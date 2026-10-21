@@ -3585,12 +3585,14 @@ reason `service.source_not_allowed`.)
 **What to do.** Use a way the policy allows, or another service. An Administrator of the service changes the
 **Certificate sources** on its **Policy** tab.
 
-## ALC-SVC-0010: The policy changed since you opened it
+## ALC-SVC-0010: The policy or the owners changed since you opened them
 
-**Meaning.** The policy was saved with the version you read, and someone saved a newer version in the meantime.
-Nothing was changed. (HTTP 409, reason `service.version_conflict`.)
+**Meaning.** The policy was saved with the version you read, and someone saved a newer version in the meantime; or
+the owners were saved with the service's version you read, and the service (its name, description, environment or
+owners) changed in the meantime. Nothing was changed. (HTTP 409, reason `service.version_conflict`.)
 
-**What to do.** Reload the policy, look at the newer version in the history, and save your change again.
+**What to do.** Reload the policy or the owners, look at what changed (the policy's history, the audit log), and save
+your change again.
 
 ## ALC-SVC-0011: Only an Administrator of all services changes the domains
 
@@ -3628,6 +3630,16 @@ or `thresholds`; `params.field` names it). Nothing was changed. (HTTP 422, reaso
 `service.policy_field_unavailable`.)
 
 **What to do.** Remove the setting from the policy document and save again.
+
+## ALC-SVC-0019: An automation account cannot own a service
+
+**Meaning.** The owners named an automation account (`details` names the entry, `owners.N.user_id`). Owners are people
+and directory groups: ownership decides who receives the service's e-mails, and an automation account has no mailbox.
+Nothing was changed. (HTTP 422, reason `service.owner_not_a_person`.)
+
+**What to do.** Remove the automation account from the owners and name a person or a directory group instead. To
+let an automation account act on the service, give it a role binding on the service (People & access, Automation
+accounts).
 
 ## ALC-ACC-0001: This person already holds this role there
 

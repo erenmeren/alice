@@ -5862,6 +5862,55 @@ paths:
               schema: { $ref: "#/components/schemas/ServicePolicyList" }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/services/{id}/owners:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getServiceOwners
+      summary: The service's owner team and the service's version
+      description: >-
+        Owners are people and directory groups (R56, design §7.1). Ownership gives no access: owners receive the service's
+        e-mails (an enabled person with an address; the enabled members of a group seen in it at their last sign-in, with an
+        address) and are shown as responsible. reaches_service (whether a role of the owner reaches the service) is answered
+        to a caller holding users.read on all services only.
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The owners
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceOwners" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putServiceOwners
+      summary: Replace the service's owner team
+      description: >-
+        owners is the whole new team (at most 50 entries, each exactly one of user_id and directory_group_id, each once);
+        version is the service's version the caller read (409 ALC-SVC-0010 when the service changed since). An automation
+        account is 422 ALC-SVC-0019; an unknown person or group is 422 validation on owners.N. A change raises the service's
+        version and is audited service.owners_changed with the owners added and removed; the same team changes nothing.
+        Administrator of all services with a fresh step-up, never an API token; works in lock.
+      x-permission: services.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceOwnersUpdate" }
+      responses:
+        "200":
+          description: The owners
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceOwners" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/services/{id}/actions/assign:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -6158,6 +6207,52 @@ components:
       required: [items]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/ServicePolicy" } }
+    ServiceOwners:
+      type: object
+      required: [version, items]
+      properties:
+        version: { type: integer, minimum: 1, description: The service's version; a change of the owners names it }
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, kind, user_id, disabled, receives_email, directory_group_id, members, created_at]
+            properties:
+              id: { type: string, format: uuid }
+              kind: { type: string, enum: [person, group] }
+              user_id: { type: [string, "null"], format: uuid }
+              username: { type: string }
+              display_name: { type: string }
+              disabled: { type: boolean, description: A disabled person receives nothing }
+              receives_email: { type: boolean, description: An enabled person with an address }
+              directory_group_id: { type: [string, "null"], format: uuid }
+              group:
+                type: object
+                required: [source, source_name, value, label]
+                properties:
+                  source: { type: string, enum: [oidc, ldap] }
+                  source_name: { type: string }
+                  value: { type: string }
+                  label: { type: string }
+              members: { type: integer, description: A group's people seen in it at their last sign-in }
+              reaches_service: { type: boolean, description: "Some role of the owner reaches the service (users.read callers only)" }
+              created_at: { type: string, format: date-time }
+    ServiceOwnersUpdate:
+      type: object
+      required: [version, owners]
+      additionalProperties: false
+      properties:
+        version: { type: integer, minimum: 1 }
+        owners:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            description: Exactly one of user_id (a person) and directory_group_id.
+            properties:
+              user_id: { type: string, format: uuid }
+              directory_group_id: { type: string, format: uuid }
     AssignRequest:
       type: object
       required: [resources]

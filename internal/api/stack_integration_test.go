@@ -258,7 +258,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	}
 	s.inv = inventory.New(inventory.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Registry: s.registry,
-		Jobs: s.queue, Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log, Roots: roots,
+		Jobs: s.queue, Notifier: notify.ServiceNotifier{Clock: s.clock}, Log: log, Roots: roots,
 	})
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: s.inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
@@ -276,14 +276,14 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	require.NoError(t, err)
 	s.sshKeys = sshkeys.New(sshkeys.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.tick, License: s.license, Inventory: s.inv, Jobs: s.queue,
-		Notifier: notify.AdminNotifier{Clock: s.tick}, Log: log, HelperBudget: helperproto.HelperBudget,
+		Notifier: notify.ServiceNotifier{Clock: s.tick}, Log: log, HelperBudget: helperproto.HelperBudget,
 	})
 	s.auditLog = auditLog
 	catalog, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
 	s.mail = notify.NewSettings(notify.SettingsConfig{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Catalog: catalog, Log: log})
 	s.alerts = alerts.New(alerts.Config{Pool: s.db.App, Audit: auditLog, Clock: s.clock, License: s.license,
-		Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log})
+		Notifier: notify.ServiceNotifier{Clock: s.clock}, Log: log})
 	s.reports = reports.New(reports.Config{Pool: s.db.App, Clock: s.clock, Audit: auditLog, License: s.license, Alerts: s.alerts,
 		Delivery: s.mail, Inventory: s.inv})
 	s.sso = oidc.New(oidc.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Auth: s.auth, Log: log})
@@ -334,7 +334,7 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 	log := s.logger()
 	r := jobs.NewRunner(jobs.RunnerConfig{
 		Pool: s.db.App, Queue: s.queue, Gate: s.license, Audit: s.auditLog, Clock: s.clock, Log: log,
-		Jitter: func() float64 { return 0 }, WorkerID: worker, Heartbeat: heartbeat, Notifier: notify.AdminNotifier{Clock: s.clock},
+		Jitter: func() float64 { return 0 }, WorkerID: worker, Heartbeat: heartbeat, Notifier: notify.ServiceNotifier{Clock: s.clock},
 	})
 	targetjobs.Register(r, targetjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})
 	deployjobs.Register(r, deployjobs.Deps{Inventory: s.inv, Registry: s.registry, Clock: s.clock, Log: log})

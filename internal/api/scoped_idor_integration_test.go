@@ -146,6 +146,14 @@ VALUES ($1, 'test.job', 'always', 'system', '{}', decode(repeat('07', 32), 'hex'
 	s.mustExec(`UPDATE certificate_incidents SET service_ids = ARRAY[$2::uuid] WHERE id = $1`, incident, w.a)
 	trust, err := s.serviceStore.CreateTrust(ctx, sysActor, w.a, w.c)
 	require.NoError(t, err)
+	// A's owner (R56): GET /services/{id}/owners of A answers as an absent service, and no answer to B names them.
+	owner := uuid.New()
+	s.mustExec(`INSERT INTO users (id, username, display_name, email, password_hash, role, created_at, updated_at)
+VALUES ($1, 'alpha-owner', 'Alpha Owner', 'alpha-owner@example.test', '$argon2id$x', NULL, now(), now())`, owner)
+	team, err := s.serviceStore.Owners(ctx, w.a)
+	require.NoError(t, err)
+	_, err = s.serviceStore.SetOwners(ctx, sysActor, w.a, team.Version, []services.OwnerInput{{UserID: owner}})
+	require.NoError(t, err)
 
 	w.byKind = map[string]any{
 		services.KindTarget: server, services.KindCertificate: cert, services.KindCSR: csr, services.KindSSHKey: sshKey,
@@ -157,10 +165,10 @@ VALUES ($1, 'test.job', 'always', 'system', '{}', decode(repeat('07', 32), 'hex'
 		services.KindKVCertificate: kvCert,
 	}
 	for _, v := range []any{server, vault, cert, cert2, loc, acmeLoc, kvCert, binding, dep, csr, sshKey, sshLoc, policy, run, acme, scope, scan,
-		incident, job, trust.ID, w.a, fp} {
+		incident, job, trust.ID, w.a, fp, owner} {
 		w.aIDs = append(w.aIDs, fmt.Sprint(v))
 	}
-	w.aIDs = append(w.aIDs, "alpha-web", "alpha-kv", "alpha.example.test", "alpha-acme.example.test", "alpha-csr.example.test", "Alpha")
+	w.aIDs = append(w.aIDs, "alpha-web", "alpha-kv", "alpha.example.test", "alpha-acme.example.test", "alpha-csr.example.test", "Alpha", "alpha-owner")
 
 	w.bServer, err = seed.Target(ctx, s.db.Owner, "bravo-web", "nginx", "ok", nil)
 	require.NoError(t, err)

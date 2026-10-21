@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,8 @@ type fakeServices struct {
 	BindingsFn      func(f services.BindingFilter) ([]services.Binding, error)
 	CreateBindingFn func(in services.BindingInput) (services.Binding, error)
 	SetPolicyFn     func(id uuid.UUID, version int, body json.RawMessage, global bool) (services.Policy, error)
+	OwnersFn        func(id uuid.UUID) (services.Owners, error)
+	SetOwnersFn     func(id uuid.UUID, version int, in []services.OwnerInput) (services.Owners, error)
 }
 
 var _ ServicesService = (*fakeServices)(nil)
@@ -111,6 +114,19 @@ func (f *fakeServices) SetPolicy(_ context.Context, a services.Actor, id uuid.UU
 		return f.SetPolicyFn(id, version, body, global)
 	}
 	return services.Policy{}, errNotConfigured
+}
+func (f *fakeServices) Owners(_ context.Context, id uuid.UUID) (services.Owners, error) {
+	if f.OwnersFn != nil {
+		return f.OwnersFn(id)
+	}
+	return services.Owners{}, errNotConfigured
+}
+func (f *fakeServices) SetOwners(_ context.Context, a services.Actor, id uuid.UUID, version int, in []services.OwnerInput) (services.Owners, error) {
+	f.lastActor = a
+	if f.SetOwnersFn != nil {
+		return f.SetOwnersFn(id, version, in)
+	}
+	return services.Owners{}, errNotConfigured
 }
 func (f *fakeServices) Trusts(context.Context, *uuid.UUID) ([]services.Trust, error) {
 	return nil, errNotConfigured
@@ -466,6 +482,84 @@ func TestPutServicePolicy(t *testing.T) {
 		}
 		if want.field != "" {
 			require.Len(t, e.Error.Details, 1, "%v", err)
+			assert.Equal(t, want.field, e.Error.Details[0].Field)
+		}
+	}
+}
+
+// SR-28 (R56, design §7.1, §8.1): the owner team is read by everyone who sees the service (whether a role reaches the
+// service only by a caller who reads people) and replaced by a global Administrator with step-up, never a token.
+func TestServiceOwnersRoutes(t *testing.T) {
+	d, f := servicesDeps(t)
+	olga, group := uuid.New(), uuid.New()
+	team := services.Owners{Version: 3, Items: []services.Owner{
+		{ID: uuid.New(), UserID: &olga, Username: "olga", DisplayName: "Olga", HasEmail: true, CreatedAt: testNow},
+		{ID: uuid.New(), DirectoryGroupID: &group, Group: &services.GroupRef{Source: "oidc", SourceName: "IdP", Value: "pay-ops"}, Members: 4,
+			ReachesService: true, CreatedAt: testNow},
+	}}
+	f.OwnersFn = func(uuid.UUID) (services.Owners, error) { return team, nil }
+	var (
+		gotVersion int
+		gotIn      []services.OwnerInput
+	)
+	f.SetOwnersFn = func(_ uuid.UUID, version int, in []services.OwnerInput) (services.Owners, error) {
+		gotVersion, gotIn = version, in
+		return team, nil
+	}
+	h := NewHandler(d)
+	path := "/api/v1/services/" + svcPay.String() + "/owners"
+
+	rec := call(h, http.MethodGet, path, "admin", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"version":3,"items":[
+{"id":"`+team.Items[0].ID.String()+`","kind":"person","user_id":"`+olga.String()+`","username":"olga","display_name":"Olga","disabled":false,
+ "receives_email":true,"directory_group_id":null,"members":0,"reaches_service":false,"created_at":"`+testNow.Format(time.RFC3339)+`"},
+{"id":"`+team.Items[1].ID.String()+`","kind":"group","user_id":null,"disabled":false,"receives_email":false,"directory_group_id":"`+group.String()+`",
+ "group":{"source":"oidc","source_name":"IdP","value":"pay-ops","label":""},"members":4,"reaches_service":true,"created_at":"`+testNow.Format(time.RFC3339)+`"}]}`,
+		rec.Body.String())
+	for _, who := range []string{"operator", "auditor"} {
+		rec = call(h, http.MethodGet, path, who, "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.NotContains(t, rec.Body.String(), "reaches_service", "%s: who holds a role is People & access's (users.read)", who)
+	}
+
+	rec = call(h, http.MethodPut, path, "admin-stepup", `{"version":3,"owners":[{"user_id":"`+olga.String()+`"},{"directory_group_id":"`+group.String()+`"}]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 3, gotVersion)
+	assert.Equal(t, []services.OwnerInput{{UserID: olga}, {DirectoryGroupID: group}}, gotIn)
+	assert.Equal(t, "admin", f.lastActor.Audit.Name)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPut, path, "admin-stepup", `{"owners":[]}`).Code, "no version")
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPut, path, "admin-stepup", `{"version":3}`).Code, "no owners")
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPut, path, "admin-stepup", `{"version":3,"owners":[{"email":"x@example.com"}]}`).Code)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "admin", `{"version":3,"owners":[]}`).Code, "step-up")
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "operator-stepup", `{"version":3,"owners":[]}`).Code)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "alice_operate_admin", `{"version":3,"owners":[]}`).Code, "never a token")
+
+	for err, want := range map[error]struct {
+		status int
+		code   string
+		field  string
+	}{
+		services.ErrOwnersVersion: {http.StatusConflict, "ALC-SVC-0010", ""},
+		services.ErrNotFound:      {http.StatusNotFound, "ALC-SVC-0001", ""},
+		&services.OwnerNotAPersonError{Field: "owners.1.user_id"}: {http.StatusUnprocessableEntity, "ALC-SVC-0019", "owners.1.user_id"},
+	} {
+		f.SetOwnersFn = func(uuid.UUID, int, []services.OwnerInput) (services.Owners, error) { return services.Owners{}, err }
+		rec := call(h, http.MethodPut, path, "admin-stepup", `{"version":3,"owners":[]}`)
+		assert.Equal(t, want.status, rec.Code, "%v", err)
+		var e struct {
+			Error struct {
+				Code    string `json:"code"`
+				Details []struct {
+					Field string `json:"field"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &e))
+		assert.Equal(t, want.code, e.Error.Code, "%v", err)
+		if want.field != "" {
+			require.Len(t, e.Error.Details, 1)
 			assert.Equal(t, want.field, e.Error.Details[0].Field)
 		}
 	}

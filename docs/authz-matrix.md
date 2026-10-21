@@ -258,6 +258,8 @@ never a platform one. A resource outside the caller's services answers the opera
 | GET | `/api/v1/services/{id}/policy` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/services/{id}/policy/versions` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | PUT | `/api/v1/services/{id}/policy` | `services.policy` | resource | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/services/{id}/owners` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| PUT | `/api/v1/services/{id}/owners` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/services/{id}/actions/assign` | `services.assign` | cross | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/service-trusts` | `read` | list | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/service-trusts` | `services.trust` | cross | no | yes | no | no | no | yes | yes |

@@ -54,6 +54,9 @@ type ServicesService interface {
 	DirectoryGroups(ctx context.Context) ([]services.DirectoryGroup, []services.SeenGroup, error)
 	CreateDirectoryGroup(ctx context.Context, a services.Actor, in services.DirectoryGroupInput) (services.DirectoryGroup, error)
 	DeleteDirectoryGroup(ctx context.Context, a services.Actor, id uuid.UUID) (services.GroupRemoval, error)
+	// R56 (Phase 4): a service's owner team, replaced with the service's version.
+	Owners(ctx context.Context, id uuid.UUID) (services.Owners, error)
+	SetOwners(ctx context.Context, a services.Actor, id uuid.UUID, version int, in []services.OwnerInput) (services.Owners, error)
 }
 
 var _ ServicesService = (*services.Store)(nil)
@@ -81,6 +84,8 @@ func (s *server) serviceRoutes() []route {
 		{method: http.MethodGet, pattern: svcs + "/{id}/policy", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.getServicePolicy},
 		{method: http.MethodGet, pattern: svcs + "/{id}/policy/versions", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.listServicePolicies},
 		{method: http.MethodPut, pattern: svcs + "/{id}/policy", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.ServicesPolicy, lic: always, handler: s.putServicePolicy},
+		{method: http.MethodGet, pattern: svcs + "/{id}/owners", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.getServiceOwners},
+		{method: http.MethodPut, pattern: svcs + "/{id}/owners", scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.putServiceOwners},
 		{method: http.MethodPost, pattern: svcs + "/{id}/actions/assign", scope: scopeCross, resolve: by(services.KindService, "id"), perm: rbac.ServicesAssign, lic: always, handler: s.assignToService},
 		{method: http.MethodGet, pattern: trusts, scope: scopeList, perm: rbac.Read, handler: s.listTrusts},
 		{method: http.MethodPost, pattern: trusts, scope: scopeCross, perm: rbac.ServicesTrust, lic: always, handler: s.createTrust},

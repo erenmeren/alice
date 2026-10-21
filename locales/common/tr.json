@@ -78,9 +78,9 @@
         "action": "İlkenin izin verdiği bir kaynak kullanın ya da başka bir hizmet seçin; veya hizmetin bir yöneticisinden ilkesini değiştirmesini isteyin."
       },
       "version_conflict": {
-        "title": "İlke siz açtıktan sonra değişti.",
-        "cause": "Bu arada biri hizmetin ilkesinin daha yeni bir sürümünü kaydetti.",
-        "action": "İlkeyi yeniden yükleyin, neyin değiştiğine bakın ve yeniden kaydedin."
+        "title": "İlke ya da sorumlular siz açtıktan sonra değişti.",
+        "cause": "Bu arada biri hizmetin ilkesinin ya da sorumlularının daha yeni bir sürümünü kaydetti.",
+        "action": "Yeniden yükleyin, neyin değiştiğine bakın ve yeniden kaydedin."
       },
       "domains_global_only": {
         "title": "Alan adlarını yalnızca tüm hizmetlerde yönetici olan biri değiştirir.",
@@ -101,6 +101,11 @@
         "title": "Bu ilke ayarı henüz kullanılamıyor.",
         "cause": "\"{{field}}\", Alice'in sonraki bir sürümü için ayrılmıştır.",
         "action": "Bunu ilkeden kaldırın ve yeniden kaydedin."
+      },
+      "owner_not_a_person": {
+        "title": "Bir otomasyon hesabı bir hizmetin sorumlusu olamaz.",
+        "cause": "Sorumlular kişiler ve dizin gruplarıdır: hizmetin e-postalarını alırlar. Otomasyon hesabının posta kutusu yoktur ve hiçbir yerde oturum açmaz.",
+        "action": "Otomasyon hesabını sorumlulardan çıkarın, yerine bir kişi ya da bir grup belirtin."
       }
     },
     "binding": {

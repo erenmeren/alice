@@ -78,9 +78,9 @@
         "action": "Use a source the policy allows or choose another service, or ask an Administrator of the service to change its policy."
       },
       "version_conflict": {
-        "title": "The policy changed since you opened it.",
-        "cause": "Someone saved a newer version of the service's policy in the meantime.",
-        "action": "Reload the policy, check what changed, then save again."
+        "title": "The policy or the owners changed since you opened them.",
+        "cause": "Someone saved a newer version of the service's policy or owners in the meantime.",
+        "action": "Reload, check what changed, then save again."
       },
       "domains_global_only": {
         "title": "Only an Administrator of all services changes the domains.",
@@ -101,6 +101,11 @@
         "title": "This policy setting is not available yet.",
         "cause": "\"{{field}}\" is reserved for a later version of Alice.",
         "action": "Remove it from the policy, then save again."
+      },
+      "owner_not_a_person": {
+        "title": "An automation account cannot own a service.",
+        "cause": "Owners are people and directory groups: they receive the service's e-mails. An automation account has no mailbox and signs in nowhere.",
+        "action": "Remove the automation account from the owners and name a person or a group instead."
       }
     },
     "binding": {

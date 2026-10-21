@@ -551,6 +551,9 @@ var (
 	ErrSVCAutoDeployForbidden    = ErrorCode{Code: "ALC-SVC-0013", Reason: "service.auto_deploy_forbidden", Status: http.StatusUnprocessableEntity}
 	ErrSVCACMENotAllowed         = ErrorCode{Code: "ALC-SVC-0014", Reason: "service.acme_not_allowed", Status: http.StatusUnprocessableEntity}
 	ErrSVCPolicyFieldUnavailable = ErrorCode{Code: "ALC-SVC-0015", Reason: "service.policy_field_unavailable", Status: http.StatusUnprocessableEntity}
+	// Owners (R56, design §7.1): an automation account named as an owner (the next free number; the design says only
+	// "refused (422)"); the entry is the field. A stale version of the owners is ErrSVCVersionConflict.
+	ErrSVCOwnerNotAPerson = ErrorCode{Code: "ALC-SVC-0019", Reason: "service.owner_not_a_person", Status: http.StatusUnprocessableEntity}
 
 	// Role bindings (area ACC, R49 Phase 2, design §8.3): the same role on the same service or environment twice, and
 	// more bindings for one person than the bound allows.
@@ -647,7 +650,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrSVCNotFound, ErrSVCNameTaken, ErrSVCNotEmpty, ErrSVCDefaultProtected, ErrSVCUntrusted, ErrSVCEnvironmentInUse,
 		ErrSVCEnvironmentTaken, ErrSVCTrustExists, ErrSVCRequired, ErrSVCNotAllowed, ErrSVCSpansServices,
 		ErrSVCDomainNotAllowed, ErrSVCSourceNotAllowed, ErrSVCVersionConflict, ErrSVCDomainsGlobalOnly, ErrSVCAutoDeployForbidden,
-		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable,
+		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable, ErrSVCOwnerNotAPerson,
 		ErrACCBindingDuplicate, ErrACCBindingLimit, ErrBreakGlassGlobalRole,
 		ErrACCRoleNotAllowed, ErrACCGroupNotFound, ErrACCAutomationAccount, ErrACCAutomationDisabled, ErrACCGroupExists, ErrTokenServiceNotAllowed,
 	}
@@ -731,6 +734,7 @@ var errorMap = []struct {
 	{services.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	// Service policy (R55); the typed errors are answered with their params and field by policyRefusal.
 	{services.ErrPolicyVersion, ErrSVCVersionConflict, nil},
+	{services.ErrOwnersVersion, ErrSVCVersionConflict, nil},
 	{services.ErrDomainsGlobalOnly, ErrSVCDomainsGlobalOnly, nil},
 	{authz.ErrPolicyMalformed, ErrBadRequest, nil},
 	{authz.ErrAutoDeployForbidden, ErrSVCAutoDeployForbidden, nil},
@@ -1096,8 +1100,11 @@ func policyRefusal(err error) (ErrorCode, map[string]string, []validate.FieldErr
 		source *authz.SourceError
 		acme   *authz.ACMEPolicyError
 		field  *authz.FieldUnavailableError
+		owner  *services.OwnerNotAPersonError
 	)
 	switch {
+	case errors.As(err, &owner):
+		return ErrSVCOwnerNotAPerson, nil, []validate.FieldError{{Field: owner.Field, Code: ErrSVCOwnerNotAPerson.Reason}}, true
 	case errors.As(err, &domain):
 		params := map[string]string{}
 		if policyName.MatchString(domain.Name) {
