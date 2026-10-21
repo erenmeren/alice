@@ -66,6 +66,9 @@ type OIDCIdentity struct {
 	// AuthTime is the ID token's auth_time (zero when it had none). A sign-in opens the step-up window only when
 	// it is within StepUpWindow of Alice's clock: a silent sign-in at the provider proves no fresh credential (I-1).
 	AuthTime time.Time
+	// Groups are the values of the provider's groups claim, as received: the sign-in or step-up keeps the first
+	// MaxDirectoryGroups of them for the bindings of directory groups (design §6.1, R54).
+	Groups []string
 }
 
 // sessionEndingReasons are the refusals that say the user no longer has access: they end the
@@ -201,7 +204,7 @@ func provisionSSOUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id OIDCI
 		_, err := q.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
 locale, oidc_provider_id, oidc_issuer, oidc_subject, last_login_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $10, $10)`,
-			userID, name, id.Email, displayName(id, name), string(role), locale, id.ProviderID, id.Issuer, id.Subject, now)
+			userID, name, id.Email, displayName(id, name), roleParam(role), locale, id.ProviderID, id.Issuer, id.Subject, now)
 		return err
 	})
 }
@@ -244,8 +247,10 @@ func (id OIDCIdentity) normalized() (OIDCIdentity, error) {
 	return id, nil
 }
 
+// checkRole admits the three roles and NoGlobalRole (no group is mapped to a role: the user signs in only when a role
+// binding reaches them, design §6.1).
 func checkRole(role rbac.Role) error {
-	if _, ok := rbac.ParseRole(string(role)); !ok {
+	if _, ok := rbac.ParseRole(string(role)); !ok && role != NoGlobalRole {
 		return ErrOIDCIdentityInvalid
 	}
 	return nil
@@ -278,7 +283,10 @@ func capRole(ctx context.Context, tx pgx.Tx, role rbac.Role) (rbac.Role, error) 
 }
 
 // SignInOIDC signs in the user of an identity the provider just authenticated, with the role
-// its group mappings resolved (C10). In one transaction it finds the user by provider and
+// its group mappings resolved (C10; NoGlobalRole when none is mapped: then a role binding must reach the user, their
+// own or one of a directory group they are in, or the sign-in is ErrNoAccess, design §6.1). The user's groups are
+// kept for the bindings of directory groups (the first MaxDirectoryGroups; user.groups_truncated when more came). In
+// one transaction it finds the user by provider and
 // subject or provisions one (never linking a local account: ErrOIDCEmailInUse), refuses a
 // disabled user, follows the provider's role, display name and e-mail (the e-mail under the
 // same collision rule, S-7), and opens a full session. Its step-up window is open only when
@@ -310,6 +318,12 @@ func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Rol
 		if err != nil {
 			return err
 		}
+		groups, dropped := keptGroups(id.Groups)
+		if role == NoGlobalRole {
+			if ok, err := hasScopedAccess(ctx, tx, u.id, directorySubject{source: AuthOIDC, from: id.ProviderID}, groups); err != nil || !ok {
+				return cmpErr(err, ErrNoAccess)
+			}
+		}
 		var events []audit.Event
 		if !found {
 			if inUse, err := localEmailInUse(ctx, tx, id.Email); err != nil || inUse {
@@ -326,7 +340,7 @@ func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Rol
 			}
 			u.username = name
 			events = append(events, audit.Event{Actor: oidcActor(u.id, name, m), Action: "user.provisioned", ObjectType: "user", ObjectID: u.id.String(),
-				Result: audit.Success, Details: map[string]string{"username": name, "role": string(role), "provider_id": id.ProviderID.String()}})
+				Result: audit.Success, Details: map[string]string{"username": name, "role": roleLabel(role), "provider_id": id.ProviderID.String()}})
 		} else {
 			if u.disabled {
 				return ErrOIDCUserDisabled
@@ -337,12 +351,18 @@ func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Rol
 				}
 			}
 			if _, err := tx.Exec(ctx, `UPDATE users SET role = $2, email = $3, display_name = $4, last_login_at = $5, updated_at = $5 WHERE id = $1`,
-				u.id, string(role), id.Email, displayName(id, u.username), now); err != nil {
+				u.id, roleParam(role), id.Email, displayName(id, u.username), now); err != nil {
 				return fmt.Errorf("update SSO user: %w", err)
 			}
 			if role != u.role {
 				events = append(events, roleSynced(u, role, m))
 			}
+		}
+		if err := syncDirectoryGroups(ctx, tx, u.id, groups, now); err != nil {
+			return err
+		}
+		if dropped > 0 {
+			events = append(events, groupsTruncated(oidcActor(u.id, u.username, m), u.id, "oidc", len(groups), dropped))
 		}
 		userID = u.id
 		if token, err = s.insertSession(ctx, tx, newSession{userID: u.id, kind: "full", createdAt: now, expiresAt: now.Add(SessionAbsolute),
@@ -351,7 +371,7 @@ func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Rol
 		}
 		// Audit rows last, after every row lock of this transaction.
 		events = append(events, audit.Event{Actor: userActor(u.id, u.username, m), Action: "auth.login", ObjectType: "user", ObjectID: u.id.String(),
-			Result: audit.Success, Details: map[string]string{"method": "oidc", "provider_id": id.ProviderID.String(), "role": string(role)}})
+			Result: audit.Success, Details: map[string]string{"method": "oidc", "provider_id": id.ProviderID.String(), "role": roleLabel(role)}})
 		return s.appendAll(ctx, tx, events)
 	})
 	if err != nil {
@@ -397,7 +417,7 @@ func displayName(id OIDCIdentity, username string) string {
 
 func roleSynced(u ssoUser, role rbac.Role, m Meta) audit.Event {
 	return audit.Event{Actor: oidcActor(u.id, u.username, m), Action: "user.role_synced", ObjectType: "user", ObjectID: u.id.String(),
-		Result: audit.Success, Details: map[string]string{"from_role": string(u.role), "to_role": string(role)}}
+		Result: audit.Success, Details: map[string]string{"from_role": roleLabel(u.role), "to_role": roleLabel(role)}}
 }
 
 func (s *Service) appendAll(ctx context.Context, tx pgx.Tx, events []audit.Event) error {
@@ -413,7 +433,8 @@ func (s *Service) appendAll(ctx context.Context, tx pgx.Tx, events []audit.Event
 // same identity (SEC-009, R42 row 22). The session must still be live (S-1: a session ended by
 // RefuseOIDC, DemoteSSOAdmins, disabling or idle expiry is never resurrected) and the user
 // enabled; role is the one the group mappings resolved for this sign-in, synchronized as
-// SignInOIDC does. The session ID is rotated with a new 5-minute step-up window.
+// SignInOIDC does (NoGlobalRole: a role binding must still reach the user, or the step-up is ErrNoAccess), and the
+// user's groups are kept again. The session ID is rotated with a new 5-minute step-up window.
 func (s *Service) StepUpOIDC(ctx context.Context, sessionHash []byte, userID uuid.UUID, id OIDCIdentity, role rbac.Role, m Meta) (SessionResult, error) {
 	if err := checkRole(role); err != nil {
 		return SessionResult{}, err
@@ -459,12 +480,24 @@ FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &sourc
 		if !live {
 			return ErrUnauthenticated
 		}
+		groups, dropped := keptGroups(id.Groups)
+		if role == NoGlobalRole {
+			if ok, err := hasScopedAccess(ctx, tx, userID, directorySubject{source: AuthOIDC, from: id.ProviderID}, groups); err != nil || !ok {
+				return cmpErr(err, ErrNoAccess)
+			}
+		}
 		var events []audit.Event
 		if role != u.role {
-			if _, err := tx.Exec(ctx, "UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", userID, string(role), now); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", userID, roleParam(role), now); err != nil {
 				return fmt.Errorf("update SSO user: %w", err)
 			}
 			events = append(events, roleSynced(u, role, m))
+		}
+		if err := syncDirectoryGroups(ctx, tx, userID, groups, now); err != nil {
+			return err
+		}
+		if dropped > 0 {
+			events = append(events, groupsTruncated(oidcActor(userID, u.username, m), userID, "oidc", len(groups), dropped))
 		}
 		stepUp := now.Add(StepUpWindow)
 		if token, err = s.rotateSession(ctx, tx, sessionHash, userID, &stepUp, m); err != nil {
@@ -519,8 +552,8 @@ func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string
 	})
 }
 
-// endAccess ends every session of a user whose access ended at the identity provider or the directory and revokes
-// every API token of the user, inside the caller's transaction, which holds the user's row lock. Each token is
+// endAccess ends every session of a user whose access ended at the identity provider or the directory, revokes
+// every API token of the user and forgets the user's groups, inside the caller's transaction, which holds the user's row lock. Each token is
 // audited as token.revoked with reason (appended here); the returned user.sessions_ended event (reason, ended_count,
 // revoked_tokens_count) is the caller's to append last (O-08, R42 row 21).
 func (s *Service) endAccess(ctx context.Context, tx pgx.Tx, actor audit.Actor, userID uuid.UUID, reason string) (audit.Event, error) {
@@ -530,6 +563,11 @@ func (s *Service) endAccess(ctx context.Context, tx pgx.Tx, actor audit.Actor, u
 		return audit.Event{}, fmt.Errorf("end sessions: %w", err)
 	}
 	details := map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}
+	// The groups kept from the last sign-in go too: no binding of a directory group reaches the user until the next
+	// sign-in that is let in (design §6.1, R54).
+	if _, err := tx.Exec(ctx, "DELETE FROM user_directory_groups WHERE user_id = $1", userID); err != nil {
+		return audit.Event{}, fmt.Errorf("forget the user's groups: %w", err)
+	}
 	// Access ended at the identity provider ends every credential Alice issued on it: the
 	// API tokens too, each audited as token.revoked with the refusal's reason.
 	if err := s.revokeUserTokens(ctx, tx, actor, userID, now, reason, details); err != nil {

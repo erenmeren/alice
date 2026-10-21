@@ -73,9 +73,9 @@ func roleLabel(r rbac.Role) string {
 	return string(r)
 }
 
-// ListUsers returns all users ordered by username.
+// ListUsers returns every person ordered by username; automation accounts are listed by ListAutomationAccounts.
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+userColumns+" FROM users u ORDER BY u.username")
+	rows, err := s.pool.Query(ctx, "SELECT "+userColumns+" FROM users u WHERE u.auth_source <> 'automation' ORDER BY u.username")
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -299,14 +299,17 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 }
 
 // sourceRefusal is the refusal of a change that only a local user can have (a password, a manual role, an API
-// token, a TOTP step-up): nil for a local user, ErrDirectoryUser for a directory user and ErrSSOUser for an SSO user
-// (and for any other source, which no row can hold).
+// token, a TOTP step-up): nil for a local user, ErrDirectoryUser for a directory user, ErrAutomationAccount for an
+// automation account (its own routes change it, R54) and ErrSSOUser for an SSO user (and for any other source, which no
+// row can hold).
 func sourceRefusal(source string) error {
 	switch source {
 	case AuthLocal:
 		return nil
 	case AuthLDAP:
 		return ErrDirectoryUser
+	case AuthAutomation:
+		return ErrAutomationAccount
 	default:
 		return ErrSSOUser
 	}
@@ -322,14 +325,18 @@ func authSourceOf(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) 
 }
 
 // refuseSSOUser returns ErrSSOUser for an SSO user: their MFA lives at the identity provider. A directory user's
-// TOTP is Alice's and passes. The caller holds the user's row lock (adminChange).
+// TOTP is Alice's and passes. An automation account has none (ErrAutomationAccount). The caller holds the user's row
+// lock (adminChange).
 func refuseSSOUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	source, err := authSourceOf(ctx, tx, id)
 	if err != nil {
 		return err
 	}
-	if source == AuthOIDC {
+	switch source {
+	case AuthOIDC:
 		return ErrSSOUser
+	case AuthAutomation:
+		return ErrAutomationAccount
 	}
 	return nil
 }
@@ -353,6 +360,8 @@ func (s *Service) auditSSORefusal(ctx context.Context, p Principal, m Meta, err 
 		reason = "sso_user"
 	case errors.Is(err, ErrDirectoryUser):
 		reason = "directory_user"
+	case errors.Is(err, ErrAutomationAccount):
+		reason = "automation_account"
 	default:
 		return err
 	}

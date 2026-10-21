@@ -69,6 +69,9 @@ type LDAPIdentity struct {
 	Login       string // the sign-in name as the directory holds it: the base of the user name (ldapx.Username), stored as ldap_login
 	DisplayName string
 	Email       string
+	// Groups are the values of the directory's group search, as returned: the sign-in or step-up keeps the first
+	// MaxDirectoryGroups of them for the bindings of directory groups (design §6.1, R54).
+	Groups []string
 }
 
 // normalized returns the identity's values as Alice stores them: an e-mail address that is not a plain address is
@@ -101,8 +104,10 @@ func (id LDAPIdentity) displayNameOr(name string) string {
 	return id.DisplayName
 }
 
+// checkLDAPRole admits the three roles and NoGlobalRole (no group is mapped to a role: the user signs in only when a
+// role binding reaches them, design §6.1).
 func checkLDAPRole(role rbac.Role) error {
-	if _, ok := rbac.ParseRole(string(role)); !ok {
+	if _, ok := rbac.ParseRole(string(role)); !ok && role != NoGlobalRole {
 		return ErrLDAPIdentityInvalid
 	}
 	return nil
@@ -189,18 +194,20 @@ func provisionLDAPUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id LDAP
 		_, err := q.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
 locale, ldap_directory_id, ldap_unique_id, ldap_login, last_login_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, 'ldap', NULL, $5, 'ldap_mapping', $6, $7, $8, $11, $10, $9, $9)`,
-			userID, name, id.Email, id.displayNameOr(name), string(role), locale, id.DirectoryID, id.UniqueID, now, lastLogin, id.Login)
+			userID, name, id.Email, id.displayNameOr(name), roleParam(role), locale, id.DirectoryID, id.UniqueID, now, lastLogin, id.Login)
 		return err
 	})
 }
 
 func ldapRoleSynced(u ssoUser, role rbac.Role, m Meta) audit.Event {
 	return audit.Event{Actor: userActor(u.id, u.username, m), Action: "user.role_synced", ObjectType: "user", ObjectID: u.id.String(),
-		Result: audit.Success, Details: map[string]string{"from_role": string(u.role), "to_role": string(role)}}
+		Result: audit.Success, Details: map[string]string{"from_role": roleLabel(u.role), "to_role": roleLabel(role)}}
 }
 
 // SignInLDAP signs in the user of an identity the directory just authenticated, with the role its group mappings
-// resolved. The caller talks to the directory first: this function holds a transaction and never calls out. In one
+// resolved (NoGlobalRole when none is mapped: then a role binding must reach the user, their own or one of a directory
+// group they are in, or the sign-in is ErrNoAccess, design §6.1; the user's groups are kept for those bindings, the
+// first MaxDirectoryGroups, user.groups_truncated when more came). The caller talks to the directory first: this function holds a transaction and never calls out. In one
 // transaction it finds the user by directory and unique id or provisions one (user name by ldapx.Username, -2, -3 on
 // a clash; never linking a local account: ErrLDAPEmailInUse), refuses a disabled user (ErrLDAPUserDisabled) and a user
 // in a delay or lockout after failed TOTP codes (ErrLDAPUserLocked, in both MFA modes), follows
@@ -239,6 +246,12 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 		if err != nil {
 			return err
 		}
+		groups, dropped := keptGroups(id.Groups)
+		if role == NoGlobalRole {
+			if ok, err := hasScopedAccess(ctx, tx, u.id, directorySubject{source: AuthLDAP, from: id.DirectoryID}, groups); err != nil || !ok {
+				return cmpErr(err, ErrNoAccess)
+			}
+		}
 		// last_login_at moves when a full session opens: here without MFA, in VerifyMFA with it (as for local users).
 		var lastLogin *time.Time
 		if !mfaRequired {
@@ -259,7 +272,7 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 			}
 			events = append(events, audit.Event{Actor: userActor(u.id, u.username, m), Action: "user.provisioned", ObjectType: "user",
 				ObjectID: u.id.String(), Result: audit.Success,
-				Details: map[string]string{"username": u.username, "role": string(role), "directory_id": id.DirectoryID.String()}})
+				Details: map[string]string{"username": u.username, "role": roleLabel(role), "directory_id": id.DirectoryID.String()}})
 		} else {
 			if u.disabled {
 				return ErrLDAPUserDisabled
@@ -279,12 +292,18 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 last_login_at = coalesce($6, last_login_at),
 failed_logins = CASE WHEN $6::timestamptz IS NULL THEN failed_logins ELSE 0 END,
 locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END, ldap_login = $7 WHERE id = $1`,
-				u.id, string(role), id.Email, id.displayNameOr(u.username), now, lastLogin, id.Login); err != nil {
+				u.id, roleParam(role), id.Email, id.displayNameOr(u.username), now, lastLogin, id.Login); err != nil {
 				return fmt.Errorf("update directory user: %w", err)
 			}
 			if role != u.role {
 				events = append(events, ldapRoleSynced(u.ssoUser, role, m))
 			}
+		}
+		if err := syncDirectoryGroups(ctx, tx, u.id, groups, now); err != nil {
+			return err
+		}
+		if dropped > 0 {
+			events = append(events, groupsTruncated(userActor(u.id, u.username, m), u.id, "ldap", len(groups), dropped))
 		}
 		userID = u.id
 		if mfaRequired {
@@ -304,7 +323,7 @@ locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END
 			}
 			res = LoginResult{Status: StatusSignedIn, SessionToken: token}
 			events = append(events, audit.Event{Actor: userActor(u.id, u.username, m), Action: "auth.login", ObjectType: "user", ObjectID: u.id.String(),
-				Result: audit.Success, Details: map[string]string{"method": "ldap", "directory_id": id.DirectoryID.String(), "role": string(role)}})
+				Result: audit.Success, Details: map[string]string{"method": "ldap", "directory_id": id.DirectoryID.String(), "role": roleLabel(role)}})
 		}
 		// Audit rows last, after every row lock of this transaction.
 		return s.appendAll(ctx, tx, events)
@@ -327,7 +346,8 @@ locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END
 // again; when the directory has mfa_required, mfaCode must also be a valid TOTP code, checked and counted like StepUp's
 // (a wrong code is ErrMFAInvalid, the delay and lockout apply). The session must still be a live full session (a
 // session ended by RefuseLDAP, DemoteSSOAdmins, disabling or idle expiry is never resurrected) and the user enabled.
-// The role is synchronized as SignInLDAP does, and the session ID is rotated with a new 5-minute step-up window.
+// The role is synchronized as SignInLDAP does (NoGlobalRole: a role binding must still reach the user, or the step-up
+// is ErrNoAccess), the user's groups are kept again, and the session ID is rotated with a new 5-minute step-up window.
 func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, role rbac.Role, mfaCode string, mfaRequired bool, m Meta) (SessionResult, error) {
 	if p.Kind != rbac.UserSession {
 		return SessionResult{}, ErrUnauthenticated
@@ -384,6 +404,14 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 				// refuses the sign-in: switching the directory's MFA off is no way around it. The caller records it.
 				return ErrLDAPUserLocked
 			}
+			// Without a mapped group and a binding the person has no access: refused before any code is checked, as
+			// the refusal came before the step-up when only mapped groups counted.
+			groups, dropped := keptGroups(id.Groups)
+			if role == NoGlobalRole {
+				if ok, err := hasScopedAccess(ctx, tx, p.UserID, directorySubject{source: AuthLDAP, from: id.DirectoryID}, groups); err != nil || !ok {
+					return cmpErr(err, ErrNoAccess)
+				}
+			}
 			if mfaRequired {
 				row, found, err := loadMFA(ctx, tx, p.UserID)
 				if err != nil {
@@ -407,10 +435,16 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 			}
 			var events []audit.Event
 			if cur := rbac.Role(curRole); role != cur {
-				if _, err := tx.Exec(ctx, "UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", p.UserID, string(role), now); err != nil {
+				if _, err := tx.Exec(ctx, "UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", p.UserID, roleParam(role), now); err != nil {
 					return fmt.Errorf("update directory user: %w", err)
 				}
 				events = append(events, ldapRoleSynced(ssoUser{id: p.UserID, username: a.name, role: cur}, role, m))
+			}
+			if err := syncDirectoryGroups(ctx, tx, p.UserID, groups, now); err != nil {
+				return err
+			}
+			if dropped > 0 {
+				events = append(events, groupsTruncated(userActor(p.UserID, a.name, m), p.UserID, "ldap", len(groups), dropped))
 			}
 			stepUp := now.Add(StepUpWindow)
 			if token, err = s.rotateSession(ctx, tx, p.SessionHash, p.UserID, &stepUp, m); err != nil {

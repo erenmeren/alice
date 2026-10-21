@@ -168,7 +168,10 @@ type Principal struct {
 	StepUpUntil time.Time
 	TokenID     uuid.UUID
 	Scope       rbac.Scope
-	AuthSource  string // AuthLocal | AuthOIDC | AuthLDAP
+	// TokenServices are the services an API token is limited to (design §6.3, R54; nil: the owner's whole reach). Role
+	// and Grants are already narrowed to them.
+	TokenServices []uuid.UUID
+	AuthSource    string // AuthLocal | AuthOIDC | AuthLDAP
 	// LDAPDirectoryID is the directory of a directory user's session (uuid.Nil for every other principal); the
 	// API runs a directory step-up against it, with the stored sign-in name LDAPLogin, and checks that the directory
 	// answers for the same entry LDAPUniqueID ("" for every other principal).

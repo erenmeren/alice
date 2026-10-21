@@ -273,18 +273,17 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.refuseDirectorySignIn(w, r, start, auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: loginOf(ident, req.Username)}, err)
 		return
 	}
-	full := auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: ident.Login, DisplayName: ident.DisplayName, Email: ident.Email}
-	role, mapped, err := s.deps.LDAP.ResolveRole(r.Context(), id, ident.Groups)
-	switch {
-	case err != nil:
+	full := auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: ident.Login, DisplayName: ident.DisplayName, Email: ident.Email,
+		Groups: ident.Groups}
+	role, err := s.directoryRole(r, id, ident.Groups)
+	if err != nil {
 		s.fail(w, r, err)
-		return
-	case !mapped:
-		att.settle(errNoAccess)
-		s.refuseDirectorySignIn(w, r, start, full, errNoAccess)
 		return
 	}
 	res, err := s.deps.Auth.SignInLDAP(r.Context(), full, role, dir.MFARequired, m)
+	if errors.Is(err, auth.ErrNoAccess) {
+		err = errNoAccess
+	}
 	if err != nil {
 		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, full, err)
@@ -295,8 +294,22 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": res.Status, "csrf_token": s.deps.Auth.CSRFToken(res.SessionToken)})
 }
 
-// errNoAccess: the directory accepted the password, but none of the person's groups is mapped to a role.
-var errNoAccess = errors.New("api: no group of the directory user is mapped")
+// errNoAccess: the directory accepted the password, but none of the person's groups is mapped to a role and no role
+// binding reaches them (their own or one of a directory group they are in, auth.ErrNoAccess; design §6.1, R54).
+var errNoAccess = errors.New("api: no group of the directory user is mapped and no role binding reaches them")
+
+// directoryRole is the global role the directory's group mappings give these groups, or auth.NoGlobalRole when none is
+// mapped: auth then lets the person in only when a role binding reaches them (ErrNoAccess otherwise).
+func (s *server) directoryRole(r *http.Request, directoryID uuid.UUID, groups []string) (rbac.Role, error) {
+	role, mapped, err := s.deps.LDAP.ResolveRole(r.Context(), directoryID, groups)
+	if err != nil {
+		return "", err
+	}
+	if !mapped {
+		return auth.NoGlobalRole, nil
+	}
+	return role, nil
+}
 
 // loginOf is the sign-in name a refusal names: the directory's own value for a resolved entry, else the typed name
 // (RefuseLDAP records it only for a resolved entry or several entries).
@@ -422,18 +435,17 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 		s.refuseDirectorySignIn(w, r, start, self, auth.ErrLDAPOtherUser)
 		return
 	}
-	full := auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: ident.Login, DisplayName: ident.DisplayName, Email: ident.Email}
-	role, mapped, err := s.deps.LDAP.ResolveRole(r.Context(), id, ident.Groups)
-	switch {
-	case err != nil:
+	full := auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: ident.Login, DisplayName: ident.DisplayName, Email: ident.Email,
+		Groups: ident.Groups}
+	role, err := s.directoryRole(r, id, ident.Groups)
+	if err != nil {
 		s.fail(w, r, err)
-		return
-	case !mapped:
-		att.settle(errNoAccess)
-		s.refuseDirectorySignIn(w, r, start, self, errNoAccess)
 		return
 	}
 	stepped, err := s.deps.Auth.StepUpLDAP(r.Context(), p, full, role, req.Code, dir.MFARequired, s.meta(r))
+	if errors.Is(err, auth.ErrNoAccess) {
+		err = errNoAccess
+	}
 	if _, _, refusal := directoryRefusal(err); refusal {
 		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, self, err)

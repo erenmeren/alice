@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,16 +38,130 @@ type Token struct {
 	Name       string
 	Prefix     string
 	Scope      rbac.Scope
+	// ServiceIDs limits the token to these services (design §6.3, R54; sorted); nil: the owner's whole reach.
+	ServiceIDs []uuid.UUID
 	ExpiresAt  time.Time
 	LastUsedAt *time.Time
 	CreatedAt  time.Time
 }
 
-// NewToken is the input of CreateToken.
+// NewToken is the input of CreateToken and CreateAutomationToken. ServiceIDs (1 to MaxTokenServices, optional)
+// limits the token to those services.
 type NewToken struct {
 	Name          string
 	Scope         rbac.Scope
 	ExpiresInDays int
+	ServiceIDs    []uuid.UUID
+}
+
+// MaxTokenServices bounds the services one token may be limited to (api_tokens.service_ids, migration 00026).
+const MaxTokenServices = 50
+
+// ErrTokenServiceNotAllowed: a token is limited to a service its owner holds no role on (or that does not exist).
+var ErrTokenServiceNotAllowed = errors.New("auth: the token's owner holds no role on a service the token is limited to")
+
+// validate checks a new token's fields (SEC-026) and returns its services sorted and without repeats (nil: no limit).
+func (in NewToken) validate() ([]uuid.UUID, error) {
+	var v validate.Errors
+	switch {
+	case strings.TrimSpace(in.Name) == "":
+		v.Add("name", validate.Required, nil)
+	case utf8.RuneCountInString(in.Name) > maxTokenName:
+		v.Add("name", validate.TooLong, map[string]string{"max": strconv.Itoa(maxTokenName)})
+	}
+	if _, ok := rbac.ParseScope(string(in.Scope)); !ok {
+		v.Add("scope", validate.OneOf, map[string]string{"values": "read, operate"})
+	}
+	if in.ExpiresInDays < 1 || in.ExpiresInDays > MaxTokenDays {
+		v.Add("expires_in_days", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(MaxTokenDays)})
+	}
+	var services []uuid.UUID
+	if in.ServiceIDs != nil {
+		services = slices.Clone(in.ServiceIDs)
+		slices.SortFunc(services, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		services = slices.Compact(services)
+		switch {
+		case len(services) == 0:
+			v.Add("service_ids", validate.Required, nil)
+		case len(services) > MaxTokenServices:
+			v.Add("service_ids", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(MaxTokenServices)})
+		case slices.Contains(services, uuid.Nil):
+			v.Add("service_ids", validate.Pattern, nil)
+		}
+	}
+	return services, v.Err()
+}
+
+// checkTokenServices refuses a limit naming a service the owner holds no role on now, or one that does not exist
+// (ErrTokenServiceNotAllowed, design §6.3); the services are key-share locked so none is deleted before the token is
+// stored. owner is the owner's current subject (its global role and scoped grants).
+func checkTokenServices(ctx context.Context, tx pgx.Tx, owner rbac.Subject, services []uuid.UUID) error {
+	if services == nil {
+		return nil
+	}
+	rows, err := tx.Query(ctx, "SELECT id FROM services WHERE id = ANY($1) FOR KEY SHARE", services)
+	if err != nil {
+		return fmt.Errorf("read the token's services: %w", err)
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("read the token's services: %w", err)
+	}
+	if len(found) != len(services) {
+		return ErrTokenServiceNotAllowed
+	}
+	if _, global := rbac.ParseRole(string(owner.Role)); global {
+		return nil
+	}
+	for _, sv := range services {
+		held := false
+		for _, g := range owner.Grants {
+			if slices.Contains(g.Services, sv) {
+				held = true
+				break
+			}
+		}
+		if !held {
+			return ErrTokenServiceNotAllowed
+		}
+	}
+	return nil
+}
+
+// insertToken stores a new token of owner inside the caller's transaction and audits token.created by actor (with
+// details); it returns the secret, shown once.
+func (s *Service) insertToken(ctx context.Context, tx pgx.Tx, actor audit.Actor, owner uuid.UUID, in NewToken, services []uuid.UUID,
+	details map[string]string) (string, Token, error) {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	secret := TokenPrefix + base64.RawURLEncoding.EncodeToString(b)
+	now := s.clock.Now().UTC()
+	t := Token{ID: uuid.Must(uuid.NewV7()), UserID: owner, Name: in.Name, Prefix: secret[:prefixLen], Scope: in.Scope, ServiceIDs: services,
+		ExpiresAt: now.Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour), CreatedAt: now}
+	if _, err := tx.Exec(ctx, `INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, service_ids, expires_at, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, t.ID, t.UserID, t.Name, tokenHash(secret), t.Prefix, []string{string(t.Scope)}, services,
+		t.ExpiresAt, now); err != nil {
+		return "", Token{}, fmt.Errorf("create token: %w", err)
+	}
+	d := map[string]string{"token_id": t.ID.String(), "scope": string(t.Scope)}
+	if services != nil {
+		d["service_ids"] = joinIDs(services)
+	}
+	maps.Copy(d, details)
+	if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "token.created", ObjectType: "api_token", ObjectID: t.ID.String(),
+		Result: audit.Success, Details: d}); err != nil {
+		return "", Token{}, err
+	}
+	return secret, t, nil
+}
+
+// joinIDs is a list of ids for an audit row's details.
+func joinIDs(ids []uuid.UUID) string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return strings.Join(out, ",")
 }
 
 func tokenHash(secret string) []byte {
@@ -63,32 +180,19 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 	if p.AuthSource != "" && p.AuthSource != AuthLocal {
 		return "", Token{}, sourceRefusal(p.AuthSource)
 	}
-	var v validate.Errors
-	switch {
-	case strings.TrimSpace(in.Name) == "":
-		v.Add("name", validate.Required, nil)
-	case utf8.RuneCountInString(in.Name) > maxTokenName:
-		v.Add("name", validate.TooLong, map[string]string{"max": strconv.Itoa(maxTokenName)})
-	}
-	if _, ok := rbac.ParseScope(string(in.Scope)); !ok {
-		v.Add("scope", validate.OneOf, map[string]string{"values": "read, operate"})
-	}
-	if in.ExpiresInDays < 1 || in.ExpiresInDays > MaxTokenDays {
-		v.Add("expires_in_days", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(MaxTokenDays)})
-	}
-	if err := v.Err(); err != nil {
+	services, err := in.validate()
+	if err != nil {
 		return "", Token{}, err
 	}
 	if !p.Subject(s.clock.Now()).AllowsScopeAnywhere(in.Scope) {
 		return "", Token{}, ErrTokenScopeNotAllowed
 	}
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	secret := TokenPrefix + base64.RawURLEncoding.EncodeToString(b)
+	var (
+		secret string
+		t      Token
+	)
 	now := s.clock.Now().UTC()
-	t := Token{ID: uuid.Must(uuid.NewV7()), UserID: p.UserID, Name: in.Name, Prefix: secret[:prefixLen], Scope: in.Scope,
-		ExpiresAt: now.Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour), CreatedAt: now}
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// The principal's role may predate a role change or disabling; the scope is checked
 		// against the owner's current row, held with FOR SHARE so UpdateUser (FOR UPDATE)
 		// cannot change it before this transaction commits.
@@ -118,15 +222,14 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 		if err != nil {
 			return err
 		}
-		if !(rbac.Subject{Role: rbac.Role(role), Grants: grants}).AllowsScopeAnywhere(in.Scope) {
+		owner := rbac.Subject{Role: rbac.Role(role), Grants: grants}
+		if !owner.AllowsScopeAnywhere(in.Scope) {
 			return ErrTokenScopeNotAllowed
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, t.ID, t.UserID, t.Name, tokenHash(secret), t.Prefix, []string{string(t.Scope)}, t.ExpiresAt, now); err != nil {
-			return fmt.Errorf("create token: %w", err)
+		if err := checkTokenServices(ctx, tx, owner, services); err != nil {
+			return err
 		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "token.created", ObjectType: "api_token", ObjectID: t.ID.String(),
-			Result: audit.Success, Details: map[string]string{"token_id": t.ID.String(), "scope": string(t.Scope)}})
+		secret, t, err = s.insertToken(ctx, tx, p.Actor(m), p.UserID, in, services, nil)
 		return err
 	})
 	if err != nil {
@@ -135,12 +238,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, t.ID, t.UserID, t.Name, tokenHash(secr
 	return secret, t, nil
 }
 
-const tokenColumns = "id, user_id, name, token_prefix, scopes[1], expires_at, last_used_at, created_at" //nolint:gosec // G101: column list, not a credential
+const tokenColumns = "id, user_id, name, token_prefix, scopes[1], service_ids, expires_at, last_used_at, created_at" //nolint:gosec // G101: column list, not a credential
 
 func scanToken(row pgx.Row) (Token, error) {
 	var t Token
 	var scope string
-	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Prefix, &scope, &t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Prefix, &scope, &t.ServiceIDs, &t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt); err != nil {
 		return Token{}, err
 	}
 	t.Scope = rbac.Scope(scope)
@@ -253,10 +356,10 @@ func (s *Service) AuthenticateToken(ctx context.Context, bearer string) (Princip
 		revoked  bool
 		disabled bool
 	)
-	err := s.pool.QueryRow(ctx, `SELECT t.id, t.scopes[1], t.expires_at, t.revoked_at IS NOT NULL,
+	err := s.pool.QueryRow(ctx, `SELECT t.id, t.scopes[1], t.service_ids, t.expires_at, t.revoked_at IS NOT NULL,
 u.id, u.username::text, u.display_name, coalesce(u.role, ''), u.locale, u.disabled_at IS NOT NULL
 FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1`, tokenHash(bearer)).Scan(
-		&p.TokenID, &scope, &expires, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled)
+		&p.TokenID, &scope, &p.TokenServices, &expires, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}
@@ -271,6 +374,12 @@ FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1`, tok
 	// the owner still allows its scope, and acts with the owner's grants as they are now (design §6.3).
 	if p.Grants, err = authz.LoadGrants(ctx, s.pool, p.UserID); err != nil {
 		return Principal{}, err
+	}
+	if p.TokenServices != nil {
+		// A token limited to services (design §6.3, R54): the owner's grants now, only on those services. The global
+		// role becomes a grant on them, so no platform route passes, whoever the owner is.
+		sub := rbac.Subject{Role: p.Role, Grants: p.Grants}.Within(p.TokenServices)
+		p.Role, p.Grants = sub.Role, sub.Grants
 	}
 	if !p.Subject(now).AllowsScopeAnywhere(p.Scope) {
 		return Principal{}, ErrUnauthenticated

@@ -235,10 +235,11 @@ func (s *Service) complete(ctx context.Context, providerID uuid.UUID, q url.Valu
 	if id.DisplayName == "" {
 		id.DisplayName = id.Username
 	}
-	role, r, err := s.resolveRole(ctx, p, c)
+	role, groups, r, err := s.resolveRole(ctx, p, c)
 	if err != nil || r != nil {
 		return Completion{}, r, err
 	}
+	id.Groups = groups
 	var res auth.SessionResult
 	if row.stepUp {
 		res, err = s.auth.StepUpOIDC(ctx, row.session, *row.user, *id, role, m)
@@ -246,6 +247,8 @@ func (s *Service) complete(ctx context.Context, providerID uuid.UUID, q url.Valu
 		res, err = s.auth.SignInOIDC(ctx, *id, role, m)
 	}
 	switch {
+	case errors.Is(err, auth.ErrNoAccess):
+		return Completion{}, &refusal{reason: "no_access"}, nil
 	case errors.Is(err, auth.ErrOIDCEmailInUse):
 		return Completion{}, &refusal{reason: "email_in_use"}, nil
 	case errors.Is(err, auth.ErrOIDCUserDisabled):
@@ -339,27 +342,29 @@ func (s *Service) verify(ctx context.Context, p Provider, raw string, row loginS
 	return c, nil, nil
 }
 
-// resolveRole maps the token's groups to a role (SEC-014): an overage is groups_overage, a malformed claim
-// login_invalid, no mapped group no_access. It runs for sign-ins and step-ups alike (S-1).
-func (s *Service) resolveRole(ctx context.Context, p Provider, c claims.Claims) (rbac.Role, *refusal, error) {
+// resolveRole maps the token's groups to a role (SEC-014) and returns the groups: an overage is groups_overage, a
+// malformed claim login_invalid. No mapped group is auth.NoGlobalRole: the sign-in or step-up is then let in only
+// when a role binding reaches the user (auth answers ErrNoAccess otherwise, the refusal no_access; design §6.1, R54).
+// It runs for sign-ins and step-ups alike (S-1).
+func (s *Service) resolveRole(ctx context.Context, p Provider, c claims.Claims) (rbac.Role, []string, *refusal, error) {
 	groups, err := claims.Groups(c, p.GroupsClaim)
 	switch {
 	case errors.Is(err, claims.ErrOverage):
-		return "", &refusal{reason: "groups_overage"}, nil
+		return "", nil, &refusal{reason: "groups_overage"}, nil
 	case err != nil:
-		return "", &refusal{reason: "login_invalid", detail: "groups"}, nil
+		return "", nil, &refusal{reason: "login_invalid", detail: "groups"}, nil
 	}
 	mappings, err := mappingsFor(ctx, s.pool, p.ID)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	sw, err := s.Settings(ctx)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	role, ok := claims.ResolveRole(groups, mappings, sw.AllowAdminRole)
 	if !ok {
-		return "", &refusal{reason: "no_access"}, nil
+		return auth.NoGlobalRole, groups, nil, nil
 	}
-	return role, nil, nil
+	return role, groups, nil, nil
 }
