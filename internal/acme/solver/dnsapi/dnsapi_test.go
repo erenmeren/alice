@@ -296,6 +296,22 @@ func TestProviderErrors(t *testing.T) {
 	assert.ErrorIs(t, s.Present(dead, ch("d.example.com", "v")), context.Canceled)
 }
 
+type zeroingProvider struct {
+	*memProvider
+	zeroed bool
+}
+
+func (z *zeroingProvider) Zero() { z.zeroed = true }
+
+func TestZeroReachesTheProvider(t *testing.T) {
+	z := &zeroingProvider{memProvider: newMem("example.com")}
+	s, _ := newSolver(t, z, Config{})
+	s.Zero()
+	assert.True(t, z.zeroed)
+	plain, _ := newSolver(t, newMem("example.com"), Config{})
+	plain.Zero() // a provider without credentials: nothing to do
+}
+
 func TestSleepCtx(t *testing.T) {
 	require.NoError(t, sleepCtx(context.Background(), time.Millisecond))
 	ctx, cancel := context.WithCancel(context.Background())

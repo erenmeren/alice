@@ -678,8 +678,8 @@ updated_at) VALUES ($1, $2, '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, 
 	assert.Positive(t, calls.Load())
 	cfg, err := seamed.ACMEHookSolverConfig(w.ctx, w.hook.ID)
 	require.NoError(t, err)
-	cfg.Secret.Zero()
-	assert.Same(t, pool, cfg.BaseRoots, "the hook's transport gets the same trust")
+	cfg.Zero()
+	assert.Same(t, pool, cfg.Hook.BaseRoots, "the hook's transport gets the same trust")
 	broken := inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
 		Registry: w.reg, Jobs: w.jobs, ACMERoots: func() (*x509.CertPool, error) { return nil, errors.New("no file") }})
 	_, err = broken.ACMEHookSolverConfig(w.ctx, w.hook.ID)
@@ -738,8 +738,8 @@ func TestACMEOrderWorkAndKey(t *testing.T) {
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 	cfg, err := w.svc.ACMEHookCleanupConfig(w.ctx, w.hook.ID)
 	require.NoError(t, err)
-	assert.Equal(t, w.fake.Credentials().HookSecret, string(cfg.Secret.Bytes()))
-	cfg.Secret.Zero()
+	assert.Equal(t, w.fake.Credentials().HookSecret, string(cfg.Hook.Secret.Bytes()))
+	cfg.Zero()
 	_, err = w.svc.ACMEHookCleanupConfig(w.ctx, uuid.New())
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 }

@@ -5,18 +5,17 @@ import (
 	"errors"
 	"fmt"
 
-	"alice/internal/acme"
 	"alice/internal/acme/solver"
-	"alice/internal/acme/solver/dns01"
+	"alice/internal/acme/solver/dnssolver"
 	"alice/internal/acme/solver/http01"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 )
 
 // cleanup removes the challenge records an ended order still lists (acme.cleanup, ClassAlways: it runs in lock too,
-// A12). Each record is removed through what published it: the hook (a deleted hook's row and secret are still used;
-// the solver's allow-list is the record's own name, since Alice only removes what she published) or the Nginx server
-// (a session on it). A removed record is taken out of the order's list at once. When records are left the attempt's
+// A12). Each record is removed through what published it: the hook or the built-in DNS provider (R57; a deleted
+// publisher's row and secret are still used; the solver's allow-list is the record's own name, since Alice only
+// removes what she published) or the Nginx server (a session on it). A removed record is taken out of the order's list at once. When records are left the attempt's
 // code is recorded on the order and the job fails retryably (five attempts on the queue's backoff; the last one writes
 // the audit row acme.order.cleanup_failed, and the sweep queues the cleanup again an hour later); when none is left the
 // order records the cleanup (audit acme.order.cleaned_up). A running order is not touched: its own job cleans up, or
@@ -77,7 +76,7 @@ func (h *handlers) cleanup(ctx context.Context, j jobs.Job, _ jobs.StepRecorder)
 // removeRecord removes one record through the hook or the server that published it.
 func (h *handlers) removeRecord(ctx context.Context, rec inventory.ACMEPresented) error {
 	var s solver.Solver
-	closeFn := func() {}
+	var closeFn func() // every way that reaches the clean-up sets it
 	switch {
 	case rec.Challenge.Type == solver.DNS01 && rec.HookID != nil:
 		cfg, err := h.d.Inventory.ACMEHookCleanupConfig(ctx, *rec.HookID)
@@ -87,13 +86,14 @@ func (h *handlers) removeRecord(ctx context.Context, rec inventory.ACMEPresented
 		if err != nil {
 			return err
 		}
-		cfg.AllowedSuffixes = []string{rec.Challenge.Domain}
-		ds, err := dns01.New(cfg)
-		cfg.Secret.Zero()
+		cfg = cfg.WithCleanupNames(rec.Challenge.Domain)
+		ds, err := dnssolver.New(cfg)
+		cfg.Zero()
 		if err != nil {
-			return &acme.Error{Reason: acme.ReasonHookRefused}
+			return dnsSetupError(cfg.Kind)
 		}
 		s = ds
+		closeFn = func() { dnssolver.Close(ds) }
 	case rec.Challenge.Type == solver.HTTP01 && rec.TargetID != nil:
 		pub, closePub, err := h.openPublisher(ctx, *rec.TargetID)
 		if err != nil {

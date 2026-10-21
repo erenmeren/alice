@@ -399,7 +399,10 @@ func secretFree(t reporter, typ reflect.Type, path string) {
 		f := typ.Field(i)
 		tag := strings.Split(f.Tag.Get("json"), ",")[0]
 		configured := f.Type.Kind() == reflect.Bool && strings.HasSuffix(f.Name, "Configured") && strings.HasSuffix(tag, "_configured")
-		if !configured {
+		// An AWS access key ID names a key and is shown by design (R57); its secret access key never is. Only that
+		// exact string field is admitted.
+		keyID := f.Type.Kind() == reflect.String && f.Name == "AccessKeyID" && tag == "access_key_id"
+		if !configured && !keyID {
 			assert.False(t, secretWords.MatchString(f.Name), "%s.%s", path, f.Name)
 			assert.False(t, secretWords.MatchString(tag), "%s.%s json %q", path, f.Name, tag)
 		}

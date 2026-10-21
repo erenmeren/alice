@@ -54,9 +54,9 @@ type Config struct {
 	// Roots are the trusted roots that decide whether a discovered chain is complete; nil = the
 	// operating system's (certs.SystemRoots).
 	Roots *x509.CertPool
-	// ACMERoots replaces the system roots of every connection to an ACME CA or DNS hook when it returns a pool
-	// (the provider's or hook's own bundle is still added). nil, or a nil pool, means the system roots. Only the
-	// e2e build sets it (cmd/alice acmeRoots: its fake CA); a release build's returns nil.
+	// ACMERoots replaces the system roots of every connection to an ACME CA, a DNS hook or a built-in DNS provider
+	// (R57) when it returns a pool (the provider's or hook's own bundle is still added). nil, or a nil pool, means the
+	// system roots. Only the e2e build sets it (cmd/alice acmeRoots: its fake CA); a release build's returns nil.
 	ACMERoots func() (*x509.CertPool, error)
 }
 

@@ -38,7 +38,7 @@ import (
 	"alice/internal/acme"
 	"alice/internal/acme/keygen"
 	"alice/internal/acme/solver"
-	"alice/internal/acme/solver/dns01"
+	"alice/internal/acme/solver/dnssolver"
 	"alice/internal/acme/solver/http01"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -65,8 +65,8 @@ type Inventory interface {
 	EnqueueACMECleanup(ctx context.Context, orderID uuid.UUID) error
 	ACMECleanupWork(ctx context.Context, orderID uuid.UUID) (inventory.ACMECleanupWork, error)
 	RecordACMECleanup(ctx context.Context, orderID uuid.UUID, code string, final bool) error
-	ACMEHookSolverConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error)
-	ACMEHookCleanupConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error)
+	ACMEHookSolverConfig(ctx context.Context, hookID uuid.UUID) (dnssolver.Config, error)
+	ACMEHookCleanupConfig(ctx context.Context, hookID uuid.UUID) (dnssolver.Config, error)
 	StaleACMEOrders(ctx context.Context, olderThan time.Duration) ([]inventory.ACMEStaleOrder, error)
 	EnqueueACMECleanups(ctx context.Context, retryAfter, giveUpAfter time.Duration) (int, error)
 	TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error)
@@ -436,9 +436,10 @@ func (c *crashSolver) CleanUp(ctx context.Context, ch solver.Challenge) error {
 	return c.Solver.CleanUp(ctx, ch)
 }
 
-// solverFor builds the order's solver: DNS-01 through the certificate's hook (its secret is opened for the solver
-// and zeroed at once; the solver keeps its own copy for the order), HTTP-01 through the session of the certificate's
-// Nginx server (closed by the returned function).
+// solverFor builds the order's solver: DNS-01 through the certificate's DNS publisher, the hook or a built-in DNS
+// provider (R57; its secret or credentials are opened for the solver and zeroed at once; the solver keeps its own
+// copy for the order and the returned function clears it), HTTP-01 through the session of the certificate's Nginx
+// server (closed by the returned function).
 func (h *handlers) solverFor(ctx context.Context, w inventory.ACMEOrderWork) (solver.Solver, func(), error) {
 	switch {
 	case w.Challenge == inventory.ACMEChallengeDNS01 && w.HookID != nil:
@@ -446,12 +447,12 @@ func (h *handlers) solverFor(ctx context.Context, w inventory.ACMEOrderWork) (so
 		if err != nil {
 			return nil, nil, err
 		}
-		defer cfg.Secret.Zero()
-		s, err := dns01.New(cfg)
+		defer cfg.Zero()
+		s, err := dnssolver.New(cfg)
 		if err != nil {
-			return nil, nil, &acme.Error{Reason: acme.ReasonHookRefused}
+			return nil, nil, dnsSetupError(cfg.Kind)
 		}
-		return s, func() {}, nil
+		return s, func() { dnssolver.Close(s) }, nil
 	case w.Challenge == inventory.ACMEChallengeHTTP01 && w.HTTPTargetID != nil:
 		pub, closePub, err := h.openPublisher(ctx, *w.HTTPTargetID)
 		if err != nil {
@@ -465,6 +466,16 @@ func (h *handlers) solverFor(ctx context.Context, w inventory.ACMEOrderWork) (so
 		return s, closePub, nil
 	}
 	return nil, nil, inventory.ErrACMEChallengeUnavailable
+}
+
+// dnsSetupError is the error of a DNS publisher whose stored configuration the solver refuses (a stored row the
+// inventory accepted always builds; this is a damaged or foreign row): the hook's refusal for a hook, the provider's
+// error for a provider. Permanent either way.
+func dnsSetupError(kind string) error {
+	if kind == dnssolver.KindWebhook {
+		return &acme.Error{Reason: acme.ReasonHookRefused}
+	}
+	return &acme.Error{Reason: acme.ReasonDNSProviderError}
 }
 
 // openPublisher opens a session on an HTTP-01 server: a live Nginx server whose host key is confirmed and that is

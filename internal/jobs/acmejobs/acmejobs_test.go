@@ -23,6 +23,7 @@ import (
 	"alice/internal/acme"
 	"alice/internal/acme/solver"
 	"alice/internal/acme/solver/dns01"
+	"alice/internal/acme/solver/dnssolver"
 	"alice/internal/acme/solver/http01"
 	"alice/internal/acme/transport"
 	"alice/internal/inventory"
@@ -124,7 +125,7 @@ type stubInv struct {
 	succeedErr  error
 	failErr     error
 	abandonErr  error
-	hookCfg     dns01.Config
+	hookCfg     dnssolver.Config
 	hookErr     error
 	cleanupWork inventory.ACMECleanupWork
 	cleanupErr  error
@@ -221,10 +222,10 @@ func (s *stubInv) RecordACMECleanup(_ context.Context, _ uuid.UUID, code string,
 	s.recorded = append(s.recorded, code)
 	return s.recordErr
 }
-func (s *stubInv) ACMEHookSolverConfig(context.Context, uuid.UUID) (dns01.Config, error) {
+func (s *stubInv) ACMEHookSolverConfig(context.Context, uuid.UUID) (dnssolver.Config, error) {
 	return s.hookCfg, s.hookErr
 }
-func (s *stubInv) ACMEHookCleanupConfig(context.Context, uuid.UUID) (dns01.Config, error) {
+func (s *stubInv) ACMEHookCleanupConfig(context.Context, uuid.UUID) (dnssolver.Config, error) {
 	return s.hookCfg, s.hookErr
 }
 func (s *stubInv) StaleACMEOrders(context.Context, time.Duration) ([]inventory.ACMEStaleOrder, error) {
@@ -321,7 +322,7 @@ func TestIssueRefusalsEndTheOrder(t *testing.T) {
 		{"names no longer allowed", func(s *stubInv, _ *handlers) { s.work.ProviderSuffixes = nil }, openGate{}, acme.ReasonNameNotAllowed},
 		{"no client", func(s *stubInv, _ *handlers) { s.clientErr = inventory.ErrACMEAccountState }, openGate{}, "acme.account_state"},
 		{"hook config", func(s *stubInv, _ *handlers) { s.hookErr = inventory.ErrACMESecretUnreadable }, openGate{}, "acme.secret_unreadable"},
-		{"hook config refused by the solver", func(s *stubInv, _ *handlers) { s.hookCfg = dns01.Config{URL: "http://x"} }, openGate{},
+		{"hook config refused by the solver", func(s *stubInv, _ *handlers) { s.hookCfg = webhook(dns01.Config{URL: "http://x"}) }, openGate{},
 			acme.ReasonHookRefused},
 		{"unknown method", func(s *stubInv, _ *handlers) { s.work.Challenge = "tlsalpn01" }, openGate{}, acme.ReasonChallengeUnavailable},
 		{"server not found", func(s *stubInv, _ *handlers) {
@@ -441,9 +442,14 @@ func fakeCA(t *testing.T) (*fakeacme.Server, *acme.Client) {
 	return s, c
 }
 
-func hookConfig(s *fakeacme.Server) dns01.Config {
-	return dns01.Config{URL: s.Credentials().HookURL, Secret: secrets.NewPlaintext([]byte(s.Credentials().HookSecret)),
-		CABundlePEM: string(s.CAPEM()), PropagationWait: -1, AllowedSuffixes: []string{"example.test"}}
+func hookConfig(s *fakeacme.Server) dnssolver.Config {
+	return webhook(dns01.Config{URL: s.Credentials().HookURL, Secret: secrets.NewPlaintext([]byte(s.Credentials().HookSecret)),
+		CABundlePEM: string(s.CAPEM()), PropagationWait: -1, AllowedSuffixes: []string{"example.test"}})
+}
+
+// webhook is the solver configuration of a hook.
+func webhook(c dns01.Config) dnssolver.Config {
+	return dnssolver.Config{Kind: dnssolver.KindWebhook, Hook: c}
 }
 
 // After the CA issued: a refusal of the chain fails the order; a database that fails twice leaves it running for the
@@ -539,7 +545,7 @@ func TestCleanupOutcomes(t *testing.T) {
 	assert.True(t, strings.HasSuffix(inv.recorded[1], "!"), "the final attempt")
 
 	// A hook configuration the solver refuses, a server whose HTTP-01 solver cannot be built.
-	inv.hookErr, inv.hookCfg = nil, dns01.Config{URL: "http://x"}
+	inv.hookErr, inv.hookCfg = nil, webhook(dns01.Config{URL: "http://x"})
 	pubReg := providers.NewRegistry()
 	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapHTTP01), pub: &memPublisher{files: map[string]string{}}})
 	pubReg.Freeze()
@@ -825,10 +831,10 @@ func TestIssueFailuresCarryTheirClass(t *testing.T) {
 		mut               func(*stubInv)
 	}{
 		{"hook unreachable", acme.ReasonHookRefused, acme.ClassTransient, func(i *stubInv) {
-			i.hookCfg.URL, i.hookCfg.CABundlePEM = deadURL, deadCA
+			i.hookCfg.Hook.URL, i.hookCfg.Hook.CABundlePEM = deadURL, deadCA
 		}},
 		{"hook refuses", acme.ReasonHookRefused, acme.ClassPermanent, func(i *stubInv) {
-			i.hookCfg.URL, i.hookCfg.CABundlePEM = refusing.URL, refusingCA
+			i.hookCfg.Hook.URL, i.hookCfg.Hook.CABundlePEM = refusing.URL, refusingCA
 		}},
 		{"name no longer allowed", acme.ReasonNameNotAllowed, acme.ClassPermanent, func(i *stubInv) { i.work.ProviderSuffixes = nil }},
 	} {

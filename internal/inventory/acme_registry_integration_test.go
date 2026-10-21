@@ -686,13 +686,14 @@ func TestACMEHookLifecycle(t *testing.T) {
 	// The sealed secret opens into a working dns01 configuration.
 	cfg, err := w.svc.ACMEHookSolverConfig(w.ctx, h.ID)
 	require.NoError(t, err)
-	assert.Equal(t, secret, string(cfg.Secret.Bytes()))
-	assert.Equal(t, time.Duration(-1), cfg.PropagationWait, "0 s is no wait (dns01 reads 0 as its default)")
-	assert.Equal(t, 30*time.Second, cfg.PollTimeout)
-	assert.Equal(t, []string{"example.test"}, cfg.AllowedSuffixes)
-	_, err = dns01.New(cfg)
+	assert.Equal(t, inventory.ACMEHookKindWebhook, cfg.Kind)
+	assert.Equal(t, secret, string(cfg.Hook.Secret.Bytes()))
+	assert.Equal(t, time.Duration(-1), cfg.Hook.PropagationWait, "0 s is no wait (dns01 reads 0 as its default)")
+	assert.Equal(t, 30*time.Second, cfg.Hook.PollTimeout)
+	assert.Equal(t, []string{"example.test"}, cfg.Hook.AllowedSuffixes)
+	_, err = dns01.New(cfg.Hook)
 	require.NoError(t, err)
-	cfg.Secret.Zero()
+	cfg.Zero()
 	assert.NotContains(t, w.allRows(), secret)
 
 	_, err = w.svc.CreateACMEHook(w.ctx, w.admin, inventory.ACMEHookInput{Name: "dns HOOK", URL: "https://dns.example/hook",
@@ -717,8 +718,8 @@ func TestACMEHookLifecycle(t *testing.T) {
 	assert.Equal(t, "propagation_wait_seconds,poll_timeout_seconds,secret", d[0]["fields"])
 	cfg, err = w.svc.ACMEHookSolverConfig(w.ctx, h.ID)
 	require.NoError(t, err)
-	assert.Equal(t, newSecret, string(cfg.Secret.Bytes()))
-	cfg.Secret.Zero()
+	assert.Equal(t, newSecret, string(cfg.Hook.Secret.Bytes()))
+	cfg.Zero()
 	wait = 21
 	_, err = w.svc.UpdateACMEHook(w.ctx, w.admin, h.ID, inventory.ACMEHookPatch{PropagationWaitSeconds: &wait})
 	require.ErrorAs(t, err, &verrs, "21 + 100 is over the 120 s budget")

@@ -5,6 +5,7 @@ package acmejobs
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -101,6 +102,12 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWith(t, nil)
+}
+
+// newWorldWith is newWorld with roots as the inventory's ACMERoots (the trust of the fake DNS providers, R57).
+func newWorldWith(t *testing.T, roots func() (*x509.CertPool, error)) *world {
+	t.Helper()
 	now := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
@@ -119,7 +126,7 @@ func newWorld(t *testing.T) *world {
 	w.reg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapTestConnection, providers.CapHTTP01), pub: w.pub})
 	w.reg.Freeze()
 	w.inv = inventory.New(inventory.Config{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, License: w.gate, Registry: w.reg,
-		Jobs: w.queue, Notifier: notify.ServiceNotifier{Clock: w.clock}, Log: log})
+		Jobs: w.queue, Notifier: notify.ServiceNotifier{Clock: w.clock}, Log: log, ACMERoots: roots})
 	_, err = w.inv.EnsurePlatformKey(w.ctx)
 	require.NoError(t, err)
 	w.h = newHandlers(Deps{Inventory: w.inv, Registry: w.reg, Gate: w.gate, Clock: w.clock, Log: log})

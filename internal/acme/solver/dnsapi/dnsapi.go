@@ -184,6 +184,13 @@ func (s *Solver) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String
 // Kind is the provider's kind.
 func (s *Solver) Kind() string { return s.p.Kind() }
 
+// Zero clears the credentials the provider holds, when it holds any (the provider is not used afterwards).
+func (s *Solver) Zero() {
+	if z, ok := s.p.(interface{ Zero() }); ok {
+		z.Zero()
+	}
+}
+
 // Types implements solver.Solver.
 func (*Solver) Types() []string { return []string{solver.DNS01} }
 
