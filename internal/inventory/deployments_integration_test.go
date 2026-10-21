@@ -519,7 +519,8 @@ func TestDeploymentStateMachine(t *testing.T) {
 	assert.Equal(t, sha(f.old.FullchainPEM), rm.ExpectCertSHA256)
 	rb := rm.RollbackRequest(rm.Guard)
 	assert.Equal(t, providers.RollbackRequest{OperationID: id, Location: rm.Location, OldFingerprint: pki.Fingerprint(f.old.Cert), OldChainLength: 2,
-		OldSANs: []string{"www.example.test"}, KeyType: "ecdsa", Verify: rm.Verify, Guard: rm.Guard}, rb)
+		OldSANs: []string{"www.example.test"}, KeyType: "ecdsa", Verify: rm.Verify, Guard: rm.Guard, Backups: rb.Backups}, rb)
+	assert.NotNil(t, rb.Backups, "R59: every request carries the held backup store")
 	assert.True(t, rm.Guard.Empty(), "nothing is revoked or compromised here")
 	vr := rm.VerifyRequest()
 	assert.Equal(t, pki.Fingerprint(f.nw.Cert), vr.Fingerprint)

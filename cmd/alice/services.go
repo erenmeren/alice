@@ -429,7 +429,7 @@ func kvDeps(svc *services, clk clock.Clock, log *slog.Logger) kvjobs.Deps {
 // keys and reconciles deploys whose job ended without an outcome. The e2e build never ticks the three:
 // tests run them with POST /test/scheduler/run. The expiry scan (alerts.scan, ClassAlways: the notices go
 // out in lock too, with the license note) runs every alertsScanEvery (15 minutes; never in the e2e build),
-// one scan at a time (scanAlerts); maintenance.cleanup also prunes expired SSO sign-in states. The e2e
+// one scan at a time (scanAlerts); maintenance.cleanup also prunes expired SSO sign-in states and old held backups. The e2e
 // tests use the same tasks.
 func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *slog.Logger) *jobs.Scheduler {
 	return jobs.NewScheduler(clk, svc.license, log,
@@ -445,7 +445,9 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 			_, sessionsErr := svc.auth.PruneExpired(ctx)
 			_, jobsErr := svc.queue.Prune(ctx, jobRetention)
 			_, statesErr := svc.oidc.PruneStates(ctx) // expired SSO sign-in states (oidc.StateLifetime)
-			return errors.Join(sessionsErr, jobsErr, statesErr)
+			// Alice-held backups of deployments final for more than 7 days (R59 G5; none exist until a target holds one).
+			_, backupsErr := svc.inventory.PurgeHeldBackups(ctx)
+			return errors.Join(sessionsErr, jobsErr, statesErr, backupsErr)
 		}},
 		jobs.Task{Type: jobs.DiscoverySchedule, Every: time.Minute, Run: func(ctx context.Context) error {
 			_, err := svc.inventory.ScheduleDiscovery(ctx)

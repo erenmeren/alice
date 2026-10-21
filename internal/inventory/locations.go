@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,9 +33,6 @@ const (
 	// the chain as incomplete.
 	WarnChainUnresolved = "chain_unresolved"
 )
-
-// locationKind is certificate_locations.kind of a certificate file of a web server.
-const locationKind = "server_file"
 
 // Bounds of certificate_locations (migration 00006): a reported value that does not fit is cut,
 // emptied or flagged here, so that one odd location never fails the scan's transaction.
@@ -71,7 +69,15 @@ type preparedLocation struct {
 	fileSHA  string // the helper's hash of the file's bytes, lower case; "" without a certificate
 	keyType  string
 	warnings []string
+	// R59 G1: the kind, and for a location that is not a file its canonical locator and details ("{}" when none fit).
+	kind    providers.LocationKind
+	locator []byte
+	details []byte
 }
+
+// identity is the key a scan deduplicates its reported locations on: the kind and the certificate path (a location that
+// is not a file has its locator's canonical text there).
+func (p preparedLocation) identity() string { return string(p.kind) + "\x00" + p.loc.CertPath }
 
 // code returns v when it has the shape of a code, "" for "", and def otherwise.
 func code(v, def string) string {
@@ -100,12 +106,49 @@ func truncRunes(s string, n int) string {
 // well-formed code becomes "unknown".
 func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (preparedLocation, bool) {
 	in := d.Location
+	kind := in.Kind.OrFile()
+	if !kind.IsFile() {
+		return prepareKindLocation(d, kind, now)
+	}
 	path := clean(in.CertPath)
 	if path == "" || utf8.RuneCountInString(path) > maxLocationPath {
 		return preparedLocation{}, false
 	}
 	l := providers.CertLocation{CertPath: path, Inherited: in.Inherited, Symlinked: in.Symlinked, CustomLocation: in.CustomLocation,
 		KeyExists: in.KeyExists, FreeBytes: in.FreeBytes}
+	return prepareFields(d, l, now)
+}
+
+// prepareKindLocation prepares a location that is not a certificate file (R59 G1): its kind must be one the schema takes
+// and its locator well-formed (else it is not stored: the provider of the kind emits neither), cert_path is the
+// locator's canonical text (at most providers.MaxCanonicalLength characters), the key path and the Unix key facts stay
+// empty, and details that do not fit are dropped with list_truncated. Everything else is a file's rules (prepareFields).
+func prepareKindLocation(d providers.DiscoveredCertificate, kind providers.LocationKind, now time.Time) (preparedLocation, bool) {
+	in := d.Location
+	path := clean(in.CertPath)
+	locator, err := in.Locator.Canonical()
+	if !kind.Known() || err != nil || path == "" || utf8.RuneCountInString(path) > providers.MaxCanonicalLength {
+		return preparedLocation{}, false
+	}
+	l := providers.CertLocation{Kind: kind, Locator: in.Locator, CertPath: path, Inherited: in.Inherited, CustomLocation: in.CustomLocation,
+		KeyExists: in.KeyExists, FreeBytes: in.FreeBytes}
+	p, ok := prepareFields(d, l, now)
+	if !ok {
+		return preparedLocation{}, false
+	}
+	p.kind, p.locator, p.details = kind, locator, []byte("{}")
+	if details, err := providers.CanonicalDetails(in.Details); err == nil {
+		p.details, p.loc.Details = details, in.Details
+	} else if !slices.Contains(p.warnings, providers.WarnListTruncated) {
+		p.warnings = locationWarnings(p.warnings, []string{providers.WarnListTruncated})
+	}
+	return p, true
+}
+
+// prepareFields applies the rules every kind shares to l (the identity already set) from what the provider reported.
+func prepareFields(d providers.DiscoveredCertificate, l providers.CertLocation, now time.Time) (preparedLocation, bool) {
+	in := d.Location
+	fileKind := l.Kind.IsFile()
 	l.Unsupported = code(in.Unsupported, providers.UnsupportedUnknown)
 	l.Problem = code(in.Problem, providers.CertProblemUnknown)
 	l.KeyProblem = code(in.KeyProblem, providers.CertProblemUnknown)
@@ -115,20 +158,22 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 	if l.Unsupported == "" && (l.Problem != "" || l.KeyProblem != "") {
 		l.Unsupported = providers.UnsupportedFile
 	}
-	l.KeyPath = clean(in.KeyPath)
-	if utf8.RuneCountInString(l.KeyPath) > maxLocationPath {
-		l.KeyPath = ""
-		if l.Unsupported == "" {
-			l.Unsupported = providers.UnsupportedPathNotAllowed
+	if fileKind {
+		l.KeyPath = clean(in.KeyPath)
+		if utf8.RuneCountInString(l.KeyPath) > maxLocationPath {
+			l.KeyPath = ""
+			if l.Unsupported == "" {
+				l.Unsupported = providers.UnsupportedPathNotAllowed
+			}
 		}
+		if l.ResolvedCertPath = clean(in.ResolvedCertPath); utf8.RuneCountInString(l.ResolvedCertPath) > maxResolvedPath {
+			l.ResolvedCertPath = ""
+		}
+		if keyModeRE.MatchString(in.KeyMode) {
+			l.KeyMode = in.KeyMode
+		}
+		l.KeyOwner, l.KeyGroup = truncRunes(clean(in.KeyOwner), maxKeyAccount), truncRunes(clean(in.KeyGroup), maxKeyAccount)
 	}
-	if l.ResolvedCertPath = clean(in.ResolvedCertPath); utf8.RuneCountInString(l.ResolvedCertPath) > maxResolvedPath {
-		l.ResolvedCertPath = ""
-	}
-	if keyModeRE.MatchString(in.KeyMode) {
-		l.KeyMode = in.KeyMode
-	}
-	l.KeyOwner, l.KeyGroup = truncRunes(clean(in.KeyOwner), maxKeyAccount), truncRunes(clean(in.KeyGroup), maxKeyAccount)
 
 	p := preparedLocation{}
 	switch {
@@ -205,7 +250,7 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 	if err != nil {
 		return preparedLocation{}, false // cleaned strings and integers: cannot fail
 	}
-	p.loc, p.servers = l, raw
+	p.loc, p.servers, p.kind = l, raw, providers.LocationServerFile
 	return p, true
 }
 
@@ -337,6 +382,7 @@ type existingLocation struct {
 	deployed    string
 	fileSHA     string
 	keyType     string
+	sameLocator bool // the stored locator is the reported one (both NULL for a file)
 	// The location's unfinished deployment (state not done) and its finished ones that matter to
 	// the changed-outside check (aliceFingerprints): every one finished since the location was last
 	// scanned, oldest first. finishedCut: there were more than
@@ -475,13 +521,20 @@ func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredC
 			out.skipped++
 			continue
 		}
-		if paths[p.loc.CertPath] {
+		// A location that is not a file is one location per path and one per locator (both unique, migration 00031).
+		locator := string(p.kind) + "\x00" + string(p.locator)
+		if paths[p.identity()] || (p.locator != nil && paths[locator]) {
 			continue
 		}
-		paths[p.loc.CertPath] = true
+		paths[p.identity()] = true
+		if p.locator != nil {
+			paths[locator] = true
+		}
 		out.items = append(out.items, p)
 	}
-	slices.SortFunc(out.items, func(a, b preparedLocation) int { return strings.Compare(a.loc.CertPath, b.loc.CertPath) })
+	slices.SortFunc(out.items, func(a, b preparedLocation) int {
+		return cmp.Or(strings.Compare(a.loc.CertPath, b.loc.CertPath), strings.Compare(string(a.kind), string(b.kind)))
+	})
 	out.read = map[string]discoveredCertificate{}
 	for _, p := range out.items {
 		if p.cert == nil {
@@ -525,9 +578,20 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 	var events []audit.Event
 	seen := []uuid.UUID{}
 	for _, p := range items {
-		prev, err := lockLocation(ctx, tx, t.ID, p.loc.CertPath)
+		prev, err := lockLocation(ctx, tx, t.ID, p.kind, p.loc.CertPath, p.locator)
 		if err != nil {
 			return certSummary{}, nil, err
+		}
+		if conflict, err := locatorConflict(ctx, tx, t.ID, p, prev); err != nil {
+			return certSummary{}, nil, err
+		} else if conflict {
+			// A location that is not a file whose path and locator disagree with what is stored (a provider that changed
+			// its canonical text): it is not stored, and the stored one is not marked missing for it.
+			sum.Skipped++
+			if prev != nil {
+				seen = append(seen, prev.id)
+			}
+			continue
 		}
 		sum.Locations++
 		var certID *uuid.UUID
@@ -561,8 +625,9 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 		}
 	}
 	if markMissing {
-		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET missing_since = $3, version = version + 1
-WHERE target_id = $1 AND kind = $2 AND missing_since IS NULL AND NOT (id = ANY($4))`, t.ID, locationKind, now, seen)
+		// Every kind of the target: one provider reports all of a target's locations (a web server's are all files).
+		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET missing_since = $2, version = version + 1
+WHERE target_id = $1 AND missing_since IS NULL AND NOT (id = ANY($3))`, t.ID, now, seen)
 		if err != nil {
 			return certSummary{}, nil, fmt.Errorf("inventory: mark missing certificate locations: %w", err)
 		}
@@ -571,16 +636,39 @@ WHERE target_id = $1 AND kind = $2 AND missing_since IS NULL AND NOT (id = ANY($
 	return sum, events, nil
 }
 
-// lockLocation reads and locks the stored location of the path (nil when there is none). The
-// lookup is the path-hash expression of the unique index (migration 00006).
-func lockLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, path string) (*existingLocation, error) {
+// locatorConflict reports a location that is not a file whose stored row disagrees with the report: the row of its path
+// holds another locator, or (a new path) another row already holds its locator. A file never conflicts.
+func locatorConflict(ctx context.Context, tx pgx.Tx, target uuid.UUID, p preparedLocation, prev *existingLocation) (bool, error) {
+	if p.locator == nil {
+		return false, nil
+	}
+	if prev != nil {
+		return !prev.sameLocator, nil
+	}
+	var taken bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM certificate_locations WHERE target_id = $1 AND kind = $2 AND locator = $3::jsonb)",
+		target, p.kind, string(p.locator)).Scan(&taken); err != nil {
+		return false, fmt.Errorf("inventory: read certificate location: %w", err)
+	}
+	return taken, nil
+}
+
+// lockLocation reads and locks the stored location of the kind and path (nil when there is none); sameLocator says
+// whether it holds locator (nil: a file). The lookup is the path-hash expression of the unique index (migration 00006).
+func lockLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, kind providers.LocationKind, path string, locator []byte) (*existingLocation, error) {
 	var e existingLocation
 	var lastSeen time.Time
+	var loc *string
+	if locator != nil {
+		s := string(locator)
+		loc = &s
+	}
 	err := tx.QueryRow(ctx, `SELECT l.id, l.certificate_id, coalesce(c.fingerprint_sha256, ''), l.deployed_fingerprint, l.cert_file_sha256, l.key_type,
-    l.last_seen_at
+    l.last_seen_at, l.locator IS NOT DISTINCT FROM $4::jsonb
 FROM certificate_locations l LEFT JOIN certificates c ON c.id = l.certificate_id
 WHERE l.target_id = $1 AND l.kind = $2 AND certificate_location_path_hash(l.cert_path) = certificate_location_path_hash($3) AND l.cert_path = $3
-FOR UPDATE OF l`, target, locationKind, path).Scan(&e.id, &e.certID, &e.fingerprint, &e.deployed, &e.fileSHA, &e.keyType, &lastSeen)
+FOR UPDATE OF l`, target, kind.OrFile(), path, loc).Scan(&e.id, &e.certID, &e.fingerprint, &e.deployed, &e.fileSHA, &e.keyType, &lastSeen,
+		&e.sameLocator)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -638,12 +726,12 @@ func insertLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, p prepared
 	id := uuid.Must(uuid.NewV7())
 	_, err := tx.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, resolved_cert_path, certificate_id,
     key_type, servers, supported, unsupported_reason, problem, key_problem, inherited, custom_location, symlinked, cert_file_sha256,
-    key_exists, key_mode, key_owner, key_group, warnings, first_seen_at, last_seen_at, file_observed_at)
+    key_exists, key_mode, key_owner, key_group, warnings, first_seen_at, last_seen_at, file_observed_at, locator, details)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $23,
-    CASE WHEN $24 THEN $23::timestamptz END)`,
-		id, target, locationKind, l.CertPath, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported,
+    CASE WHEN $24 THEN $23::timestamptz END, $25::jsonb, coalesce($26::jsonb, '{}'))`,
+		id, target, p.kind.OrFile(), l.CertPath, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported,
 		l.Problem, l.KeyProblem, l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup,
-		p.warnings, now, p.readFile())
+		p.warnings, now, p.readFile(), jsonText(p.locator), jsonText(p.details))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("inventory: store certificate location: %w", err)
 	}
@@ -660,17 +748,21 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 func updateLocation(ctx context.Context, tx pgx.Tx, id uuid.UUID, p preparedLocation, certID *uuid.UUID, fileSHA, keyType string,
 	changedOutside bool, now time.Time) error {
 	l := p.loc
+	details := p.details
+	if details == nil {
+		details = []byte("{}")
+	}
 	args := []any{id, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported, l.Problem, l.KeyProblem,
 		l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup, p.warnings, changedOutside, now,
-		p.readFile()}
+		p.readFile(), string(details)}
 	if !changedOutside {
 		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET last_seen_at = $21,
     file_observed_at = CASE WHEN $22 THEN $21 ELSE file_observed_at END
 WHERE id = $1 AND missing_since IS NULL AND NOT $20::boolean
   AND (key_path, resolved_cert_path, certificate_id, key_type, servers, supported, unsupported_reason, problem, key_problem, inherited,
-       custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group, warnings)
+       custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group, warnings, details)
       IS NOT DISTINCT FROM ($2::text, $3::text, $4::uuid, $5::text, $6::jsonb, $7::boolean, $8::text, $9::text, $10::text, $11::boolean,
-       $12::boolean, $13::boolean, $14::text, $15::boolean, $16::text, $17::text, $18::text, $19::text[])`, args...)
+       $12::boolean, $13::boolean, $14::text, $15::boolean, $16::text, $17::text, $18::text, $19::text[], $23::jsonb)`, args...)
 		if err != nil {
 			return fmt.Errorf("inventory: update certificate location: %w", err)
 		}
@@ -681,7 +773,7 @@ WHERE id = $1 AND missing_since IS NULL AND NOT $20::boolean
 	_, err := tx.Exec(ctx, `UPDATE certificate_locations SET version = version + 1,
     key_path = $2, resolved_cert_path = $3, certificate_id = $4, key_type = $5, servers = $6, supported = $7, unsupported_reason = $8,
     problem = $9, key_problem = $10, inherited = $11, custom_location = $12, symlinked = $13, cert_file_sha256 = $14, key_exists = $15,
-    key_mode = $16, key_owner = $17, key_group = $18, warnings = $19, last_seen_at = $21, missing_since = NULL,
+    key_mode = $16, key_owner = $17, key_group = $18, warnings = $19, details = $23::jsonb, last_seen_at = $21, missing_since = NULL,
     changed_outside_at = CASE WHEN $20 THEN $21 ELSE changed_outside_at END,
     file_observed_at = CASE WHEN $22 THEN $21 ELSE file_observed_at END
 WHERE id = $1`, args...)
@@ -698,7 +790,8 @@ c.id, coalesce(c.subject_cn, ''), coalesce(c.label, ''), coalesce(c.fingerprint_
 l.servers, l.supported, l.unsupported_reason, l.problem, l.key_problem, l.inherited, l.custom_location, l.symlinked, l.cert_file_sha256,
 l.key_exists, l.key_mode, l.key_owner, l.key_group, l.warnings, l.deployed_fingerprint, l.changed_outside_at, l.verify_port,
 coalesce(l.verify_sni, ''), l.skip_verify, l.first_seen_at, l.last_seen_at, l.missing_since, l.version,
-(SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1), t.type
+(SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1), t.type,
+l.kind, l.locator, l.details, coalesce(l.verify_address, '')
 FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 LEFT JOIN certificates c ON c.id = l.certificate_id`
@@ -713,12 +806,15 @@ func (s *Service) scanCertLocation(row pgx.Row) (CertificateLocation, error) {
 		ref      CertificateRef
 		notAfter *time.Time
 		servers  []byte
+		locator  []byte
+		details  []byte
 	)
 	err := row.Scan(&l.ID, &l.TargetID, &l.TargetName, &l.CertPath, &l.KeyPath, &l.ResolvedCertPath, &l.KeyType,
 		&certID, &ref.SubjectCN, &ref.Label, &ref.Fingerprint, &notAfter,
 		&servers, &l.Supported, &l.UnsupportedReason, &l.Problem, &l.KeyProblem, &l.Inherited, &l.CustomLocation, &l.Symlinked, &l.CertFileSHA256,
 		&l.KeyExists, &l.KeyMode, &l.KeyOwner, &l.KeyGroup, &l.Warnings, &l.DeployedFingerprint, &l.ChangedOutsideAt, &l.VerifyPort,
-		&l.VerifySNI, &l.SkipVerify, &l.FirstSeenAt, &l.LastSeenAt, &l.MissingSince, &l.Version, &l.ActiveDeploymentID, &typ)
+		&l.VerifySNI, &l.SkipVerify, &l.FirstSeenAt, &l.LastSeenAt, &l.MissingSince, &l.Version, &l.ActiveDeploymentID, &typ,
+		&l.Kind, &locator, &details, &l.VerifyAddress)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CertificateLocation{}, ErrNotFound
 	}
@@ -734,6 +830,9 @@ func (s *Service) scanCertLocation(row pgx.Row) (CertificateLocation, error) {
 	}
 	if l.Servers == nil {
 		l.Servers = []providers.CertServer{}
+	}
+	if l.Locator, l.Details, err = decodeKind(locator, details); err != nil {
+		return CertificateLocation{}, err
 	}
 	if l.Warnings == nil {
 		l.Warnings = []string{}
@@ -803,6 +902,31 @@ func (s *Service) GetLocation(ctx context.Context, id uuid.UUID) (CertificateLoc
 		return CertificateLocation{}, err
 	}
 	return items[0], nil
+}
+
+// jsonText is a canonical JSON text as a query parameter (nil: SQL NULL).
+func jsonText(b []byte) *string {
+	if b == nil {
+		return nil
+	}
+	s := string(b)
+	return &s
+}
+
+// decodeKind reads a stored locator and details (R59 G1): nil for a file's NULL locator and for empty details.
+func decodeKind(locator, details []byte) (providers.Locator, map[string]any, error) {
+	l, err := providers.ParseLocator(locator)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inventory: decode location locator: %w", err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(details, &d); err != nil {
+		return nil, nil, fmt.Errorf("inventory: decode location details: %w", err)
+	}
+	if len(d) == 0 {
+		d = nil
+	}
+	return l, d, nil
 }
 
 // liveLocation reports ErrNotFound unless the location is on a live target.

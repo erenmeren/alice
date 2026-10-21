@@ -120,6 +120,8 @@ type Material struct {
 	TrustRoots *x509.CertPool
 	TrustStore string
 	TrustAt    time.Time
+	// R59 G5: the deployment's store of a held backup, carried by every request built from the material.
+	backups providers.HeldBackups
 }
 
 // TrustPolicy is the verification's trust policy for the chain sent (R51; providers.TrustPolicyFor): nil when the
@@ -174,7 +176,7 @@ func (m Material) DeployRequest(v SendValues) providers.DeployRequest {
 	return providers.DeployRequest{OperationID: v.OperationID, Location: m.Location, ExpectCertSHA256: v.ExpectCertSHA256,
 		CertificatePEM: m.CertificatePEM, PrivateKeyPEM: m.PrivateKeyPEM, Fingerprint: m.Fingerprint, SANs: m.SANs, KeyType: m.KeyType,
 		OldFingerprint: v.PreviousFingerprint, OldSANs: m.OldSANs, Verify: m.Verify, ChainLength: v.NewChainLength, Guard: m.Guard,
-		Trust: m.TrustPolicy()}
+		Trust: m.TrustPolicy(), Backups: m.backups}
 }
 
 // VerifyRequest checks the new certificate with the recorded fingerprint and chain length (a
@@ -192,7 +194,7 @@ func (m Material) RollbackRequest(g providers.RollbackGuard) providers.RollbackR
 		op = *m.Deployment.OperationID
 	}
 	return providers.RollbackRequest{OperationID: op, Location: m.Location, OldFingerprint: m.PreviousFingerprint,
-		OldChainLength: m.PreviousChainLength, OldSANs: m.OldSANs, KeyType: m.oldKeyType(), Verify: m.Verify, Guard: g}
+		OldChainLength: m.PreviousChainLength, OldSANs: m.OldSANs, KeyType: m.oldKeyType(), Verify: m.Verify, Guard: g, Backups: m.backups}
 }
 
 func (m Material) oldKeyType() string {
@@ -253,6 +255,8 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 		facts                        []byte
 		revoked, compromised         bool
 		oldKey                       string
+		kind                         providers.LocationKind
+		locator, details             []byte
 	)
 	err = s.pool.QueryRow(ctx, `SELECT l.servers, l.supported AND l.missing_since IS NULL, l.resolved_cert_path, l.inherited, l.symlinked,
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
@@ -260,7 +264,8 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
     c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts,
     c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL, coalesce(oc.public_key_sha256, ''),
     (SELECT p.ca_bundle_pem FROM acme_orders o JOIN acme_certificates ac ON ac.id = o.acme_certificate_id
-     JOIN acme_providers p ON p.id = ac.provider_id WHERE o.certificate_id = c.id ORDER BY o.finished_at DESC NULLS LAST LIMIT 1)
+     JOIN acme_providers p ON p.id = ac.provider_id WHERE o.certificate_id = c.id ORDER BY o.finished_at DESC NULLS LAST LIMIT 1),
+    l.kind, l.locator, l.details, coalesce(l.verify_address, '')
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -269,7 +274,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
 		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised, &oldKey,
-		&bundle)
+		&bundle, &kind, &locator, &details, &m.Verify.Address)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -279,6 +284,15 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if err := json.Unmarshal(servers, &m.Location.Servers); err != nil {
 		return Material{}, fmt.Errorf("inventory: decode location servers: %w", err)
 	}
+	if !kind.IsFile() {
+		// R59 G1: a location that is not a file carries its kind, locator and details to the provider; a file's request
+		// is unchanged (no kind, no locator).
+		m.Location.Kind = kind
+		if m.Location.Locator, m.Location.Details, err = decodeKind(locator, details); err != nil {
+			return Material{}, err
+		}
+	}
+	m.backups = s.HeldBackups(d.ID)
 	if !m.Recorded {
 		// A certificate revoked or marked compromised after its deployment was queued is never sent (00021).
 		if _, err := (deployCertificate{revoked: revoked, compromised: compromised}).revocationRefusal(); err != nil {
@@ -293,7 +307,9 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if err := json.Unmarshal(facts, &f); err != nil {
 		return Material{}, fmt.Errorf("inventory: decode target facts: %w", err)
 	}
-	m.ConfigValid = f.WebServer != nil && f.WebServer.ConfigValid
+	// The web server's configuration test gates certificate files; a provider of another kind refuses its own
+	// preconditions before it changes anything (R59).
+	m.ConfigValid = (f.WebServer != nil && f.WebServer.ConfigValid) || !kind.IsFile()
 	m.Location.CertPath, m.Location.KeyPath = d.CertPath, d.KeyPath
 	if verifyPort != nil {
 		m.Verify.Port = *verifyPort

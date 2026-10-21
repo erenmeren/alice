@@ -49,6 +49,12 @@ type HostKeyRecord struct {
 // VerifyCommand is the command an administrator runs on the server to compare the fingerprint
 // (R33 "UI copy-paste fingerprint verification command").
 func VerifyCommand(keyType string) string {
+	if keyType == providers.HostKeyTypeTLSSPKI {
+		// The fingerprint of the certificate's public key, in the form Alice shows (R59 G2): run against the target's
+		// address and port from a machine that reaches it.
+		return "openssl s_client -connect ADDRESS:PORT </dev/null 2>/dev/null | openssl x509 -pubkey -noout | " +
+			"openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64 | tr -d '='"
+	}
 	name := "ed25519"
 	switch {
 	case strings.HasPrefix(keyType, "ecdsa-"):
@@ -86,6 +92,14 @@ var errInconsistentHostKey = errors.New("inventory: an observed host key's type 
 func checkHostKey(k providers.HostKey) error {
 	if k.Type == "" || k.Fingerprint == "" || len(k.PublicKey) == 0 {
 		return errInconsistentHostKey
+	}
+	if k.Type == providers.HostKeyTypeTLSSPKI {
+		// An API target's server identity (R59 G2): the SubjectPublicKeyInfo it presents, in the same history and
+		// confirm flow as an SSH host key.
+		if !providers.ValidTLSIdentity(k) {
+			return errInconsistentHostKey
+		}
+		return nil
 	}
 	pub, err := ssh.ParsePublicKey(k.PublicKey)
 	if err != nil || pub.Type() != k.Type || ssh.FingerprintSHA256(pub) != k.Fingerprint {

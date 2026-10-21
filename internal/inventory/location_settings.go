@@ -16,6 +16,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
 )
 
 // LocationPatch is the input of UpdateLocation: a location's verification settings (R38 item 6).
@@ -24,6 +25,19 @@ type LocationPatch struct {
 	VerifyPort *int    // 1..65535; 0 clears (the port of the location's server blocks is probed)
 	VerifySNI  *string // a DNS name; "" clears (the location's first server name is sent)
 	SkipVerify *bool
+	// VerifyAddress (R59 G4) is where Alice's probe reaches the location's endpoints: a DNS name or an IP literal; ""
+	// clears. Only a location that is not a certificate file takes one (validate.Pattern on a file): the web-server
+	// providers keep probing the server's own address.
+	VerifyAddress *string
+}
+
+// validProbeAddress is certificate_locations.verify_address's CHECK in its stored form: an IP literal without a zone (no
+// route domain), or a DNS name as validSNI takes it.
+func validProbeAddress(s string) bool {
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Zone() == ""
+	}
+	return validSNI(s)
 }
 
 // validSNI mirrors helperproto.ValidSNI, which inventory may not import (archtest): a DNS name of
@@ -47,7 +61,7 @@ func (s *Service) UpdateLocation(ctx context.Context, a Actor, id uuid.UUID, ifV
 		return CertificateLocation{}, err
 	}
 	var errs validate.Errors
-	if p.VerifyPort == nil && p.VerifySNI == nil && p.SkipVerify == nil {
+	if p.VerifyPort == nil && p.VerifySNI == nil && p.SkipVerify == nil && p.VerifyAddress == nil {
 		// Nothing to change: refused, so an empty edit neither bumps the version nor is audited.
 		errs.Add("verify_port", validate.Required, nil)
 		errs.Add("verify_sni", validate.Required, nil)
@@ -63,6 +77,16 @@ func (s *Service) UpdateLocation(ctx context.Context, a Actor, id uuid.UUID, ifV
 			errs.Add("verify_sni", validate.Pattern, nil)
 		}
 	}
+	address := ""
+	if p.VerifyAddress != nil {
+		address = foldASCII(strings.TrimSpace(*p.VerifyAddress))
+		if a, err := netip.ParseAddr(address); err == nil && a.Zone() == "" {
+			address = a.String() // one form per address (2001:DB8::0:7 is 2001:db8::7)
+		}
+		if address != "" && !validProbeAddress(address) {
+			errs.Add("verify_address", validate.Pattern, nil)
+		}
+	}
 	if len(errs) > 0 {
 		return CertificateLocation{}, errs
 	}
@@ -73,12 +97,13 @@ func (s *Service) UpdateLocation(ctx context.Context, a Actor, id uuid.UUID, ifV
 		var (
 			version           int
 			port              *int
-			curSNI            *string
+			curSNI, curAddr   *string
 			skip, targetAlive bool
+			kind              providers.LocationKind
 		)
-		err := tx.QueryRow(ctx, `SELECT l.version, l.verify_port, l.verify_sni, l.skip_verify, t.deleted_at IS NULL
+		err := tx.QueryRow(ctx, `SELECT l.version, l.verify_port, l.verify_sni, l.skip_verify, t.deleted_at IS NULL, l.verify_address, l.kind
 FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $1 FOR NO KEY UPDATE OF l`, id).
-			Scan(&version, &port, &curSNI, &skip, &targetAlive)
+			Scan(&version, &port, &curSNI, &skip, &targetAlive, &curAddr, &kind)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !targetAlive) {
 			return ErrNotFound
 		}
@@ -103,8 +128,18 @@ FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $
 		if p.SkipVerify != nil {
 			skip = *p.SkipVerify
 		}
-		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET verify_port = $2, verify_sni = $3, skip_verify = $4, version = version + 1
-WHERE id = $1`, id, port, curSNI, skip); err != nil {
+		if p.VerifyAddress != nil {
+			if address != "" && kind.IsFile() {
+				return validate.Errors{{Field: "verify_address", Code: validate.Pattern}}
+			}
+			curAddr = nil
+			if address != "" {
+				curAddr = &address
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET verify_port = $2, verify_sni = $3, skip_verify = $4, verify_address = $5,
+    version = version + 1
+WHERE id = $1`, id, port, curSNI, skip, curAddr); err != nil {
 			return fmt.Errorf("inventory: update certificate location: %w", err)
 		}
 		if out, err = s.scanCertLocation(tx.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id)); err != nil {
@@ -116,6 +151,12 @@ WHERE id = $1`, id, port, curSNI, skip); err != nil {
 		}
 		if curSNI != nil {
 			d["verify_sni"] = *curSNI
+		}
+		if !kind.IsFile() {
+			d["verify_address"] = ""
+			if curAddr != nil {
+				d["verify_address"] = *curAddr
+			}
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "location.updated", ObjectType: "certificate_location",
 			ObjectID: id.String(), Result: audit.Success, Details: d})

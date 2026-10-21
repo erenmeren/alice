@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/acme"
 	"alice/internal/certs"
@@ -241,3 +242,22 @@ func (s *Service) Registry() *providers.Registry { return s.registry }
 
 // SafeACMEWebURL is safeACMEWebURL (the preview's rule for a URL shown as a link).
 var SafeACMEWebURL = safeACMEWebURL
+
+// AddAPITarget stores a target of an API type (R59: the BIG-IP and Kubernetes phases add the API path) with its own
+// credential sealed from sec, as the owner role, and returns its id.
+func (s *Service) AddAPITarget(ctx context.Context, owner *pgxpool.Pool, typ, name, host string, sec providers.TargetSecret) (uuid.UUID, error) {
+	c, err := s.sealTargetCredential(typ, sec)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	target := uuid.Must(uuid.NewV7())
+	err = db.InTx(ctx, owner, func(tx pgx.Tx) error {
+		if err := insertTargetCredential(ctx, tx, c, target, time.Now()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+VALUES ($1, $2, $3, jsonb_build_object('host', $4::text, 'port', 443), $5, 'ok', now(), now())`, target, name, typ, host, c.ID)
+		return err
+	})
+	return target, err
+}

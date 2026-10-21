@@ -79,6 +79,7 @@ import (
 	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -331,6 +332,17 @@ type deployLocation struct {
 	keyType            string
 	servers            []providers.CertServer
 	supported, missing bool
+	kind               providers.LocationKind // R59 G1
+	hasLocator         bool
+}
+
+// deployableIdentity reports whether a deployment can record the location (deployments' CHECK, migration 00031): a
+// certificate file's two paths the helper accepts, or another kind's locator with its canonical text and no key path.
+func (l deployLocation) deployableIdentity() bool {
+	if l.kind.IsFile() {
+		return deployablePath(l.certPath) && deployablePath(l.keyPath)
+	}
+	return l.hasLocator && l.certPath != "" && utf8.RuneCountInString(l.certPath) <= providers.MaxCanonicalLength && l.keyPath == ""
 }
 
 // targetReady are the statuses a deployment may be requested in: connected, or reachable again
@@ -479,7 +491,8 @@ func (s *Service) lockDeployTargets(ctx context.Context, tx pgx.Tx, ids []uuid.U
 		}
 		targets[sv.target] = t
 	}
-	rows, err = tx.Query(ctx, `SELECT id, target_id, cert_path, key_path, cert_file_sha256, key_type, servers, supported, missing_since IS NOT NULL
+	rows, err = tx.Query(ctx, `SELECT id, target_id, cert_path, key_path, cert_file_sha256, key_type, servers, supported, missing_since IS NOT NULL,
+    kind, locator IS NOT NULL
 FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, ids)
 	if err != nil {
 		return nil, nil, fmt.Errorf("inventory: lock the locations: %w", err)
@@ -489,7 +502,8 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 	for rows.Next() {
 		var l deployLocation
 		var servers []byte
-		if err := rows.Scan(&l.id, &l.target, &l.certPath, &l.keyPath, &l.fileSHA, &l.keyType, &servers, &l.supported, &l.missing); err != nil {
+		if err := rows.Scan(&l.id, &l.target, &l.certPath, &l.keyPath, &l.fileSHA, &l.keyType, &servers, &l.supported, &l.missing,
+			&l.kind, &l.hasLocator); err != nil {
 			return nil, nil, fmt.Errorf("inventory: read a location: %w", err)
 		}
 		if err := json.Unmarshal(servers, &l.servers); err != nil {
@@ -516,13 +530,14 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 // R49 (design §5.6 (c)), an *authz.UntrustedError when the server's service does not accept the source service's keys.
 func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCertificate, l deployLocation, t Target) (string, error) {
 	switch {
-	case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath):
+	case l.missing || !l.supported || !l.deployableIdentity():
 		return "location_unsupported", ErrLocationUnsupported
 	case !s.canDeploy(t.Type):
 		return "location_unsupported", ErrLocationUnsupported
 	case !slices.Contains(targetReady, t.Status):
 		return "target_not_ready", ErrTargetNotReady
-	case t.Facts.WebServer == nil || !t.Facts.WebServer.ConfigValid:
+	case l.kind.IsFile() && (t.Facts.WebServer == nil || !t.Facts.WebServer.ConfigValid):
+		// The web server's configuration gates its files; another kind's provider refuses its own preconditions (R59).
 		return "config_invalid", ErrNginxConfigInvalid
 	case !hex64RE.MatchString(l.fileSHA):
 		return "rescan_needed", ErrLocationNeedsDiscovery
@@ -580,9 +595,10 @@ func (s *Service) insertDeployment(ctx context.Context, tx pgx.Tx, a Actor, c de
 	now time.Time) (RequestedDeployment, error) {
 	id := uuid.Must(uuid.NewV7())
 	_, err := tx.Exec(ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, requested_by, state, status,
-    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, binding_id, kv_version_id, created_at)
-VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
-		DeployStateQueued, DeployStatusPending, c.fingerprint, l.certPath, l.keyPath, src.Confirmed, now, src.Trigger, src.BindingID, src.KVVersionID)
+    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, binding_id, kv_version_id, created_at, location_kind)
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12, $16)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
+		DeployStateQueued, DeployStatusPending, c.fingerprint, l.certPath, l.keyPath, src.Confirmed, now, src.Trigger, src.BindingID, src.KVVersionID,
+		l.kind.OrFile())
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "deployments_one_active" {
 		return RequestedDeployment{}, ErrDeploymentInProgress

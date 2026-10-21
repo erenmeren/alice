@@ -307,7 +307,7 @@ func (s *Service) checkBindable(c kvCertInfo, ids []uuid.UUID, self uuid.UUID, t
 		switch {
 		case bound[id] != nil && *bound[id] != self:
 			return "location_bound", id, ErrLocationBound
-		case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath),
+		case l.missing || !l.supported || !l.deployableIdentity(),
 			!s.canDeploy(t.Type):
 			return "location_unsupported", id, ErrLocationUnsupported
 		case l.keyType != "" && c.keyType != "" && l.keyType != c.keyType:

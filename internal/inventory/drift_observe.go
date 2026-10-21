@@ -113,7 +113,8 @@ func (s *Service) DriftProbes(ctx context.Context, target uuid.UUID) ([]DriftPro
 	rows, err := s.pool.Query(ctx, `SELECT l.id, l.cert_path, l.key_path, l.servers, l.verify_port, coalesce(l.verify_sni, ''), l.skip_verify,
     dc.fingerprint_sha256, dc.sans, dc.key_algorithm, dc.pem_chain,
     (SELECT p.ca_bundle_pem FROM acme_orders ao JOIN acme_certificates ac ON ac.id = ao.acme_certificate_id
-     JOIN acme_providers p ON p.id = ac.provider_id WHERE ao.certificate_id = dc.id ORDER BY ao.finished_at DESC NULLS LAST LIMIT 1)
+     JOIN acme_providers p ON p.id = ac.provider_id WHERE ao.certificate_id = dc.id ORDER BY ao.finished_at DESC NULLS LAST LIMIT 1),
+    l.kind, l.locator, l.details, coalesce(l.verify_address, '')
 FROM certificate_locations l
 `+driftSourceJoin+`
 JOIN certificates dc ON dc.id = src.cert_id
@@ -137,10 +138,19 @@ ORDER BY o.tls_attempted_at NULLS FIRST, l.id LIMIT $2`, target, driftProbesPerT
 			loc          = &req.Location
 			verifyPort   int
 			fingerprints string
+			kind         providers.LocationKind
+			locator      []byte
+			details      []byte
 		)
 		if err := rows.Scan(&p.LocationID, &loc.CertPath, &loc.KeyPath, &servers, &port, &req.Verify.SNI, &req.Verify.Skip, &fingerprints,
-			&req.SANs, &alg, &chain, &bundle); err != nil {
+			&req.SANs, &alg, &chain, &bundle, &kind, &locator, &details, &req.Verify.Address); err != nil {
 			return nil, fmt.Errorf("inventory: read a location to probe: %w", err)
+		}
+		if !kind.IsFile() { // R59 G1: as the deployment engine's requests (Material)
+			loc.Kind = kind
+			if loc.Locator, loc.Details, err = decodeKind(locator, details); err != nil {
+				return nil, err
+			}
 		}
 		if err := json.Unmarshal(servers, &loc.Servers); err != nil {
 			return nil, fmt.Errorf("inventory: decode location servers: %w", err)
