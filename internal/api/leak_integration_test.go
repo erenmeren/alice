@@ -628,7 +628,7 @@ var oneTimeFields = map[string]map[string]bool{
 	"secret":         only("POST /api/v1/setup/admin/enrollment", "POST /api/v1/auth/mfa/enroll"),
 	"otpauth_uri":    only("POST /api/v1/setup/admin/enrollment", "POST /api/v1/auth/mfa/enroll"),
 	"qr_png":         only("POST /api/v1/setup/admin/enrollment", "POST /api/v1/auth/mfa/enroll"),
-	"token":          only("POST /api/v1/tokens"),
+	"token":          only("POST /api/v1/tokens", "POST /api/v1/automation-accounts/{id}/tokens"),
 	"recovery_codes": only("POST /api/v1/setup/admin", "POST /api/v1/auth/mfa/verify", "POST /api/v1/auth/recovery-codes"),
 }
 

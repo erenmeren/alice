@@ -462,6 +462,10 @@ WHERE id = $2`, incidentID, ids["/api/v1/certificates/"])
 	var defaultService string
 	require.NoError(t, s.db.Owner.QueryRow(context.Background(), "SELECT id::text FROM services WHERE is_default").Scan(&defaultService))
 	ids["/api/v1/services/"] = defaultService
+	// Automation accounts (R54): one account, so its token list answers 200.
+	rec = c.do(http.MethodPost, "/api/v1/automation-accounts", map[string]any{"username": "ci-bot", "display_name": "CI"})
+	requireStatus(t, rec, http.StatusCreated)
+	ids["/api/v1/automation-accounts/"] = decodeBody[map[string]any](t, rec)["id"].(string)
 	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
 	rec = c.do(http.MethodPost, "/api/v1/backups", nil)
 	requireStatus(t, rec, http.StatusCreated)
