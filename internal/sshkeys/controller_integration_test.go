@@ -334,7 +334,7 @@ func TestStepsRecorded(t *testing.T) {
 	assert.Equal(t, 2, e.audits("rotation.status_changed"))
 	assert.Equal(t, 3, e.audits("rotation.location_changed"))
 	var details map[string]string
-	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT details FROM audit_log WHERE action = 'rotation.location_changed'
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT details - 'service_id' FROM audit_log WHERE action = 'rotation.location_changed'
 ORDER BY seq DESC LIMIT 1`).Scan(&details))
 	assert.Equal(t, map[string]string{"rotation_id": r.ID.String(), "location_id": r.Locations[0].ID.String(),
 		"target_id": r.Locations[0].TargetID.String(), "os_user": "deploy", "file_path": "/home/deploy/.ssh/authorized_keys",

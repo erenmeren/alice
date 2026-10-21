@@ -231,7 +231,7 @@ type auditRow struct {
 // finished lists the discovery.scan.finished audit rows of a scan.
 func (w *world) finished(scan uuid.UUID) []auditRow {
 	w.t.Helper()
-	rows, err := w.db.Owner.Query(w.ctx, `SELECT result, details FROM audit_log WHERE action = 'discovery.scan.finished' AND object_id = $1
+	rows, err := w.db.Owner.Query(w.ctx, `SELECT result, details - 'service_id' FROM audit_log WHERE action = 'discovery.scan.finished' AND object_id = $1
   AND object_type = 'discovery_scan' AND actor_type = 'system' ORDER BY seq`, scan.String())
 	require.NoError(w.t, err)
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (auditRow, error) {

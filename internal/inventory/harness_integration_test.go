@@ -212,6 +212,9 @@ func (h *harness) auditDetails(action string) []map[string]string {
 	for rows.Next() {
 		var d map[string]string
 		require.NoError(h.t, rows.Scan(&d))
+		// The audit log adds the object's owning service to every row about a resource (R49 Phase 2); the tests of the
+		// details compare what the inventory writes, and TestAuditRowsNameTheirService checks the service.
+		delete(d, "service_id")
 		out = append(out, d)
 	}
 	require.NoError(h.t, rows.Err())

@@ -730,15 +730,18 @@ func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxACMECertBody, append(slices.Clone(acmeCertKeys), "service_id")...) {
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new ACME certificate goes to, checked against the caller's reach first.
+	service, ok := s.serviceForCreate(w, r, rbac.AcmeManage, req.ServiceID)
+	if !ok {
+		return
+	}
 	var v validate.Errors
 	provider, hook, target := req.check(true, &v)
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// R49 Phase 2, design §4.4: the service the new ACME certificate goes to, checked against the caller's reach.
-	service, ok := s.serviceForCreate(w, r, rbac.AcmeManage, req.ServiceID)
-	if !ok || !s.checkHTTPServer(w, r, target) {
+	if !s.checkHTTPServer(w, r, target) {
 		return
 	}
 	in := inventory.ACMECertificateInput{ProviderID: *provider, Names: *req.Names, KeyType: deref(req.KeyType), Challenge: deref(req.Challenge),

@@ -132,7 +132,8 @@ type auditRow struct {
 
 func (w *world) audits(action string) []auditRow {
 	w.t.Helper()
-	rows, err := w.db.Owner.Query(w.ctx, `SELECT actor_name, object_id, result, request_id, details FROM audit_log WHERE action = $1 ORDER BY seq`, action)
+	// details.service_id (R49 Phase 2: the scope's service, added by the audit log) is left out: the tests compare what this module writes.
+	rows, err := w.db.Owner.Query(w.ctx, `SELECT actor_name, object_id, result, request_id, details - 'service_id' FROM audit_log WHERE action = $1 ORDER BY seq`, action)
 	require.NoError(w.t, err)
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (auditRow, error) {
 		var a auditRow

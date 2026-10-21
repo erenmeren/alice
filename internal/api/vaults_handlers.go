@@ -125,6 +125,11 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxVaultBody, vaultCreateKeys...) {
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new Key Vault goes to, checked against the caller's reach first.
+	service, ok := s.serviceForCreate(w, r, rbac.CredentialsManage, req.ServiceID)
+	if !ok {
+		return
+	}
 	var v validate.Errors
 	in := req.credential(&v)
 	pv, err := azureid.ParseVault(req.VaultURL)
@@ -133,12 +138,6 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
-		return
-	}
-	// R49 Phase 2, design §4.4: the service the new Key Vault goes to, checked against the caller's reach.
-	service, ok := s.serviceForCreate(w, r, rbac.CredentialsManage, req.ServiceID)
-	if !ok {
-		req.zero()
 		return
 	}
 	t, rep, jobID, err := s.deps.Inventory.CreateVault(r.Context(), s.actor(r), inventory.NewVault{

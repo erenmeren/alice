@@ -106,7 +106,9 @@ func TestCreatePathsNameAService(t *testing.T) {
 	csr2, err := h.svc.CreateCSR(h.ctx, admin, inventory.CSRInput{CommonName: "req2.example.test", KeyType: "ecdsa-p256"})
 	require.NoError(t, err)
 	assert.Equal(t, def, csr2.ServiceID)
-	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE details ? 'service_id'"), "Phase 1 leaves the audit rows as they were")
+	// Phase 2: every audit row about a resource names the service it belongs to as the change commits (design §5.8).
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'csr.created' AND details->>'service_id' = $1", pay.String()))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'csr.created' AND details->>'service_id' = $1", def.String()))
 }
 
 // What a scan finds on a server goes to the server's service; a certificate Alice knows keeps its service.
