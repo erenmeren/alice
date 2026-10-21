@@ -179,7 +179,7 @@ func TestAnOrderThroughTheTool(t *testing.T) {
 		}
 		rec, err := c.DNS01ChallengeRecord(ch.Token)
 		require.NoError(t, err)
-		st.ctlJSON("dns", "set", "_acme-challenge.www.example.test", rec)
+		st.ctlJSON("dns", "set", "--", "_acme-challenge.www.example.test", rec)
 		_, err = c.Accept(ctx, ch)
 		require.NoError(t, err)
 	}
@@ -232,7 +232,7 @@ func TestEveryCtlCommandReachesTheFake(t *testing.T) {
 		{"fault", "set", "new-order", "rateLimited", "--times", "2", "--retry-after", "30"},
 		{"fault", "set", "*", "slow", "--delay", "10ms"},
 		{"fault", "clear"},
-		{"dns", "set", "a.test", "v"}, {"dns", "clear", "a.test", "v"}, {"dns", "clear"}, {"dns", "list"},
+		{"dns", "set", "a.test", "v"}, {"dns", "set", "--", "b.test", "--v"}, {"dns", "clear", "a.test", "v"}, {"dns", "clear"}, {"dns", "list"},
 		{"http-target", "a.test", "127.0.0.1:8080"}, {"http-target", "a.test", "off"},
 		{"eab", "off"}, {"eab", "on"}, {"lifetime", "48h"}, {"stuck", "on"}, {"stuck", "off"},
 		{"reject", "bad.test"}, {"reject", "clear"},

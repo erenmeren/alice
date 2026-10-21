@@ -380,11 +380,17 @@ func lookup(args []string) (name string, cmd ctlCommand, rest []string, ok bool)
 	return args[0], c, args[1:], found
 }
 
-// parseCtl splits arguments into positionals and --flags (a value flag takes the next argument).
+// parseCtl splits arguments into positionals and --flags (a value flag takes the next argument). A bare "--" ends the
+// flags: every argument after it is a positional, so a value that may start with "--" (a DNS-01 record is base64url)
+// is passed after it.
 func parseCtl(cmd ctlCommand, args []string) (pos []string, flags map[string]string, err error) {
 	flags = map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
+		}
 		name, isFlag := strings.CutPrefix(a, "--")
 		if !isFlag {
 			pos = append(pos, a)
