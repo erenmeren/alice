@@ -375,7 +375,3 @@ func targetIDsOf[T any](rows []T, target func(T) uuid.UUID) []uuid.UUID {
 	}
 	return out
 }
-
-// visibleTo reports whether a row visible from services is in the caller's read reach (the related rows of a detail
-// answer, design §5.8).
-func visibleTo(reach authz.Reach, services ...uuid.UUID) bool { return reach.ContainsAny(services) }

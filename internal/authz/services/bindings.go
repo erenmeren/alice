@@ -112,12 +112,13 @@ func scanBinding(r pgx.CollectableRow) (Binding, error) {
 // withRefs fills the services a binding covers with their names and environments.
 func withRefs(bs []Binding, refs map[uuid.UUID]authz.ServiceRef) {
 	for i := range bs {
-		for j, s := range bs[i].Services {
+		covered := bs[i].Services
+		for j, s := range covered {
 			if ref, ok := refs[s.ID]; ok {
-				bs[i].Services[j] = ref
+				covered[j] = ref
 			}
 		}
-		slices.SortFunc(bs[i].Services, func(a, b authz.ServiceRef) int { return compareIDs(a.ID, b.ID) })
+		slices.SortFunc(covered, func(a, b authz.ServiceRef) int { return compareIDs(a.ID, b.ID) })
 	}
 }
 

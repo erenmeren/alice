@@ -160,9 +160,7 @@ VALUES ($1, 'test.job', 'always', 'system', '{}', decode(repeat('07', 32), 'hex'
 		incident, job, trust.ID, w.a, fp} {
 		w.aIDs = append(w.aIDs, fmt.Sprint(v))
 	}
-	for _, name := range []string{"alpha-web", "alpha-kv", "alpha.example.test", "alpha-acme.example.test", "alpha-csr.example.test", "Alpha"} {
-		w.aIDs = append(w.aIDs, name)
-	}
+	w.aIDs = append(w.aIDs, "alpha-web", "alpha-kv", "alpha.example.test", "alpha-acme.example.test", "alpha-csr.example.test", "Alpha")
 
 	w.bServer, err = seed.Target(ctx, s.db.Owner, "bravo-web", "nginx", "ok", nil)
 	require.NoError(t, err)
