@@ -37,7 +37,7 @@ var (
 
 // targetSecretInfo is credentials.public_info of an API target's credential (never a secret).
 type targetSecretInfo struct {
-	Secret               string `json:"secret"` // providers.TargetSecret*
+	Method               string `json:"method"` // providers.TargetSecret*
 	Username             string `json:"username,omitempty"`
 	ClientCertificatePEM string `json:"client_certificate_pem,omitempty"`
 }
@@ -71,7 +71,7 @@ func (s *Service) sealTargetCredential(typ string, sec providers.TargetSecret) (
 	if !ok {
 		return sealedTargetCredential{}, errTargetSecretInvalid
 	}
-	info := targetSecretInfo{Secret: sec.Kind}
+	info := targetSecretInfo{Method: sec.Kind}
 	var payload []byte
 	switch sec.Kind {
 	case providers.TargetSecretPassword:
@@ -159,7 +159,7 @@ WHERE t.id = $1 AND t.deleted_at IS NULL`, t.id).
 	if err := json.Unmarshal(raw, &info); err != nil {
 		return providers.TargetSecret{}, nil, errors.New("inventory: the stored target credential is damaged")
 	}
-	wantPurpose, wantKind, ok := targetCredentialShape(typ, info.Secret)
+	wantPurpose, wantKind, ok := targetCredentialShape(typ, info.Method)
 	if owner != t.id || !ok || purpose != wantPurpose || kind != wantKind {
 		return providers.TargetSecret{}, nil, errForeignCredential
 	}
@@ -167,8 +167,8 @@ WHERE t.id = $1 AND t.deleted_at IS NULL`, t.id).
 	if err != nil {
 		return providers.TargetSecret{}, nil, fmt.Errorf("%w (%w)", errTargetCredentialUnreadable, err)
 	}
-	sec := providers.TargetSecret{Kind: info.Secret}
-	switch info.Secret {
+	sec := providers.TargetSecret{Kind: info.Method}
+	switch info.Method {
 	case providers.TargetSecretPassword:
 		sec.Username, sec.Password = info.Username, pt
 	case providers.TargetSecretToken:

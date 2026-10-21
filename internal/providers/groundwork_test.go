@@ -77,7 +77,7 @@ func TestLocatorCanonical(t *testing.T) {
 		"an empty value":    {"name": ""},
 		"a long value":      {"name": strings.Repeat("x", providers.MaxLocatorText+1)},
 		"a control char":    {"name": "a\nb"},
-		"a bidi control":    {"name": "a‮b"},
+		"a bidi control":    {"name": "a\u202eb"},
 		"a fraction":        {"port": 1.5},
 		"a huge number":     {"port": float64(1 << 60)},
 		"a nested object":   {"spec": map[string]any{"a": 1}},

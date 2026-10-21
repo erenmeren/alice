@@ -44,7 +44,7 @@ const (
 	LocationServerFile    LocationKind = "server_file"    // a certificate and key file pair (Nginx, Apache, HAProxy)
 	LocationWinSSLBinding LocationKind = "win_sslbinding" // an http.sys SSL binding of a Windows server
 	LocationF5ClientSSL   LocationKind = "f5_clientssl"   // one certKeyChain entry of a BIG-IP client SSL profile
-	LocationK8sTLSSecret  LocationKind = "k8s_tls_secret" // a Kubernetes Secret of type kubernetes.io/tls
+	LocationK8sTLSSecret  LocationKind = "k8s_tls_secret" //nolint:gosec // G101 false positive: a location kind (a Kubernetes Secret of type kubernetes.io/tls)
 )
 
 var locationKinds = []LocationKind{LocationServerFile, LocationWinSSLBinding, LocationF5ClientSSL, LocationK8sTLSSecret}

@@ -34,7 +34,7 @@ func TestPrepareLocationOfAnotherKind(t *testing.T) {
 	leaf := pki.NewCA("G", pki.ECDSA256, now).Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
 	base := func() providers.DiscoveredCertificate {
 		return providers.DiscoveredCertificate{Location: providers.CertLocation{Kind: providers.LocationF5ClientSSL,
-			Locator: providers.Locator{"partition": "Common", "profile": "/Common/www_clientssl", "entry": "default"},
+			Locator:  providers.Locator{"partition": "Common", "profile": "/Common/www_clientssl", "entry": "default"},
 			CertPath: "/Common/www_clientssl#default", Supported: true, KeyPath: "/x.key", KeyMode: "0600", KeyOwner: "root", KeyGroup: "root",
 			ResolvedCertPath: "/y", Symlinked: true, Details: map[string]any{"cert": "/Common/www.crt"}},
 			PEMChain: leaf.FullchainPEM, FileSHA256: strings.Repeat("ab", 32)}

@@ -174,12 +174,12 @@ func TestMigration00031DeploymentsAndBackups(t *testing.T) {
 	require.NoError(t, insertRow(t, d.App, "deployments", with(deploymentRow(w), map[string]any{"state": "done", "status": "succeeded",
 		"finished_at": time.Now()})), "a file deployment inserts as before (location_kind defaults to server_file)")
 	for name, over := range map[string]map[string]any{
-		"a file without a key path":         {"key_path": ""},
-		"a file with a relative path":       {"cert_path": "etc/www.crt"},
-		"a secret with a key path":          {"location_kind": "k8s_tls_secret", "cert_path": "shop/x", "key_path": "/x.key"},
-		"a secret without its text":         {"location_kind": "k8s_tls_secret", "cert_path": "", "key_path": ""},
-		"an unknown kind":                   {"location_kind": "ssh_file"},
-		"a binding text over 1024":          {"location_kind": "win_sslbinding", "cert_path": strings.Repeat("a", 1025), "key_path": ""},
+		"a file without a key path":   {"key_path": ""},
+		"a file with a relative path": {"cert_path": "etc/www.crt"},
+		"a secret with a key path":    {"location_kind": "k8s_tls_secret", "cert_path": "shop/x", "key_path": "/x.key"},
+		"a secret without its text":   {"location_kind": "k8s_tls_secret", "cert_path": "", "key_path": ""},
+		"an unknown kind":             {"location_kind": "ssh_file"},
+		"a binding text over 1024":    {"location_kind": "win_sslbinding", "cert_path": strings.Repeat("a", 1025), "key_path": ""},
 	} {
 		assert.Equal(t, checkViolation, sqlState(insertRow(t, d.App, "deployments", with(deploymentRow(w), with(map[string]any{"state": "done",
 			"status": "failed", "finished_at": time.Now()}, over)))), name)

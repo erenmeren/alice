@@ -335,7 +335,7 @@ func TestTargetCredentialsOfAPITargets(t *testing.T) {
 	}
 
 	// A credential whose row no longer suits the target is never used.
-	_, err = h.db.Owner.Exec(h.ctx, `UPDATE credentials SET public_info = '{"secret":"token"}' WHERE target_id = $1`, bigip)
+	_, err = h.db.Owner.Exec(h.ctx, `UPDATE credentials SET public_info = '{"method":"token"}' WHERE target_id = $1`, bigip)
 	require.NoError(t, err)
 	_, _, err = h.svc.TargetCredentials(bigip).TargetSecret(h.ctx)
 	require.Error(t, err)
