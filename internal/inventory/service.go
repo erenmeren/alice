@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -32,9 +33,10 @@ type LicenseGate interface {
 	Allow(c license.Class) error
 }
 
-// Notifier is notify.AdminNotifier (inventory may not import notify, §5.4).
+// Notifier is notify.ServiceNotifier (inventory may not import notify, §5.4): every e-mail of the inventory is about
+// something services own and goes to the recipients of those services (R56, design §7.2).
 type Notifier interface {
-	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+	NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error
 }
 
 // Config holds the service dependencies.

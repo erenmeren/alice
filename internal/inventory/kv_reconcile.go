@@ -308,7 +308,7 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 			return fmt.Errorf("inventory: store the poll's outcome: %w", err)
 		}
 		if o.mail && s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
+			if err := s.notifyTarget(ctx, tx, id, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
 				return fmt.Errorf("inventory: queue the sign-in email: %w", err)
 			}
 		}
@@ -325,7 +325,7 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 				if r.bound {
 					tpl = TemplateKVCertificateRemovedBound
 				}
-				if err := s.notifier.NotifyAdmins(ctx, tx, tpl, map[string]string{"target_name": cur.name, "certificate_name": r.name}); err != nil {
+				if err := s.notifyTarget(ctx, tx, id, tpl, map[string]string{"target_name": cur.name, "certificate_name": r.name}); err != nil {
 					return fmt.Errorf("inventory: queue the removal email: %w", err)
 				}
 				noticeIDs = append(noticeIDs, r.id)
@@ -335,7 +335,7 @@ func (s *Service) ReconcileKV(ctx context.Context, id uuid.UUID, res providers.D
 				if more == 1 {
 					tpl = TemplateKVCertificatesRemovedOne // the singular text (the mail has no plural mechanism)
 				}
-				if err := s.notifier.NotifyAdmins(ctx, tx, tpl,
+				if err := s.notifyTarget(ctx, tx, id, tpl,
 					map[string]string{"target_name": cur.name, "count": strconv.Itoa(more)}); err != nil {
 					return fmt.Errorf("inventory: queue the removal summary email: %w", err)
 				}
@@ -640,7 +640,7 @@ func (s *Service) RecordKVFailure(ctx context.Context, id uuid.UUID, cause error
 			return fmt.Errorf("inventory: record a failed poll: %w", err)
 		}
 		if auth == kvAuthNotice && s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
+			if err := s.notifyTarget(ctx, tx, id, TemplateKVAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
 				return fmt.Errorf("inventory: queue the sign-in email: %w", err)
 			}
 		}

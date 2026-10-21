@@ -1017,7 +1017,7 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 				params["operation_id"] = op.String()
 			}
 		}
-		if err := s.notify(ctx, tx, template, params); err != nil {
+		if err := s.notify(ctx, tx, d.id, template, params); err != nil {
 			return err
 		}
 	}
@@ -1040,11 +1040,12 @@ func (s *Service) emailParams(ctx context.Context, tx pgx.Tx, d lockedDeployment
 	return map[string]string{"target_name": name, "cert_path": d.certPath, "deployment_id": d.id.String()}, nil
 }
 
-func (s *Service) notify(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
+// notify queues a deployment e-mail for the destination server's service and the certificate's (R56, design §7.2).
+func (s *Service) notify(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string, params map[string]string) error {
 	if s.notifier == nil {
 		return nil
 	}
-	if err := s.notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
+	if err := s.notifyDeployment(ctx, tx, deployment, template, params); err != nil {
 		return fmt.Errorf("inventory: queue the %s email: %w", template, err)
 	}
 	return nil
@@ -1133,7 +1134,7 @@ func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedD
 		if err != nil {
 			return err
 		}
-		if err := s.notify(ctx, tx, template, params); err != nil {
+		if err := s.notify(ctx, tx, d.id, template, params); err != nil {
 			return err
 		}
 		if err := s.appendAudit(ctx, tx, "deployment.needs_attention", audit.Failure, d.id,

@@ -59,9 +59,16 @@ type RunnerConfig struct {
 	Notifier      Notifier       // emails the Administrators about dead jobs; nil = no email
 }
 
-// Notifier queues an email to every Administrator inside tx; notify.AdminNotifier implements it.
+// AdminNotifier queues a platform e-mail to the Administrators inside tx (notify.AdminNotifier): the audit check's.
+type AdminNotifier interface {
+	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+}
+
+// Notifier queues e-mails inside tx; notify.ServiceNotifier implements it: a job's tampering to the Administrators
+// (platform), a dead job to the recipients of its service (R56).
 type Notifier interface {
 	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+	NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error
 }
 
 // TemplateJobDead is the email sent when a job is out of attempts (spec §8.4 "exhausted jobs
@@ -99,6 +106,26 @@ func (r *Runner) alert(ctx context.Context, tx pgx.Tx, template string, params m
 	}
 	if err := r.cfg.Notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
 		return fmt.Errorf("jobs: queue the %s email: %w", template, err)
+	}
+	return nil
+}
+
+// alertDead queues job.dead for the job's service (R56, design §7.2): its recipients as the service's policy says, its
+// owners; a job without a service (platform work) the Administrators only.
+func (r *Runner) alertDead(ctx context.Context, tx pgx.Tx, id uuid.UUID, params map[string]string) error {
+	if r.cfg.Notifier == nil {
+		return nil
+	}
+	var service *uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT service_id FROM jobs WHERE id = $1", id).Scan(&service); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("jobs: read the job's service: %w", err)
+	}
+	var services []uuid.UUID
+	if service != nil {
+		services = []uuid.UUID{*service}
+	}
+	if err := r.cfg.Notifier.NotifyServices(ctx, tx, services, TemplateJobDead, params); err != nil {
+		return fmt.Errorf("jobs: queue the %s email: %w", TemplateJobDead, err)
 	}
 	return nil
 }
@@ -580,7 +607,7 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 					// announced elsewhere: audited, not mailed.
 					continue
 				}
-				err = r.alert(ctx, tx, TemplateJobDead, deadAlertParams(c.id, c.typ, ev.Details["reason"], c.attempts))
+				err = r.alertDead(ctx, tx, c.id, deadAlertParams(c.id, c.typ, ev.Details["reason"], c.attempts))
 			case "job.tampered":
 				err = r.alert(ctx, tx, TemplateJobTampered, tamperedAlertParams(c.id, c.typ))
 			}
@@ -980,7 +1007,7 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 	}
 	for _, x := range all {
 		if x.status == string(StatusDead) && !shutdown && alertsWhenDead(x.typ) {
-			if err := r.alert(ctx, tx, TemplateJobDead, deadAlertParams(x.id, x.typ, "job.lease_expired", x.attempts)); err != nil {
+			if err := r.alertDead(ctx, tx, x.id, deadAlertParams(x.id, x.typ, "job.lease_expired", x.attempts)); err != nil {
 				return nil, err
 			}
 		}

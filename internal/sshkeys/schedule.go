@@ -84,7 +84,7 @@ func (s *Service) planOne(ctx context.Context, id uuid.UUID) (bool, error) {
 				return policyWriteError(err)
 			}
 			s.log.Info("rotation not planned: no location can change", "policy_id", id.String())
-			return s.mail(ctx, tx, TemplateNothingToRotate, nothingToRotateParams(key, p, next))
+			return s.mail(ctx, tx, id, pol.SSHKeyID, TemplateNothingToRotate, nothingToRotateParams(key, p, next))
 		case err != nil:
 			// The key can no longer be rotated (Alice's own key, retired, …): the policy cannot run.
 			if _, err := tx.Exec(ctx, `UPDATE rotation_policies SET enabled = false, next_run_at = NULL, version = version + 1, updated_at = $2

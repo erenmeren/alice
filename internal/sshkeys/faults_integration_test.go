@@ -34,11 +34,11 @@ type faultNotifier struct {
 	next sshkeys.Notifier
 }
 
-func (n faultNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
+func (n faultNotifier) NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error {
 	if n.f.mail.Load() {
 		return errInjected
 	}
-	return n.next.NotifyAdmins(ctx, tx, template, params)
+	return n.next.NotifyServices(ctx, tx, services, template, params)
 }
 
 type faultJobs struct {

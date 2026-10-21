@@ -75,12 +75,12 @@ func (g *lockGate) Allow(c license.Class) error {
 func (g *lockGate) lock()   { g.locked.Store(true) }
 func (g *lockGate) unlock() { g.locked.Store(false) }
 
-// recordingNotifier records every NotifyAdmins call (template and params) and queues the email in
+// recordingNotifier records every NotifyServices call (template and params) and queues the email in
 // the outbox as production does (next), so a test can see the outbox rows and their delivery.
 type recordingNotifier struct {
 	mu         sync.Mutex
 	calls      []notice
-	next       notify.AdminNotifier
+	next       notify.ServiceNotifier
 	unrendered []string
 }
 
@@ -98,8 +98,8 @@ type notice struct {
 	params   map[string]string
 }
 
-func (r *recordingNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
-	if err := r.next.NotifyAdmins(ctx, tx, template, params); err != nil {
+func (r *recordingNotifier) NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error {
+	if err := r.next.NotifyServices(ctx, tx, services, template, params); err != nil {
 		return err
 	}
 	// Every mail a test causes is rendered with the real catalogue: a template must never receive a
@@ -161,7 +161,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{t: t, ctx: context.Background(), db: pgtest.New(t), clock: clock.NewFake(start), logs: &syncBuffer{}}
 	e.tick = &tickClock{Fake: e.clock}
-	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.tick}}
+	e.notifier = &recordingNotifier{next: notify.ServiceNotifier{Clock: e.tick}}
 	t.Cleanup(func() {
 		e.notifier.mu.Lock()
 		defer e.notifier.mu.Unlock()
@@ -187,7 +187,7 @@ func newEnv(t *testing.T) *env {
 	reg.Register(fake.New(providers.KindLinuxSSH))
 	reg.Freeze()
 	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, License: e.gate,
-		Registry: reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: quiet})
+		Registry: reg, Jobs: e.queue, Notifier: notify.ServiceNotifier{Clock: e.tick}, Log: quiet})
 	_, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.svc = e.newService(e.keyring)

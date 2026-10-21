@@ -687,7 +687,7 @@ WHERE id = $1 AND state IN ('queued', 'running') AND finished_at IS NULL`, id, c
 			}
 			details["reason"] = code
 			event = audit.Event{Action: "kv.import.failed", Result: audit.Failure}
-			if err := s.mailImport(ctx, tx, TemplateKVImportFailed, vault.name, im.Name); err != nil {
+			if err := s.mailImport(ctx, tx, id, TemplateKVImportFailed, vault.name, im.Name); err != nil {
 				return err
 			}
 		default: // uncertain
@@ -740,7 +740,7 @@ WHERE id = $1 AND state = 'queued' AND finished_at IS NULL`, id, code, now); err
 		if err := tx.QueryRow(ctx, "SELECT name::text, coalesce(config->>'vault_url', '') FROM targets WHERE id = $1", im.VaultID).Scan(&name, &url); err != nil {
 			return fmt.Errorf("inventory: read the import's vault: %w", err)
 		}
-		if err := s.mailImport(ctx, tx, TemplateKVImportFailed, name, im.Name); err != nil {
+		if err := s.mailImport(ctx, tx, id, TemplateKVImportFailed, name, im.Name); err != nil {
 			return err
 		}
 		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.import.failed", ObjectType: "kv_import", ObjectID: id.String(),
@@ -754,11 +754,16 @@ WHERE id = $1 AND state = 'queued' AND finished_at IS NULL`, id, code, now); err
 	return out, err
 }
 
-func (s *Service) mailImport(ctx context.Context, tx pgx.Tx, template, vaultName, certificateName string) error {
+// mailImport queues an import's e-mail for its vault's service (R56).
+func (s *Service) mailImport(ctx context.Context, tx pgx.Tx, importID uuid.UUID, template, vaultName, certificateName string) error {
 	if s.notifier == nil {
 		return nil
 	}
-	if err := s.notifier.NotifyAdmins(ctx, tx, template, map[string]string{"target_name": vaultName, "certificate_name": certificateName}); err != nil {
+	svcs, err := servicesOf(ctx, tx, "SELECT t.service_id FROM kv_imports i JOIN targets t ON t.id = i.target_id WHERE i.id = $1", importID)
+	if err != nil {
+		return err
+	}
+	if err := s.notifier.NotifyServices(ctx, tx, svcs, template, map[string]string{"target_name": vaultName, "certificate_name": certificateName}); err != nil {
 		return fmt.Errorf("inventory: queue the import's email: %w", err)
 	}
 	return nil
@@ -910,7 +915,7 @@ WHERE id = $1 AND state IN ('queued', 'running', 'uncertain') AND finished_at IS
 		return nil
 	}
 	if template != "" {
-		if err := s.mailImport(ctx, tx, template, vaultName, name); err != nil {
+		if err := s.mailImport(ctx, tx, id, template, vaultName, name); err != nil {
 			return err
 		}
 	}

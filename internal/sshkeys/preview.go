@@ -160,7 +160,7 @@ func (s *Service) Preview(ctx context.Context, a inventory.Actor, policyID uuid.
 			return err
 		}
 		if s.notifier != nil && (last == nil || !now.Before(last.Add(PreviewMailEvery))) {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplatePreview, previewParams(key, p, plannedFor, uuid.Nil)); err != nil {
+			if err := s.mail(ctx, tx, policyID, key.id, TemplatePreview, previewParams(key, p, plannedFor, uuid.Nil)); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, "UPDATE rotation_policies SET preview_mailed_at = $2 WHERE id = $1", policyID, now); err != nil {
@@ -220,7 +220,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $11, $11)`, id, pol.I
 		}
 	}
 	if s.notifier != nil {
-		if err := s.notifier.NotifyAdmins(ctx, tx, TemplatePreview, previewParams(key, p, plannedFor, id)); err != nil {
+		if err := s.mail(ctx, tx, pol.ID, key.id, TemplatePreview, previewParams(key, p, plannedFor, id)); err != nil {
 			return uuid.Nil, err
 		}
 	}

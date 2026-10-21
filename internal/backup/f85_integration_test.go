@@ -142,13 +142,13 @@ func (f *f85) wire() {
 	roots := x509.NewCertPool()
 	roots.AddCert(f.ca.Root)
 	f.inv = inventory.New(inventory.Config{Pool: f.db.App, Keyring: f.keyring, Audit: f.audit, Clock: f.clk, License: f.lic,
-		Registry: f.reg, Jobs: f.queue, Notifier: notify.AdminNotifier{Clock: f.clk}, Log: log, Roots: roots})
+		Registry: f.reg, Jobs: f.queue, Notifier: notify.ServiceNotifier{Clock: f.clk}, Log: log, Roots: roots})
 	f.keys = sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget, Pool: f.db.App, Keyring: f.keyring, Audit: f.audit,
-		Clock: f.clk, License: f.lic, Inventory: f.inv, Jobs: f.queue, Notifier: notify.AdminNotifier{Clock: f.clk}, Log: log})
+		Clock: f.clk, License: f.lic, Inventory: f.inv, Jobs: f.queue, Notifier: notify.ServiceNotifier{Clock: f.clk}, Log: log})
 	h := auth.NewHasher(auth.Argon2Params{MemoryKiB: 64, Time: 1, Threads: 1, SaltLen: 16, KeyLen: 32}, 4)
 	f.auth = auth.NewService(auth.Config{Pool: f.db.App, Keyring: f.keyring, Audit: f.audit, Clock: f.clk, Hasher: h, RecoveryHasher: h})
 	f.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: f.db.App, Queue: f.queue, Gate: f.lic, Audit: f.audit, Clock: f.clk, Log: log,
-		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: f.clk}})
+		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 }, Notifier: notify.ServiceNotifier{Clock: f.clk}})
 	targetjobs.Register(f.runner, targetjobs.Deps{Inventory: f.inv, Registry: f.reg, Clock: f.clk, Log: log})
 	deployjobs.Register(f.runner, deployjobs.Deps{Inventory: f.inv, Registry: f.reg, Clock: f.clk, Log: log})
 	sshkeyjobs.Register(f.runner, sshkeyjobs.Deps{Keys: f.keys, Targets: f.inv, Registry: f.reg, Clock: f.clk, Log: log, Gate: f.lic})

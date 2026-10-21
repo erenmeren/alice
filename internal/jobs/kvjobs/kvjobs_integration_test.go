@@ -137,7 +137,7 @@ func newWorld(t *testing.T) *world {
 	w.reg.Register(w.az)
 	w.reg.Freeze()
 	w.inv = inventory.New(inventory.Config{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, License: w.lic, Registry: w.reg,
-		Jobs: w.queue, Notifier: notify.AdminNotifier{Clock: w.clock}, Log: log, Roots: roots})
+		Jobs: w.queue, Notifier: notify.ServiceNotifier{Clock: w.clock}, Log: log, Roots: roots})
 	_, err = w.inv.EnsurePlatformKey(w.ctx)
 	require.NoError(t, err)
 	w.runner = w.newRunner("alice")
@@ -152,7 +152,7 @@ VALUES ($1, 'ada', 'ada@example.com', 'Ada Yılmaz', 'x', 'admin', $2, $2)`, id,
 func (w *world) newRunner(worker string) *jobs.Runner {
 	r := jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.lic, Audit: audit.New(w.clock), Clock: w.clock,
 		Log: logging.New(w.logs, slog.LevelDebug), Workers: 1, WorkerID: worker, Jitter: func() float64 { return 0 },
-		Notifier: notify.AdminNotifier{Clock: w.clock}})
+		Notifier: notify.ServiceNotifier{Clock: w.clock}})
 	Register(r, Deps{Inventory: w.inv, Registry: w.reg, Clock: w.clock, Log: logging.New(w.logs, slog.LevelDebug)})
 	return r
 }
@@ -1022,7 +1022,7 @@ func TestImportsEndWhenTheirJobDoes(t *testing.T) {
 		})
 		broken := jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.lic, Audit: audit.New(w.clock), Clock: w.clock,
 			Log: logging.New(w.logs, slog.LevelDebug), Workers: 1, WorkerID: "broken", Jitter: func() float64 { return 0 },
-			Notifier: notify.AdminNotifier{Clock: w.clock}})
+			Notifier: notify.ServiceNotifier{Clock: w.clock}})
 		Register(broken, Deps{Inventory: finishFails{w.inv}, Registry: w.reg, Clock: w.clock})
 		for range 3 {
 			w.evaluate()

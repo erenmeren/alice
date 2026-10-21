@@ -418,7 +418,7 @@ last_error_code = $3, last_attempt_at = $4, next_attempt_at = $5, updated_at = $
 			return fmt.Errorf("inventory: mark the renewal notice: %w", err)
 		}
 		if tag.RowsAffected() == 1 && s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMERenewalFailed, acmeNoticeParams(id, names, failures, code, notAfter)); err != nil {
+			if err := s.notifyACME(ctx, tx, id, TemplateACMERenewalFailed, acmeNoticeParams(id, names, failures, code, notAfter)); err != nil {
 				return fmt.Errorf("inventory: queue the renewal notice: %w", err)
 			}
 		}
@@ -445,7 +445,7 @@ WHERE id = $1 AND state <> 'stopped'`, id, now)
 		return false, err
 	}
 	if s.notifier != nil {
-		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMEAutoRenewStopped, acmeNoticeParams(id, names, failures, code, notAfter)); err != nil {
+		if err := s.notifyACME(ctx, tx, id, TemplateACMEAutoRenewStopped, acmeNoticeParams(id, names, failures, code, notAfter)); err != nil {
 			return false, fmt.Errorf("inventory: queue the stop notice: %w", err)
 		}
 	}

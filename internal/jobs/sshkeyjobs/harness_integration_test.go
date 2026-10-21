@@ -69,11 +69,11 @@ func (g *lockGate) Allow(c license.Class) error {
 func (g *lockGate) lock()   { g.locked.Store(true) }
 func (g *lockGate) unlock() { g.locked.Store(false) }
 
-// recordingNotifier records every NotifyAdmins call and queues the email in the outbox as production does.
+// recordingNotifier records every NotifyServices call and queues the email in the outbox as production does.
 type recordingNotifier struct {
 	mu    sync.Mutex
 	calls []notice
-	next  notify.AdminNotifier
+	next  notify.ServiceNotifier
 }
 
 type notice struct {
@@ -81,8 +81,8 @@ type notice struct {
 	params   map[string]string
 }
 
-func (r *recordingNotifier) NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
-	if err := r.next.NotifyAdmins(ctx, tx, template, params); err != nil {
+func (r *recordingNotifier) NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error {
+	if err := r.next.NotifyServices(ctx, tx, services, template, params); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -210,14 +210,14 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: e.log})
 	require.NoError(t, lic.Start(e.ctx))
 	e.gate = &lockGate{Service: lic}
-	e.notifier = &recordingNotifier{next: notify.AdminNotifier{Clock: e.tick}}
+	e.notifier = &recordingNotifier{next: notify.ServiceNotifier{Clock: e.tick}}
 	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Gate: e.gate})
 	e.provider = fake.New(providers.KindLinuxSSH, providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
 		providers.CapKeyLogin)
 	e.provider.Configure(func(c *fake.Config) { c.World = e.world })
 	e.reg = providers.NewRegistry()
 	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, License: e.gate,
-		Registry: e.reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: e.log})
+		Registry: e.reg, Jobs: e.queue, Notifier: notify.ServiceNotifier{Clock: e.tick}, Log: e.log})
 	if real != nil {
 		real(e)
 	} else {
@@ -236,7 +236,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	// The heartbeat never beats on the fake clock: a lease ends only when a test moves the clock past it.
 	e.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.tick, Log: e.log,
 		Workers: 1, WorkerID: "alice", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
-		Notifier: notify.AdminNotifier{Clock: e.tick}})
+		Notifier: notify.ServiceNotifier{Clock: e.tick}})
 	sshkeyjobs.Register(e.runner, sshkeyjobs.Deps{Keys: killKeys{Service: e.keys, e: e}, Targets: e.inv, Registry: e.reg, Clock: e.tick,
 		Log: e.log, Gate: e.gate})
 	e.admin = e.user("ada", rbac.Admin)

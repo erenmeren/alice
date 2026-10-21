@@ -220,7 +220,7 @@ func (s *Service) RecordConnectionFailure(ctx context.Context, id uuid.UUID, rea
 			return fmt.Errorf("inventory: record connection failure: %w", err)
 		}
 		if to == StatusAuthFailed && t.Status != StatusAuthFailed && s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
+			if err := s.notifyTarget(ctx, tx, id, TemplateAuthFailed, map[string]string{"target_name": t.Name}); err != nil {
 				return fmt.Errorf("inventory: queue the authentication email: %w", err)
 			}
 		}

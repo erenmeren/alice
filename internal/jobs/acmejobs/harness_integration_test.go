@@ -119,13 +119,13 @@ func newWorld(t *testing.T) *world {
 	w.reg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapTestConnection, providers.CapHTTP01), pub: w.pub})
 	w.reg.Freeze()
 	w.inv = inventory.New(inventory.Config{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, License: w.gate, Registry: w.reg,
-		Jobs: w.queue, Notifier: notify.AdminNotifier{Clock: w.clock}, Log: log})
+		Jobs: w.queue, Notifier: notify.ServiceNotifier{Clock: w.clock}, Log: log})
 	_, err = w.inv.EnsurePlatformKey(w.ctx)
 	require.NoError(t, err)
 	w.h = newHandlers(Deps{Inventory: w.inv, Registry: w.reg, Gate: w.gate, Clock: w.clock, Log: log})
 	w.h.newHTTP01 = func(c http01.Config) (solver.Solver, error) { return publishOnly{pub: c.Publisher}, nil }
 	w.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.gate, Audit: audit.New(w.clock), Clock: w.clock,
-		Log: log, Workers: 1, WorkerID: "acme-test", Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: w.clock}})
+		Log: log, Workers: 1, WorkerID: "acme-test", Jitter: func() float64 { return 0 }, Notifier: notify.ServiceNotifier{Clock: w.clock}})
 	w.runner.Handle(jobs.ACMEIssue, w.h.issue)
 	w.runner.Handle(jobs.ACMERenew, w.h.issue)
 	w.runner.Handle(jobs.ACMECleanup, w.h.cleanup)

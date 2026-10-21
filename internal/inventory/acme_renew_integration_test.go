@@ -40,7 +40,7 @@ func newRenewWorld(t *testing.T) *renewWorld {
 	t.Helper()
 	cw := newCertWorld(t)
 	cw.svc = inventory.New(inventory.Config{Pool: cw.db.App, Keyring: cw.keyring, Audit: cw.audit, Clock: cw.clock, License: cw.lic,
-		Registry: cw.reg, Jobs: cw.jobs, Notifier: notify.AdminNotifier{Clock: cw.clock},
+		Registry: cw.reg, Jobs: cw.jobs, Notifier: notify.ServiceNotifier{Clock: cw.clock},
 		Log: slog.New(slog.NewTextHandler(cw.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	ayse := cw.user("ayse", rbac.Admin, "ayse@example.test")
 	_, err := cw.db.Owner.Exec(cw.ctx, "UPDATE users SET locale = 'tr' WHERE id = $1", ayse.UserID)
@@ -52,7 +52,7 @@ func newRenewWorld(t *testing.T) *renewWorld {
 // otherProcess is a second planner on the same database (another Alice process).
 func (w *renewWorld) otherProcess() *inventory.Service {
 	return inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
-		Registry: w.reg, Jobs: w.jobs, Notifier: notify.AdminNotifier{Clock: w.clock}})
+		Registry: w.reg, Jobs: w.jobs, Notifier: notify.ServiceNotifier{Clock: w.clock}})
 }
 
 // issued defines a DNS-01 certificate and issues it from the fake CA as a person's order would (the job's steps).

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -43,7 +45,7 @@ func (e *qenv) emails(t *testing.T, template, by string) map[string]map[string]s
 func TestDeadJobsAlertTheAdministratorsOncePerJob(t *testing.T) {
 	e := newQEnv(t)
 	e.adminWithEmail(t)
-	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.ServiceNotifier{Clock: e.clk} })
 	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) {
 		return nil, Retry("ssh.timeout", nil, nil)
 	})
@@ -86,6 +88,44 @@ func TestDeadJobsAlertTheAdministratorsOncePerJob(t *testing.T) {
 	assert.Len(t, e.deadEmails(t), 2)
 }
 
+// SR-25 (R56, design §7.2): a dead job of a service is mailed to the service's recipients (its owner too); a dead
+// job without a service is platform work and goes to the Administrators only.
+func TestDeadJobsGoToTheirServicesOwners(t *testing.T) {
+	e := newQEnv(t)
+	e.adminWithEmail(t)
+	svc, owner := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	_, err := e.d.Owner.Exec(e.ctx, "INSERT INTO services (id, name, created_at, updated_at) VALUES ($1, 'Payments', now(), now())", svc)
+	require.NoError(t, err)
+	_, err = e.d.Owner.Exec(e.ctx, `INSERT INTO users (id, username, email, display_name, password_hash, role, created_at, updated_at)
+VALUES ($1, 'olga', 'olga@example.com', 'Olga', 'x', 'operator', now(), now())`, owner)
+	require.NoError(t, err)
+	_, err = e.d.Owner.Exec(e.ctx, "INSERT INTO service_owners (id, service_id, user_id, created_at) VALUES ($1, $2, $3, now())",
+		uuid.Must(uuid.NewV7()), svc, owner)
+	require.NoError(t, err)
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.ServiceNotifier{Clock: e.clk} })
+	r.Handle(testQueueJob, func(context.Context, Job, StepRecorder) (map[string]any, error) {
+		return nil, Retry("ssh.timeout", nil, nil)
+	})
+	recipients := func(job uuid.UUID) []string {
+		rows, err := e.d.Owner.Query(e.ctx, `SELECT to_address FROM notifications_outbox WHERE template_key = $1 AND params->>'job_id' = $2
+ORDER BY to_address`, TemplateJobDead, job.String())
+		require.NoError(t, err)
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		require.NoError(t, err)
+		return got
+	}
+
+	ofService := e.enqueue(t, Spec{Type: testQueueJob, MaxAttempts: 1, ServiceID: svc})
+	_, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin@example.com", "olga@example.com"}, recipients(ofService))
+
+	platform := e.enqueue(t, Spec{Type: testQueueJob, MaxAttempts: 1})
+	_, err = r.RunOnce(e.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin@example.com"}, recipients(platform))
+}
+
 // adminWithEmail gives the test Administrator an address, so admin emails are queued.
 func (e *qenv) adminWithEmail(t *testing.T) {
 	t.Helper()
@@ -98,7 +138,7 @@ func (e *qenv) adminWithEmail(t *testing.T) {
 func TestTamperedJobsAlertTheAdministratorsOnce(t *testing.T) {
 	e := newQEnv(t)
 	e.adminWithEmail(t)
-	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
+	r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.ServiceNotifier{Clock: e.clk} })
 	r.Handle(testQueueJob, succeed)
 	id := e.enqueue(t, Spec{Type: testQueueJob})
 	_, err := e.d.Owner.Exec(e.ctx, `UPDATE jobs SET payload_mac = $2 WHERE id = $1`, id, make([]byte, 32))
@@ -134,7 +174,7 @@ func TestDeadJobsOfQuietTypesAreAuditedNotMailed(t *testing.T) {
 		t.Run(tc.typ.Name, func(t *testing.T) {
 			e := newQEnv(t)
 			e.adminWithEmail(t)
-			r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.AdminNotifier{Clock: e.clk} })
+			r := e.runner(t, "w1", func(c *RunnerConfig) { c.Notifier = notify.ServiceNotifier{Clock: e.clk} })
 			r.Handle(tc.typ, succeed)
 
 			// The reaper: the worker died on the job's last attempt.

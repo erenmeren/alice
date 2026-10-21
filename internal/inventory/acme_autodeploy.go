@@ -407,7 +407,7 @@ WHERE id = $1 AND deploy_held_certificate_id IS DISTINCT FROM $2`, id, current, 
 		return false, err
 	}
 	if s.notifier != nil {
-		if err := s.notifier.NotifyAdmins(ctx, tx, tpl, acmeDeployParams(names)); err != nil {
+		if err := s.notifyACME(ctx, tx, id, tpl, acmeDeployParams(names)); err != nil {
 			return false, fmt.Errorf("inventory: queue the hold notice: %w", err)
 		}
 	}
@@ -433,7 +433,7 @@ WHERE id = $1 AND deploy_stopped_certificate_id IS DISTINCT FROM $2`, id, curren
 	if s.notifier != nil {
 		p := acmeDeployParams(names)
 		p["count"], p["error_reason"] = strconv.Itoa(failed), code
-		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMEAutoDeployStopped, p); err != nil {
+		if err := s.notifyACME(ctx, tx, id, TemplateACMEAutoDeployStopped, p); err != nil {
 			return false, fmt.Errorf("inventory: queue the stop notice: %w", err)
 		}
 	}
@@ -452,7 +452,7 @@ func (s *Service) untrustedACMEDeploy(ctx context.Context, tx pgx.Tx, id uuid.UU
 	if s.notifier != nil {
 		p := acmeDeployParams(names)
 		p["count"] = strconv.Itoa(len(locations))
-		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMEAutoDeployUntrusted, p); err != nil {
+		if err := s.notifyACME(ctx, tx, id, TemplateACMEAutoDeployUntrusted, p); err != nil {
 			return fmt.Errorf("inventory: queue the untrusted notice: %w", err)
 		}
 	}

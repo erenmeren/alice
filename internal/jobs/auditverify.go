@@ -25,7 +25,7 @@ type AuditVerifier interface {
 type AuditVerifyConfig struct {
 	Pool     *pgxpool.Pool
 	Verifier AuditVerifier
-	Notifier Notifier // emails the Administrators about a broken chain; nil = no email
+	Notifier AdminNotifier // emails the Administrators about a broken chain (platform); nil = no email
 	Clock    clock.Clock
 }
 

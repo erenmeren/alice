@@ -248,12 +248,38 @@ func (s *Service) setRunStatus(ctx context.Context, tx pgx.Tx, actor audit.Actor
 	return s.recordRunStatus(ctx, tx, actor, run.id, run.status, to, reason, now)
 }
 
-// mail queues an email to every Administrator in the transaction (nothing without a notifier).
-func (s *Service) mail(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error {
+// mail queues a rotation e-mail in the transaction (nothing without a notifier) for the services of the rotation
+// (R56, design §7.2): the key's service and the services the policy's approval recorded (approved_service_ids).
+func (s *Service) mail(ctx context.Context, tx pgx.Tx, policyID, keyID uuid.UUID, template string, params map[string]string) error {
 	if s.notifier == nil {
 		return nil
 	}
-	return s.notifier.NotifyAdmins(ctx, tx, template, params)
+	svcs, err := rotationServices(ctx, tx, policyID, keyID)
+	if err != nil {
+		return err
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// rotationServices is the key's service and the policy's approved services, each once.
+func rotationServices(ctx context.Context, tx pgx.Tx, policyID, keyID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `SELECT service_id FROM ssh_keys WHERE id = $2
+UNION ALL
+SELECT unnest(approved_service_ids) FROM rotation_policies WHERE id = $1`, policyID, keyID)
+	if err != nil {
+		return nil, fmt.Errorf("sshkeys: read the rotation's services: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("sshkeys: read the rotation's services: %w", err)
+	}
+	var out []uuid.UUID
+	for _, id := range ids {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // pause sets the run's license pause (L-83, L-85, S6) and mails rotation.paused_license once, when
@@ -283,7 +309,7 @@ func (c *advance) pause(ctx context.Context) error {
 	if err := appendStep(ctx, c.tx, c.run.id, nil, "paused", "ok", map[string]string{"reason": ReasonPausedLicense}, c.now); err != nil {
 		return err
 	}
-	return c.s.mail(ctx, c.tx, TemplatePausedLicense, map[string]string{"key_label": c.run.oldLabel})
+	return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplatePausedLicense, map[string]string{"key_label": c.run.oldLabel})
 }
 
 // renotify sends rotation.preview_after_license once after a renewal (S6, L-84) and records it.
@@ -299,7 +325,7 @@ func (s *Service) renotify(ctx context.Context, tx pgx.Tx, run runRow, now time.
 	if err := tx.QueryRow(ctx, "SELECT coalesce((plan->>'Changes')::int, 0) FROM rotations WHERE id = $1", run.id).Scan(&changes); err != nil {
 		return fmt.Errorf("sshkeys: read the rotation's plan: %w", err)
 	}
-	return s.mail(ctx, tx, TemplatePreviewAfterLicense, map[string]string{"key_label": run.oldLabel, "fingerprint": run.oldFingerprint,
+	return s.mail(ctx, tx, run.policyID, run.oldKeyID, TemplatePreviewAfterLicense, map[string]string{"key_label": run.oldLabel, "fingerprint": run.oldFingerprint,
 		"change_count": strconv.Itoa(changes)})
 }
 
@@ -346,7 +372,7 @@ func (c *advance) adding(ctx context.Context) error {
 		if err := c.setStatus(ctx, StatusVerifyingNew, "", ", awaiting_decision = true, decision_due_at = $5", due); err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateDecisionNeeded, map[string]string{"key_label": c.run.oldLabel, "count": strconv.Itoa(n),
+		return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateDecisionNeeded, map[string]string{"key_label": c.run.oldLabel, "count": strconv.Itoa(n),
 			"decision_due": mailTime(due)})
 	}
 	return c.s.toOverlap(ctx, c.tx, c.actor, c.run, c.now)
@@ -359,7 +385,7 @@ func (s *Service) toOverlap(ctx context.Context, tx pgx.Tx, actor audit.Actor, r
 		", verified_at = $3, overlap_until = $5, awaiting_decision = false, decision_due_at = NULL", until); err != nil {
 		return err
 	}
-	return s.mail(ctx, tx, TemplateOverlapStarted, map[string]string{"key_label": run.oldLabel, "new_fingerprint": run.newFingerprint,
+	return s.mail(ctx, tx, run.policyID, run.oldKeyID, TemplateOverlapStarted, map[string]string{"key_label": run.oldLabel, "new_fingerprint": run.newFingerprint,
 		"overlap_until": mailTime(until)})
 }
 
@@ -396,7 +422,7 @@ func (c *advance) overlap(ctx context.Context) error {
 			if _, err := c.tx.Exec(ctx, "UPDATE rotations SET reminder_sent_at = $2, updated_at = $2 WHERE id = $1", c.run.id, c.now); err != nil {
 				return fmt.Errorf("sshkeys: record the reminder: %w", err)
 			}
-			return c.s.mail(ctx, c.tx, TemplateOverlapEnding, map[string]string{"key_label": c.run.oldLabel, "overlap_until": mailTime(until)})
+			return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateOverlapEnding, map[string]string{"key_label": c.run.oldLabel, "overlap_until": mailTime(until)})
 		}
 		return nil
 	}
@@ -488,7 +514,7 @@ func (c *advance) removing(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, params)
+		return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateNeedsAttention, params)
 	}
 	if err := c.setStatus(ctx, StatusCompleted, "", ", kept_count = $5", kept); err != nil {
 		return err
@@ -497,10 +523,10 @@ func (c *advance) removing(ctx context.Context) error {
 		return err
 	}
 	if kept > 0 {
-		return c.s.mail(ctx, c.tx, TemplateCompletedPartial, map[string]string{"key_label": c.run.oldLabel,
+		return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateCompletedPartial, map[string]string{"key_label": c.run.oldLabel,
 			"new_fingerprint": c.run.newFingerprint, "kept_count": strconv.Itoa(kept)})
 	}
-	return c.s.mail(ctx, c.tx, TemplateCompleted, map[string]string{"key_label": c.run.oldLabel, "new_fingerprint": c.run.newFingerprint})
+	return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateCompleted, map[string]string{"key_label": c.run.oldLabel, "new_fingerprint": c.run.newFingerprint})
 }
 
 // completed moves the policy to the new key and retires the old key when nothing uses it any more
@@ -628,12 +654,12 @@ func (c *advance) rollingBack(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, params)
+		return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateNeedsAttention, params)
 	}
 	if err := c.setStatus(ctx, StatusAborted, c.run.resultCode, ""); err != nil {
 		return err
 	}
-	return c.s.mail(ctx, c.tx, TemplateAborted, map[string]string{"key_label": c.run.oldLabel, "code": c.run.resultCode})
+	return c.s.mail(ctx, c.tx, c.run.policyID, c.run.oldKeyID, TemplateAborted, map[string]string{"key_label": c.run.oldLabel, "code": c.run.resultCode})
 }
 
 // queueJobs queues one rotation.location job of the phase per location (C1 payload and dedupe; a live

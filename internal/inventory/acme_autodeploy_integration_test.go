@@ -618,7 +618,7 @@ func TestACMEAutoDeployInLockDoesNothing(t *testing.T) {
 	lock := &lockableLicense{LicenseGate: w.h.lic}
 	lock.locked.Store(true)
 	svc := inventory.New(inventory.Config{Pool: w.h.db.App, Keyring: w.h.keyring, Audit: w.h.audit, Clock: w.h.clock, License: lock,
-		Registry: w.h.svc.Registry(), Jobs: w.h.jobs, Notifier: notify.AdminNotifier{Clock: w.h.clock}})
+		Registry: w.h.svc.Registry(), Jobs: w.h.jobs, Notifier: notify.ServiceNotifier{Clock: w.h.clock}})
 	audits, jobsBefore := w.h.count("SELECT count(*) FROM audit_log"), len(w.h.jobs.requests())
 	run, err := svc.PlanACMEAutoDeploy(w.h.ctx)
 	require.NoError(t, err)
@@ -761,7 +761,7 @@ func TestACMEAutoDeployConcurrentPlanners(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 4 {
 		svc := inventory.New(inventory.Config{Pool: w.h.db.App, Keyring: w.h.keyring, Audit: w.h.audit, Clock: w.h.clock, License: w.h.lic,
-			Registry: w.h.svc.Registry(), Jobs: w.h.jobs, Notifier: notify.AdminNotifier{Clock: w.h.clock}})
+			Registry: w.h.svc.Registry(), Jobs: w.h.jobs, Notifier: notify.ServiceNotifier{Clock: w.h.clock}})
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

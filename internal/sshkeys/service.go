@@ -33,9 +33,10 @@ import (
 // LicenseGate is the lock-mode gate (license.Service.Allow).
 type LicenseGate interface{ Allow(c license.Class) error }
 
-// Notifier is notify.AdminNotifier (sshkeys may not import notify).
+// Notifier is notify.ServiceNotifier (sshkeys may not import notify): every rotation e-mail goes to the recipients of
+// the key's service and of the services its policy's approval names (R56, design §7.2).
 type Notifier interface {
-	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+	NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error
 }
 
 // Inventory is the part of *inventory.Service this module uses.

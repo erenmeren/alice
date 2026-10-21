@@ -106,7 +106,7 @@ func (s *Service) FinishNow(ctx context.Context, a inventory.Actor, id uuid.UUID
 		if _, err := tx.Exec(ctx, "UPDATE rotations SET overlap_until = $2, updated_at = $2, version = version + 1 WHERE id = $1", id, now); err != nil {
 			return err
 		}
-		if err := s.mail(ctx, tx, TemplateOverlapEnding, map[string]string{"key_label": run.oldLabel, "overlap_until": mailTime(now)}); err != nil {
+		if err := s.mail(ctx, tx, run.policyID, run.oldKeyID, TemplateOverlapEnding, map[string]string{"key_label": run.oldLabel, "overlap_until": mailTime(now)}); err != nil {
 			return err
 		}
 		return s.auditDecision(ctx, tx, a, run, "rotation.finish_requested", nil)

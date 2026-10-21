@@ -192,8 +192,12 @@ func (s *Service) sendPlanSummaries(ctx context.Context, r *planRun) error {
 			tpl = one
 		}
 		name := r.vaults[key]
+		vault, err := uuid.Parse(strings.SplitN(key, "/", 2)[0]) // take's key: the vault's id, then the kind
+		if err != nil {
+			return fmt.Errorf("inventory: the summary's vault: %w", err)
+		}
 		if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-			return s.notifier.NotifyAdmins(ctx, tx, tpl, map[string]string{"target_name": name, "count": strconv.Itoa(n)})
+			return s.notifyTarget(ctx, tx, vault, tpl, map[string]string{"target_name": name, "count": strconv.Itoa(n)})
 		}); err != nil {
 			return fmt.Errorf("inventory: queue the summary notice: %w", err)
 		}
@@ -402,7 +406,7 @@ WHERE binding_id = $1 AND binding_attention_code = $2`, id, ReasonAutoDeployForb
 				return fmt.Errorf("inventory: mark the notice: %w", err)
 			}
 			if s.notifier != nil && mails.take(vaultID, vaultName, n.template) {
-				if err := s.notifier.NotifyAdmins(ctx, tx, n.template, map[string]string{"target_name": vaultName, "certificate_name": certName}); err != nil {
+				if err := s.notifyTarget(ctx, tx, vaultID, n.template, map[string]string{"target_name": vaultName, "certificate_name": certName}); err != nil {
 					return fmt.Errorf("inventory: queue the notice: %w", err)
 				}
 			}
@@ -427,7 +431,7 @@ WHERE binding_id = $1 AND binding_attention_code = $2`, id, ReasonAutoDeployForb
 			}
 			if tag.RowsAffected() == 1 {
 				if s.notifier != nil && mails.take(vaultID, vaultName, TemplateKVAutoDeployStopped) {
-					if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAutoDeployStopped, map[string]string{"target_name": vaultName,
+					if err := s.notifyTarget(ctx, tx, vaultID, TemplateKVAutoDeployStopped, map[string]string{"target_name": vaultName,
 						"certificate_name": certName, "count": strconv.Itoa(p.stop.failed)}); err != nil {
 						return fmt.Errorf("inventory: queue the stop notice: %w", err)
 					}
@@ -479,7 +483,7 @@ WHERE id = ANY($1) AND binding_id = $2 AND binding_attention_code <> $3 RETURNIN
 		return err
 	}
 	if s.notifier != nil && mails.take(vault, vaultName, TemplateKVAutoDeployUntrusted) {
-		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAutoDeployUntrusted, map[string]string{"target_name": vaultName,
+		if err := s.notifyTarget(ctx, tx, vault, TemplateKVAutoDeployUntrusted, map[string]string{"target_name": vaultName,
 			"certificate_name": certName, "count": strconv.Itoa(len(marked))}); err != nil {
 			return fmt.Errorf("inventory: queue the untrusted notice: %w", err)
 		}

@@ -149,7 +149,7 @@ func TestShutdownKillsALastAttemptWithoutAnEmail(t *testing.T) {
 		started, release := make(chan struct{}), make(chan struct{})
 		r := e.runner(t, "w1", func(c *RunnerConfig) {
 			c.Workers, c.Poll, c.ShutdownGrace = 1, 5*time.Millisecond, 100*time.Millisecond
-			c.Notifier = notify.AdminNotifier{Clock: e.clk}
+			c.Notifier = notify.ServiceNotifier{Clock: e.clk}
 		})
 		r.Handle(testQueueJob, func(ctx context.Context, _ Job, _ StepRecorder) (map[string]any, error) {
 			close(started)

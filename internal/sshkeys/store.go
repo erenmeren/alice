@@ -786,7 +786,7 @@ func (s *Service) lateResult(ctx context.Context, tx pgx.Tx, run runRow, loc loc
 		return fmt.Errorf("sshkeys: read the server: %w", err)
 	}
 	// Its own template (once per location): what the server did after the run gave up on it.
-	return s.mail(ctx, tx, TemplateLateResult, map[string]string{"key_label": run.oldLabel, "server": server, "os_user": loc.osUser,
+	return s.mail(ctx, tx, run.policyID, run.oldKeyID, TemplateLateResult, map[string]string{"key_label": run.oldLabel, "server": server, "os_user": loc.osUser,
 		"file_path": loc.filePath, "result": result, "rotation_id": run.id.String()})
 }
 

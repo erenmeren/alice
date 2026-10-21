@@ -148,7 +148,7 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 		}
 		p := acmeNoticeParams(id, names, failures, code, &notAfter)
 		p["days"] = strconv.Itoa(expiry.DaysLeft(notAfter, now))
-		if err := s.notifier.NotifyAdmins(ctx, tx, acmeExpiringTemplate(state, class), p); err != nil {
+		if err := s.notifyACME(ctx, tx, id, acmeExpiringTemplate(state, class), p); err != nil {
 			return fmt.Errorf("inventory: queue the expiry notice: %w", err)
 		}
 		queued = true
@@ -199,7 +199,7 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 	p := acmeNoticeParams(id, names, failures, code, &notAfter)
 	p["ca_not_before"] = caNotBefore.UTC().Format(acmeNoticeTime)
 	p["days"] = strconv.Itoa(expiry.DaysLeft(notAfter, now))
-	if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMERenewalCAWait, p); err != nil {
+	if err := s.notifyACME(ctx, tx, id, TemplateACMERenewalCAWait, p); err != nil {
 		return fmt.Errorf("inventory: queue the CA's wait notice: %w", err)
 	}
 	return nil

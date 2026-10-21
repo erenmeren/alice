@@ -166,7 +166,7 @@ WHERE id = $1 AND status <> $2`, target, StatusHostKeyChanged, now)
 			return err
 		}
 		if s.notifier != nil {
-			if err := s.notifier.NotifyAdmins(ctx, tx, TemplateHostKeyChanged, map[string]string{
+			if err := s.notifyTarget(ctx, tx, target, TemplateHostKeyChanged, map[string]string{
 				"target_name": t.Name, "old_fingerprint": old, "new_fingerprint": key.Fingerprint}); err != nil {
 				return fmt.Errorf("inventory: queue the host key email: %w", err)
 			}

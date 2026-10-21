@@ -618,8 +618,8 @@ WHERE fingerprint_sha256 = $1`, fp).Scan(&n)
 }
 
 // driftNotice records a drift notice of a location in the alerts ledger (kind, the location, the instant that names the
-// episode or the back-off, threshold 0) and, only when the row is new, queues template to every Administrator. So each
-// is told once.
+// episode or the back-off, threshold 0) and, only when the row is new, queues template for the location's services
+// (its server's and its certificate's, R56). So each is told once.
 func (s *Service) driftNotice(ctx context.Context, tx pgx.Tx, kind, template string, o LocationObservation, at time.Time, observed string) error {
 	params, err := driftNames(ctx, tx, o, observed)
 	if err != nil {
@@ -640,7 +640,7 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 	if s.notifier == nil {
 		return nil
 	}
-	if err := s.notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
+	if err := s.notifyLocation(ctx, tx, o.LocationID, template, params); err != nil {
 		return fmt.Errorf("inventory: queue the drift notice: %w", err)
 	}
 	return nil

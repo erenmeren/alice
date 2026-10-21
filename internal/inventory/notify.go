@@ -1,5 +1,16 @@
 package inventory
 
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"alice/internal/platform/db"
+)
+
 // Email templates sent to every Administrator (R37 item 14). Texts: locales/common email.<template>.
 // Every deployment template takes target_name, cert_path and deployment_id, and those that name a
 // backup also backup_dir (BackupRoot/<operation id>, Alice's own value, never text from the server).
@@ -138,4 +149,94 @@ func Templates() []string {
 		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVAutoDeployUntrusted, TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne, TemplateKVSkippedMore,
 		TemplateKVSkippedMoreOne, TemplateKVStoppedMore, TemplateKVStoppedMoreOne, TemplateKVImportFailed,
 		TemplateKVImportOutcomeUnknown}
+}
+
+// The services an e-mail of this package is about (R56, design §7.2): the notifier sends it to their recipients (the
+// Administrators as their policies say, their owners, their extra addresses). Each is read in the e-mail's
+// transaction; a row gone since names no service, and an e-mail about no service goes to the Administrators.
+
+// notifyTarget queues an e-mail about a server or a Key Vault (target.*, kv.*) for its service.
+func (s *Service) notifyTarget(ctx context.Context, tx pgx.Tx, target uuid.UUID, template string, params map[string]string) error {
+	svcs, err := targetServices(ctx, tx, target)
+	if err != nil {
+		return err
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// notifyACME queues an e-mail about an ACME certificate (acme.*) for its service.
+func (s *Service) notifyACME(ctx context.Context, tx pgx.Tx, acmeCertificate uuid.UUID, template string, params map[string]string) error {
+	svcs, err := acmeServices(ctx, tx, acmeCertificate)
+	if err != nil {
+		return err
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// notifyDeployment queues an e-mail about a deployment (deployment.*) for the destination's and the certificate's
+// services.
+func (s *Service) notifyDeployment(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string, params map[string]string) error {
+	svcs, err := deploymentServices(ctx, tx, deployment)
+	if err != nil {
+		return err
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// notifyLocation queues an e-mail about a website (location.drift_*) for its server's and its certificate's services.
+func (s *Service) notifyLocation(ctx context.Context, tx pgx.Tx, location uuid.UUID, template string, params map[string]string) error {
+	svcs, err := locationServices(ctx, tx, location)
+	if err != nil {
+		return err
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// targetServices is a server's or a Key Vault's service (target.*, kv.*).
+func targetServices(ctx context.Context, q db.Querier, target uuid.UUID) ([]uuid.UUID, error) {
+	return servicesOf(ctx, q, "SELECT service_id FROM targets WHERE id = $1", target)
+}
+
+// acmeServices is an ACME certificate's service (acme.*).
+func acmeServices(ctx context.Context, q db.Querier, acmeCertificate uuid.UUID) ([]uuid.UUID, error) {
+	return servicesOf(ctx, q, "SELECT service_id FROM acme_certificates WHERE id = $1", acmeCertificate)
+}
+
+// deploymentServices is the destination server's service and the deployed certificate's owning service
+// (deployment.*).
+func deploymentServices(ctx context.Context, q db.Querier, deployment uuid.UUID) ([]uuid.UUID, error) {
+	return servicesOf(ctx, q, `SELECT t.service_id FROM deployments d JOIN targets t ON t.id = d.target_id WHERE d.id = $1
+UNION ALL
+SELECT c.service_id FROM deployments d JOIN certificates c ON c.id = d.certificate_id WHERE d.id = $1`, deployment)
+}
+
+// locationServices is a website's server's service and the owning service of the certificate it holds
+// (location.drift_*: as a deployment's, R52 meets R56).
+func locationServices(ctx context.Context, q db.Querier, location uuid.UUID) ([]uuid.UUID, error) {
+	return servicesOf(ctx, q, `SELECT t.service_id FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $1
+UNION ALL
+SELECT c.service_id FROM certificate_locations l JOIN certificates c ON c.id = l.certificate_id WHERE l.id = $1`, location)
+}
+
+// servicesOf reads the service ids a query answers, each once, in their order.
+func servicesOf(ctx context.Context, q db.Querier, sql string, args ...any) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the e-mail's services: %w", err)
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id *uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("inventory: read the e-mail's services: %w", err)
+		}
+		if id != nil && !slices.Contains(out, *id) {
+			out = append(out, *id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inventory: read the e-mail's services: %w", err)
+	}
+	return out, nil
 }

@@ -181,7 +181,7 @@ func newEnv(t *testing.T) *env {
 	roots.AddCert(e.ca.Root)
 	e.reg = providers.NewRegistry()
 	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, License: e.lic,
-		Registry: e.reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: log, Roots: roots})
+		Registry: e.reg, Jobs: e.queue, Notifier: notify.ServiceNotifier{Clock: e.clock}, Log: log, Roots: roots})
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: e.inv.HostKeyStore()}, linuxssh.MaxConnections, 16,
 		linuxssh.IdleTimeout)
 	t.Cleanup(pool.Close)
@@ -250,7 +250,7 @@ func (e *env) log() *slog.Logger { return logging.New(e.logs, slog.LevelDebug) }
 
 func (e *env) newRunner(worker string) *jobs.Runner {
 	return jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.clock,
-		Log: e.log(), Workers: 1, WorkerID: worker, Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: e.clock}})
+		Log: e.log(), Workers: 1, WorkerID: worker, Jitter: func() float64 { return 0 }, Notifier: notify.ServiceNotifier{Clock: e.clock}})
 }
 
 // register installs the target and deployment handlers on r, the way cmd/alice will (Task 19).
@@ -544,7 +544,7 @@ func (e *env) startDying(k *killer) <-chan struct{} {
 	e.t.Helper()
 	r := jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.gate, Audit: e.audit, Clock: e.clock,
 		Log: e.log(), Workers: 1, WorkerID: "dying", Heartbeat: 24 * time.Hour, Jitter: func() float64 { return 0 },
-		Notifier: notify.AdminNotifier{Clock: e.clock}})
+		Notifier: notify.ServiceNotifier{Clock: e.clock}})
 	reg := providers.NewRegistry()
 	reg.Register(hookProvider{Provider: e.prov, wrap: func(_ providers.TargetRef, s providers.Session) providers.Session {
 		return killSession{Session: s, k: k}

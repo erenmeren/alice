@@ -105,7 +105,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	h.jobs = &recordingJobs{}
 	cfg := inventory.Config{
 		Pool: h.db.App, Keyring: h.keyring, Audit: h.audit, Clock: h.clock, License: h.lic,
-		Registry: h.reg, Jobs: h.jobs, Notifier: notify.AdminNotifier{Clock: h.clock},
+		Registry: h.reg, Jobs: h.jobs, Notifier: notify.ServiceNotifier{Clock: h.clock},
 		Log: slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	for _, o := range opts {

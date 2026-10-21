@@ -145,7 +145,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		License:  lic,
 		Registry: registry,
 		Jobs:     queue,
-		Notifier: notify.AdminNotifier{Clock: clk},
+		Notifier: notify.ServiceNotifier{Clock: clk},
 		Log:      log,
 		// The trust of ACME CAs and DNS hooks: nil (the system roots) in a release build, only the fake CA in the e2e
 		// build (testapi_*.go); each provider's and hook's own bundle is added.
@@ -184,7 +184,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	svc.databaseURL = cfg.DatabaseURL
 	svc.notifySettings = notifySettings
 	svc.alerts = alerts.New(alerts.Config{Pool: pool, Audit: auditLog, Clock: clk, License: lic,
-		Notifier: notify.AdminNotifier{Clock: clk}, Log: log})
+		Notifier: notify.ServiceNotifier{Clock: clk}, Log: log})
 	svc.reports = reports.New(reports.Config{Pool: pool, Clock: clk, Audit: auditLog, License: lic, Alerts: svc.alerts,
 		Delivery: svc.notifySettings, Inventory: inv})
 	svc.oidc = oidc.New(oidcConfig(svc, clk, log))
@@ -294,7 +294,7 @@ func sshkeysConfig(pool *pgxpool.Pool, keyring *secrets.Keyring, auditLog *audit
 		License:      lic,
 		Inventory:    inv,
 		Jobs:         queue,
-		Notifier:     notify.AdminNotifier{Clock: clk},
+		Notifier:     notify.ServiceNotifier{Clock: clk},
 		Log:          log,
 		HelperBudget: helperproto.HelperBudget,
 	}
@@ -307,12 +307,12 @@ const jobRetention = 90 * 24 * time.Hour
 // §8.1–§8.8), the Phase 4 certificate deployment and its recovery (§12.6, §8.8) and the Phase 5 Key
 // Vault jobs (access check, poll, import; §11) and the Phase 6 SSH key jobs (sshkey.add: deploy with a
 // test login; rotation.location: one location of a rotation run). Every claim passes the license gate;
-// a job that runs out of attempts or fails its integrity check emails the Administrators.
+// a job that fails its integrity check emails the Administrators, one that runs out of attempts its service's recipients (R56).
 // deployjobs.Register, kvjobs.Register and sshkeyjobs.Register panic on a missing dependency, so a
 // build that lacks one never starts.
 func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.Logger) *jobs.Runner {
 	runner := jobs.NewRunner(jobs.RunnerConfig{Pool: pool, Queue: svc.queue, Gate: svc.license, Audit: svc.auditLog,
-		Clock: clk, Log: log, Notifier: notify.AdminNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
+		Clock: clk, Log: log, Notifier: notify.ServiceNotifier{Clock: clk}, ShutdownGrace: jobsShutdownGrace})
 	targetjobs.Register(runner, targetDeps(svc, clk, log))
 	deployjobs.Register(runner, deployDeps(svc, clk, log))
 	kvjobs.Register(runner, kvDeps(svc, clk, log))

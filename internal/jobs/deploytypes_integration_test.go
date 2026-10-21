@@ -95,3 +95,8 @@ func (c countingNotifier) NotifyAdmins(context.Context, pgx.Tx, string, map[stri
 	*c.n++
 	return nil
 }
+
+func (c countingNotifier) NotifyServices(context.Context, pgx.Tx, []uuid.UUID, string, map[string]string) error {
+	*c.n++
+	return nil
+}

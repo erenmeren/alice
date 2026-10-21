@@ -315,7 +315,7 @@ func TestSSHKeysConfigIsTheProductionOne(t *testing.T) {
 	assert.Same(t, keyring, cfg.Keyring, "generated private keys are sealed with serve's keyring")
 	assert.Same(t, clk, cfg.Clock, "the service reads serve's clock")
 	assert.Same(t, log, cfg.Log)
-	assert.Equal(t, notify.AdminNotifier{Clock: clk}, cfg.Notifier, "rotation previews and results are mailed to the Administrators")
+	assert.Equal(t, notify.ServiceNotifier{Clock: clk}, cfg.Notifier, "rotation previews and results are mailed to the recipients of the key's services (R56)")
 	assert.Equal(t, helperproto.HelperBudget, cfg.HelperBudget)
 	assert.Nil(t, cfg.Rand, "production key generation takes no caller-supplied reader")
 	assert.Same(t, svc.license, cfg.License)

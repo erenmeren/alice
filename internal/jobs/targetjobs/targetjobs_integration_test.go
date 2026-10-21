@@ -77,11 +77,11 @@ func newEnv(t *testing.T, wrap func(providers.Session) providers.Session) *env {
 	reg.Freeze()
 	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: keyring, Audit: auditLog, Clock: e.clock, Gate: e.lic})
 	e.inv = inventory.New(inventory.Config{Pool: e.db.App, Keyring: keyring, Audit: auditLog, Clock: e.clock, License: e.lic,
-		Registry: reg, Jobs: e.queue, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: log})
+		Registry: reg, Jobs: e.queue, Notifier: notify.ServiceNotifier{Clock: e.clock}, Log: log})
 	_, err = e.inv.EnsurePlatformKey(e.ctx)
 	require.NoError(t, err)
 	e.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: e.db.App, Queue: e.queue, Gate: e.lic, Audit: auditLog, Clock: e.clock,
-		Log: log, Workers: 1, Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: e.clock}})
+		Log: log, Workers: 1, Jitter: func() float64 { return 0 }, Notifier: notify.ServiceNotifier{Clock: e.clock}})
 	targetjobs.Register(e.runner, targetjobs.Deps{Inventory: e.inv, Registry: reg, Clock: e.clock, Log: log})
 	id := uuid.Must(uuid.NewV7())
 	_, err = e.db.Owner.Exec(e.ctx, `INSERT INTO users (id, username, email, display_name, password_hash, role, created_at, updated_at)
