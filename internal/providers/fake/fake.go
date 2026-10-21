@@ -181,6 +181,7 @@ func cloneGuard(g providers.RollbackGuard) providers.RollbackGuard {
 
 func cloneLocation(l providers.CertLocation) providers.CertLocation {
 	l.Warnings = slices.Clone(l.Warnings)
+	l.Locator, l.Details = maps.Clone(l.Locator), maps.Clone(l.Details)
 	servers := make([]providers.CertServer, len(l.Servers))
 	for i, sv := range l.Servers {
 		sv.Names = slices.Clone(sv.Names)

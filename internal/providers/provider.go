@@ -53,6 +53,12 @@ func KindForTargetType(t string) (Kind, bool) {
 		return KindHAProxy, true
 	case "azure_key_vault":
 		return KindAzureKV, true
+	case TargetTypeWindows:
+		return KindWindows, true
+	case TargetTypeF5BigIP:
+		return KindF5BigIP, true
+	case TargetTypeKubernetes:
+		return KindKubernetes, true
 	default:
 		return "", false
 	}

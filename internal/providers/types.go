@@ -304,8 +304,17 @@ type DiscoveredCertificate struct {
 	FileSHA256 string
 }
 
-// CertLocation is a certificate/key file pair of a web server and the server blocks (virtual hosts) using it.
+// CertLocation is a certificate/key file pair of a web server and the server blocks (virtual hosts) using it, or (R59
+// G1) a location of another kind: an http.sys binding, a client SSL profile entry, a TLS Secret. A location that is not a
+// file has a Locator (its identity), CertPath is the locator's canonical text as the UI shows it (unique per target),
+// KeyPath, ResolvedCertPath and the Key* file facts are empty, and Details holds the kind's facts.
 type CertLocation struct {
+	// Kind is the location's kind; "" is a certificate file (every web-server provider leaves it empty).
+	Kind LocationKind
+	// Locator identifies a location that is not a file (nil for a file). See Locator.
+	Locator Locator
+	// Details are the kind's facts shown in the UI (bounded: CanonicalDetails); nil for a file.
+	Details          map[string]any
 	CertPath         string
 	KeyPath          string
 	ResolvedCertPath string
@@ -428,6 +437,11 @@ type VerifyOptions struct {
 	Port int    // 0 = the ports of the SSL listens
 	SNI  string // "" = derived from server_name and the certificate (spec §12.8 item 1)
 	Skip bool
+	// Address (R59 G4) is where Alice's probe reaches the location's endpoints instead of the address the provider
+	// derives (a load balancer's internal address, an address without a route domain): a host name or an IP literal, ""
+	// when not set. Only a location that is not a file takes one (certificate_locations.verify_address); the R51 rules and
+	// levels do not change.
+	Address string
 }
 
 // Requests are validated by the provider, not by the framework: operation ids, paths, SNI, ports
@@ -483,9 +497,14 @@ func (g RollbackGuard) RefusesUnchecked() bool {
 // private key: Format and LogValue print nothing but the operation id, so no fmt verb and no slog
 // handler shows the key, and the key has no JSON form (the wire form is helperproto's).
 type DeployRequest struct {
-	OperationID      uuid.UUID // = deployment id = the helper's operation id
-	Location         CertLocation
-	ExpectCertSHA256 string            // the certificate file's SHA-256 from the last discovery
+	OperationID uuid.UUID // = deployment id = the helper's operation id
+	Location    CertLocation
+	// ExpectCertSHA256 is the provider's compare-and-swap token for the location's current content, as the last
+	// discovery read it (certificate_locations.cert_file_sha256): the SHA-256 of the certificate file's bytes for a file,
+	// of the DER of the certificate an http.sys binding names (Windows), of the certificate object's DER (BIG-IP), of
+	// tls.crt's bytes (Kubernetes, which also compares the resourceVersion of Location.Details). A provider refuses with
+	// DeployNoChange (deployment.precondition) when the location holds anything else.
+	ExpectCertSHA256 string
 	CertificatePEM   []byte            // leaf first, then the chain (public)
 	PrivateKeyPEM    secrets.Plaintext `json:"-"` // the caller zeroes it after the call
 	Fingerprint      string            // hex SHA-256 of the new leaf
@@ -505,6 +524,10 @@ type DeployRequest struct {
 	RecheckGuard func(context.Context) (RollbackGuard, error) `json:"-"`
 	// Trust is the trust policy of the verification after the change (R51; nil: the served chains are not checked).
 	Trust *TrustPolicy `json:"-"`
+	// Backups is the deployment's store of a held backup (R59 G5): a BackupHeldByAlice provider holds the location's
+	// previous content there before it changes anything. The engine sets it for every deployment; a provider of another
+	// model ignores it. nil (a caller outside the engine) means none can be held: such a provider then refuses.
+	Backups HeldBackups `json:"-"`
 }
 
 func (r DeployRequest) redacted() string {
@@ -622,6 +645,8 @@ type RollbackRequest struct {
 	Verify         VerifyOptions
 	// Guard is the rollback guard as the engine read it right before this rollback (R48).
 	Guard RollbackGuard
+	// Backups is where a BackupHeldByAlice provider reads the backup it restores (R59 G5); see DeployRequest.Backups.
+	Backups HeldBackups `json:"-"`
 }
 
 // RollbackOutcome is the result of RollbackDeployment. Result is DeployRolledBack,

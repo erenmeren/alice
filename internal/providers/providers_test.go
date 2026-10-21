@@ -148,12 +148,14 @@ func TestRegistryRefusesBrokenProviders(t *testing.T) {
 func TestKindForTargetType(t *testing.T) {
 	for typ, want := range map[string]providers.Kind{
 		"linux": providers.KindLinuxSSH, "nginx": providers.KindNginx, "apache": providers.KindApache, "haproxy": providers.KindHAProxy, "azure_key_vault": providers.KindAzureKV,
+		// R59: the groundwork's types map to the kinds their phases will register.
+		"windows": providers.KindWindows, "f5_bigip": providers.KindF5BigIP, "kubernetes": providers.KindKubernetes,
 	} {
 		got, ok := providers.KindForTargetType(typ)
 		assert.True(t, ok, typ)
 		assert.Equal(t, want, got, typ)
 	}
-	for _, typ := range []string{"", "Linux", "linuxssh", "windows"} {
+	for _, typ := range []string{"", "Linux", "linuxssh", "Windows", "f5bigip", "k8s"} {
 		_, ok := providers.KindForTargetType(typ)
 		assert.False(t, ok, typ)
 	}
