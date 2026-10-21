@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { getDashboardSummary } from '../api/phase7';
 import { DASHBOARD_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { Icon } from '../design/Icon';
 
 // BackupBanner is the red banner of §20.2 for Administrators: no successful backup for 48 hours. It reads the
@@ -13,7 +14,8 @@ import { Icon } from '../design/Icon';
 export function BackupBanner() {
   const { t } = useTranslation();
   const { session } = useAuth();
-  const admin = session?.user.role === 'admin';
+  // The backups are the installation's: a global Administrator's (backup.manage).
+  const admin = canPlatform(session, 'backup.manage');
   const summary = useQuery({ queryKey: DASHBOARD_KEY, queryFn: getDashboardSummary, enabled: admin, refetchInterval: 60_000 });
   if (!admin || !summary.data?.backup?.alarm) return null;
   return (

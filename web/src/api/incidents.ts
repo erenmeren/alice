@@ -75,6 +75,8 @@ export interface CertificateImpact {
   endpoints_hidden: boolean;
   truncated: boolean;
   open_incident_id: string | null;
+  // Certificates, locations and Key Vault versions with the key outside the reader's services, left out (R49 Phase 2).
+  hidden_count?: number;
 }
 
 export interface SourceCapabilities {
@@ -123,6 +125,8 @@ export interface Incident {
   finished_at: string | null;
   counts: Partial<Record<IncidentLocationStatus, number>>;
   locations?: IncidentLocation[];
+  // With locations: those on servers outside the reader's services, left out (R49 Phase 2).
+  hidden_count?: number;
 }
 
 // An incident is open until completed or closed.

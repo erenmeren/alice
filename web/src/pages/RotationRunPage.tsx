@@ -6,6 +6,7 @@ import { Link, useParams } from 'react-router';
 import { ROTATION_POLICIES_KEY, ROTATION_RUNS_KEY, runKey, SSH_KEYS_KEY } from '../api/queryKeys';
 import { abortRun, continueRun, finishRunNow, getRun, keepOldKey, listPolicies, runPollInterval, type Run, type RunLocation, type RunStep } from '../api/rotation';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import type { ErrorRef } from '../api/types';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
@@ -117,7 +118,7 @@ export function RotationRunPage() {
   const { session } = useAuth();
   // Only an Administrator may decide (rotation.manage / rotation.operate); everybody else reads. The buttons shown are the
   // intersection of that and what the API offers.
-  const isAdmin = session?.user.role === 'admin';
+  const isAdmin = can(session, 'rotation.manage');
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [kept, setKept] = useState<Set<string>>(new Set());
   const closeConfirm = () => {

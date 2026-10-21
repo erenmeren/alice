@@ -378,7 +378,8 @@
       "revokeSessions": "Sign out everywhere",
       "unlockDirectory": "Unlock directory sign-in",
       "disable": "Disable",
-      "enable": "Enable"
+      "enable": "Enable",
+      "access": "Access"
     },
     "confirm": {
       "resetMfaTitle": "Reset two-factor sign-in for {{name}}?",
@@ -759,7 +760,9 @@
       "location_drift_resolved": "Certificate location in sync again",
       "location_drift_mode_changed": "Repair mode of a certificate location changed",
       "location_drift_repair_requested": "Automatic repair of a certificate location requested",
-      "location_drift_backoff": "Automatic repair of a certificate location stopped"
+      "location_drift_backoff": "Automatic repair of a certificate location stopped",
+      "access_binding_added": "Access added",
+      "access_binding_removed": "Access removed"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -4281,7 +4284,8 @@
     "tabs": {
       "overview": "Overview",
       "resources": "Resources",
-      "trusts": "Trusts"
+      "trusts": "Trusts",
+      "access": "Access"
     },
     "overview": {
       "title": "About this service",
@@ -4435,6 +4439,76 @@
       "other_one": "{{count}} waiting or not checked recently",
       "other_other": "{{count}} waiting or not checked recently",
       "driftedHelp": "Someone or another tool changed what these places have, after Alice had deployed the right certificate. The rows below show what each should have, what Alice last deployed, what the file holds and what the website serves, each with its time."
+    }
+  },
+  "access": {
+    "title": "Access",
+    "modalTitle": "Access of {{name}}",
+    "outside": "outside your services",
+    "hiddenCount_one": "and {{count}} more outside your services",
+    "hiddenCount_other": "and {{count}} more outside your services",
+    "noGlobalRole": "No role on all services",
+    "roleHelp": "The role on all services. Without one, the person reaches only the services and environments of their Access.",
+    "allServices": "All services",
+    "empty": "No role on a single service or environment.",
+    "coversNone": "No service yet",
+    "addedBy": "{{date}} by {{name}}",
+    "remove": "Remove",
+    "removeNamed": "Remove {{role}} on {{where}}",
+    "shell": {
+      "services_one": "Role on {{count}} service",
+      "services_other": "Roles on {{count}} services"
+    },
+    "none": {
+      "title": "You do not have access to anything yet.",
+      "text": "Ask an Administrator."
+    },
+    "section": {
+      "description": "What this person may reach: the role on all services first, then each role on one service or on every service of an environment."
+    },
+    "columns": {
+      "person": "Person",
+      "role": "Role",
+      "where": "Where",
+      "covers": "Covers now",
+      "added": "Added",
+      "actions": "Actions"
+    },
+    "where": {
+      "environment": "Every service in {{name}}"
+    },
+    "add": {
+      "title": "Add access",
+      "stepUp": "Adding or removing access asks for a fresh verification code.",
+      "person": "Person",
+      "pickPerson": "Choose a person",
+      "role": "Role",
+      "where": "Service or environment",
+      "pick": "Choose one",
+      "services": "Services",
+      "environments": "Environments",
+      "submit": "Add"
+    },
+    "explain": {
+      "button": "Explain",
+      "hide": "Hide the explanation",
+      "title": "Effective access",
+      "intro": "What the roles add up to: each role with the services it reaches now.",
+      "global": "{{role}} on all services",
+      "grant": "{{role}} on:",
+      "none": "This person reaches nothing yet.",
+      "cappedTitle": "An Administrator role counts as Operator",
+      "capped": "Single sign-on users may not be Administrators (Settings, single sign-on), so this person's Administrator roles give Operator rights."
+    },
+    "service": {
+      "intro": "People who reach this service through a role on the service itself or on every service of its environment.",
+      "globalTitle": "All services",
+      "globalNote": "Everyone with a role on all services (People & access) reaches this service too.",
+      "direct": "On this service",
+      "throughEnvironment": "Through its environment",
+      "noneDirect": "Nobody has a role on this service alone.",
+      "noneThrough": "Nobody has a role through the environment.",
+      "adminOnly": "Only Administrators of all services see who has access."
     }
   }
 }

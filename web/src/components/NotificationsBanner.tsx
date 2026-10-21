@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { getNotificationStatus } from '../api/phase7';
 import { NOTIFICATIONS_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { Icon } from '../design/Icon';
 import { CodeText } from './CodeText';
 
@@ -13,7 +14,8 @@ import { CodeText } from './CodeText';
 export function NotificationsBanner() {
   const { t } = useTranslation();
   const { session } = useAuth();
-  const admin = session?.user.role === 'admin';
+  // The notification settings are the installation's: a global Administrator's (settings.manage).
+  const admin = canPlatform(session, 'settings.manage');
   const status = useQuery({ queryKey: NOTIFICATIONS_KEY, queryFn: getNotificationStatus, enabled: admin, refetchInterval: 60_000 });
   if (!admin || !status.data?.failing) return null;
   return (

@@ -14,6 +14,7 @@ import { useAbort } from '../api/useAbort';
 import { warningKey } from '../api/warnings';
 import type { HostKey, JobAccepted, JobError, KeyLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -43,10 +44,6 @@ export function TargetDetailPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const client = useQueryClient();
-  const role = session?.user.role;
-  const admin = role === 'admin';
-  const canOperate = role === 'admin' || role === 'operator';
-
   const [busy, setBusy] = useState(false);
   const addedNow = (location.state as { added?: boolean } | null)?.added === true;
   const target = useQuery({
@@ -61,6 +58,12 @@ export function TargetDetailPage() {
       return addedNow && !d.last_discovery_at && q.state.dataUpdateCount < 20 ? 3000 : false;
     },
   });
+  // What the person may do here: the permissions held on the server's service (its allowed_actions).
+  const canOperate = canOn(session, target.data, 'inventory.operate');
+  const canManage = canOn(session, target.data, 'targets.manage');
+  const canAssign = canOn(session, target.data, 'services.assign');
+  const canConfirm = canOn(session, target.data, 'hostkeys.confirm');
+  const canRepin = canOn(session, target.data, 'hostkeys.repin');
   // The status is part of the key so the host keys are read again when a polled server moves on
   // (for example from checking to pending_host_key and its confirmation card).
   const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys', target.data?.status ?? null], queryFn: () => listHostKeys(id), placeholderData: keepPreviousData });
@@ -159,12 +162,12 @@ export function TargetDetailPage() {
           canOperate && (
             <>
               {scan}
-              {admin && (
+              {canAssign && (
                 <Button variant="default" leftSection={<Icon name="Layers" size={15} />} onClick={() => setMoving(true)}>
                   {t('services.moveTo')}
                 </Button>
               )}
-              {admin && (
+              {canManage && (
                 <Button variant="light" color="red" disabled={busy} onClick={() => setDeleting(true)}>
                   {t('targets.delete')}
                 </Button>
@@ -179,7 +182,7 @@ export function TargetDetailPage() {
             {t('targets.added')}
           </Alert>
         )}
-        <IdentityNotice target={tg} admin={admin} onReview={() => setRepinning(true)} />
+        <IdentityNotice target={tg} admin={canRepin} onReview={() => setRepinning(true)} />
         {busy && (
           <Group gap="sm" role="status" aria-live="polite">
             <Loader size="sm" aria-hidden />
@@ -200,7 +203,7 @@ export function TargetDetailPage() {
 
       <div className={classes.detailGrid}>
         <div className={classes.stack}>
-          {tg.status === 'pending_host_key' && admin && observed && (
+          {tg.status === 'pending_host_key' && canConfirm && observed && (
             <Panel title={t('hostKeys.confirmTitle')}>
               <HostKeyConfirm host={tg.host} hostKey={observed} busy={busy} onYes={() => void runJob(() => confirmHostKey(tg.id, observed.id, observed.fingerprint))} />
             </Panel>
@@ -284,7 +287,7 @@ export function TargetDetailPage() {
           }}
         />
       )}
-      {moving && admin && <MoveDialog resource={{ type: 'target', id: tg.id, name: tg.name, service: tg.service }} onClose={() => setMoving(false)} />}
+      {moving && canAssign && <MoveDialog resource={{ type: 'target', id: tg.id, name: tg.name, service: tg.service }} onClose={() => setMoving(false)} />}
       {deleting && (
         <DeleteTargetDialog
           target={tg}

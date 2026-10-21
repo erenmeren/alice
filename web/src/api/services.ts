@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { EnvironmentRef, ServiceRef } from './types';
+import type { EnvironmentRef, OwnerService, ServiceRef } from './types';
 
 export type { EnvironmentRef, ServiceRef };
 
@@ -134,7 +134,7 @@ export function addServiceFilter(params: URLSearchParams, f: ServiceFilter): voi
 }
 
 // inServiceFilter reports whether a row passes the filters (lists read completely filter in the browser).
-export function inServiceFilter(service: ServiceRef | undefined | null, f: ServiceFilter): boolean {
+export function inServiceFilter(service: OwnerService | undefined | null, f: ServiceFilter): boolean {
   if (f.service_id && service?.id !== f.service_id) return false;
   if (f.environment_id && service?.environment?.id !== f.environment_id) return false;
   return true;

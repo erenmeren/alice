@@ -21,6 +21,7 @@ import {
 import { getCertificate } from '../api/endpoints';
 import { ACME_CERTIFICATES_KEY, acmeCertificateKey, acmeOrdersKey, CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
 import { AcmeBindingsPanel } from '../components/acme/AcmeBindingsPanel';
 import { RevokeDialog, revocableVersions } from '../components/acme/RevokeDialog';
@@ -48,9 +49,6 @@ export function AcmeCertificatePage() {
   const client = useQueryClient();
   const navigate = useNavigate();
   const { run } = useStepUp();
-  const role = session?.user.role;
-  const admin = role === 'admin';
-  const canOperate = admin || role === 'operator';
   const locked = useChangesLocked();
   const providers = useProviders();
   const hooks = useHooks();
@@ -66,6 +64,9 @@ export function AcmeCertificatePage() {
     refetchInterval: (q) => (q.state.data?.items.some((o) => o.state === 'running') ? ORDER_POLL_MS : false),
   });
   const c = cert.data;
+  // What the person may do here: the permissions held on the certificate's service (its allowed_actions).
+  const admin = canOn(session, c, 'acme.manage');
+  const canOperate = canOn(session, c, 'acme.operate');
   const servers = useWebServers(c?.challenge === 'http01');
   const running = !!c?.running_order_id || (orders.data?.items.some((o) => o.state === 'running') ?? false);
 
@@ -225,7 +226,7 @@ export function AcmeCertificatePage() {
             {t('acme.issued.lockedText')}
           </Notice>
         )}
-        {role === 'auditor' && <Notice tone="neutral" title={t('acme.issued.readOnly')} />}
+        {!canOperate && <Notice tone="neutral" title={t('acme.issued.readOnly')} />}
         {canOperate && <Text size="sm">{t('acme.issued.testRunHelp')}</Text>}
         {running && (
           <Group gap="sm" role="status" aria-live="polite" data-testid="order-running">

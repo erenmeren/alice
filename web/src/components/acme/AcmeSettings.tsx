@@ -18,6 +18,7 @@ import {
 } from '../../api/acme';
 import { ACME_CERTIFICATES_KEY, ACME_HOOKS_KEY, ACME_HOOK_LIST_KEY, ACME_PROVIDERS_KEY, ACME_PROVIDER_LIST_KEY, notACMEPreview } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
+import { canPlatform } from '../../auth/permissions';
 import { Icon, type IconName } from '../../design/Icon';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
@@ -44,7 +45,8 @@ type Dialog =
 export function AcmeSettings() {
   const { t } = useTranslation();
   const { session } = useAuth();
-  const canManage = session?.user.role === 'admin';
+  // Authorities and hooks are the installation's: a global Administrator's (acme.manage, platform).
+  const canManage = canPlatform(session, 'acme.manage');
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const providers = useQuery({ queryKey: ACME_PROVIDER_LIST_KEY, queryFn: ({ signal }) => listACMEProviders(signal) });
   const hooks = useQuery({ queryKey: ACME_HOOK_LIST_KEY, queryFn: ({ signal }) => listACMEHooks(signal) });

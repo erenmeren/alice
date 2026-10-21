@@ -17,6 +17,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 import { KVDeployDialog } from './KVDeployDialog';
 import { ROLE_SECRETS_USER } from './roleCommands';
+import { HiddenCount } from './services/shared';
 import { Icon } from '../design/Icon';
 import { DialogActions, EmptyState, Notice, Panel, StatusBadge, type Tone } from './ui';
 import { shortVersion } from './vaultText';
@@ -138,6 +139,7 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
+        <HiddenCount count={b.hidden_count} />
         {b.stopped_version !== '' && (
           <Notice tone="warning" role="status" testId="stopped-help" title={<CodeText i18nKey="bindings.stoppedHelp" param="version" value={shortVersion(b.stopped_version)} />} />
         )}

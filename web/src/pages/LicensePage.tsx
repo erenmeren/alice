@@ -6,6 +6,7 @@ import { getLicense } from "../api/endpoints";
 import type { LicenseFileEntry, LicensePhase, LicenseUploadResult } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { PageLoader } from "../auth/guards";
+import { canPlatform } from "../auth/permissions";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { LicenseUpload } from "../components/LicenseUpload";
 import { FactList, Notice, PageHeader, Panel, StatusBadge, type Tone } from "../components/ui";
@@ -53,7 +54,8 @@ export function InstallationID({ id }: { id: string }) {
 export function LicensePage() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
-  const admin = session?.user.role === "admin";
+  // Uploading a license is a global Administrator's (license.manage).
+  const admin = canPlatform(session, 'license.manage');
   const detail = useQuery({
     queryKey: ["license", "detail"],
     queryFn: getLicense,

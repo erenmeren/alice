@@ -4,7 +4,8 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { ENVIRONMENTS_KEY, SERVICE_LIST_KEY } from '../../api/queryKeys';
-import { listEnvironments, listServices, SEEDED_ENVIRONMENTS, type EnvironmentRef, type ServiceFilter, type ServiceRef } from '../../api/services';
+import { listEnvironments, listServices, SEEDED_ENVIRONMENTS, type EnvironmentRef, type ServiceFilter } from '../../api/services';
+import { isOutside, type OwnerService } from '../../api/types';
 import { useUrlFilters } from '../../hooks/useUrlFilters';
 import { StatusBadge } from '../ui';
 
@@ -25,11 +26,33 @@ export function EnvironmentBadge({ environment }: { environment: EnvironmentRef 
   );
 }
 
+// OutsideBadge says that a row belongs to a service outside the reader's services (the server never names it).
+export function OutsideBadge() {
+  const { t } = useTranslation();
+  return (
+    <StatusBadge tone="neutral" size="sm" icon="LockKeyhole" testId="service-outside">
+      {t('access.outside')}
+    </StatusBadge>
+  );
+}
+
+// HiddenCount is the line under a detail list whose related rows outside the reader's services were left out.
+export function HiddenCount({ count }: { count: number | null | undefined }) {
+  const { t } = useTranslation();
+  if (!count || count <= 0) return null;
+  return (
+    <Text size="sm" c="dimmed" data-testid="hidden-count">
+      {t('access.hiddenCount', { count })}
+    </Text>
+  );
+}
+
 // ServiceBadge is the owning service of a row (design §8.2): its name and its environment; on a detail page (link) the
 // name links to the service's page (a list row keeps its one link, to the row's own page). A row of an older answer has
-// none and shows nothing.
-export function ServiceBadge({ service, link = false }: { service: ServiceRef | null | undefined; link?: boolean }) {
+// none and shows nothing; a row outside the reader's services says so.
+export function ServiceBadge({ service, link = false }: { service: OwnerService | null | undefined; link?: boolean }) {
   if (!service) return null;
+  if (isOutside(service)) return <OutsideBadge />;
   const name = service.name || service.id;
   return (
     <Group gap={6} wrap="nowrap" data-testid="service-badge">

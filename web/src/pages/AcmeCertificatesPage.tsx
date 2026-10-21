@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router';
 import { ACME_CERTIFICATE_STATES, certificateStateKey, challengeKey, listACMECertificates, type ACMECertificate, type ACMECertificateState } from '../api/acme';
 import { acmeCertificateListKey } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { GetCertificateDialog } from '../components/acme/GetCertificateDialog';
 import { providerName, renewal, stateIcon, stateTone, useChangesLocked, useProviders } from '../components/acme/issued';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -29,8 +30,9 @@ export function AcmeCertificatesPage() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const role = session?.user.role;
-  const admin = role === 'admin';
+  // Getting a certificate is acme.manage on some service; a person who cannot order anywhere only reads.
+  const admin = can(session, 'acme.manage');
+  const readOnly = !can(session, 'acme.operate');
   const locked = useChangesLocked();
   const [urlFilters, setFilters, clearFilters] = useUrlFilters(FILTER_KEYS);
   // A value in the address that is not an option is ignored, so the select never says "all" over a filtered list.
@@ -88,7 +90,7 @@ export function AcmeCertificatesPage() {
         }
       />
       {locked && <Notice tone="warning" title={t('acme.issued.lockedTitle')}>{t('acme.issued.lockedText')}</Notice>}
-      {role === 'auditor' && <Notice tone="neutral" title={t('acme.issued.readOnly')} />}
+      {readOnly && <Notice tone="neutral" title={t('acme.issued.readOnly')} />}
       <ErrorAlert error={list.error} />
       <div className={ui.tablePanel}>
         <div className={ui.toolbar}>{toolbar}</div>

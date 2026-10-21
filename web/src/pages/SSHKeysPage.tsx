@@ -8,6 +8,7 @@ import { listAllServers, listSSHKeys } from '../api/endpoints';
 import { SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyFlag, SSHKey, SSHKeyQuery } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { ExportButton } from '../components/ExportButton';
 import { GenerateKeyDialog } from '../components/GenerateKeyDialog';
@@ -43,7 +44,8 @@ export function SSHKeysPage() {
   const { t } = useTranslation();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const canGenerate = session?.user.role === 'admin' || session?.user.role === 'operator';
+  // Generating needs inventory.operate on some service.
+  const canGenerate = can(session, 'inventory.operate');
   const [generating, setGenerating] = useState(false);
   const [filters, setFilters, clearFilters] = useUrlFilters(SSH_FILTER_KEYS);
   const [serviceFilter, setServiceFilter] = useServiceFilters();

@@ -13,6 +13,7 @@ import { AppearanceControl, FactList, PageHeader, Panel, StatusBadge } from '../
 import { Icon } from '../design/Icon';
 import classes from './People.module.css';
 import { initials } from '../initials';
+import { roleLabel } from '../components/access/shared';
 
 function ChangePassword() {
   const { t } = useTranslation();
@@ -147,7 +148,7 @@ export function AccountPage() {
   const sso = user.auth_source === 'oidc';
   // A directory account has no Alice password (the directory owns it) but keeps Alice's authenticator and recovery codes.
   const directory = user.auth_source === 'ldap';
-  const role = t(`enum.role.${user.role}`, { ns: 'common' });
+  const role = roleLabel(t, user.role);
   let mfa;
   if (sso) {
     mfa = (

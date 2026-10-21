@@ -7,6 +7,8 @@ import { getSSHKey } from '../api/endpoints';
 import { sshKey, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { KeyLocation } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
+import { HiddenCount } from '../components/services/shared';
 import { PageLoader } from '../auth/guards';
 import { DeployKeyDialog } from '../components/DeployKeyDialog';
 import { DownloadKeyDialog } from '../components/DownloadKeyDialog';
@@ -27,8 +29,6 @@ export function SSHKeyDetailPage() {
   const { id = '' } = useParams();
   const { session } = useAuth();
   const client = useQueryClient();
-  const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
-  const isAdmin = session?.user.role === 'admin';
   const key = useQuery({ queryKey: sshKey(id), queryFn: () => getSSHKey(id) });
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
   const [deploying, setDeploying] = useState(false);
@@ -45,6 +45,10 @@ export function SSHKeyDetailPage() {
       </Stack>
     );
   const k = key.data;
+  // What the person may do here: the permissions held on the key's service (its allowed_actions).
+  const canOperate = canOn(session, k, 'inventory.operate');
+  const canDownload = canOn(session, k, 'sshkeys.download');
+  const canRotate = canOn(session, k, 'rotation.manage');
   const mk = k.managed_key ?? null;
   const live = mk !== null && mk.destroyed_at === null;
   // Alice's own connection key is never "managed", yet Alice certainly holds its private half (not downloadable).
@@ -71,7 +75,7 @@ export function SSHKeyDetailPage() {
                 {t('sshKeys.deploy')}
               </Button>
             )}
-            {isAdmin && live && (
+            {canDownload && live && (
               <Button variant="default" leftSection={<Icon name="Download" size={15} />} onClick={() => setDownloading(true)}>
                 {t('sshKeys.download')}
               </Button>
@@ -93,7 +97,7 @@ export function SSHKeyDetailPage() {
       </Stack>
       <div className={classes.detailGrid}>
         <div className={classes.stack}>
-          <Panel title={t('sshKeys.usedWhere')} description={t('sshKeys.page.locationsText')} padded={false}>
+          <Panel title={t('sshKeys.usedWhere')} description={t('sshKeys.page.locationsText')} padded={false} footer={(k.hidden_count ?? 0) > 0 ? <HiddenCount count={k.hidden_count} /> : undefined}>
             <Table.ScrollContainer minWidth={880}>
               <Table data-testid="key-locations" aria-label={t('sshKeys.usedWhere')} highlightOnHover>
                 <Table.Thead>
@@ -232,7 +236,7 @@ export function SSHKeyDetailPage() {
           )}
         </div>
         <div className={classes.stack}>
-          {mk && mk.retired_at === null && <RotationPolicyPanel keyId={id} policyId={mk.policy_id} isAdmin={isAdmin} />}
+          {mk && mk.retired_at === null && <RotationPolicyPanel keyId={id} policyId={mk.policy_id} isAdmin={canRotate} />}
           {canOperate && (
             <Notice tone="info" title={t('sshKeys.page.reviewBeforeRemoving')}>
               {t('sshKeys.page.removeNote')}

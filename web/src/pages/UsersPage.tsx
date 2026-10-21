@@ -22,6 +22,8 @@ import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
 import { initials } from '../initials';
 import { AppModal } from '../components/AppModal';
+import { roleLabel } from '../components/access/shared';
+import { UserAccess } from '../components/access/UserAccess';
 import classes from './People.module.css';
 
 const ROLES: Role[] = ['admin', 'operator', 'auditor'];
@@ -31,6 +33,7 @@ type Dialog =
   | { kind: 'create' }
   | { kind: 'manage'; user: User }
   | { kind: 'edit'; user: User }
+  | { kind: 'access'; user: User }
   | { kind: 'resetPassword'; user: User }
   | { kind: 'resetMfa'; user: User }
   | { kind: 'revoke'; user: User }
@@ -109,7 +112,7 @@ export function UsersPage() {
                   </div>
                 </Table.Td>
                 <Table.Td>
-                  <span className={classes.userRole}>{t(`enum.role.${u.role}`)}</span>
+                  <span className={classes.userRole}>{roleLabel(t, u.role)}</span>
                 </Table.Td>
                 <Table.Td>
                   <SignInMethod user={u} provider={u.auth_source === 'ldap' ? directoryName(u.ldap_directory_id) : providerName(u.sso_provider_id)} />
@@ -147,6 +150,7 @@ export function UsersPage() {
       {dialog?.kind === 'create' && <CreateUserModal onClose={close} />}
       {dialog?.kind === 'manage' && <ManageModal user={dialog.user} onChoose={setDialog} onClose={close} />}
       {dialog?.kind === 'edit' && <EditUserModal user={dialog.user} onClose={close} />}
+      {dialog?.kind === 'access' && <AccessModal user={dialog.user} onClose={close} />}
       {dialog?.kind === 'resetPassword' && <ResetPasswordModal user={dialog.user} onClose={close} />}
       {(dialog?.kind === 'resetMfa' || dialog?.kind === 'revoke' || dialog?.kind === 'toggle' || dialog?.kind === 'unlock') && (
         <ConfirmModal kind={dialog.kind} user={dialog.user} onClose={close} />
@@ -208,6 +212,9 @@ function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Di
         <Button variant="default" onClick={() => onChoose({ kind: 'edit', user })}>
           {t('users.actions.edit')}
         </Button>
+        <Button variant="default" onClick={() => onChoose({ kind: 'access', user })}>
+          {t('users.actions.access')}
+        </Button>
         {/* An SSO user has no Alice password or authenticator, a directory user has Alice's authenticator but no Alice
             password (the server refuses with ALC-USR-0003 anyway). */}
         {user.auth_source !== 'oidc' && (
@@ -260,14 +267,26 @@ function useUserAction(onDone: () => void) {
   return { perform, error, busy };
 }
 
-function RoleSelect({ value, onChange }: { value: Role; onChange: (r: Role) => void }) {
+// AccessModal is a person's Access section: the global role, their roles on services and environments, and Explain.
+function AccessModal({ user, onClose }: { user: User; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <AppModal opened onClose={onClose} size="xl" title={t('access.modalTitle', { name: user.username })}>
+      <UserAccess user={user} />
+    </AppModal>
+  );
+}
+
+// RoleSelect is the global role, the role on all services; "none" (null) leaves the person only their service roles.
+function RoleSelect({ value, onChange }: { value: Role | null; onChange: (r: Role | null) => void }) {
   const { t } = useTranslation();
   return (
     <NativeSelect
       label={t('users.fields.role')}
-      value={value}
-      onChange={(e) => onChange(e.currentTarget.value as Role)}
-      data={ROLES.map((r) => ({ value: r, label: t(`enum.role.${r}`) }))}
+      description={t('access.roleHelp')}
+      value={value ?? ''}
+      onChange={(e) => onChange((e.currentTarget.value || null) as Role | null)}
+      data={[...ROLES.map((r) => ({ value: r, label: t(`enum.role.${r}`) })), { value: '', label: t('access.noGlobalRole') }]}
     />
   );
 }
@@ -277,7 +296,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<Role>('operator');
+  const [role, setRole] = useState<Role | null>('operator');
   const [password, setPassword] = useState('');
   const { perform, error, busy } = useUserAction(onClose);
   const submit = (e: FormEvent) => {
@@ -323,7 +342,7 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState(user.display_name);
   const [email, setEmail] = useState(user.email);
-  const [role, setRole] = useState<Role>(user.role);
+  const [role, setRole] = useState<Role | null>(user.role);
   // The role of an SSO or directory user comes from their groups: it is neither offered nor sent.
   const sso = user.auth_source !== 'local';
   const { perform, error, busy } = useUserAction(onClose);

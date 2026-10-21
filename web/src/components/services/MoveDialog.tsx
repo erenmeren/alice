@@ -7,7 +7,7 @@ import { listAllDiscoveryScopes } from '../../api/discovery';
 import { listAllTargets, listCertificates, listSSHKeys } from '../../api/endpoints';
 import { ACME_KEY, CERTIFICATES_KEY, DISCOVERY_KEY, SERVICE_LIST_KEY, SERVICES_KEY, SSH_KEYS_KEY, TARGETS_KEY } from '../../api/queryKeys';
 import { assignToService, listServices, type AssignResource, type AssignResult, type AssignType } from '../../api/services';
-import type { ServiceRef } from '../../api/types';
+import type { OwnerService, ServiceRef } from '../../api/types';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { useStepUp } from '../StepUpProvider';
@@ -19,7 +19,7 @@ const PICKABLE: AssignType[] = ['target', 'certificate', 'acme_certificate', 'ss
 interface Option {
   id: string;
   name: string;
-  service?: ServiceRef;
+  service?: OwnerService;
 }
 
 // optionsOf reads the resources of a kind a person may move (the first 200 of a paged list; the list page filters the rest).
@@ -42,7 +42,7 @@ async function optionsOf(kind: AssignType): Promise<Option[]> {
 
 export interface MoveDialogProps {
   // Move to service: the resource is fixed and the person picks the destination.
-  resource?: AssignResource & { name: string; service?: ServiceRef };
+  resource?: AssignResource & { name: string; service?: OwnerService };
   // Move here: the destination is fixed and the person picks the resource.
   destination?: ServiceRef;
   onClose: () => void;
@@ -102,7 +102,7 @@ export function MoveDialog({ resource, destination, onClose }: MoveDialogProps) 
                 setPicked(e.currentTarget.value);
                 setPreview(null);
               }}
-              data={[{ value: '', label: t('services.move.pick') }, ...choices.map((o) => ({ value: o.id, label: o.service ? `${o.name} (${o.service.name})` : o.name }))]}
+              data={[{ value: '', label: t('services.move.pick') }, ...choices.map((o) => ({ value: o.id, label: o.service?.name ? `${o.name} (${o.service.name})` : o.name }))]}
             />
             <ErrorAlert error={options.error} />
           </>

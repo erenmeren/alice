@@ -18,6 +18,8 @@ import {
 } from '../api/incidents';
 import { CERTIFICATES_KEY, INCIDENTS_KEY, incidentKey } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
+import { HiddenCount } from '../components/services/shared';
 import { PageLoader } from '../auth/guards';
 import { Problem, useChangesLocked } from '../components/acme/issued';
 import { AppModal } from '../components/AppModal';
@@ -66,7 +68,8 @@ export function IncidentPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
   const { session } = useAuth();
-  const admin = session?.user.role === 'admin';
+  // The incident's actions need certificates.incident (an Administrator's, with step-up).
+  const admin = can(session, 'certificates.incident');
   const locked = useChangesLocked();
   const client = useQueryClient();
   const { run } = useStepUp();
@@ -253,6 +256,7 @@ export function IncidentPage() {
             </Table>
           </Table.ScrollContainer>
         )}
+        <HiddenCount count={i.hidden_count} />
       </Panel>
       {(confirm === 'close' || confirm === 'revokeNow') && (
         <AppModal opened onClose={() => !busy && setConfirm(null)} title={t(confirm === 'close' ? 'incidents.close.title' : 'incidents.revokeNow.title')}>

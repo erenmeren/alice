@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { createToken, listTokens, revokeToken } from '../api/endpoints';
 import type { ApiToken, TokenScope } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
 import { DialogActions, EmptyState, Notice, PageHeader, Panel, ResourceTable, StatusBadge } from '../components/ui';
@@ -152,7 +153,8 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const { t } = useTranslation();
   const { session } = useAuth();
   const { run } = useStepUp();
-  const readOnly = session?.user.role === 'auditor';
+  // A token never does more than its owner: a person who changes nothing anywhere gets read tokens only.
+  const readOnly = !can(session, 'inventory.operate') && !can(session, 'certificates.operate') && !can(session, 'targets.manage');
   const scopes: TokenScope[] = readOnly ? ['read'] : ['read', 'operate'];
   const [name, setName] = useState('');
   const [scope, setScope] = useState<TokenScope>('read');

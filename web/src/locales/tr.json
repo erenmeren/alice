@@ -378,7 +378,8 @@
       "revokeSessions": "Tüm oturumları kapat",
       "unlockDirectory": "Dizinle oturum açma kilidini kaldır",
       "disable": "Devre dışı bırak",
-      "enable": "Etkinleştir"
+      "enable": "Etkinleştir",
+      "access": "Erişim"
     },
     "confirm": {
       "resetMfaTitle": "İki adımlı giriş sıfırlanacak kullanıcı: {{name}}",
@@ -759,7 +760,9 @@
       "location_drift_resolved": "Sertifika konumu yeniden uyumlu",
       "location_drift_mode_changed": "Sertifika konumunun onarım kipi değişti",
       "location_drift_repair_requested": "Sertifika konumunun otomatik onarımı istendi",
-      "location_drift_backoff": "Sertifika konumunun otomatik onarımı durdu"
+      "location_drift_backoff": "Sertifika konumunun otomatik onarımı durdu",
+      "access_binding_added": "Erişim eklendi",
+      "access_binding_removed": "Erişim kaldırıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -4281,7 +4284,8 @@
     "tabs": {
       "overview": "Genel bakış",
       "resources": "Kaynaklar",
-      "trusts": "Güvenler"
+      "trusts": "Güvenler",
+      "access": "Erişim"
     },
     "overview": {
       "title": "Bu hizmet hakkında",
@@ -4435,6 +4439,76 @@
       "other_one": "{{count}} yer bekliyor ya da yakın zamanda denetlenmedi",
       "other_other": "{{count}} yer bekliyor ya da yakın zamanda denetlenmedi",
       "driftedHelp": "Alice doğru sertifikayı dağıttıktan sonra biri ya da başka bir araç bu yerlerde olanı değiştirdi. Aşağıdaki satırlar her birinde olması gerekeni, Alice'in son dağıttığını, dosyada bulunanı ve web sitesinin sunduğunu, her birini zamanıyla gösterir."
+    }
+  },
+  "access": {
+    "title": "Erişim",
+    "modalTitle": "{{name}} kullanıcısının erişimi",
+    "outside": "hizmetlerinizin dışında",
+    "hiddenCount_one": "ve hizmetlerinizin dışında {{count}} tane daha",
+    "hiddenCount_other": "ve hizmetlerinizin dışında {{count}} tane daha",
+    "noGlobalRole": "Tüm hizmetlerde rol yok",
+    "roleHelp": "Tüm hizmetlerdeki rol. Rol yoksa kişi yalnızca Erişim bölümündeki hizmetlere ve ortamlara erişir.",
+    "allServices": "Tüm hizmetler",
+    "empty": "Tek bir hizmette veya ortamda rolü yok.",
+    "coversNone": "Henüz hizmet yok",
+    "addedBy": "{{date}}, {{name}} tarafından",
+    "remove": "Kaldır",
+    "removeNamed": "{{where}} üzerindeki {{role}} rolünü kaldır",
+    "shell": {
+      "services_one": "{{count}} hizmette rol",
+      "services_other": "{{count}} hizmette rol"
+    },
+    "none": {
+      "title": "Henüz hiçbir şeye erişiminiz yok.",
+      "text": "Bir yöneticiye başvurun."
+    },
+    "section": {
+      "description": "Bu kişinin erişebildikleri: önce tüm hizmetlerdeki rolü, ardından tek bir hizmetteki veya bir ortamın her hizmetindeki rolleri."
+    },
+    "columns": {
+      "person": "Kişi",
+      "role": "Rol",
+      "where": "Nerede",
+      "covers": "Şu an kapsadığı",
+      "added": "Eklenme",
+      "actions": "İşlemler"
+    },
+    "where": {
+      "environment": "{{name}} ortamındaki her hizmet"
+    },
+    "add": {
+      "title": "Erişim ekle",
+      "stepUp": "Erişim eklemek veya kaldırmak için yeni bir doğrulama kodu istenir.",
+      "person": "Kişi",
+      "pickPerson": "Bir kişi seçin",
+      "role": "Rol",
+      "where": "Hizmet veya ortam",
+      "pick": "Birini seçin",
+      "services": "Hizmetler",
+      "environments": "Ortamlar",
+      "submit": "Ekle"
+    },
+    "explain": {
+      "button": "Açıkla",
+      "hide": "Açıklamayı gizle",
+      "title": "Geçerli erişim",
+      "intro": "Rollerin toplamı: her rol ve şu an eriştiği hizmetler.",
+      "global": "Tüm hizmetlerde {{role}}",
+      "grant": "{{role}}:",
+      "none": "Bu kişi henüz hiçbir şeye erişemiyor.",
+      "cappedTitle": "Yönetici rolü Operatör olarak sayılır",
+      "capped": "Çoklu oturum açma kullanıcıları yönetici olamaz (Ayarlar, çoklu oturum açma); bu yüzden bu kişinin yönetici rolleri Operatör yetkisi verir."
+    },
+    "service": {
+      "intro": "Bu hizmete, hizmetin kendisindeki veya ortamının her hizmetindeki bir rolle erişen kişiler.",
+      "globalTitle": "Tüm hizmetler",
+      "globalNote": "Tüm hizmetlerde rolü olan herkes (Kişiler ve erişim) bu hizmete de erişir.",
+      "direct": "Bu hizmette",
+      "throughEnvironment": "Ortamı üzerinden",
+      "noneDirect": "Yalnızca bu hizmette rolü olan kimse yok.",
+      "noneThrough": "Ortam üzerinden rolü olan kimse yok.",
+      "adminOnly": "Kimin erişimi olduğunu yalnızca tüm hizmetlerin yöneticileri görür."
     }
   }
 }

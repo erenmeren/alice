@@ -5,6 +5,40 @@ import type { LocationObservation } from './drift';
 import type { WebServerType } from './webServer';
 
 export type Role = 'admin' | 'operator' | 'auditor';
+
+// Permission is a route's x-permission (internal/rbac, docs/authz-matrix.md) as the session's access names it.
+export type Permission =
+  | 'read'
+  | 'audit.read'
+  | 'users.read'
+  | 'users.manage'
+  | 'settings.manage'
+  | 'license.read'
+  | 'license.manage'
+  | 'targets.manage'
+  | 'hostkeys.confirm'
+  | 'hostkeys.repin'
+  | 'inventory.operate'
+  | 'jobs.confirm'
+  | 'certificates.operate'
+  | 'credentials.manage'
+  | 'sshkeys.download'
+  | 'rotation.manage'
+  | 'rotation.operate'
+  | 'sso.manage'
+  | 'backup.manage'
+  | 'acme.view'
+  | 'acme.operate'
+  | 'acme.manage'
+  | 'acme.preview'
+  | 'discovery.view'
+  | 'discovery.operate'
+  | 'discovery.manage'
+  | 'certificates.incident'
+  | 'services.manage'
+  | 'services.assign'
+  | 'services.trust'
+  | 'access.manage';
 export type TokenScope = 'read' | 'operate';
 
 export interface VersionInfo {
@@ -18,7 +52,8 @@ export interface User {
   username: string;
   display_name: string;
   email: string;
-  role: Role;
+  // null: no global role (the person reaches only the services of their role bindings, R49 Phase 2).
+  role: Role | null;
   locale: string;
   disabled: boolean;
   mfa_enrolled: boolean;
@@ -43,6 +78,22 @@ export interface SessionInfo {
   expires_at: string;
   idle_expires_at: string;
   stepup_until: string | null;
+  // What the person may reach (R49 Phase 2); absent from an older server (auth/permissions.ts then reads the role).
+  access?: SessionAccess;
+}
+
+// A service the signed-in person holds a role on, with those roles.
+export interface SessionService extends ServiceRef {
+  roles: Role[];
+}
+
+export interface SessionAccess {
+  global_role: Role | null;
+  services: SessionService[];
+  // Held on at least one service or globally (navigation, lists, create buttons).
+  permissions_anywhere: Permission[];
+  // Held with a global grant (the platform pages: people, settings, audit, license, ...).
+  platform_permissions: Permission[];
 }
 
 export interface SessionWithCodes extends SessionInfo {
@@ -95,14 +146,16 @@ export interface UserCreateRequest {
   username: string;
   display_name: string;
   email: string;
-  role: Role;
+  // null: no global role.
+  role: Role | null;
   password: string;
 }
 
 export interface UserUpdateRequest {
   display_name?: string;
   email?: string;
-  role?: Role;
+  // null removes the global role.
+  role?: Role | null;
   disabled?: boolean;
 }
 
@@ -343,8 +396,26 @@ export interface ServiceRef {
   environment: EnvironmentRef | null;
 }
 
+// OutsideService is the owning service of a row outside the caller's services: the server says so, never which one.
+export interface OutsideService {
+  outside: true;
+  id?: undefined;
+  name?: undefined;
+  environment?: undefined;
+}
+
+// OwnerService is a row's owning service as the server shows it to the caller.
+export type OwnerService = ServiceRef | OutsideService;
+
+// isOutside reports whether a row's service is outside the caller's services.
+export function isOutside(service: OwnerService | null | undefined): service is OutsideService {
+  return !!service && 'outside' in service && service.outside === true;
+}
+
 export interface Target {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   name: string;
   type: TargetType;
@@ -420,7 +491,9 @@ export interface KeyLocation {
 }
 
 export interface SSHKey {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   fingerprint: string;
   key_type: string;
@@ -524,7 +597,9 @@ export type CSRKeyType = 'ecdsa-p256' | 'rsa-3072' | 'rsa-4096';
 export type ExpiryFilter = '' | 'expired' | '7' | '14' | '30' | '60' | '90';
 
 export interface Certificate {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   fingerprint: string;
   subject_cn: string;
@@ -569,6 +644,8 @@ export interface CertificateDetail extends Certificate {
   pem_chain: string;
   locations: CertificateLocation[];
   locations_truncated: boolean;
+  // Locations on servers outside the reader's services, left out of locations (R49 Phase 2; absent from older answers).
+  hidden_count?: number;
 }
 
 export interface CertificateRef {
@@ -725,7 +802,9 @@ export interface DeploymentDetail extends Deployment {
 }
 
 export interface CSR {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   common_name: string;
   sans: string[];

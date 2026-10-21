@@ -10,6 +10,7 @@ import { getDashboardSummary } from '../api/phase7';
 import { CERTIFICATES_KEY, CSRS_KEY, DASHBOARD_KEY, DISCOVERY_SUMMARY_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { Certificate, CertificateQuery, CertificateSourceFilter, ExpiryFilter } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { sourceIcon } from '../components/certificates/UsageTopology';
 import { CreateCSRDialog } from '../components/CreateCSRDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -76,7 +77,8 @@ export function CertificatesPage() {
   const { session } = useAuth();
   const client = useQueryClient();
   const navigate = useNavigate();
-  const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
+  // Uploading and signing requests need certificates.operate on some service.
+  const canOperate = can(session, 'certificates.operate');
   const [urlFilters, setFilters, clearFilters] = useUrlFilters(CERT_FILTER_KEYS);
   // A value in the address that is not one of the options (a typed link) is ignored: the list, the select, the export and a
   // saved view then agree, and the select never says "all" over a filtered list.

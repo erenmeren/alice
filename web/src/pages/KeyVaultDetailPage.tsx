@@ -11,6 +11,7 @@ import { KV_CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import type { JobError, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
 import { AccessCheckPanel } from '../components/AccessCheckPanel';
 import { AppModal } from '../components/AppModal';
@@ -43,9 +44,6 @@ export function KeyVaultDetailPage() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const now = useNow();
-  const role = session?.user.role;
-  const admin = role === 'admin';
-  const canOperate = admin || role === 'operator';
   const abort = useAbort();
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -63,6 +61,10 @@ export function KeyVaultDetailPage() {
     // Follow a vault only while it is being checked or a job started here is pending.
     refetchInterval: (q) => (q.state.data?.status === 'checking' || busy ? 3000 : false),
   });
+  // What the person may do here: the permissions held on the vault's service (its allowed_actions).
+  const canOperate = canOn(session, target.data, 'inventory.operate');
+  const canCredentials = canOn(session, target.data, 'credentials.manage');
+  const canManage = canOn(session, target.data, 'targets.manage');
 
   const refresh = async () => {
     await Promise.all([client.invalidateQueries({ queryKey: TARGETS_KEY }), client.invalidateQueries({ queryKey: KV_CERTIFICATES_KEY }), client.invalidateQueries({ queryKey: ['kv'] })]);
@@ -132,12 +134,12 @@ export function KeyVaultDetailPage() {
               <Button leftSection={<Icon name="RefreshCw" size={15} />} disabled={busy} onClick={() => void checkNow()}>
                 {t('vaults.checkNow')}
               </Button>
-              {admin && (
+              {canCredentials && (
                 <Button variant="default" leftSection={<Icon name="LockKeyhole" size={15} />} disabled={busy} onClick={() => setReplacing(true)}>
                   {t('vaults.replaceCredentials')}
                 </Button>
               )}
-              {admin && (
+              {canManage && (
                 <Button variant="light" color="red" disabled={busy} onClick={() => setDeleting(true)}>
                   {t('vaults.delete')}
                 </Button>
@@ -222,7 +224,7 @@ export function KeyVaultDetailPage() {
             )}
           </Panel>
           <Panel title={t('vaults.page.interval')}>
-            <PollInterval target={tg} editable={admin} />
+            <PollInterval target={tg} editable={canManage} />
           </Panel>
         </div>
       </div>

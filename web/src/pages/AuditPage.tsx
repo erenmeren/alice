@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { auditExportUrl, listAudit, verifyAudit } from '../api/endpoints';
 import type { AuditEntry, AuditResult } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { CursorFooter, EmptyState, Notice, PageHeader, StatusBadge, type Tone } from '../components/ui';
 import ui from '../components/ui/ui.module.css';
@@ -194,7 +195,7 @@ export function AuditPage() {
           title={report.intact ? t('audit.intact') : t('audit.broken', { seq: report.first_bad_seq ?? 0 })}
           action={
             // Only Administrators can open Settings; the forwarding state itself needs a step-up there.
-            session?.user.role === 'admin' && (
+            canPlatform(session, 'settings.manage') && (
               <Anchor component={Link} to="/settings?tab=forwarding" size="sm" c="inherit" fw={600} underline="always">
                 {t('audit.page.forwarding')}
               </Anchor>

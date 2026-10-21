@@ -9,6 +9,7 @@ import { TARGETS_KEY } from '../api/queryKeys';
 import { inServiceFilter } from '../api/services';
 import type { Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { AddServerModal } from '../components/AddServerModal';
 import { BlockedJobsPanel } from '../components/BlockedJobsPanel';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -27,7 +28,9 @@ export function TargetsPage() {
   const { t } = useTranslation();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const admin = session?.user.role === 'admin';
+  // Adding needs targets.manage on some service; the paused changes are confirmed with jobs.confirm.
+  const canAdd = can(session, 'targets.manage');
+  const canConfirmJobs = can(session, 'jobs.confirm');
   const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
   const [adding, setAdding] = useState(false);
   const items = targets.data?.items ?? [];
@@ -38,7 +41,7 @@ export function TargetsPage() {
         title={t('targets.title')}
         description={t('targets.page.description')}
         actions={
-          admin && (
+          canAdd && (
             <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setAdding(true)}>
               {t('targets.add')}
             </Button>
@@ -48,7 +51,7 @@ export function TargetsPage() {
       <Stack gap="lg">
         <ErrorAlert error={targets.error} />
         {targets.isSuccess && <MiniStats items={items} />}
-        {admin && <BlockedJobsPanel />}
+        {canConfirmJobs && <BlockedJobsPanel />}
         {targets.isSuccess && items.length === 0 && (
           <Panel>
             <EmptyState icon="Server" title={t('targets.empty')} />
@@ -56,7 +59,7 @@ export function TargetsPage() {
         )}
         {items.length > 0 && <ServersTable items={items} />}
         {/* Below the list: the empty state's text points to "the command below". */}
-        {admin && <PlatformKeyPanel />}
+        {canAdd && <PlatformKeyPanel />}
       </Stack>
       {adding && (
         <AddServerModal

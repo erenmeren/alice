@@ -1,6 +1,6 @@
 import { Outlet, type RouteObject } from 'react-router';
 import { AuthProvider } from './auth/AuthProvider';
-import { RequireAuth, RequireRole } from './auth/guards';
+import { RequireAuth, RequirePermission } from './auth/guards';
 import { SessionActivity } from './auth/SessionActivity';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
@@ -91,34 +91,34 @@ export function routes(): RouteObject[] {
             {
               path: 'users',
               element: (
-                <RequireRole roles={['admin']}>
+                <RequirePermission perm="users.read" platform>
                   <UsersPage />
-                </RequireRole>
+                </RequirePermission>
               ),
             },
             {
               path: 'settings',
               element: (
-                <RequireRole roles={['admin']}>
+                <RequirePermission perm="settings.manage" platform>
                   <SettingsPage />
-                </RequireRole>
+                </RequirePermission>
               ),
             },
             { path: 'tokens', element: <TokensPage /> },
             {
               path: 'audit',
               element: (
-                <RequireRole roles={['admin', 'auditor']}>
+                <RequirePermission perm="audit.read" platform>
                   <AuditPage />
-                </RequireRole>
+                </RequirePermission>
               ),
             },
             {
               path: 'license',
               element: (
-                <RequireRole roles={['admin', 'auditor']}>
+                <RequirePermission perm="license.read" platform>
                   <LicensePage />
-                </RequireRole>
+                </RequirePermission>
               ),
             },
           ],

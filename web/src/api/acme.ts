@@ -1,6 +1,6 @@
 import { apiFetch } from './client';
 import type { LocationObservation } from './drift';
-import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, ServiceRef } from './types';
+import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, OwnerService } from './types';
 
 // ACME certificate issuance (api/openapi.yaml, /api/v1/acme). The names follow the API's snake_case schemas. No type
 // here carries a secret the server keeps: the EAB HMAC key and the DNS hook secret are write-only request fields
@@ -134,7 +134,9 @@ export interface ACMEBinding {
 }
 
 export interface ACMECertificate {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   provider_id: string;
   account_id: string;
@@ -363,7 +365,8 @@ export const listACMEOrders = (id: string, limit?: number, signal?: AbortSignal)
   apiFetch<{ items: ACMEOrder[] }>(`${v1}/certificates/${enc(id)}/orders${limit ? `?limit=${limit}` : ''}`, { signal });
 export const rearmACMECertificate = (id: string) => apiFetch<ACMECertificate>(`${v1}/certificates/${enc(id)}/rearm`, { method: 'POST' });
 export const releaseACMEHold = (id: string) => apiFetch<ACMECertificate>(`${v1}/certificates/${enc(id)}/release-hold`, { method: 'POST' });
-export const listACMEBindings = (id: string, signal?: AbortSignal) => apiFetch<{ items: ACMEBinding[] }>(`${v1}/certificates/${enc(id)}/bindings`, { signal });
+// hidden_count: websites on servers outside the reader's services, left out of items (R49 Phase 2).
+export const listACMEBindings = (id: string, signal?: AbortSignal) => apiFetch<{ items: ACMEBinding[]; hidden_count?: number }>(`${v1}/certificates/${enc(id)}/bindings`, { signal });
 export const putACMEBinding = (id: string, locationId: string, autoDeploy: boolean) =>
   apiFetch<ACMEBinding>(`${v1}/certificates/${enc(id)}/bindings/${enc(locationId)}`, { method: 'PUT', body: { auto_deploy: autoDeploy } });
 export const deleteACMEBinding = (id: string, locationId: string) =>

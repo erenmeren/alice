@@ -10,6 +10,7 @@ import { getAlerts, getDashboardSummary, getExpiring, type DashboardSummary } fr
 import { ALERTS_KEY, DASHBOARD_KEY, EXPIRING_KEY } from '../api/queryKeys';
 import type { AuditEntry, AuditResult } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { AttentionList } from '../components/dashboard/AttentionList';
 import { AuditHead } from '../components/dashboard/AuditHead';
 import { BackupCard } from '../components/dashboard/BackupCard';
@@ -124,7 +125,6 @@ function EvidenceTrail() {
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
-  const role = session?.user.role;
   const now = useNow();
   const [params, setParams] = useSearchParams();
   const version = useQuery({ queryKey: ['version'], queryFn: getVersion });
@@ -219,9 +219,9 @@ export function DashboardPage() {
         {assuranceAllowed && s && (
           <Tabs.Panel value="assurance">
             <div className={classes.assurance}>
-              {s.audit && <AuditHead audit={s.audit} admin={role === 'admin'} />}
-              {s.backup && <BackupCard backup={s.backup} admin={role === 'admin'} />}
-              <LicenseCard license={s.license} detailed={role === 'admin' || role === 'auditor'} />
+              {s.audit && <AuditHead audit={s.audit} admin={canPlatform(session, 'settings.manage')} />}
+              {s.backup && <BackupCard backup={s.backup} admin={canPlatform(session, 'backup.manage')} />}
+              <LicenseCard license={s.license} detailed={canPlatform(session, 'license.read')} />
               {view === 'assurance' && <EvidenceTrail />}
             </div>
           </Tabs.Panel>

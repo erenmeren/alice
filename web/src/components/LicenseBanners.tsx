@@ -6,6 +6,7 @@ import { getLicenseStatus } from '../api/endpoints';
 import { LICENSE_STATUS_KEY } from '../api/queryKeys';
 import type { BannerSeverity, LicenseBanner } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
 
@@ -51,7 +52,8 @@ export function LicenseBanners() {
   const { session } = useAuth();
   const status = useQuery({ queryKey: LICENSE_STATUS_KEY, queryFn: () => getLicenseStatus(), enabled: !!session });
   if (!status.data) return null;
-  const admin = session?.user.role === 'admin';
+  // Only a global Administrator changes the license (license.manage).
+  const admin = canPlatform(session, 'license.manage');
   const shown = status.data.banners
     .map((b) => ({ b, key: `license.banner.${b.kind}`, values: bannerValues(b, i18n.language) }))
     .filter(({ key, values }) => i18n.exists(key, values));

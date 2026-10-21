@@ -5,8 +5,11 @@ import { isApiError } from '../api/client';
 import { removeKeyLocation } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { useAbort } from '../api/useAbort';
-import type { JobError, KeyLocation } from '../api/types';
+import type { JobError, KeyLocation, Target } from '../api/types';
+import { useQueryClient } from '@tanstack/react-query';
+import { targetKey } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { adminOn } from '../auth/permissions';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
@@ -19,7 +22,9 @@ import { WRAP } from './wrap';
 export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLocation; onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const { session } = useAuth();
-  const admin = session?.user.role === 'admin';
+  const client = useQueryClient();
+  // Root's last key is removed only with an Administrator's confirmation, of the server's service (as last read).
+  const admin = adminOn(session, client.getQueryData<Target>(targetKey(location.target_id)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);

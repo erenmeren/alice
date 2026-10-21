@@ -4,8 +4,10 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
 import { getBinding, getKVCertificate, releaseKVVersion, type KVCertificateDetail, type KVVersion } from '../api/keyvault';
-import { bindingKey, KV_CERTIFICATES_KEY, kvCertificateKey } from '../api/queryKeys';
+import type { Target } from '../api/types';
+import { bindingKey, KV_CERTIFICATES_KEY, kvCertificateKey, targetKey } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
+import { adminOn, canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { BindingPanel } from '../components/BindingPanel';
@@ -60,9 +62,12 @@ export function KVCertificatePage() {
   const { vaultId = '', id = '' } = useParams();
   const { session } = useAuth();
   const now = useNow();
-  const role = session?.user.role;
-  const admin = role === 'admin';
-  const canOperate = admin || role === 'operator';
+  const client = useQueryClient();
+  // The permissions held on the vault's service (the vault as last read; without it, held anywhere): held versions and
+  // incomplete chains are an Administrator's.
+  const vault = client.getQueryData<Target>(targetKey(vaultId));
+  const admin = adminOn(session, vault);
+  const canOperate = canOn(session, vault, 'certificates.operate');
   const cert = useQuery({ queryKey: kvCertificateKey(vaultId, id), queryFn: () => getKVCertificate(vaultId, id) });
   const [deploy, setDeploy] = useState<string | null>(null);
   const [releasing, setReleasing] = useState<KVVersion | null>(null);

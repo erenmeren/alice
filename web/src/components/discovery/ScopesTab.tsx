@@ -16,6 +16,8 @@ import { DialogActions, EmptyState, FactList, Notice, Panel, StatusBadge } from 
 import classes from './discovery.module.css';
 import { ScanStateBadge, scheduleText, useDiscoveryRole } from './shared';
 import { ScanNowButton, type StartContext } from './StartScan';
+import { useAuth } from '../../auth/AuthProvider';
+import { canOn } from '../../auth/permissions';
 
 // ScopesTab is what Alice may scan: the discovery settings (allowed networks, exclusions, retention) and the scan scopes.
 // Administrators change them (with a step-up); Operators start scans of a scope; Auditors read.
@@ -85,6 +87,7 @@ function ScopeTable({ scopes: all, ctx, onEdit, onDelete }: { scopes: DiscoveryS
   const [serviceFilter, setServiceFilter] = useServiceFilters();
   const scopes = all.filter((s) => inServiceFilter(s.service, serviceFilter));
   const { admin, canOperate } = useDiscoveryRole();
+  const { session } = useAuth();
   const { run } = useStepUp();
   const client = useQueryClient();
   const toggle = useMutation({
@@ -171,7 +174,7 @@ function ScopeTable({ scopes: all, ctx, onEdit, onDelete }: { scopes: DiscoveryS
                   </Table.Td>
                   <Table.Td>
                     <div className={classes.actionsCell}>
-                      {canOperate && <ScanNowButton scope={s} ctx={ctx} />}
+                      {canOperate && canOn(session, s, 'discovery.operate') && <ScanNowButton scope={s} ctx={ctx} />}
                       {admin && (
                         <Group gap={4}>
                           <Button size="xs" variant="subtle" aria-label={t('discovery.scopes.editLabel', { name: s.name })} onClick={() => onEdit(s)}>

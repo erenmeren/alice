@@ -1,4 +1,6 @@
 import { http, HttpResponse } from 'msw';
+import type { RoleBinding } from '../api/access';
+import { ROLE_PERMISSIONS } from '../auth/permissions';
 import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { CertificateImpact, Incident } from '../api/incidents';
 import type { AssignResult, Environment, Service, ServicePolicy, ServiceTrust } from '../api/services';
@@ -1482,3 +1484,50 @@ export function assignResultFixture(o: Partial<AssignResult> = {}): AssignResult
     ...o,
   };
 }
+
+// Scoped access (R49 Phase 2). scopedSession is a person without a global role who holds the given roles on the Payments
+// service (none: a person with no access at all); globalSession is a global role as the server sends it with access.
+export function scopedSession(roles: Role[], locale = 'en'): SessionInfo {
+  const s = sessionFor(roles[0] ?? 'operator', locale);
+  const perms = [...new Set(roles.flatMap((r) => ROLE_PERMISSIONS[r]))];
+  return {
+    ...s,
+    user: { ...s.user, id: '00000000-0000-7000-8000-000000000009', username: 'deniz', display_name: 'Deniz Kaya', role: null },
+    access: { global_role: null, services: roles.length > 0 ? [{ ...serviceRef, roles }] : [], permissions_anywhere: perms, platform_permissions: [] },
+  };
+}
+
+export function globalSession(role: Role, locale = 'en'): SessionInfo {
+  const s = sessionFor(role, locale);
+  const perms = [...ROLE_PERMISSIONS[role]];
+  return { ...s, access: { global_role: role, services: [], permissions_anywhere: perms, platform_permissions: perms } };
+}
+
+export const ROLE_BINDING_ID = '0192f200-0000-7000-8000-0000000000c1';
+export const ENV_BINDING_ID = '0192f200-0000-7000-8000-0000000000c2';
+
+export function roleBindingFixture(o: Partial<RoleBinding> = {}): RoleBinding {
+  return {
+    id: ROLE_BINDING_ID,
+    user_id: userFor('operator').id,
+    username: 'operator',
+    display_name: 'Olcay Öztürk',
+    directory_group_id: null,
+    role: 'operator',
+    service: serviceRef,
+    environment: null,
+    services: [serviceRef],
+    created_by: userFor('admin').id,
+    created_by_name: 'Ayşe Yılmaz',
+    created_at: '2026-10-21T08:00:00Z',
+    ...o,
+  };
+}
+
+export const environmentBindingFixture = roleBindingFixture({
+  id: ENV_BINDING_ID,
+  role: 'auditor',
+  service: null,
+  environment: { id: PRODUCTION_ID, key: 'production', name: 'Production' },
+  services: [serviceRef],
+});

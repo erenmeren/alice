@@ -3,8 +3,9 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useLocation } from 'react-router';
 import { AuthMessage } from '../components/auth/AuthLayout';
-import type { Role } from '../api/types';
+import type { Permission } from '../api/types';
 import { useAuth } from './AuthProvider';
+import { can, canPlatform } from './permissions';
 import { adminExists } from './setupStatus';
 
 export function PageLoader() {
@@ -29,12 +30,13 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-// RequireRole hides a page from roles that may not use it. The server enforces the same rule. The no-access view is the
-// design's deniedPage(): the page's <h1> says so, with the way home.
-export function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }) {
+// RequirePermission hides a page from people without the permission it needs: a platform page (people, settings, audit,
+// license) needs a global grant (platform), any other the permission on some service. The server enforces the same rule.
+// The no-access view is the design's deniedPage(): the page's <h1> says so, with the way home.
+export function RequirePermission({ perm, platform = false, children }: { perm: Permission; platform?: boolean; children: ReactNode }) {
   const { t } = useTranslation();
   const { session } = useAuth();
-  if (!session || !roles.includes(session.user.role)) {
+  if (!session || !(platform ? canPlatform(session, perm) : can(session, perm))) {
     // role="alert" as before: the refusal is announced when the page is reached through the navigation.
     return (
       <div role="alert">

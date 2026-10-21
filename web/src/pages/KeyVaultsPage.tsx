@@ -7,6 +7,7 @@ import { listAllTargets } from '../api/endpoints';
 import { VAULTS_KEY } from '../api/queryKeys';
 import type { Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can } from '../auth/permissions';
 import { AddKeyVaultDialog } from '../components/AddKeyVaultDialog';
 import { BlockedJobsPanel } from '../components/BlockedJobsPanel';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -27,7 +28,9 @@ export function KeyVaultsPage() {
   const { t } = useTranslation();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const admin = session?.user.role === 'admin';
+  // Adding a vault stores its credentials: credentials.manage on some service.
+  const canAdd = can(session, 'credentials.manage');
+  const canConfirmJobs = can(session, 'jobs.confirm');
   const vaults = useQuery({ queryKey: VAULTS_KEY, queryFn: () => listAllTargets('azure_key_vault') });
   const [adding, setAdding] = useState(false);
   const items = vaults.data?.items ?? [];
@@ -38,7 +41,7 @@ export function KeyVaultsPage() {
         title={t('vaults.title')}
         description={t('vaults.page.description')}
         actions={
-          admin && (
+          canAdd && (
             <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setAdding(true)}>
               {t('vaults.add')}
             </Button>
@@ -48,7 +51,7 @@ export function KeyVaultsPage() {
       <Stack gap="lg">
         <ErrorAlert error={vaults.error} />
         {vaults.isPending && <LoadingIndicator />}
-        {admin && <BlockedJobsPanel />}
+        {canConfirmJobs && <BlockedJobsPanel />}
         {vaults.isSuccess && items.length === 0 && (
           <Panel>
             <EmptyState icon="Cloud" title={t('vaults.empty')} description={t('vaults.intro')} />

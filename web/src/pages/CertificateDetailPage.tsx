@@ -10,6 +10,7 @@ import { getCertificateImpact } from '../api/incidents';
 import { certificateImpactKey, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { CertificateDetail } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
 import { CapabilitiesPanel } from '../components/certificates/CapabilitiesPanel';
 import { ImpactPanel } from '../components/certificates/ImpactPanel';
@@ -21,7 +22,7 @@ import { daysLeft, expiryState, useNow } from '../components/Expiry';
 import { ImportHistory } from '../components/ImportHistory';
 import { ImportToKeyVaultDialog } from '../components/ImportToKeyVaultDialog';
 import { MoveDialog } from '../components/services/MoveDialog';
-import { ServiceBadge } from '../components/services/shared';
+import { HiddenCount, ServiceBadge } from '../components/services/shared';
 import { expiryTone, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDate, formatDateTime } from '../datetime';
@@ -45,9 +46,7 @@ export function CertificateDetailPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
   const { session } = useAuth();
-  const canOperate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const now = useNow();
-  const admin = session?.user.role === 'admin';
   const [deploying, setDeploying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [incident, setIncident] = useState(false);
@@ -72,6 +71,11 @@ export function CertificateDetailPage() {
       </Stack>
     );
   const c: CertificateDetail = cert.data;
+  // What the person may do here: the permissions held on the certificate's service (its allowed_actions).
+  const canOperate = canOn(session, c, 'certificates.operate');
+  const canAssign = canOn(session, c, 'services.assign');
+  const canIncident = canOn(session, c, 'certificates.incident');
+  const canImport = canOn(session, c, 'credentials.manage');
   const expired = Date.parse(c.not_after) <= now;
   const state = expiryState(c.not_after, now);
   const days = daysLeft(c.not_after, now);
@@ -181,12 +185,12 @@ export function CertificateDetailPage() {
                 {t('incidents.openIncident')}
               </Button>
             )}
-            {admin && (
+            {canAssign && (
               <Button variant="default" leftSection={<Icon name="Layers" size={15} />} onClick={() => setMoving(true)}>
                 {t('services.moveTo')}
               </Button>
             )}
-            {admin && !openIncident && impact.isSuccess && (
+            {canIncident && !openIncident && impact.isSuccess && (
               <Button variant="light" color="red" leftSection={<Icon name="ShieldAlert" size={15} />} onClick={() => setIncident(true)}>
                 {t('incidents.start.action')}
               </Button>
@@ -231,8 +235,19 @@ export function CertificateDetailPage() {
           <Panel title={t('certificates.page.details')}>
             <FactList label={t('certificates.detail.facts')} facts={facts} />
           </Panel>
-          {c.locations.length > 0 && (
-            <Panel title={t('certificates.page.locations')} padded={false} footer={c.locations_truncated ? <span>{t('certificates.detail.moreLocations')}</span> : undefined}>
+          {(c.locations.length > 0 || (c.hidden_count ?? 0) > 0) && (
+            <Panel
+              title={t('certificates.page.locations')}
+              padded={false}
+              footer={
+                c.locations_truncated || (c.hidden_count ?? 0) > 0 ? (
+                  <>
+                    {c.locations_truncated && <span>{t('certificates.detail.moreLocations')}</span>}
+                    <HiddenCount count={c.hidden_count} />
+                  </>
+                ) : undefined
+              }
+            >
               <Table.ScrollContainer minWidth={560}>
                 <Table aria-label={t('certificates.detail.usedWhere')} highlightOnHover>
                   <Table.Thead>
@@ -364,10 +379,10 @@ export function CertificateDetailPage() {
               )}
               {canOperate && c.has_private_key && !expired && (
                 <Stack gap={4} align="flex-start">
-                  <Button variant="default" leftSection={<Icon name="Cloud" size={15} />} disabled={!admin} onClick={() => setImporting(true)}>
+                  <Button variant="default" leftSection={<Icon name="Cloud" size={15} />} disabled={!canImport} onClick={() => setImporting(true)}>
                     {t('imports.action')}
                   </Button>
-                  <Text size="sm">{t(admin ? 'certificates.detail.importHelp' : 'imports.adminOnly')}</Text>
+                  <Text size="sm">{t(canImport ? 'certificates.detail.importHelp' : 'imports.adminOnly')}</Text>
                 </Stack>
               )}
             </Stack>
@@ -390,10 +405,10 @@ export function CertificateDetailPage() {
           </Panel>
         </div>
       </div>
-      {importing && admin && <ImportToKeyVaultDialog certificate={c} onClose={() => setImporting(false)} />}
+      {importing && canImport && <ImportToKeyVaultDialog certificate={c} onClose={() => setImporting(false)} />}
       {canDeploy && <DeployDialog opened={deploying} onClose={() => setDeploying(false)} certificate={c} />}
-      {moving && admin && <MoveDialog resource={{ type: 'certificate', id: c.id, name: name || c.fingerprint.slice(0, 16), service: c.service }} onClose={() => setMoving(false)} />}
-      {incident && admin && <StartIncidentDialog certificate={c} onClose={() => setIncident(false)} />}
+      {moving && canAssign && <MoveDialog resource={{ type: 'certificate', id: c.id, name: name || c.fingerprint.slice(0, 16), service: c.service }} onClose={() => setMoving(false)} />}
+      {incident && canIncident && <StartIncidentDialog certificate={c} onClose={() => setIncident(false)} />}
     </Stack>
   );
 }

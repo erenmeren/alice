@@ -1,5 +1,5 @@
 import { ApiError, apiFetch } from './client';
-import type { ServiceRef } from './types';
+import type { OwnerService } from './types';
 
 // Network certificate discovery (api/openapi.yaml, /api/v1/discovery). The names follow the API's snake_case schemas.
 // Nothing here is secret: scopes, scans and the certificates found are public facts of the network. The map of the
@@ -40,7 +40,9 @@ export interface DiscoveryScan {
 }
 
 export interface DiscoveryScope {
-  service?: ServiceRef;
+  service?: OwnerService;
+  // What the caller may do with the row: the permissions held on its owning service (omitted when none).
+  allowed_actions?: string[];
   id: string;
   name: string;
   entries: string[];

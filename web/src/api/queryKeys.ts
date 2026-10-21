@@ -119,3 +119,9 @@ export const servicePolicyKey = (id: string) => ['services', id, 'policy'] as co
 export const serviceResourcesKey = (id: string, kind: string) => ['services', id, 'resources', kind] as const;
 export const SERVICE_TRUSTS_KEY = ['services', 'trusts'] as const;
 export const ENVIRONMENTS_KEY = ['environments'] as const;
+
+// Role bindings of people (R49 Phase 2). ACCESS_KEY is the prefix of the binding lists and each person's access, so one
+// invalidation after an added or removed binding reads them all again.
+export const ACCESS_KEY = ['access'] as const;
+export const roleBindingsKey = (filter: Record<string, string>) => ['access', 'bindings', filter] as const;
+export const userAccessKey = (userId: string) => ['access', 'user', userId] as const;

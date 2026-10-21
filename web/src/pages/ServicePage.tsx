@@ -9,6 +9,8 @@ import { listAllTargets, listCertificates, listSSHKeys } from '../api/endpoints'
 import { SERVICE_LIST_KEY, SERVICE_TRUSTS_KEY, serviceKey, servicePolicyKey, serviceResourcesKey, SERVICES_KEY } from '../api/queryKeys';
 import { createTrust, deleteService, deleteTrust, getService, getServicePolicy, listServices, listTrusts, type Service, type ServiceTrust } from '../api/services';
 import { useAuth } from '../auth/AuthProvider';
+import { canIn, canPlatform } from '../auth/permissions';
+import { ServiceAccess } from '../components/access/ServiceAccess';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { MoveDialog } from '../components/services/MoveDialog';
@@ -20,21 +22,26 @@ import { formatDateTime } from '../datetime';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import { resourceSummary } from './ServicesPage';
 
-const TABS = ['overview', 'resources', 'trusts'] as const;
+const TABS = ['overview', 'resources', 'access', 'trusts'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
 // ServicePage is one service (R49): its environment, description and policy (Overview), what it owns (Resources, with
-// Move here) and which services it accepts certificates and keys from or sends them to (Trusts). Every role reads it;
-// changes are an Administrator's with a fresh step-up.
+// Move here), who reaches it (Access, for the people administration) and which services it accepts certificates and keys
+// from or sends them to (Trusts). Every role reads it; changes are an Administrator's with a fresh step-up.
 export function ServicePage() {
   const { id = '' } = useParams();
   const { t } = useTranslation();
   const { session } = useAuth();
-  const admin = session?.user.role === 'admin';
+  // Editing and deleting a service is a global Administrator's (services.manage); moving resources here and trusts need
+  // services.assign and services.trust on this service; its Access tab is the people administration's (users.read).
+  const admin = canPlatform(session, 'services.manage');
+  const canAssign = canIn(session, id, 'services.assign');
+  const canTrust = canIn(session, id, 'services.trust');
+  const tabs = TABS.filter((x) => x !== 'access' || canPlatform(session, 'users.read'));
   const navigate = useNavigate();
   const [filters, setFilters] = useUrlFilters(TAB_KEYS);
-  const tab: Tab = (TABS as readonly string[]).includes(filters.tab) ? (filters.tab as Tab) : 'overview';
+  const tab: Tab = (tabs as readonly string[]).includes(filters.tab) ? (filters.tab as Tab) : 'overview';
   const service = useQuery({ queryKey: serviceKey(id), queryFn: ({ signal }) => getService(id, signal) });
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -82,7 +89,7 @@ export function ServicePage() {
       />
       <Tabs value={tab} onChange={(v) => v && setFilters({ tab: v === 'overview' ? '' : v })} keepMounted={false}>
         <Tabs.List aria-label={t('services.tabsLabel')}>
-          {TABS.map((x) => (
+          {tabs.map((x) => (
             <Tabs.Tab key={x} value={x}>
               {t(`services.tabs.${x}`)}
             </Tabs.Tab>
@@ -92,10 +99,15 @@ export function ServicePage() {
           <Overview service={s} />
         </Tabs.Panel>
         <Tabs.Panel value="resources" pt="md">
-          <Resources service={s} admin={admin} />
+          <Resources service={s} admin={canAssign} />
         </Tabs.Panel>
+        {tabs.includes('access') && (
+          <Tabs.Panel value="access" pt="md">
+            <ServiceAccess service={s} />
+          </Tabs.Panel>
+        )}
         <Tabs.Panel value="trusts" pt="md">
-          <Trusts service={s} admin={admin} />
+          <Trusts service={s} admin={canTrust} />
         </Tabs.Panel>
       </Tabs>
       {editing && <ServiceDialog service={s} onClose={() => setEditing(false)} />}
@@ -175,7 +187,7 @@ function Resources({ service, admin }: { service: Service; admin: boolean }) {
   const { t } = useTranslation();
   const [moving, setMoving] = useState(false);
   const sid = service.id;
-  const mine = <T extends { service?: { id: string } }>(items: T[]) => items.filter((x) => x.service?.id === sid);
+  const mine = <T extends { service?: { id?: string } }>(items: T[]) => items.filter((x) => x.service?.id === sid);
   const targets = useQuery({ queryKey: serviceResourcesKey(sid, 'targets'), queryFn: async () => mine((await listAllTargets()).items) });
   const certs = useQuery({ queryKey: serviceResourcesKey(sid, 'certificates'), queryFn: () => listCertificates({ service_id: sid, limit: 50 }) });
   const acme = useQuery({ queryKey: serviceResourcesKey(sid, 'acme'), queryFn: () => listACMECertificates({ service_id: sid, limit: 50 }) });

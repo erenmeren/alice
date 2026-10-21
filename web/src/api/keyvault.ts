@@ -211,6 +211,8 @@ export interface Binding {
   created_at: string;
   created_by: string | null;
   locations: BindingLocation[];
+  // Websites on servers outside the reader's services, left out of locations (R49 Phase 2).
+  hidden_count?: number;
 }
 
 export interface DeployableLocation {

@@ -23,7 +23,8 @@ export interface ManagedKeyInfo {
 
 // SSHKeyDetail is the key as the detail route answers it: the inventory key plus managed_key (null for a key
 // Alice found on a server and for Alice's own connection key).
-export type SSHKeyDetail = SSHKey & { managed_key: ManagedKeyInfo | null };
+// hidden_count: locations on servers outside the reader's services, left out of locations (R49 Phase 2).
+export type SSHKeyDetail = SSHKey & { managed_key: ManagedKeyInfo | null; hidden_count?: number };
 
 export interface KeyFiles {
   items: { os_user: string; files: string[]; default_file: string }[];

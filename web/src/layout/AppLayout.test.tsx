@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { adminSession, auditorSession, operatorSession, sessionHandlers } from '../test/fixtures';
+import { adminSession, auditorSession, globalSession, operatorSession, scopedSession, sessionHandlers } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 import { ACCOUNT_ITEMS, NAV_ITEMS, isActive } from './AppLayout';
@@ -79,6 +79,27 @@ describe('AppLayout shell', () => {
     await renderRoute('/');
     await screen.findByRole('navigation', { name: 'Main navigation' });
     expect(linkNames()).toEqual(expected);
+  });
+
+  it.each([
+    [globalSession('admin'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']],
+    [globalSession('auditor'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'Services', 'License', 'Your account', 'API tokens']],
+    // A role on a service never opens a platform page: an Administrator of one service sees no People, Settings, Audit
+    // or License.
+    [scopedSession(['admin']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Services', 'Your account', 'API tokens']],
+    [scopedSession(['auditor']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Services', 'Your account', 'API tokens']],
+  ])('renders the destinations from the session’s access (%#)', async (session, expected) => {
+    server.use(...sessionHandlers(session));
+    await renderRoute('/');
+    await screen.findByRole('navigation', { name: 'Main navigation' });
+    expect(linkNames()).toEqual(expected);
+  });
+
+  it('names a person without a global role by their services and refuses a platform page', async () => {
+    server.use(...sessionHandlers(scopedSession(['operator'])));
+    await renderRoute('/users');
+    expect(await screen.findByRole('heading', { level: 1, name: 'You do not have access to this page.' })).toBeInTheDocument();
+    expect(screen.getByText('Role on 1 service')).toBeInTheDocument();
   });
 
   it('has one navigation landmark, group labels that are neither headings nor links, and one h1', async () => {
@@ -173,7 +194,7 @@ describe('AppLayout shell', () => {
   });
 
   it('activates Key rotations for run pages through match', () => {
-    expect(isActive({ to: '/rotations', labelKey: 'nav.rotations', roles: [], icon: 'RotateCw', group: 'operations', match: ['/rotation/'] }, '/rotation/runs/1')).toBe(true);
+    expect(isActive({ to: '/rotations', labelKey: 'nav.rotations', icon: 'RotateCw', group: 'operations', match: ['/rotation/'] }, '/rotation/runs/1')).toBe(true);
     expect(isActive(NAV_ITEMS[0], '/servers')).toBe(false);
     expect(ACCOUNT_ITEMS.map((i) => i.to)).toEqual(['/account', '/tokens']);
   });

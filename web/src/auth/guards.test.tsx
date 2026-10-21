@@ -3,7 +3,7 @@ import { sessionFor, sessionHandlers } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
-describe('RequireRole', () => {
+describe('RequirePermission', () => {
   it('shows the no-access page with one h1 and a way home', async () => {
     server.use(...sessionHandlers(sessionFor('operator')));
     await renderRoute('/users');

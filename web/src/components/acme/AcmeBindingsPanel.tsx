@@ -17,6 +17,7 @@ import { ErrorAlert } from '../ErrorAlert';
 import { DriftControls, DriftSummaryLine, HealthBadge, ObservationFacts } from '../drift/LocationDrift';
 import { InternalLink } from '../InternalLink';
 import { LoadingIndicator } from '../LoadingIndicator';
+import { HiddenCount } from '../services/shared';
 import { useStepUp } from '../StepUpProvider';
 import { DialogActions, EmptyState, Notice, Panel, StatusBadge, type Tone } from '../ui';
 import { WRAP } from '../wrap';
@@ -198,6 +199,7 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
             {t('acme.issued.bindings.byHand')}
           </Notice>
         )}
+        <HiddenCount count={bindings.data?.hidden_count} />
         {!admin && items.some((b) => !b.auto_deploy) && <Text size="xs" c="dimmed">{t('acme.issued.bindings.autoAdminOnly')}</Text>}
         {!confirmAuto && <ErrorAlert error={error} />}
         {canOperate && issued && (

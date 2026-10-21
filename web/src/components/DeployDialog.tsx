@@ -14,6 +14,7 @@ import { CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryK
 import { useAbort } from '../api/useAbort';
 import type { Certificate, CertificateLocation, DeployResult, DeploymentDetail } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { adminOn } from '../auth/permissions';
 import { formatDate } from '../datetime';
 import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
@@ -89,7 +90,8 @@ function DeployForm({
   const abort = useAbort();
   const now = useNow();
   const siteLabel = useSiteLabel();
-  const admin = session?.user.role === 'admin';
+  // An incomplete chain is confirmed by an Administrator of the certificate's service.
+  const admin = adminOn(session, certificate);
 
   const detail = useQuery({
     queryKey: certificateKey(certificate?.id ?? ''),

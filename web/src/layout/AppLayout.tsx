@@ -2,13 +2,16 @@ import { useEffect, useRef } from 'react';
 import { Alert, Anchor, AppShell, Burger, Button, NavLink } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useQuery } from '@tanstack/react-query';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { getVersion } from '../api/endpoints';
 import { ssoErrorReason } from '../api/sso';
 import { SSOErrorAlert } from '../components/SSOErrorAlert';
-import type { Role } from '../api/types';
+import type { Permission, SessionInfo } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { can, canPlatform, hasNoAccess, sessionAccess } from '../auth/permissions';
+import { NoAccessPage } from '../pages/NoAccessPage';
 import { BackupBanner } from '../components/BackupBanner';
 import { LicenseBanners } from '../components/LicenseBanners';
 import { NotificationsBanner } from '../components/NotificationsBanner';
@@ -23,38 +26,39 @@ export type NavGroup = 'none' | 'inventory' | 'operations' | 'administration';
 export interface NavItem {
   to: string;
   labelKey: string;
-  roles: Role[];
+  // perm is the permission the page reads with (none: the person's own pages); platform: it needs a global grant.
+  perm?: Permission;
+  platform?: boolean;
   icon: IconName;
   group: NavGroup;
   // match lists extra path prefixes that mark the item active (a page that lives under another address).
   match?: string[];
 }
 
-const ALL: Role[] = ['admin', 'operator', 'auditor'];
-
-// NAV_ITEMS lists the side navigation in the design's groups. Roles mirror the server permissions (docs/authz-matrix.md);
-// the UI is not an authorization boundary.
+// NAV_ITEMS lists the side navigation in the design's groups. The permissions mirror the server's (docs/authz-matrix.md):
+// a resource page shows when the person reads something somewhere, a platform page only with a global grant. The UI is
+// not an authorization boundary.
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/', labelKey: 'nav.dashboard', roles: ALL, icon: 'LayoutDashboard', group: 'none' },
-  { to: '/certificates', labelKey: 'nav.certificates', roles: ALL, icon: 'FileKey2', group: 'inventory' },
-  { to: '/acme', labelKey: 'nav.acme', roles: ALL, icon: 'ShieldCheck', group: 'inventory' },
-  { to: '/discovery', labelKey: 'nav.discovery', roles: ALL, icon: 'Network', group: 'inventory' },
-  { to: '/ssh-keys', labelKey: 'nav.sshKeys', roles: ALL, icon: 'KeyRound', group: 'inventory' },
-  { to: '/servers', labelKey: 'nav.servers', roles: ALL, icon: 'Server', group: 'inventory' },
-  { to: '/key-vaults', labelKey: 'nav.keyVaults', roles: ALL, icon: 'Cloud', group: 'inventory' },
-  { to: '/deployments', labelKey: 'nav.deployments', roles: ALL, icon: 'Rocket', group: 'operations' },
-  { to: '/rotations', labelKey: 'nav.rotations', roles: ALL, icon: 'RotateCw', group: 'operations', match: ['/rotation/'] },
-  { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'], icon: 'ScrollText', group: 'operations' },
-  { to: '/users', labelKey: 'nav.users', roles: ['admin'], icon: 'Users', group: 'administration' },
-  { to: '/services', labelKey: 'nav.services', roles: ALL, icon: 'Layers', group: 'administration' },
-  { to: '/settings', labelKey: 'nav.settings', roles: ['admin'], icon: 'Settings2', group: 'administration' },
-  { to: '/license', labelKey: 'nav.license', roles: ['admin', 'auditor'], icon: 'CreditCard', group: 'administration' },
+  { to: '/', labelKey: 'nav.dashboard', perm: 'read', icon: 'LayoutDashboard', group: 'none' },
+  { to: '/certificates', labelKey: 'nav.certificates', perm: 'read', icon: 'FileKey2', group: 'inventory' },
+  { to: '/acme', labelKey: 'nav.acme', perm: 'acme.view', icon: 'ShieldCheck', group: 'inventory' },
+  { to: '/discovery', labelKey: 'nav.discovery', perm: 'discovery.view', icon: 'Network', group: 'inventory' },
+  { to: '/ssh-keys', labelKey: 'nav.sshKeys', perm: 'read', icon: 'KeyRound', group: 'inventory' },
+  { to: '/servers', labelKey: 'nav.servers', perm: 'read', icon: 'Server', group: 'inventory' },
+  { to: '/key-vaults', labelKey: 'nav.keyVaults', perm: 'read', icon: 'Cloud', group: 'inventory' },
+  { to: '/deployments', labelKey: 'nav.deployments', perm: 'read', icon: 'Rocket', group: 'operations' },
+  { to: '/rotations', labelKey: 'nav.rotations', perm: 'read', icon: 'RotateCw', group: 'operations', match: ['/rotation/'] },
+  { to: '/audit', labelKey: 'nav.audit', perm: 'audit.read', platform: true, icon: 'ScrollText', group: 'operations' },
+  { to: '/users', labelKey: 'nav.users', perm: 'users.read', platform: true, icon: 'Users', group: 'administration' },
+  { to: '/services', labelKey: 'nav.services', perm: 'read', icon: 'Layers', group: 'administration' },
+  { to: '/settings', labelKey: 'nav.settings', perm: 'settings.manage', platform: true, icon: 'Settings2', group: 'administration' },
+  { to: '/license', labelKey: 'nav.license', perm: 'license.read', platform: true, icon: 'CreditCard', group: 'administration' },
 ];
 
 // ACCOUNT_ITEMS are the person's own pages, shown as plain links above Sign out (R5).
 export const ACCOUNT_ITEMS: NavItem[] = [
-  { to: '/account', labelKey: 'nav.account', roles: ALL, icon: 'UserRound', group: 'none' },
-  { to: '/tokens', labelKey: 'nav.tokens', roles: ALL, icon: 'KeySquare', group: 'none' },
+  { to: '/account', labelKey: 'nav.account', icon: 'UserRound', group: 'none' },
+  { to: '/tokens', labelKey: 'nav.tokens', icon: 'KeySquare', group: 'none' },
 ];
 
 const GROUPS: NavGroup[] = ['none', 'inventory', 'operations', 'administration'];
@@ -65,10 +69,25 @@ export function isActive(item: NavItem, pathname: string): boolean {
   return pathname === item.to || pathname.startsWith(`${item.to}/`) || (item.match ?? []).some((m) => pathname.startsWith(m));
 }
 
+// allowed: the navigation item is for this person.
+export function allowed(session: SessionInfo, item: NavItem): boolean {
+  if (!item.perm) return true;
+  return item.platform ? canPlatform(session, item.perm) : can(session, item.perm);
+}
+
+// roleLine is the role under the person's name: the global role, or how many services they hold a role on.
+function roleLine(t: TFunction, session: SessionInfo): string {
+  const a = sessionAccess(session);
+  if (a.global_role) return t(`enum.role.${a.global_role}`);
+  if (a.services.length > 0) return t('access.shell.services', { count: a.services.length });
+  return t('access.noGlobalRole');
+}
+
 function SetupBanner() {
   const { t } = useTranslation();
   const { session, setupStatus } = useAuth();
-  if (session?.user.role !== 'admin' || !setupStatus || setupStatus.completed) return null;
+  // The setup wizard is the installation's: a global Administrator finishes it.
+  if (!canPlatform(session, 'settings.manage') || !setupStatus || setupStatus.completed) return null;
   const text = !setupStatus.recovery_passphrase_set
     ? t('nav.setupBanner')
     : !setupStatus.license_chosen
@@ -88,7 +107,9 @@ export function AppLayout() {
   const { session, signOut, signOutFailed } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const version = useQuery({ queryKey: ['version'], queryFn: getVersion });
+  // A person with no role anywhere sees one page (design §9) and the account controls; nothing else is read for them.
+  const nothing = hasNoAccess(session);
+  const version = useQuery({ queryKey: ['version'], queryFn: getVersion, enabled: !nothing });
   // The callback sends a refused step-up back to the page with ?sso_error=<reason>: the reason moves into the navigation state
   // (so a reload does not show it again) and the parameter leaves the address, the rest of it kept.
   const rawSsoError = new URLSearchParams(location.search).get('sso_error');
@@ -124,8 +145,8 @@ export function AppLayout() {
     return () => document.removeEventListener('keydown', onKey);
   }, [navOpened, closeNav]);
   if (!session) return null;
-  const items = NAV_ITEMS.filter((i) => i.roles.includes(session.user.role));
-  const account = ACCOUNT_ITEMS.filter((i) => i.roles.includes(session.user.role));
+  const items = nothing ? [] : NAV_ITEMS.filter((i) => allowed(session, i));
+  const account = nothing ? [] : ACCOUNT_ITEMS.filter((i) => allowed(session, i));
   const current = [...items, ...account].find((i) => isActive(i, location.pathname));
   const deeper = current !== undefined && current.to !== '/' && location.pathname !== current.to;
   const navLink = (i: NavItem) => {
@@ -200,7 +221,7 @@ export function AppLayout() {
               <div className={classes.accountName} data-testid="current-user">
                 {session.user.display_name}
               </div>
-              <div className={classes.accountRole}>{t(`enum.role.${session.user.role}`)}</div>
+              <div className={classes.accountRole}>{roleLine(t, session)}</div>
             </div>
           </div>
           <Button variant="default" size="xs" fullWidth leftSection={<Icon name="LogOut" size={15} />} onClick={() => void signOut()}>
@@ -236,11 +257,11 @@ export function AppLayout() {
             </div>
           </div>
           <div className={classes.topActions}>
-            <CommandPalette items={[...items, ...account]} />
+            {!nothing && <CommandPalette items={[...items, ...account]} />}
             <span className={classes.divider} aria-hidden="true" />
             <ThemeToggle />
             <LanguageToggle signedIn />
-            <AttentionBell />
+            {!nothing && <AttentionBell />}
           </div>
         </div>
       </AppShell.Header>
@@ -252,15 +273,19 @@ export function AppLayout() {
                 {t('nav.signOutFailed')}
               </Alert>
             )}
-            <LicenseBanners />
-            <NotificationsBanner />
-            <BackupBanner />
-            <SetupBanner />
+            {!nothing && (
+              <>
+                <LicenseBanners />
+                <NotificationsBanner />
+                <BackupBanner />
+                <SetupBanner />
+              </>
+            )}
             {stateReason && (
               <SSOErrorAlert reason={stateReason} onClose={() => navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true })} />
             )}
           </div>
-          <Outlet />
+          {nothing ? <NoAccessPage /> : <Outlet />}
           <footer className={classes.footer}>
             <Icon name="LockKeyhole" size={14} />
             <span>{version.data ? t('shell.footer', { version: version.data.version }) : t('app.name', { ns: 'common' })}</span>

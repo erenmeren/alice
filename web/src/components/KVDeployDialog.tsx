@@ -6,7 +6,8 @@ import { isApiError } from '../api/client';
 import { deploymentView, isSettled, watchDeployments } from '../api/deployments';
 import { isAbort } from '../api/jobs';
 import { deployBinding, type Binding, type BindingDeployResult, type KVCertificateDetail } from '../api/keyvault';
-import { BINDINGS_KEY, DEPLOYMENTS_KEY, KV_CERTIFICATES_KEY } from '../api/queryKeys';
+import { BINDINGS_KEY, DEPLOYMENTS_KEY, KV_CERTIFICATES_KEY, targetKey } from '../api/queryKeys';
+import type { Target } from '../api/types';
 import { useAbort } from '../api/useAbort';
 import type { DeploymentDetail } from '../api/types';
 import { formatDate } from '../datetime';
@@ -21,6 +22,7 @@ import deploy from './deploy.module.css';
 import { DialogActions } from './ui';
 import { shortVersion, versionBlock } from './vaultText';
 import { useAuth } from '../auth/AuthProvider';
+import { adminOn } from '../auth/permissions';
 import { Icon } from '../design/Icon';
 import { WRAP } from './wrap';
 
@@ -46,7 +48,8 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
   const client = useQueryClient();
   const abort = useAbort();
   const now = useNow();
-  const admin = session?.user.role === 'admin';
+  // A held version and an incomplete chain are an Administrator's of the vault's service (the vault as last read).
+  const admin = adminOn(session, client.getQueryData<Target>(targetKey(binding.vault_id)));
   const versions = certificate.versions;
   const deployable = versions.filter((v) => v.certificate_id !== null);
   const firstId = versionId ?? versions.find((v) => v.version === certificate.current_version)?.id ?? versions[0]?.id ?? '';

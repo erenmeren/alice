@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { ACME_CERT_ID, freshStatus, INCIDENT_ID, installedStatus, SERVICE_ID, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
+import { ACME_CERT_ID, freshStatus, INCIDENT_ID, installedStatus, SERVICE_ID, nginxTargetFixture, scopedSession, sessionFor, targetFixture, vaultFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -136,4 +136,6 @@ export const SCREENS: Screen[] = [
     ready: { en: 'Deployment sequence', tr: 'Dağıtım adımları' },
   },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
+  // A person with no role anywhere: every address is the one no-access page (R49 Phase 2).
+  { path: '/certificates', session: scopedSession([]), status: installedStatus, ready: { en: 'You do not have access to anything yet.', tr: 'Henüz hiçbir şeye erişiminiz yok.' } },
 ];

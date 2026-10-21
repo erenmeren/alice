@@ -6,6 +6,7 @@ import { getCertificateImpact, type CertificateImpact, type ImpactMatch } from '
 import { certificateImpactKey } from '../../api/queryKeys';
 import { formatDateTime } from '../../datetime';
 import { ErrorAlert } from '../ErrorAlert';
+import { HiddenCount } from '../services/shared';
 import { EmptyState, Panel, StatusBadge } from '../ui';
 import { WRAP } from '../wrap';
 
@@ -157,6 +158,7 @@ export function ImpactPanel({ certificateId }: { certificateId: string }) {
           </Text>
         )}
         {m?.truncated && <Text size="xs">{t('certificates.impact.truncated')}</Text>}
+        <HiddenCount count={m?.hidden_count} />
       </Stack>
     </Panel>
   );

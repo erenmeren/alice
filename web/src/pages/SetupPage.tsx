@@ -6,6 +6,7 @@ import { createAdmin } from '../api/endpoints';
 import type { MfaEnrollment, SessionInfo, SetupStatus } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { canPlatform } from '../auth/permissions';
 import { adminExists } from '../auth/setupStatus';
 import { RecoveryCodes } from '../components/RecoveryCodes';
 import { TotpEnrollment } from '../components/TotpEnrollment';
@@ -56,7 +57,7 @@ const BACK: Partial<Record<WizardStep, WizardStep>> = {
 export function startOf(status: SetupStatus | null, session: SessionInfo | null): WizardStep | 'home' | 'login' {
   if (!status || !adminExists(status)) return 'code';
   if (!session) return 'login';
-  if (session.user.role !== 'admin' || status.completed) return 'home';
+  if (!canPlatform(session, 'settings.manage') || status.completed) return 'home';
   if (status.next_step && RESUMABLE.includes(status.next_step)) return status.next_step;
   if (!status.recovery_passphrase_set) return 'passphrase';
   // A server that reports the choices without a position: the HTTPS and mail steps come before the license.

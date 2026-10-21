@@ -7,6 +7,7 @@ import { isApiError } from '../api/client';
 import { cancelCSR, completeCSR, listCSRs } from '../api/endpoints';
 import { CERTIFICATES_KEY, CSRS_KEY } from '../api/queryKeys';
 import type { CSR, UploadResult } from '../api/types';
+import { rowAllows } from '../auth/permissions';
 import { formatDateTime } from '../datetime';
 import { AppModal } from './AppModal';
 import { CSRPem } from './CSRPem';
@@ -211,7 +212,7 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
                         <Button size="xs" variant="default" onClick={() => setShowing(c)} id={`csr-show-${c.id}`} aria-labelledby={`csr-show-${c.id} csr-names-${c.id}`}>
                           {t('certificates.csr.viewPem')}
                         </Button>
-                        {canOperate && (
+                        {canOperate && rowAllows(c, 'certificates.operate') && (
                           <>
                           {/* The name of each button is its text plus the request's names (data, so not an aria-label text). */}
                           <Button size="xs" variant="light" onClick={() => setCompleting(c)} id={`csr-complete-${c.id}`} aria-labelledby={`csr-complete-${c.id} csr-names-${c.id}`}>

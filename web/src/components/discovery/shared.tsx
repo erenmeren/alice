@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { MAX_ACTIVE_SCANS, scanStateKey, statusKey, type DiscoveredStatus, type DiscoveryScan, type DiscoveryScanState, type DiscoveryScope, type DiscoveredEndpointState } from '../../api/discovery';
 import { useAuth } from '../../auth/AuthProvider';
+import { can, canPlatform } from '../../auth/permissions';
 import type { IconName } from '../../design/Icon';
 import { reasonTitle } from '../JobErrorAlert';
 import { StatusBadge, type Tone } from '../ui';
@@ -14,13 +15,12 @@ import { StatusBadge, type Tone } from '../ui';
 export const SCAN_POLL_MS = 3000;
 
 // useDiscoveryRole: every role reads discovery (discovery.view); Operators and Administrators start and cancel scans
-// (discovery.operate); only an Administrator defines scopes and the settings (discovery.manage, with a step-up). The
-// server stays the judge; the screens only follow its rules.
+// (discovery.operate, on the scope's service); only a global Administrator defines scopes and the settings
+// (discovery.manage, a platform permission, with a step-up). The server stays the judge; the screens only follow its rules.
 export function useDiscoveryRole() {
   const { session } = useAuth();
-  const role = session?.user.role;
-  const admin = role === 'admin';
-  return { role, admin, canOperate: admin || role === 'operator', auditor: role === 'auditor' };
+  const canOperate = can(session, 'discovery.operate');
+  return { admin: canPlatform(session, 'discovery.manage'), canOperate, auditor: !canOperate };
 }
 
 export const formatNumber = (n: number, lang: string) => new Intl.NumberFormat(lang).format(n);

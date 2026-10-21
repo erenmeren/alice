@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router';
 import { SERVICE_LIST_KEY } from '../api/queryKeys';
 import { listServices, type Service } from '../api/services';
 import { useAuth } from '../auth/AuthProvider';
+import { canPlatform } from '../auth/permissions';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { ServiceDialog } from '../components/services/ServiceDialog';
 import { EnvironmentBadge } from '../components/services/shared';
@@ -35,7 +36,8 @@ export function ServicesPage() {
   const { t } = useTranslation();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const admin = session?.user.role === 'admin';
+  // Adding a service is a global Administrator's (services.manage, platform).
+  const admin = canPlatform(session, 'services.manage');
   const services = useQuery({ queryKey: SERVICE_LIST_KEY, queryFn: ({ signal }) => listServices(signal) });
   const [adding, setAdding] = useState(false);
   const items = services.data?.items ?? [];

@@ -7,6 +7,7 @@ import { capabilityText, can } from '../api/capabilities';
 import { canDeployTo, firstServerName, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { canOn } from '../auth/permissions';
 import { formatDateTime } from '../datetime';
 import { DeployDialog } from './DeployDialog';
 import { DriftControls, DriftSummaryLine, HealthBadge, ObservationFacts } from './drift/LocationDrift';
@@ -58,9 +59,9 @@ function RowButton({ id, label, data, children, ...rest }: { id: string; label: 
 export function WebsitesPanel({ target, discoveryFailed = false }: { target: Target; discoveryFailed?: boolean }) {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
-  const role = session?.user.role;
-  const canDeploy = role === 'admin' || role === 'operator';
-  const admin = role === 'admin';
+  // The permissions held on the server's service: deploying, and the location settings (targets.manage).
+  const canDeploy = canOn(session, target, 'certificates.operate');
+  const admin = canOn(session, target, 'targets.manage');
   const siteLabel = useSiteLabel();
   const client = useQueryClient();
   const [showMissing, setShowMissing] = useState(false);
