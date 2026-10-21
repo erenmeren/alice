@@ -1,0 +1,6 @@
+email | ada@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | tr | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 
+email | bob@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | en | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 
+email | ada@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | tr | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 
+email | bob@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | en | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 
+email | noc@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | en | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 
+email | noc@example.com | target.auth_failed | {"count": "2", "target_name": "web-01"} | tr | pending | 0 | 2026-10-07 09:00:00+00 | 2026-10-07 09:00:00+00 |  | 

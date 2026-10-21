@@ -34,7 +34,7 @@ var rules = map[string][]string{
 	"alice/internal/secrets/...":    {platform},
 	"alice/internal/audit/...":      {platform},
 	"alice/internal/license/...":    {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
-	"alice/internal/notify/...":     {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/..."},
+	"alice/internal/notify/...":     {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/authz"},
 	"alice/internal/auth/...":       {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/...", "alice/internal/authz"},
 	"alice/internal/certs/...":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":      {platform, "alice/internal/secrets/..."},
