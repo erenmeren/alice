@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -60,19 +59,22 @@ func (n ServiceNotifier) NotifyDigest(ctx context.Context, tx pgx.Tx, template s
 	if err != nil {
 		return err
 	}
-	var order []recipient
-	counts := map[string]int{}
+	var (
+		order  []recipient
+		counts []int // counts[i]: the items of order[i]
+	)
 	for _, s := range items {
 		for _, r := range rt.recipients(s) {
-			key := mailboxKey(r.email)
-			if _, seen := counts[key]; !seen {
-				order = append(order, r)
+			i := slices.IndexFunc(order, func(o recipient) bool { return sameMailbox(o.email, r.email) })
+			if i < 0 {
+				order, counts = append(order, r), append(counts, 0)
+				i = len(order) - 1
 			}
-			counts[key]++
+			counts[i]++
 		}
 	}
-	for _, r := range order {
-		raw, err := encodeParams(template, params(counts[mailboxKey(r.email)]))
+	for i, r := range order {
+		raw, err := encodeParams(template, params(counts[i]))
 		if err != nil {
 			return err
 		}
@@ -223,9 +225,6 @@ func distinct(services []uuid.UUID) []uuid.UUID {
 	}
 	return out
 }
-
-// mailboxKey is the key sameMailbox compares by.
-func mailboxKey(s string) string { return strings.ToLower(mailbox(s)) }
 
 func encodeParams(template string, params map[string]string) ([]byte, error) {
 	if !templatePattern.MatchString(template) {
