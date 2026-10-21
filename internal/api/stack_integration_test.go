@@ -241,6 +241,10 @@ func (s *stack) start() {
 	s.handler = s.api.Handler()
 }
 
+// stackACMERoots, when set before a stack starts, is its inventory's ACMERoots (the trust of fake DNS providers, R57;
+// as the e2e build's trust of its fakes). The API's integration tests never run in parallel.
+var stackACMERoots func() (*x509.CertPool, error)
+
 // startInventory builds the Phase 3 services the way cmd/alice does: the job queue, the inventory
 // with the platform key, the linuxssh provider over a real dialer (pinned against the inventory's
 // host-key store) and a job runner with the target handlers. Tests drive the runner with RunOnce.
@@ -258,7 +262,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	}
 	s.inv = inventory.New(inventory.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, License: s.license, Registry: s.registry,
-		Jobs: s.queue, Notifier: notify.ServiceNotifier{Clock: s.clock}, Log: log, Roots: roots,
+		Jobs: s.queue, Notifier: notify.ServiceNotifier{Clock: s.clock}, Log: log, Roots: roots, ACMERoots: stackACMERoots,
 	})
 	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clock.Real{}, HostKeys: s.inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)

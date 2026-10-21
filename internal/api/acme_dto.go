@@ -61,20 +61,44 @@ func acmeAccountJSON(a inventory.ACMEAccount) acmeAccountDTO {
 }
 
 type acmeHookDTO struct {
-	ID                     string    `json:"id"`
-	Name                   string    `json:"name"`
-	URL                    string    `json:"url"`
-	CABundlePEM            string    `json:"ca_bundle_pem"`
-	SecretConfigured       bool      `json:"secret_configured"`
-	AllowedSuffixes        []string  `json:"allowed_suffixes"`
-	PropagationWaitSeconds int       `json:"propagation_wait_seconds"`
-	PollTimeoutSeconds     int       `json:"poll_timeout_seconds"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     string             `json:"id"`
+	Kind                   string             `json:"kind"`
+	Settings               acmeDNSSettingsDTO `json:"settings"`
+	Name                   string             `json:"name"`
+	URL                    string             `json:"url"`
+	CABundlePEM            string             `json:"ca_bundle_pem"`
+	SecretConfigured       bool               `json:"secret_configured"`
+	AllowedSuffixes        []string           `json:"allowed_suffixes"`
+	PropagationWaitSeconds int                `json:"propagation_wait_seconds"`
+	PollTimeoutSeconds     int                `json:"poll_timeout_seconds"`
+	CreatedAt              time.Time          `json:"created_at"`
+	UpdatedAt              time.Time          `json:"updated_at"`
+}
+
+// acmeDNSSettingsDTO is a built-in DNS provider's settings (R57); every field is empty for a hook. No credential:
+// secret_configured says that they are stored.
+type acmeDNSSettingsDTO struct {
+	Auth           string     `json:"auth"`
+	TenantID       string     `json:"tenant_id"`
+	ClientID       string     `json:"client_id"`
+	SubscriptionID string     `json:"subscription_id"`
+	ResourceGroup  string     `json:"resource_group"`
+	CertThumbprint string     `json:"cert_thumbprint"`
+	CertNotAfter   *time.Time `json:"cert_not_after"`
+	AccessKeyID    string     `json:"access_key_id"`
+	RoleARN        string     `json:"role_arn"`
+	ExternalID     string     `json:"external_id"`
 }
 
 func acmeHookJSON(h inventory.ACMEHook) acmeHookDTO {
-	return acmeHookDTO{ID: h.ID.String(), Name: h.Name, URL: h.URL, CABundlePEM: h.CABundlePEM, SecretConfigured: h.SecretConfigured,
+	st := h.Settings
+	kind := h.Kind
+	if kind == "" {
+		kind = inventory.ACMEHookKindWebhook
+	}
+	return acmeHookDTO{ID: h.ID.String(), Kind: kind, Settings: acmeDNSSettingsDTO{Auth: st.Auth, TenantID: st.TenantID, ClientID: st.ClientID,
+		SubscriptionID: st.SubscriptionID, ResourceGroup: st.ResourceGroup, CertThumbprint: st.CertThumbprint, CertNotAfter: utcPtr(st.CertNotAfter),
+		AccessKeyID: st.AccessKeyID, RoleARN: st.RoleARN, ExternalID: st.ExternalID}, Name: h.Name, URL: h.URL, CABundlePEM: h.CABundlePEM, SecretConfigured: h.SecretConfigured,
 		AllowedSuffixes: nonNil(h.AllowedSuffixes), PropagationWaitSeconds: h.PropagationWaitSeconds, PollTimeoutSeconds: h.PollTimeoutSeconds,
 		CreatedAt: h.CreatedAt.UTC(), UpdatedAt: h.UpdatedAt.UTC()}
 }

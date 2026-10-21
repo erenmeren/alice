@@ -409,6 +409,79 @@ func TestACMEHookHandlers(t *testing.T) {
 	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/acme/hooks", "auditor", "").Code)
 }
 
+// A built-in DNS provider (R57): its kind, settings and credentials reach the inventory, credentials never come back,
+// the kind cannot be changed by a PATCH, the credential bytes are cleared after the call and the view names the kind.
+func TestACMEDNSProviderHandlers(t *testing.T) {
+	h, f, _ := acmeDeps(t)
+	var in inventory.ACMEHookInput
+	var token string
+	f.CreateACMEHookFn = func(_ context.Context, _ inventory.Actor, i inventory.ACMEHookInput) (inventory.ACMEHook, error) {
+		in, token = i, string(i.Credentials.APIToken.Bytes())
+		v := sampleACMEHook()
+		v.Kind, v.URL, v.Settings = inventory.ACMEHookKindRoute53, "", inventory.ACMEDNSSettings{AccessKeyID: "TESTACCESSKEYID0001"}
+		return v, nil
+	}
+	var seen [][]byte
+	onSecretBytes = func(b []byte) { seen = append(seen, b) }
+	defer func() { onSecretBytes = nil }()
+	cfToken := strings.Repeat("t", 40)
+	body := `{"kind":"cloudflare","name":"CF","api_token":"` + cfToken + `","allowed_suffixes":["example.com"]}`
+	rec := call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", body)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.ACMEHookKindCloudflare, in.Kind)
+	assert.Equal(t, cfToken, token)
+	assert.Equal(t, inventory.ACMEDNSSettings{}, in.Settings, "no setting given")
+	view := jsonObj(t, rec)
+	assert.Equal(t, "route53", view["kind"])
+	assert.Equal(t, "TESTACCESSKEYID0001", view["settings"].(map[string]any)["access_key_id"])
+	assert.NotContains(t, rec.Body.String(), cfToken)
+	for _, b := range seen {
+		assert.Equal(t, make([]byte, len(b)), b, "every secret slice is cleared")
+	}
+
+	azure := `{"kind":"azure_dns","name":"AZ","auth":"certificate","tenant_id":"t","client_id":"c","subscription_id":"s","resource_group":"g",` +
+		`"certificate_pem":"cert","private_key_pem":"key","pfx_base64":"!!","pfx_password":"pw"}`
+	rec = call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", azure)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	_, _, details := errorField(t, rec)
+	assert.Contains(t, detailFields(details), "pfx_base64")
+	azure = strings.Replace(azure, `"pfx_base64":"!!",`, `"pfx_base64":"AAEC",`, 1)
+	rec = call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", azure)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.ACMEDNSSettings{Auth: "certificate", TenantID: "t", ClientID: "c", SubscriptionID: "s", ResourceGroup: "g"}, in.Settings)
+	for _, tc := range []struct{ name, body, field string }{
+		{"long token", `{"kind":"cloudflare","name":"x","api_token":"` + strings.Repeat("t", 257) + `"}`, "api_token"},
+		{"long secret key", `{"kind":"route53","name":"x","secret_access_key":"` + strings.Repeat("s", 1025) + `"}`, "secret_access_key"},
+		{"long client secret", `{"kind":"azure_dns","name":"x","client_secret":"` + strings.Repeat("s", 1025) + `"}`, "client_secret"},
+		{"long setting", `{"kind":"route53","name":"x","role_arn":"` + strings.Repeat("r", 2049) + `"}`, "role_arn"},
+		{"long external id", `{"kind":"route53","name":"x","external_id":"` + strings.Repeat("r", 65537) + `"}`, "external_id"},
+	} {
+		rec := call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", tc.body)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, tc.name)
+		_, _, details := errorField(t, rec)
+		assert.Contains(t, detailFields(details), tc.field, tc.name)
+	}
+
+	var patch inventory.ACMEHookPatch
+	f.UpdateACMEHookFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, p inventory.ACMEHookPatch) (inventory.ACMEHook, error) {
+		patch = p
+		return sampleACMEHook(), nil
+	}
+	rec = call(h, http.MethodPatch, "/api/v1/acme/hooks/"+acmeHookID.String(), "admin-stepup", `{"kind":"route53"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "the kind never changes")
+	rec = call(h, http.MethodPatch, "/api/v1/acme/hooks/"+acmeHookID.String(), "admin-stepup",
+		`{"access_key_id":"TESTACCESSKEYID0002","role_arn":"","secret_access_key":"`+strings.Repeat("k", 40)+`"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, patch.Settings)
+	assert.Equal(t, inventory.ACMEDNSSettings{AccessKeyID: "TESTACCESSKEYID0002"}, *patch.Settings)
+	assert.Len(t, patch.Credentials.SecretAccessKey.Bytes(), 40)
+	rec = call(h, http.MethodPatch, "/api/v1/acme/hooks/"+acmeHookID.String(), "admin-stepup", `{"name":"x"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Nil(t, patch.Settings, "no setting given: the stored ones stay")
+	assert.False(t, patch.Credentials.Given())
+	assert.Equal(t, "webhook", jsonObj(t, rec)["kind"])
+}
+
 func TestACMECertificateHandlers(t *testing.T) {
 	h, f, _ := acmeDeps(t)
 	var in inventory.ACMECertificateInput

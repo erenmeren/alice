@@ -4547,8 +4547,10 @@ paths:
   /api/v1/acme/hooks:
     get:
       operationId: listACMEHooks
-      summary: DNS hooks (the webhooks that publish DNS-01 records), oldest first
-      description: The secret is write-only (secret_configured).
+      summary: DNS publishers (the DNS hooks and the built-in DNS providers that publish DNS-01 records), by name
+      description: >-
+        A publisher is a DNS hook (kind webhook) or a built-in DNS provider (cloudflare, azure_dns, route53; R57). The hook's
+        secret and a provider's credentials are write-only (secret_configured).
       x-permission: acme.view
       x-scope: any
       responses:
@@ -4560,12 +4562,18 @@ paths:
         default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createACMEHook
-      summary: Add a DNS hook (no network call is made)
+      summary: Add a DNS publisher, a hook or a built-in DNS provider (no network call is made)
       description: >-
-        url must be https without user information; the secret (16 to 256 printable characters) signs every call. allowed_suffixes
-        is the hook's name allow-list. propagation_wait_seconds (0..120, default 5) plus poll_timeout_seconds (1..100, default
-        60) are at most 120. 409 ALC-ACM-0020 (name taken). Administrator with a fresh step-up, never an API token. Refused with
-        403 ALC-LIC-0001 while the license is locked.
+        kind (default webhook) is fixed for the publisher's life. A hook: url must be https without user information; the
+        secret (16 to 256 printable characters) signs every call. A built-in provider (R57) has no url, ca_bundle_pem or
+        secret: cloudflare takes api_token (20 to 256 printable characters; Zone Read and DNS Edit); azure_dns takes auth
+        (client_secret, certificate, managed_identity), tenant_id and client_id (GUIDs, as a Key Vault credential),
+        client_secret or the certificate (certificate_pem and private_key_pem, or pfx_base64 and pfx_password; an RSA key),
+        subscription_id and resource_group; route53 takes access_key_id, secret_access_key, and optionally role_arn (an IAM
+        role to assume) with external_id. Fields of another kind are refused (422). allowed_suffixes is the publisher's name
+        allow-list. propagation_wait_seconds (0..120, default 5) plus poll_timeout_seconds (1..100, default 60; a provider's
+        wait for its change to be live) are at most 120. 409 ALC-ACM-0020 (name taken). Administrator with a fresh step-up,
+        never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
       x-scope: platform
       requestBody:
@@ -4592,7 +4600,7 @@ paths:
       - { $ref: "#/components/parameters/ID" }
     get:
       operationId: getACMEHook
-      summary: One DNS hook
+      summary: One DNS publisher
       x-permission: acme.view
       x-scope: any
       responses:
@@ -4605,9 +4613,12 @@ paths:
         default: { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateACMEHook
-      summary: Change a DNS hook (absent fields stay; a secret replaces the stored one)
+      summary: Change a DNS publisher (absent fields stay; a secret or credentials replace the stored ones)
       description: >-
-        Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+        The kind cannot change (a body that names it is refused, 400). For a built-in provider, settings given replace the
+        stored settings (the other settings of the kind must be given with them); credentials are required again when the
+        Azure sign-in method or the AWS access key changes. Administrator with a fresh step-up, never an API token. Refused
+        with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
       x-scope: platform
       requestBody:
@@ -4630,7 +4641,7 @@ paths:
         default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteACMEHook
-      summary: Remove a DNS hook
+      summary: Remove a DNS publisher
       description: >-
         409 ALC-ACM-0019 while live ACME certificates use it. Administrator with a fresh step-up, never an API token. Refused
         with 403 ALC-LIC-0001 while the license is locked.
@@ -6751,9 +6762,11 @@ components:
         updated_at: { type: string, format: date-time }
     ACMEHookCreate:
       type: object
-      required: [name, url, secret]
+      required: [name]
       additionalProperties: false
+      description: A hook needs url and secret; a built-in provider the settings and credentials of its kind (R57).
       properties:
+        kind: { type: string, enum: [webhook, cloudflare, azure_dns, route53], default: webhook }
         name: { type: string, maxLength: 100, examples: [Internal DNS] }
         url: { type: string, maxLength: 2048, examples: ["https://dns-hook.example.com/acme"] }
         ca_bundle_pem: { type: string, maxLength: 65536 }
@@ -6761,6 +6774,21 @@ components:
         allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 }, examples: [[example.com]] }
         propagation_wait_seconds: { type: integer, minimum: 0, maximum: 120, default: 5 }
         poll_timeout_seconds: { type: integer, minimum: 1, maximum: 100, default: 60 }
+        auth: { type: string, enum: [client_secret, certificate, managed_identity], description: 'azure_dns: the sign-in method' }
+        tenant_id: { type: string, format: uuid, description: 'azure_dns: the directory (tenant); empty for a managed identity' }
+        client_id: { type: string, format: uuid, description: 'azure_dns: the application; optional user-assigned identity for a managed identity' }
+        subscription_id: { type: string, format: uuid, description: 'azure_dns: the subscription of the zones' }
+        resource_group: { type: string, maxLength: 90, description: 'azure_dns: the resource group of the zones' }
+        access_key_id: { type: string, pattern: '^[A-Z0-9]{16,128}$', description: 'route53: the IAM access key ID' }
+        role_arn: { type: string, maxLength: 2048, description: 'route53: an IAM role to assume (arn:aws:iam::<account>:role/<name>)' }
+        external_id: { type: string, maxLength: 1224, description: 'route53: the external ID of the role assumption' }
+        api_token: { type: string, maxLength: 256, writeOnly: true, description: 'cloudflare: the API token. Never returned' }
+        client_secret: { type: string, maxLength: 1024, writeOnly: true, description: 'azure_dns, client_secret: never returned' }
+        certificate_pem: { type: string, writeOnly: true, description: 'azure_dns, certificate: the registered certificate' }
+        private_key_pem: { type: string, writeOnly: true, description: 'azure_dns, certificate: its RSA key. Never returned' }
+        pfx_base64: { type: string, writeOnly: true, description: 'azure_dns, certificate: or both as a PFX. Never returned' }
+        pfx_password: { type: string, writeOnly: true }
+        secret_access_key: { type: string, maxLength: 1024, writeOnly: true, description: 'route53: never returned' }
     ACMEHookPatch:
       type: object
       additionalProperties: false
@@ -6772,12 +6800,29 @@ components:
         allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 } }
         propagation_wait_seconds: { type: integer, minimum: 0, maximum: 120 }
         poll_timeout_seconds: { type: integer, minimum: 1, maximum: 100 }
+        auth: { type: string, enum: [client_secret, certificate, managed_identity], description: 'azure_dns: the sign-in method' }
+        tenant_id: { type: string, format: uuid, description: 'azure_dns: the directory (tenant); empty for a managed identity' }
+        client_id: { type: string, format: uuid, description: 'azure_dns: the application; optional user-assigned identity for a managed identity' }
+        subscription_id: { type: string, format: uuid, description: 'azure_dns: the subscription of the zones' }
+        resource_group: { type: string, maxLength: 90, description: 'azure_dns: the resource group of the zones' }
+        access_key_id: { type: string, pattern: '^[A-Z0-9]{16,128}$', description: 'route53: the IAM access key ID' }
+        role_arn: { type: string, maxLength: 2048, description: 'route53: an IAM role to assume (arn:aws:iam::<account>:role/<name>)' }
+        external_id: { type: string, maxLength: 1224, description: 'route53: the external ID of the role assumption' }
+        api_token: { type: string, maxLength: 256, writeOnly: true, description: 'cloudflare: the API token. Never returned' }
+        client_secret: { type: string, maxLength: 1024, writeOnly: true, description: 'azure_dns, client_secret: never returned' }
+        certificate_pem: { type: string, writeOnly: true, description: 'azure_dns, certificate: the registered certificate' }
+        private_key_pem: { type: string, writeOnly: true, description: 'azure_dns, certificate: its RSA key. Never returned' }
+        pfx_base64: { type: string, writeOnly: true, description: 'azure_dns, certificate: or both as a PFX. Never returned' }
+        pfx_password: { type: string, writeOnly: true }
+        secret_access_key: { type: string, maxLength: 1024, writeOnly: true, description: 'route53: never returned' }
     ACMEHook:
       type: object
-      required: [id, name, url, ca_bundle_pem, secret_configured, allowed_suffixes, propagation_wait_seconds, poll_timeout_seconds,
-        created_at, updated_at]
+      required: [id, kind, settings, name, url, ca_bundle_pem, secret_configured, allowed_suffixes, propagation_wait_seconds,
+        poll_timeout_seconds, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
+        kind: { type: string, enum: [webhook, cloudflare, azure_dns, route53] }
+        settings: { $ref: "#/components/schemas/ACMEDNSSettings" }
         name: { type: string }
         url: { type: string }
         ca_bundle_pem: { type: string }
@@ -6787,6 +6832,22 @@ components:
         poll_timeout_seconds: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ACMEDNSSettings:
+      type: object
+      description: A built-in DNS provider's settings (R57); every field is empty for a hook. No credential is ever returned.
+      required: [auth, tenant_id, client_id, subscription_id, resource_group, cert_thumbprint, cert_not_after, access_key_id, role_arn,
+        external_id]
+      properties:
+        auth: { type: string }
+        tenant_id: { type: string }
+        client_id: { type: string }
+        subscription_id: { type: string }
+        resource_group: { type: string }
+        cert_thumbprint: { type: string, description: 'azure_dns, certificate: the SHA-1 thumbprint of the sign-in certificate' }
+        cert_not_after: { type: [string, "null"], format: date-time }
+        access_key_id: { type: string }
+        role_arn: { type: string }
+        external_id: { type: string }
     ACMEHookList:
       type: object
       required: [items]

@@ -459,7 +459,11 @@ func (s *server) deactivateACMEAccount(w http.ResponseWriter, r *http.Request) {
 
 // --- hooks ---
 
+// acmeHookBody is a DNS publisher's body (R57): the hook's fields, and the flat settings and write-only credentials of
+// a built-in DNS provider (the names of the Key Vault credential's for Azure). The secret fields are secretText: slices
+// the handler owns and zeroes on every path.
 type acmeHookBody struct {
+	Kind                   *string    `json:"kind"`
 	Name                   *string    `json:"name"`
 	URL                    *string    `json:"url"`
 	CABundlePEM            *string    `json:"ca_bundle_pem"`
@@ -467,9 +471,57 @@ type acmeHookBody struct {
 	AllowedSuffixes        *[]string  `json:"allowed_suffixes"`
 	PropagationWaitSeconds *int       `json:"propagation_wait_seconds"`
 	PollTimeoutSeconds     *int       `json:"poll_timeout_seconds"`
+	// Built-in DNS providers: settings.
+	Auth           *string `json:"auth"`
+	TenantID       *string `json:"tenant_id"`
+	ClientID       *string `json:"client_id"`
+	SubscriptionID *string `json:"subscription_id"`
+	ResourceGroup  *string `json:"resource_group"`
+	AccessKeyID    *string `json:"access_key_id"`
+	RoleARN        *string `json:"role_arn"`
+	ExternalID     *string `json:"external_id"`
+	// Built-in DNS providers: credentials (write-only).
+	APIToken        secretText `json:"api_token"`
+	ClientSecret    secretText `json:"client_secret"`
+	CertificatePEM  secretText `json:"certificate_pem"`
+	PrivateKeyPEM   secretText `json:"private_key_pem"`
+	PFXBase64       secretText `json:"pfx_base64"`
+	PFXPassword     secretText `json:"pfx_password"`
+	SecretAccessKey secretText `json:"secret_access_key"`
+	pfx             []byte     // PFXBase64 decoded
 }
 
-var acmeHookKeys = []string{"name", "url", "ca_bundle_pem", "secret", "allowed_suffixes", "propagation_wait_seconds", "poll_timeout_seconds"}
+// zero clears every secret slice of the body. Safe to call more than once.
+func (b *acmeHookBody) zero() {
+	for _, t := range []secretText{b.Secret, b.APIToken, b.ClientSecret, b.CertificatePEM, b.PrivateKeyPEM, b.PFXBase64, b.PFXPassword, b.SecretAccessKey} {
+		t.zero()
+	}
+	clear(b.pfx)
+}
+
+// acmeHookSettingKeys are the provider settings of a body; acmeHookCredentialKeys its credentials.
+var (
+	acmeHookSettingKeys    = []string{"auth", "tenant_id", "client_id", "subscription_id", "resource_group", "access_key_id", "role_arn", "external_id"}
+	acmeHookCredentialKeys = []string{"api_token", "client_secret", "certificate_pem", "private_key_pem", "pfx_base64", "pfx_password", "secret_access_key"}
+	acmeHookPatchKeys      = append(append([]string{"name", "url", "ca_bundle_pem", "secret", "allowed_suffixes", "propagation_wait_seconds",
+		"poll_timeout_seconds"}, acmeHookSettingKeys...), acmeHookCredentialKeys...)
+	// The kind is chosen when a publisher is added and never changes: a PATCH that names it is refused.
+	acmeHookKeys = append([]string{"kind"}, acmeHookPatchKeys...)
+)
+
+// Credential caps: a Cloudflare token, an Azure client secret, an AWS secret access key; the certificate fields as the
+// Key Vault credential's (the body cap bounds them).
+const (
+	maxACMEDNSTokenLen = 256
+	maxACMEDNSSecret   = 1024
+)
+
+func (b *acmeHookBody) kind() string {
+	if b.Kind == nil {
+		return inventory.ACMEHookKindWebhook
+	}
+	return *b.Kind
+}
 
 func (b *acmeHookBody) check(create bool, v *validate.Errors) {
 	if create && b.Name == nil {
@@ -478,13 +530,14 @@ func (b *acmeHookBody) check(create bool, v *validate.Errors) {
 	if b.Name != nil {
 		checkMaxRunes("name", *b.Name, maxACMEFieldRunes, v)
 	}
-	if b.URL != nil || create {
+	webhook := b.kind() == inventory.ACMEHookKindWebhook
+	if webhook && (b.URL != nil || create) {
 		checkHTTPSURL("url", deref(b.URL), v)
 	}
 	if b.CABundlePEM != nil {
 		checkMaxBytes("ca_bundle_pem", *b.CABundlePEM, maxACMEBundleBytes, v)
 	}
-	if create && len(b.Secret) == 0 {
+	if webhook && create && len(b.Secret) == 0 {
 		v.Add("secret", validate.Required, nil)
 	}
 	if len(b.Secret) > maxACMEHookSecretLen {
@@ -493,6 +546,62 @@ func (b *acmeHookBody) check(create bool, v *validate.Errors) {
 	if b.AllowedSuffixes != nil {
 		checkSuffixes("allowed_suffixes", *b.AllowedSuffixes, v)
 	}
+	for _, f := range []struct {
+		field string
+		val   *string
+	}{{"auth", b.Auth}, {"tenant_id", b.TenantID}, {"client_id", b.ClientID}, {"subscription_id", b.SubscriptionID},
+		{"resource_group", b.ResourceGroup}, {"access_key_id", b.AccessKeyID}, {"role_arn", b.RoleARN}} {
+		if f.val != nil {
+			checkMaxBytes(f.field, *f.val, maxACMEURLBytes, v)
+		}
+	}
+	if b.ExternalID != nil {
+		checkMaxBytes("external_id", *b.ExternalID, maxACMEBundleBytes, v)
+	}
+	if len(b.APIToken) > maxACMEDNSTokenLen {
+		v.Add("api_token", validate.TooLong, map[string]string{"max": strconv.Itoa(maxACMEDNSTokenLen)})
+	}
+	for field, t := range map[string]secretText{"client_secret": b.ClientSecret, "secret_access_key": b.SecretAccessKey} {
+		if len(t) > maxACMEDNSSecret {
+			v.Add(field, validate.TooLong, map[string]string{"max": strconv.Itoa(maxACMEDNSSecret)})
+		}
+	}
+}
+
+// settings is the body's provider settings (nil when it names none).
+func (b *acmeHookBody) settings() *inventory.ACMEDNSSettings {
+	var st inventory.ACMEDNSSettings
+	given := false
+	for _, f := range []struct {
+		dst *string
+		val *string
+	}{{&st.Auth, b.Auth}, {&st.TenantID, b.TenantID}, {&st.ClientID, b.ClientID}, {&st.SubscriptionID, b.SubscriptionID},
+		{&st.ResourceGroup, b.ResourceGroup}, {&st.AccessKeyID, b.AccessKeyID}, {&st.RoleARN, b.RoleARN}, {&st.ExternalID, b.ExternalID}} {
+		if f.val != nil {
+			*f.dst, given = *f.val, true
+		}
+	}
+	if !given {
+		return nil
+	}
+	return &st
+}
+
+// credentials is the body's provider credentials (the handler's own slices; the PFX decoded into b.pfx).
+func (b *acmeHookBody) credentials(v *validate.Errors) inventory.ACMEDNSCredentials {
+	c := inventory.ACMEDNSCredentials{APIToken: secrets.NewPlaintext(b.APIToken), ClientSecret: secrets.NewPlaintext(b.ClientSecret),
+		SecretAccessKey: secrets.NewPlaintext(b.SecretAccessKey)}
+	c.Certificate.CertificatePEM, c.Certificate.PrivateKeyPEM = b.CertificatePEM, b.PrivateKeyPEM
+	if len(b.PFXBase64) > 0 {
+		pfx, ok := decodeBase64Secret(b.PFXBase64)
+		if !ok {
+			v.Add("pfx_base64", validate.Pattern, nil)
+		}
+		b.pfx = pfx
+		c.Certificate.PFX = pfx
+	}
+	c.Certificate.PFXPassword = string(b.PFXPassword) // a Go string: it cannot be cleared (as the vault credential's)
+	return c
 }
 
 func (s *server) listACMEHooks(w http.ResponseWriter, r *http.Request) {
@@ -510,18 +619,22 @@ func (s *server) listACMEHooks(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createACMEHook(w http.ResponseWriter, r *http.Request) {
 	var req acmeHookBody
-	defer func() { req.Secret.zero() }() // the slice the decoder fills, not the nil one of now
+	defer req.zero() // the slices the decoder fills
 	if !s.decodeExact(w, r, &req, maxACMEHookBody, acmeHookKeys...) {
 		return
 	}
 	var v validate.Errors
 	req.check(true, &v)
+	cred := req.credentials(&v)
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	in := inventory.ACMEHookInput{Name: deref(req.Name), URL: deref(req.URL), CABundlePEM: deref(req.CABundlePEM),
-		Secret: secrets.NewPlaintext(req.Secret), PropagationWaitSeconds: req.PropagationWaitSeconds}
+	in := inventory.ACMEHookInput{Kind: req.kind(), Name: deref(req.Name), URL: deref(req.URL), CABundlePEM: deref(req.CABundlePEM),
+		Secret: secrets.NewPlaintext(req.Secret), PropagationWaitSeconds: req.PropagationWaitSeconds, Credentials: cred}
+	if st := req.settings(); st != nil {
+		in.Settings = *st
+	}
 	if req.AllowedSuffixes != nil {
 		in.AllowedSuffixes = *req.AllowedSuffixes
 	}
@@ -529,7 +642,7 @@ func (s *server) createACMEHook(w http.ResponseWriter, r *http.Request) {
 		in.PollTimeoutSeconds = *req.PollTimeoutSeconds
 	}
 	h, err := s.deps.ACME.CreateACMEHook(r.Context(), s.actor(r), in)
-	req.Secret.zero()
+	req.zero()
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -559,12 +672,13 @@ func (s *server) updateACMEHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req acmeHookBody
-	defer func() { req.Secret.zero() }() // the slice the decoder fills, not the nil one of now
-	if !s.decodeExact(w, r, &req, maxACMEHookBody, acmeHookKeys...) {
+	defer req.zero() // the slices the decoder fills
+	if !s.decodeExact(w, r, &req, maxACMEHookBody, acmeHookPatchKeys...) {
 		return
 	}
 	var v validate.Errors
 	req.check(false, &v)
+	cred := req.credentials(&v)
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
@@ -575,8 +689,8 @@ func (s *server) updateACMEHook(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := s.deps.ACME.UpdateACMEHook(r.Context(), s.actor(r), id, inventory.ACMEHookPatch{Name: req.Name, URL: req.URL, CABundlePEM: req.CABundlePEM,
 		Secret: secret, AllowedSuffixes: req.AllowedSuffixes, PropagationWaitSeconds: req.PropagationWaitSeconds,
-		PollTimeoutSeconds: req.PollTimeoutSeconds})
-	req.Secret.zero()
+		PollTimeoutSeconds: req.PollTimeoutSeconds, Settings: req.settings(), Credentials: cred})
+	req.zero()
 	if err != nil {
 		s.fail(w, r, err)
 		return
