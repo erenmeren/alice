@@ -360,6 +360,8 @@ INSERT INTO user_directory_groups (user_id, value, seen_at)
 VALUES ('b1000000-0000-4000-8000-000000000002', 'CN=Payments,DC=example,DC=test', now());
 INSERT INTO role_bindings (id, directory_group_id, role, service_id, created_at)
 VALUES ('e2000000-0000-4000-8000-000000000004', 'e2000000-0000-4000-8000-000000000003', 'operator', 'e2000000-0000-4000-8000-000000000001', now());
+INSERT INTO role_bindings (id, user_id, role, environment_id, created_at)
+VALUES ('e2000000-0000-4000-8000-000000000006', 'b1000000-0000-4000-8000-000000000002', 'auditor', (SELECT id FROM environments WHERE key = 'staging'), now());
 INSERT INTO service_owners (id, service_id, directory_group_id, created_at)
 VALUES ('e2000000-0000-4000-8000-000000000005', 'e2000000-0000-4000-8000-000000000001', 'e2000000-0000-4000-8000-000000000003', now());`)
 	require.NoError(t, err)
