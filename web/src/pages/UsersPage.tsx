@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Button, NativeSelect, PasswordInput, Stack, Table, Text, TextInput, VisuallyHidden } from '@mantine/core';
+import { Button, NativeSelect, PasswordInput, Stack, Table, Tabs, Text, TextInput, VisuallyHidden } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listProviders } from '../api/sso';
@@ -24,10 +24,18 @@ import { initials } from '../initials';
 import { AppModal } from '../components/AppModal';
 import { roleLabel } from '../components/access/shared';
 import { UserAccess } from '../components/access/UserAccess';
+import { AutomationTab } from '../components/access/AutomationTab';
+import { GroupsTab } from '../components/access/GroupsTab';
+import { useUrlFilters } from '../hooks/useUrlFilters';
 import classes from './People.module.css';
 
 const ROLES: Role[] = ['admin', 'operator', 'auditor'];
 const ROLE_ICON: Record<Role, IconName> = { admin: 'ShieldCheck', operator: 'Settings2', auditor: 'Eye' };
+// The tabs of People & access (R54): people, the directory groups role bindings name, and the automation accounts. The
+// tab is in the address (?tab=), so a link opens it.
+const TABS = ['people', 'groups', 'automation'] as const;
+type Tab = (typeof TABS)[number];
+const TAB_KEYS = ['tab'] as const;
 
 type Dialog =
   | { kind: 'create' }
@@ -54,6 +62,8 @@ export function UsersPage() {
   const directories = useQuery({ queryKey: LDAP_DIRECTORIES_KEY, queryFn: listDirectories, enabled: hasDirectory, retry: false });
   const directoryName = (id: string | null) => directories.data?.items.find((d) => d.id === id)?.name;
   const close = () => setDialog(null);
+  const [filters, setFilters] = useUrlFilters(TAB_KEYS);
+  const tab: Tab = (TABS as readonly string[]).includes(filters.tab) ? (filters.tab as Tab) : 'people';
 
   return (
     <Stack gap={0}>
@@ -61,92 +71,111 @@ export function UsersPage() {
         title={t('users.title')}
         description={t('users.page.description')}
         actions={
-          <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'create' })}>
-            {t('users.add')}
-          </Button>
+          tab === 'people' && (
+            <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'create' })}>
+              {t('users.add')}
+            </Button>
+          )
         }
       />
-      <div role="group" aria-label={t('users.page.roles')} className={classes.roleCards}>
-        {ROLES.map((r) => (
-          <div key={r} className={classes.roleCard}>
-            <div className={classes.roleHead}>
-              <h2 className={classes.roleName}>{t(`enum.role.${r}`)}</h2>
-              <Icon name={ROLE_ICON[r]} size={17} />
-            </div>
-            <p className={classes.roleText}>{t(`users.page.${r}`)}</p>
-          </div>
-        ))}
-      </div>
-      {users.isError && <ErrorAlert error={users.error} />}
-      {users.isSuccess && (
-        <ResourceTable label={t('users.page.table')} minWidth={760}>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t('users.page.person')}</Table.Th>
-              <Table.Th>{t('users.columns.role')}</Table.Th>
-              <Table.Th>{t('users.page.signIn')}</Table.Th>
-              <Table.Th>{t('users.columns.status')}</Table.Th>
-              <Table.Th>{t('users.columns.lastLogin')}</Table.Th>
-              <Table.Th>
-                <VisuallyHidden>{t('users.columns.actions')}</VisuallyHidden>
-              </Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {users.data.items.map((u) => (
-              <Table.Tr key={u.id}>
-                <Table.Td>
-                  <div className={classes.person}>
-                    <span className={classes.avatar} aria-hidden="true">
-                      {initials(u.display_name, i18n.language)}
-                    </span>
-                    <div>
-                      <p className={classes.name}>{u.display_name}</p>
-                      <p className={classes.secondary}>
-                        <span className={classes.mono} translate="no">
-                          {u.username}
-                        </span>
-                        {u.email && <span translate="no">{u.email}</span>}
-                      </p>
-                    </div>
-                  </div>
-                </Table.Td>
-                <Table.Td>
-                  <span className={classes.userRole}>{roleLabel(t, u.role)}</span>
-                </Table.Td>
-                <Table.Td>
-                  <SignInMethod user={u} provider={u.auth_source === 'ldap' ? directoryName(u.ldap_directory_id) : providerName(u.sso_provider_id)} />
-                </Table.Td>
-                <Table.Td>
-                  <StatusBadge tone={u.disabled ? 'neutral' : 'success'}>{u.disabled ? t('users.status.disabled') : t('users.status.active')}</StatusBadge>
-                  {u.directory_sign_in_locked_until && (
-                    <div className={classes.method}>
-                      <StatusBadge tone="warning" icon="LockKeyhole">
-                        {t('users.status.directoryLocked')}
-                      </StatusBadge>
-                      <p className={classes.secondary}>
-                        {t('users.status.directoryLockedUntil', { time: formatDateTime(u.directory_sign_in_locked_until, i18n.language) })}
-                      </p>
-                    </div>
-                  )}
-                </Table.Td>
-                <Table.Td className={classes.time}>{u.last_login_at ? formatDateTime(u.last_login_at, i18n.language) : t('users.never')}</Table.Td>
-                <Table.Td>
-                  <Button
-                    size="xs"
-                    variant="default"
-                    leftSection={<Icon name="Settings2" size={14} />}
-                    onClick={() => setDialog({ kind: 'manage', user: u })}
-                    aria-label={t('users.manageNamed', { name: u.username })}
-                  >
-                    {t('users.manage')}
-                  </Button>
-                </Table.Td>
-              </Table.Tr>
+      <Tabs value={tab} onChange={(v) => v && setFilters({ tab: v === 'people' ? '' : v })} keepMounted={false}>
+        <Tabs.List aria-label={t('users.tabsLabel')} mb="md">
+          {TABS.map((x) => (
+            <Tabs.Tab key={x} value={x}>
+              {t(`users.tabs.${x}`)}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+        <Tabs.Panel value="groups">
+          <GroupsTab />
+        </Tabs.Panel>
+        <Tabs.Panel value="automation">
+          <AutomationTab />
+        </Tabs.Panel>
+        <Tabs.Panel value="people">
+          <div role="group" aria-label={t('users.page.roles')} className={classes.roleCards}>
+            {ROLES.map((r) => (
+              <div key={r} className={classes.roleCard}>
+                <div className={classes.roleHead}>
+                  <h2 className={classes.roleName}>{t(`enum.role.${r}`)}</h2>
+                  <Icon name={ROLE_ICON[r]} size={17} />
+                </div>
+                <p className={classes.roleText}>{t(`users.page.${r}`)}</p>
+              </div>
             ))}
-          </Table.Tbody>
-        </ResourceTable>
-      )}
+          </div>
+          {users.isError && <ErrorAlert error={users.error} />}
+          {users.isSuccess && (
+            <ResourceTable label={t('users.page.table')} minWidth={760}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t('users.page.person')}</Table.Th>
+                  <Table.Th>{t('users.columns.role')}</Table.Th>
+                  <Table.Th>{t('users.page.signIn')}</Table.Th>
+                  <Table.Th>{t('users.columns.status')}</Table.Th>
+                  <Table.Th>{t('users.columns.lastLogin')}</Table.Th>
+                  <Table.Th>
+                    <VisuallyHidden>{t('users.columns.actions')}</VisuallyHidden>
+                  </Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {users.data.items.map((u) => (
+                  <Table.Tr key={u.id}>
+                    <Table.Td>
+                      <div className={classes.person}>
+                        <span className={classes.avatar} aria-hidden="true">
+                          {initials(u.display_name, i18n.language)}
+                        </span>
+                        <div>
+                          <p className={classes.name}>{u.display_name}</p>
+                          <p className={classes.secondary}>
+                            <span className={classes.mono} translate="no">
+                              {u.username}
+                            </span>
+                            {u.email && <span translate="no">{u.email}</span>}
+                          </p>
+                        </div>
+                      </div>
+                    </Table.Td>
+                    <Table.Td>
+                      <span className={classes.userRole}>{roleLabel(t, u.role)}</span>
+                    </Table.Td>
+                    <Table.Td>
+                      <SignInMethod user={u} provider={u.auth_source === 'ldap' ? directoryName(u.ldap_directory_id) : providerName(u.sso_provider_id)} />
+                    </Table.Td>
+                    <Table.Td>
+                      <StatusBadge tone={u.disabled ? 'neutral' : 'success'}>{u.disabled ? t('users.status.disabled') : t('users.status.active')}</StatusBadge>
+                      {u.directory_sign_in_locked_until && (
+                        <div className={classes.method}>
+                          <StatusBadge tone="warning" icon="LockKeyhole">
+                            {t('users.status.directoryLocked')}
+                          </StatusBadge>
+                          <p className={classes.secondary}>
+                            {t('users.status.directoryLockedUntil', { time: formatDateTime(u.directory_sign_in_locked_until, i18n.language) })}
+                          </p>
+                        </div>
+                      )}
+                    </Table.Td>
+                    <Table.Td className={classes.time}>{u.last_login_at ? formatDateTime(u.last_login_at, i18n.language) : t('users.never')}</Table.Td>
+                    <Table.Td>
+                      <Button
+                        size="xs"
+                        variant="default"
+                        leftSection={<Icon name="Settings2" size={14} />}
+                        onClick={() => setDialog({ kind: 'manage', user: u })}
+                        aria-label={t('users.manageNamed', { name: u.username })}
+                      >
+                        {t('users.manage')}
+                      </Button>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </ResourceTable>
+          )}
+        </Tabs.Panel>
+      </Tabs>
       {dialog?.kind === 'create' && <CreateUserModal onClose={close} />}
       {dialog?.kind === 'manage' && <ManageModal user={dialog.user} onChoose={setDialog} onClose={close} />}
       {dialog?.kind === 'edit' && <EditUserModal user={dialog.user} onClose={close} />}

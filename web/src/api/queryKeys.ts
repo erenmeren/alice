@@ -126,3 +126,8 @@ export const ENVIRONMENTS_KEY = ['environments'] as const;
 export const ACCESS_KEY = ['access'] as const;
 export const roleBindingsKey = (filter: Record<string, string>) => ['access', 'bindings', filter] as const;
 export const userAccessKey = (userId: string) => ['access', 'user', userId] as const;
+// Directory groups and automation accounts (R54), under ACCESS_KEY: a change to a group, an account or a binding reads
+// them all again.
+export const DIRECTORY_GROUPS_KEY = ['access', 'groups'] as const;
+export const AUTOMATION_KEY = ['access', 'automation'] as const;
+export const automationTokensKey = (id: string) => ['access', 'automation', id, 'tokens'] as const;

@@ -166,6 +166,8 @@ export interface ApiToken {
   name: string;
   prefix: string;
   scope: TokenScope;
+  // The services the token is limited to (R54); null: its owner's whole reach.
+  service_ids?: string[] | null;
   expires_at: string;
   last_used_at: string | null;
   created_at: string;
@@ -175,6 +177,8 @@ export interface TokenCreateRequest {
   name: string;
   scope: TokenScope;
   expires_in_days: number;
+  // Limit the token to these services (each one its owner holds a role on); absent: no limit.
+  service_ids?: string[];
 }
 
 export interface CreatedToken {

@@ -12,6 +12,7 @@ import { DialogActions, EmptyState, Notice, PageHeader, Panel, ResourceTable, St
 import { formatDateTime } from '../datetime';
 import { Icon } from '../design/Icon';
 import { AppModal } from '../components/AppModal';
+import { ServiceLimitSelect, TokenLimit } from '../components/access/ServiceLimit';
 import classes from './People.module.css';
 
 export function TokensPage() {
@@ -83,6 +84,7 @@ export function TokensPage() {
               <Table.Th>{t('tokens.columns.name')}</Table.Th>
               <Table.Th>{t('tokens.columns.prefix')}</Table.Th>
               <Table.Th>{t('tokens.columns.access')}</Table.Th>
+              <Table.Th>{t('tokens.columns.services')}</Table.Th>
               <Table.Th>{t('tokens.columns.expires')}</Table.Th>
               <Table.Th>{t('tokens.columns.lastUsed')}</Table.Th>
               <Table.Th>
@@ -105,6 +107,9 @@ export function TokensPage() {
                   <StatusBadge tone={tok.scope === 'operate' ? 'info' : 'neutral'} icon={tok.scope === 'operate' ? 'Settings2' : 'Eye'}>
                     {t(`tokens.scope.${tok.scope}`)}
                   </StatusBadge>
+                </Table.Td>
+                <Table.Td>
+                  <TokenLimit token={tok} />
                 </Table.Td>
                 <Table.Td className={classes.time}>{formatDateTime(tok.expires_at, i18n.language)}</Table.Td>
                 <Table.Td className={classes.time}>{tok.last_used_at ? formatDateTime(tok.last_used_at, i18n.language) : t('tokens.never')}</Table.Td>
@@ -159,6 +164,7 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [name, setName] = useState('');
   const [scope, setScope] = useState<TokenScope>('read');
   const [days, setDays] = useState<number | string>(90);
+  const [limit, setLimit] = useState<string[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
@@ -167,7 +173,8 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
     setBusy(true);
     setError(null);
     try {
-      const res = await run(() => createToken({ name, scope, expires_in_days: Number(days) }));
+      // No service chosen is no limit: service_ids is left out (the server refuses an empty list).
+      const res = await run(() => createToken({ name, scope, expires_in_days: Number(days), ...(limit.length > 0 ? { service_ids: limit } : {}) }));
       onCreated(res.token);
     } catch (err) {
       setError(err);
@@ -196,6 +203,7 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
             allowDecimal={false}
             required
           />
+          <ServiceLimitSelect value={limit} onChange={setLimit} />
           <ErrorAlert error={error} />
           <DialogActions>
             <Button type="submit" loading={busy}>

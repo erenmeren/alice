@@ -9,12 +9,14 @@ import { useAuth } from '../../auth/AuthProvider';
 import { canPlatform } from '../../auth/permissions';
 import { ErrorAlert } from '../ErrorAlert';
 import { Notice, Panel } from '../ui';
-import { AddBinding, BindingsList, roleLabel } from './shared';
+import { AddBinding, BindingsList, roleLabel, whereText } from './shared';
 
 // UserAccess is a person's Access section in People & access (design §9): the global role as the first row ("All
 // services"), then their roles on single services and on every service of an environment, Add and Remove for a person
-// who manages access (a fresh step-up), and Explain: what it all adds up to (GET /users/{id}/access).
-export function UserAccess({ user }: { user: User }) {
+// who manages access (a fresh step-up), and Explain: what it all adds up to (GET /users/{id}/access). An SSO or
+// directory user also shows, read-only, the roles their directory groups give them (R54); an automation account uses the
+// same section (its role on all services is never Administrator).
+export function UserAccess({ user }: { user: Pick<User, 'id' | 'role'> & { auth_source?: User['auth_source'] | 'automation' } }) {
   const { t } = useTranslation();
   const { session } = useAuth();
   const canManage = canPlatform(session, 'access.manage');
@@ -36,6 +38,7 @@ export function UserAccess({ user }: { user: User }) {
       {bindings.isPending && <Loader size="xs" aria-label={t('ui.loading')} />}
       {bindings.data && <BindingsList bindings={bindings.data.items} canManage={canManage} emptyText={t('access.empty')} testId="user-bindings" />}
       {canManage && <AddBinding userId={user.id} />}
+      {(user.auth_source === 'oidc' || user.auth_source === 'ldap') && <GroupRights userId={user.id} />}
       <Group>
         <Button variant="default" size="xs" aria-expanded={explaining} onClick={() => setExplaining((x) => !x)}>
           {explaining ? t('access.explain.hide') : t('access.explain.button')}
@@ -43,6 +46,30 @@ export function UserAccess({ user }: { user: User }) {
       </Group>
       {explaining && <Explain userId={user.id} />}
     </Stack>
+  );
+}
+
+// GroupRights are the roles a person holds through the directory groups seen at their last sign-in: read-only here,
+// changed on the Groups tab.
+function GroupRights({ userId }: { userId: string }) {
+  const { t } = useTranslation();
+  const access = useQuery({ queryKey: userAccessKey(userId), queryFn: ({ signal }) => getUserAccess(userId, signal) });
+  const rows = access.data?.group_bindings ?? [];
+  return (
+    <Panel title={t('access.groupRights.title')} description={t('access.groupRights.intro')} headingOrder={3} testId="group-rights">
+      <ErrorAlert error={access.error} />
+      {access.isPending && <Loader size="xs" aria-label={t('ui.loading')} />}
+      {access.data && rows.length === 0 && <Text size="sm">{t('access.groupRights.none')}</Text>}
+      {rows.length > 0 && (
+        <List size="sm" spacing={4}>
+          {rows.map((b) => (
+            <List.Item key={b.id} data-testid="group-right">
+              {t('access.groupRights.row', { group: b.group?.label || b.group?.value || '', role: roleLabel(t, b.role), where: whereText(t, b) })}
+            </List.Item>
+          ))}
+        </List>
+      )}
+    </Panel>
   );
 }
 

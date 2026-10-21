@@ -131,9 +131,9 @@ export function BindingsList({ bindings, showPerson, canManage, emptyText, testI
   return <BindingsTable bindings={bindings} showPerson={showPerson} canManage={canManage} testId={testId} />;
 }
 
-// AddBinding adds a role binding with a fresh step-up: for one person (pick the role and a service or an environment) or
-// on one service (pick the person and the role).
-export function AddBinding({ userId, serviceId }: { userId?: string; serviceId?: string }) {
+// AddBinding adds a role binding with a fresh step-up: for one person or automation account (userId), or one directory
+// group (groupId, R54): pick the role and a service or an environment; or on one service (pick the person and the role).
+export function AddBinding({ userId, groupId, serviceId }: { userId?: string; groupId?: string; serviceId?: string }) {
   const { t, i18n } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
@@ -142,14 +142,15 @@ export function AddBinding({ userId, serviceId }: { userId?: string; serviceId?:
   const [person, setPerson] = useState('');
   const services = useQuery({ queryKey: SERVICE_LIST_KEY, queryFn: ({ signal }) => listServices(signal), enabled: !serviceId });
   const environments = useQuery({ queryKey: ENVIRONMENTS_KEY, queryFn: ({ signal }) => listEnvironments(signal), enabled: !serviceId });
-  const users = useQuery({ queryKey: ['users'], queryFn: listUsers, enabled: !userId });
+  const subjectGiven = Boolean(userId ?? groupId);
+  const users = useQuery({ queryKey: ['users'], queryFn: listUsers, enabled: !subjectGiven });
   const add = useMutation({
     mutationFn: () => {
-      const subject = userId ?? person;
+      const subject = groupId ? { directory_group_id: groupId } : { user_id: userId ?? person };
       let body: RoleBindingCreate;
-      if (serviceId) body = { user_id: subject, role, service_id: serviceId };
-      else if (where.startsWith('e:')) body = { user_id: subject, role, environment_id: where.slice(2) };
-      else body = { user_id: subject, role, service_id: where.slice(2) };
+      if (serviceId) body = { ...subject, role, service_id: serviceId };
+      else if (where.startsWith('e:')) body = { ...subject, role, environment_id: where.slice(2) };
+      else body = { ...subject, role, service_id: where.slice(2) };
       return run(() => createRoleBinding(body));
     },
     onSuccess: async () => {
@@ -158,13 +159,13 @@ export function AddBinding({ userId, serviceId }: { userId?: string; serviceId?:
       await client.invalidateQueries({ queryKey: ACCESS_KEY });
     },
   });
-  const ready = (userId ? true : person !== '') && (serviceId ? true : where !== '');
+  const ready = (subjectGiven ? true : person !== '') && (serviceId ? true : where !== '');
   const sorted = (users.data?.items ?? []).slice().sort((a, b) => a.display_name.localeCompare(b.display_name, i18n.language));
   return (
     <Panel title={t('access.add.title')} description={t('access.add.stepUp')} headingOrder={3}>
       <Stack gap="sm">
         <Group align="flex-end">
-          {!userId && (
+          {!subjectGiven && (
             <NativeSelect
               label={t('access.add.person')}
               value={person}

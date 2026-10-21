@@ -409,7 +409,13 @@
       "mfaEnrolled": "Authenticator app set up",
       "mfaPending": "Authenticator app not set up yet"
     },
-    "directory": "Directory"
+    "directory": "Directory",
+    "tabsLabel": "People & access sections",
+    "tabs": {
+      "people": "People",
+      "groups": "Groups",
+      "automation": "Automation accounts"
+    }
   },
   "tokens": {
     "title": "API tokens",
@@ -436,12 +442,15 @@
       "access": "Access",
       "expires": "Expires",
       "lastUsed": "Last used",
-      "actions": "Actions"
+      "actions": "Actions",
+      "services": "Services"
     },
     "fields": {
       "name": "Name",
       "access": "Access",
-      "days": "Valid for (days)"
+      "days": "Valid for (days)",
+      "limit": "Limit to services",
+      "limitHelp": "Leave empty for every service you reach. A limited token never opens People & access, Settings or the other platform pages."
     },
     "scope": {
       "read": "Read only",
@@ -453,7 +462,8 @@
       "boundText": "An auditor can create read-only tokens. Sensitive actions that need the browser, such as downloading a private key, are not possible with a token.",
       "table": "Your API tokens"
     },
-    "directoryNoCreate": "You sign in through a directory, so you cannot create API tokens. Ask an Administrator if a script needs one."
+    "directoryNoCreate": "You sign in through a directory, so you cannot create API tokens. Ask an Administrator if a script needs one.",
+    "allMyServices": "All my services"
   },
   "audit": {
     "page": {
@@ -765,7 +775,12 @@
       "access_binding_removed": "Access removed",
       "service_policy_changed": "Service policy changed",
       "acme_auto_deploy_forbidden": "Certificate from a certificate authority (ACME) not deployed automatically: its service's policy forbids it",
-      "kv_auto_deploy_forbidden": "Vault certificate not deployed automatically: its service's policy forbids it"
+      "kv_auto_deploy_forbidden": "Vault certificate not deployed automatically: its service's policy forbids it",
+      "automation_created": "Automation account created",
+      "automation_updated": "Automation account changed",
+      "access_directory_group_added": "Directory group added",
+      "access_directory_group_removed": "Directory group removed",
+      "user_groups_truncated": "Only the first 1000 groups of a sign-in were kept"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -4584,6 +4599,94 @@
       "noneDirect": "Nobody has a role on this service alone.",
       "noneThrough": "Nobody has a role through the environment.",
       "adminOnly": "Only Administrators of all services see who has access."
+    },
+    "groupRights": {
+      "title": "Rights through groups",
+      "intro": "Roles this person holds through the directory groups they were in at their last sign-in. Change them on the Groups tab.",
+      "none": "No role through a directory group.",
+      "row": "{{group}}: {{role}} on {{where}}"
     }
+  },
+  "groups": {
+    "introTitle": "Directory groups",
+    "intro": "Give a group of an identity provider or a directory a role on services or environments. Its members reach them from their next sign-in, even without a group mapped to a role on all services.",
+    "add": "Add group",
+    "empty": "No directory group yet.",
+    "table": "Directory groups",
+    "columns": {
+      "group": "Group",
+      "source": "From",
+      "members": "Members seen",
+      "bindings": "Roles",
+      "actions": "Actions"
+    },
+    "source": {
+      "oidc": "Single sign-on",
+      "ldap": "Directory"
+    },
+    "membersCount_one": "{{count}} person",
+    "membersCount_other": "{{count}} people",
+    "access": "Roles",
+    "accessNamed": "Roles of {{name}}",
+    "delete": "Remove",
+    "deleteNamed": "Remove {{name}}",
+    "fields": {
+      "from": "Identity provider or directory",
+      "pickFrom": "Choose one",
+      "seen": "Seen at sign-in",
+      "seenHelp": "Group values people of this provider or directory had at their last sign-in.",
+      "pickSeen": "Choose a value",
+      "value": "Group value",
+      "valueHelp": "Exactly as the groups claim or the group search returns it; upper and lower case count.",
+      "label": "Label (optional)"
+    },
+    "seenOption_one": "{{value}} ({{count}} person)",
+    "seenOption_other": "{{value}} ({{count}} people)",
+    "submit": "Add group",
+    "accessTitle": "Roles of {{name}}",
+    "accessIntro": "Every member of this group holds these roles from their next sign-in.",
+    "noBindings": "This group holds no role yet.",
+    "deleteTitle": "Remove {{name}}?",
+    "deleteText_one": "The group and its {{count}} role are removed; its members lose that role at their next request.",
+    "deleteText_other": "The group and its {{count}} roles are removed; its members lose those roles at their next request.",
+    "deleted": "Removed. Role bindings removed with it: {{bindings}}; owner entries: {{owners}}."
+  },
+  "automation": {
+    "introTitle": "Automation accounts",
+    "intro": "An automation account is not a person: it never signs in and only holds API tokens, which an Administrator makes here. Its role on all services is Operator, Auditor or none; give it roles on services in its Access.",
+    "add": "Add automation account",
+    "create": "Create",
+    "empty": "No automation account yet.",
+    "table": "Automation accounts",
+    "columns": {
+      "account": "Account",
+      "role": "Role on all services",
+      "status": "Status",
+      "tokens": "Tokens",
+      "lastUsed": "Last used",
+      "actions": "Actions"
+    },
+    "tokens": "Tokens",
+    "tokensNamed": "Tokens of {{name}}",
+    "accessNamed": "Access of {{name}}",
+    "editNamed": "Edit {{name}}",
+    "enableNamed": "Enable {{name}}",
+    "disableNamed": "Disable {{name}}",
+    "editTitle": "Edit {{name}}",
+    "fields": {
+      "description": "Description",
+      "roleHelp": "Never Administrator on all services; give it the Administrator role on the services it needs instead.",
+      "displayName": "Display name"
+    },
+    "disableTitle": "Disable {{name}}?",
+    "enableTitle": "Enable {{name}}?",
+    "disableText_one": "Its {{count}} token is revoked for good; enabling the account again does not bring it back.",
+    "disableText_other": "Its {{count}} tokens are revoked for good; enabling the account again brings none back.",
+    "enableText": "The account can hold tokens again. Its old tokens stay revoked.",
+    "tokensTitle": "Tokens of {{name}}",
+    "tokensTable": "Tokens of the automation account",
+    "tokenHelp": "The token can do what the account's roles allow, and no more. Making one asks for a fresh verification code.",
+    "disabledTitle": "Disabled",
+    "disabledTokens": "A disabled automation account holds no tokens. Enable it to make one."
   }
 }

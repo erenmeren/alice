@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ApiToken, SessionInfo } from '../api/types';
-import { errorResponse, ldapSessionFor, operatorSession, sessionFor, ssoSessionFor } from '../test/fixtures';
+import { errorResponse, ldapSessionFor, operatorSession, SERVICE_ID, serviceFixture, sessionFor, ssoSessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -53,7 +53,7 @@ describe('TokensPage', () => {
     expect(bound).toHaveTextContent('Sensitive actions that need the browser, such as downloading a private key, are not possible with a token.');
     const table = await screen.findByRole('table', { name: 'Your API tokens' });
     expect(screen.getByRole('group', { name: 'Table, scrolls sideways' })).toContainElement(table);
-    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Name', 'Starts with', 'Access', 'Expires', 'Last used', 'Actions']);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Name', 'Starts with', 'Access', 'Services', 'Expires', 'Last used', 'Actions']);
     const row = within(table).getByText('backup script').closest('tr')!;
     expect(within(row).getByText('Read only').closest('.mantine-Badge-root')).not.toBeNull();
     expect(within(row).getByRole('button', { name: 'Revoke token backup script' })).toHaveTextContent('Revoke');
@@ -94,6 +94,31 @@ describe('TokensPage', () => {
     expect(body).toEqual({ name: 'deploy bot', scope: 'operate', expires_in_days: 30 });
     await userEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.queryByTestId('new-token')).not.toBeInTheDocument();
+  });
+
+  it('limits a new token to the chosen services and shows the limit in the list (R54)', async () => {
+    signedInAs(operatorSession, [token, { ...token, id: 'limited', name: 'payments deploy', service_ids: [SERVICE_ID] }]);
+    let body: unknown = null;
+    server.use(
+      http.get('/api/v1/services', () => HttpResponse.json({ items: [serviceFixture()] })),
+      http.post('/api/v1/tokens', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ token: 'alice_LIMITED', item: { ...token, service_ids: [SERVICE_ID] } }, { status: 201 });
+      }),
+    );
+    await renderRoute('/tokens');
+    const unlimited = (await screen.findByText('backup script')).closest('tr')!;
+    expect(within(unlimited).getByTestId('token-limit')).toHaveTextContent('All my services');
+    const limited = screen.getByText('payments deploy').closest('tr')!;
+    await waitFor(() => expect(within(limited).getByTestId('token-limit')).toHaveTextContent('Payments'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/^Name/), 'deploy payments');
+    await userEvent.click(await within(dialog).findByRole('checkbox', { name: 'Payments (Production)' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+    expect(await screen.findByTestId('new-token')).toHaveTextContent('alice_LIMITED');
+    expect(body).toEqual({ name: 'deploy payments', scope: 'read', expires_in_days: 90, service_ids: [SERVICE_ID] });
   });
 
   it('offers only read access to auditors, in Turkish', async () => {

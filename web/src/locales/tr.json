@@ -409,7 +409,13 @@
       "mfaEnrolled": "Doğrulama uygulaması kurulu",
       "mfaPending": "Doğrulama uygulaması henüz kurulmadı"
     },
-    "directory": "Dizin"
+    "directory": "Dizin",
+    "tabsLabel": "Kişiler ve erişim bölümleri",
+    "tabs": {
+      "people": "Kişiler",
+      "groups": "Gruplar",
+      "automation": "Otomasyon hesapları"
+    }
   },
   "tokens": {
     "title": "API anahtarları",
@@ -436,12 +442,15 @@
       "access": "Erişim",
       "expires": "Bitiş",
       "lastUsed": "Son kullanım",
-      "actions": "İşlemler"
+      "actions": "İşlemler",
+      "services": "Hizmetler"
     },
     "fields": {
       "name": "Ad",
       "access": "Erişim",
-      "days": "Geçerlilik (gün)"
+      "days": "Geçerlilik (gün)",
+      "limit": "Hizmetlerle sınırla",
+      "limitHelp": "Erişebildiğiniz tüm hizmetler için boş bırakın. Sınırlı bir anahtar Kişiler ve erişim, Ayarlar ve diğer platform sayfalarını hiçbir zaman açamaz."
     },
     "scope": {
       "read": "Salt okunur",
@@ -453,7 +462,8 @@
       "boundText": "Denetçi yalnızca okuma yetkili API anahtarı oluşturabilir. Özel anahtar indirme gibi tarayıcı gerektiren hassas işlemler API anahtarıyla yapılamaz.",
       "table": "API anahtarlarınız"
     },
-    "directoryNoCreate": "Dizin ile oturum açtığınız için API anahtarı oluşturamazsınız. Bir betik için anahtar gerekiyorsa bir Yöneticiye başvurun."
+    "directoryNoCreate": "Dizin ile oturum açtığınız için API anahtarı oluşturamazsınız. Bir betik için anahtar gerekiyorsa bir Yöneticiye başvurun.",
+    "allMyServices": "Tüm hizmetlerim"
   },
   "audit": {
     "page": {
@@ -765,7 +775,12 @@
       "access_binding_removed": "Erişim kaldırıldı",
       "service_policy_changed": "Hizmet ilkesi değiştirildi",
       "acme_auto_deploy_forbidden": "Sertifika yetkilisinden (ACME) gelen sertifika otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor",
-      "kv_auto_deploy_forbidden": "Kasa sertifikası otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor"
+      "kv_auto_deploy_forbidden": "Kasa sertifikası otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor",
+      "automation_created": "Otomasyon hesabı oluşturuldu",
+      "automation_updated": "Otomasyon hesabı değiştirildi",
+      "access_directory_group_added": "Dizin grubu eklendi",
+      "access_directory_group_removed": "Dizin grubu kaldırıldı",
+      "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -4584,6 +4599,94 @@
       "noneDirect": "Yalnızca bu hizmette rolü olan kimse yok.",
       "noneThrough": "Ortam üzerinden rolü olan kimse yok.",
       "adminOnly": "Kimin erişimi olduğunu yalnızca tüm hizmetlerin yöneticileri görür."
+    },
+    "groupRights": {
+      "title": "Gruplardan gelen haklar",
+      "intro": "Bu kişinin son oturum açışında üyesi olduğu dizin gruplarından gelen roller. Gruplar sekmesinden değiştirilir.",
+      "none": "Dizin grubundan gelen rol yok.",
+      "row": "{{group}}: {{where}} üzerinde {{role}}"
     }
+  },
+  "groups": {
+    "introTitle": "Dizin grupları",
+    "intro": "Bir kimlik sağlayıcısının ya da dizinin grubuna hizmetlerde veya ortamlarda rol verin. Üyeleri, tüm hizmetlerde role eşlenmiş bir grupları olmasa da, bir sonraki oturum açışlarından itibaren bunlara erişir.",
+    "add": "Grup ekle",
+    "empty": "Henüz dizin grubu yok.",
+    "table": "Dizin grupları",
+    "columns": {
+      "group": "Grup",
+      "source": "Kaynak",
+      "members": "Görülen üyeler",
+      "bindings": "Roller",
+      "actions": "İşlemler"
+    },
+    "source": {
+      "oidc": "Çoklu oturum açma",
+      "ldap": "Dizin"
+    },
+    "membersCount_one": "{{count}} kişi",
+    "membersCount_other": "{{count}} kişi",
+    "access": "Roller",
+    "accessNamed": "{{name}} rolleri",
+    "delete": "Kaldır",
+    "deleteNamed": "{{name}} grubunu kaldır",
+    "fields": {
+      "from": "Kimlik sağlayıcısı ya da dizin",
+      "pickFrom": "Birini seçin",
+      "seen": "Oturum açarken görülenler",
+      "seenHelp": "Bu sağlayıcının ya da dizinin kişilerinin son oturum açışlarında sahip oldukları grup değerleri.",
+      "pickSeen": "Bir değer seçin",
+      "value": "Grup değeri",
+      "valueHelp": "Grup bilgisinin ya da grup aramasının döndürdüğü şekliyle; büyük ve küçük harf fark eder.",
+      "label": "Etiket (isteğe bağlı)"
+    },
+    "seenOption_one": "{{value}} ({{count}} kişi)",
+    "seenOption_other": "{{value}} ({{count}} kişi)",
+    "submit": "Grup ekle",
+    "accessTitle": "{{name}} rolleri",
+    "accessIntro": "Bu grubun her üyesi, bir sonraki oturum açışından itibaren bu rollere sahip olur.",
+    "noBindings": "Bu grubun henüz rolü yok.",
+    "deleteTitle": "{{name}} kaldırılsın mı?",
+    "deleteText_one": "Grup ve {{count}} rolü kaldırılır; üyeleri bu rolü bir sonraki isteklerinde kaybeder.",
+    "deleteText_other": "Grup ve {{count}} rolü kaldırılır; üyeleri bu rolleri bir sonraki isteklerinde kaybeder.",
+    "deleted": "Kaldırıldı. Onunla kaldırılan rol atamaları: {{bindings}}; sorumlu kayıtları: {{owners}}."
+  },
+  "automation": {
+    "introTitle": "Otomasyon hesapları",
+    "intro": "Otomasyon hesabı bir kişi değildir: hiçbir zaman oturum açmaz, yalnızca bir Yöneticinin burada oluşturduğu API anahtarlarına sahiptir. Tüm hizmetlerdeki rolü Operatör, Denetçi ya da yoktur; hizmetlerdeki rollerini Erişim bölümünden verin.",
+    "add": "Otomasyon hesabı ekle",
+    "create": "Oluştur",
+    "empty": "Henüz otomasyon hesabı yok.",
+    "table": "Otomasyon hesapları",
+    "columns": {
+      "account": "Hesap",
+      "role": "Tüm hizmetlerdeki rol",
+      "status": "Durum",
+      "tokens": "Anahtarlar",
+      "lastUsed": "Son kullanım",
+      "actions": "İşlemler"
+    },
+    "tokens": "Anahtarlar",
+    "tokensNamed": "{{name}} anahtarları",
+    "accessNamed": "{{name}} erişimi",
+    "editNamed": "{{name}} düzenle",
+    "enableNamed": "{{name}} etkinleştir",
+    "disableNamed": "{{name}} devre dışı bırak",
+    "editTitle": "{{name}} düzenle",
+    "fields": {
+      "description": "Açıklama",
+      "roleHelp": "Tüm hizmetlerde hiçbir zaman Yönetici olamaz; bunun yerine gereken hizmetlerde Yönetici rolü verin.",
+      "displayName": "Görünen ad"
+    },
+    "disableTitle": "{{name}} devre dışı bırakılsın mı?",
+    "enableTitle": "{{name}} etkinleştirilsin mi?",
+    "disableText_one": "{{count}} anahtarı kalıcı olarak iptal edilir; hesabı yeniden etkinleştirmek onu geri getirmez.",
+    "disableText_other": "{{count}} anahtarı kalıcı olarak iptal edilir; hesabı yeniden etkinleştirmek hiçbirini geri getirmez.",
+    "enableText": "Hesap yeniden anahtar alabilir. Eski anahtarları iptal edilmiş kalır.",
+    "tokensTitle": "{{name}} anahtarları",
+    "tokensTable": "Otomasyon hesabının anahtarları",
+    "tokenHelp": "Anahtar, hesabın rollerinin izin verdiğini yapabilir, fazlasını değil. Oluşturmak yeni bir doğrulama kodu ister.",
+    "disabledTitle": "Devre dışı",
+    "disabledTokens": "Devre dışı bir otomasyon hesabının anahtarı olamaz. Anahtar oluşturmak için hesabı etkinleştirin."
   }
 }
