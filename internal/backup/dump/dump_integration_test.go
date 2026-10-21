@@ -363,7 +363,12 @@ VALUES ('e2000000-0000-4000-8000-000000000004', 'e2000000-0000-4000-8000-0000000
 INSERT INTO role_bindings (id, user_id, role, environment_id, created_at)
 VALUES ('e2000000-0000-4000-8000-000000000006', 'b1000000-0000-4000-8000-000000000002', 'auditor', (SELECT id FROM environments WHERE key = 'staging'), now());
 INSERT INTO service_owners (id, service_id, directory_group_id, created_at)
-VALUES ('e2000000-0000-4000-8000-000000000005', 'e2000000-0000-4000-8000-000000000001', 'e2000000-0000-4000-8000-000000000003', now());`)
+VALUES ('e2000000-0000-4000-8000-000000000005', 'e2000000-0000-4000-8000-000000000001', 'e2000000-0000-4000-8000-000000000003', now());
+INSERT INTO users (id, username, display_name, auth_source, role, description, created_at, updated_at)
+VALUES ('e2000000-0000-4000-8000-000000000007', 'ci-deployer', 'CI deployer', 'automation', NULL, 'Deploys from the pipeline', now(), now());
+INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, service_ids, expires_at, created_at)
+VALUES ('e2000000-0000-4000-8000-000000000008', 'e2000000-0000-4000-8000-000000000007', 'pipeline', sha256('automation token'), 'alice_autom1',
+        '{operate}', '{e2000000-0000-4000-8000-000000000001}', now() + interval '30 days', now());`)
 	require.NoError(t, err)
 }
 
