@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -35,6 +36,36 @@ func roleValues() string {
 	return strings.Join(names, ", ")
 }
 
+// optionalRole is a role field that tells absent (set false: unchanged), null (no global role, R49 Phase 2) and a role
+// apart.
+type optionalRole struct {
+	set   bool
+	value *string
+}
+
+// UnmarshalJSON records that the field was sent; null leaves value nil.
+func (o *optionalRole) UnmarshalJSON(b []byte) error {
+	o.set = true
+	if string(b) == "null" {
+		o.value = nil
+		return nil
+	}
+	var v string
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	o.value = &v
+	return nil
+}
+
+// role is the role sent: auth.NoGlobalRole for null; ok is false for an unknown role.
+func (o optionalRole) role() (rbac.Role, bool) {
+	if o.value == nil {
+		return auth.NoGlobalRole, true
+	}
+	return rbac.ParseRole(*o.value)
+}
+
 func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.deps.Auth.ListUsers(r.Context())
 	if err != nil {
@@ -50,17 +81,19 @@ func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username    string `json:"username"`
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
-		Role        string `json:"role"`
-		Password    string `json:"password"`
+		Username    string       `json:"username"`
+		DisplayName string       `json:"display_name"`
+		Email       string       `json:"email"`
+		Role        optionalRole `json:"role"`
+		Password    string       `json:"password"`
 	}
 	if !s.decode(w, r, &req) {
 		return
 	}
-	role, ok := rbac.ParseRole(req.Role)
-	if !ok {
+	// "role": null creates a person without a global role (R49 Phase 2: role bindings only, or none yet); the field is
+	// still required.
+	role, ok := req.Role.role()
+	if !ok || !req.Role.set {
 		var v validate.Errors
 		v.Add("role", validate.OneOf, map[string]string{"values": roleValues()})
 		s.fail(w, r, v)
@@ -97,17 +130,18 @@ func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		DisplayName *string `json:"display_name"`
-		Email       *string `json:"email"`
-		Role        *string `json:"role"`
-		Disabled    *bool   `json:"disabled"`
+		DisplayName *string      `json:"display_name"`
+		Email       *string      `json:"email"`
+		Role        optionalRole `json:"role"`
+		Disabled    *bool        `json:"disabled"`
 	}
 	if !s.decode(w, r, &req) {
 		return
 	}
 	in := auth.UserUpdate{DisplayName: req.DisplayName, Email: req.Email, Disabled: req.Disabled}
-	if req.Role != nil {
-		role, ok := rbac.ParseRole(*req.Role)
+	if req.Role.set {
+		// "role": null removes the global role (R49 Phase 2).
+		role, ok := req.Role.role()
 		if !ok {
 			var v validate.Errors
 			v.Add("role", validate.OneOf, map[string]string{"values": roleValues()})

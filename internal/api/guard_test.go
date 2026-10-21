@@ -467,13 +467,14 @@ func TestRouteScopesMatchTheDesign(t *testing.T) {
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		counts[rt.scope]++
 	}
-	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6, scopeResource: 61 + 3 + 2, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
+	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6 + 4, scopeResource: 61 + 3 + 2, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
 		scopeSelf: 14, scopeAny: 13 + 1, scopeCreate: 7}, counts)
 	for key, want := range map[string]routeScope{
 		"GET /api/v1/discovery/settings": scopePlatform, "GET /api/v1/ssh-keys/platform-key": scopeAny,
 		"POST /api/v1/certificates/{id}/deploy": scopeCross, "POST /api/v1/key-vaults": scopeCreate, "GET /api/v1/jobs": scopeList,
 		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}": scopeCross, "DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}": scopeResource,
 		"GET /api/v1/auth/session": scopeSelf, "POST /api/v1/auth/login": scopeNone, "POST /api/v1/services/{id}/actions/assign": scopeCross,
+		"POST /api/v1/role-bindings": scopePlatform, "GET /api/v1/users/{id}/access": scopePlatform,
 	} {
 		found := false
 		for _, rt := range newServer(Deps{}).apiRoutes() {

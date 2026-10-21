@@ -859,6 +859,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.discoveryRoutes()...)
 	routes = append(routes, s.incidentRoutes()...)
 	routes = append(routes, s.serviceRoutes()...)
+	routes = append(routes, s.accessRoutes()...)
 	return routes
 }
 

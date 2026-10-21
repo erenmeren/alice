@@ -204,7 +204,9 @@ func authzMatrixDoc() string {
 	b.WriteString("Scope: how the operation meets scoped access (R49): platform (a global grant only), resource (the resource\n")
 	b.WriteString("the path names, by its service), list (filtered by the caller's services), create (the body's service_id),\n")
 	b.WriteString("cross (the source and the destination service), any (some grant), self (the caller's own records) or none (no\n")
-	b.WriteString("grant is involved). Until scoped role bindings exist every grant is global, so the scope changes no answer.\n\n")
+	b.WriteString("grant is involved). The role columns are global roles; a role held on a service or an environment (a role\n")
+	b.WriteString("binding) allows the same on that service's resources for resource, list, create, cross and any operations,\n")
+	b.WriteString("never a platform one. A resource outside the caller's services answers the operation's 404.\n\n")
 	b.WriteString("| Method | Path | Permission | Scope | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, rt := range newServer(Deps{}).apiRoutes() {
@@ -897,7 +899,9 @@ var (
 		"/api/v1/ldap",
 		// Scoped access (R49): services, environments and trusts are Alice's own records; moving a resource to another
 		// service changes no managed system.
-		"/api/v1/services", "/api/v1/environments", "/api/v1/service-trusts"}
+		"/api/v1/services", "/api/v1/environments", "/api/v1/service-trusts",
+		// Role bindings (R49 Phase 2): who may reach what, Alice's own records like people.
+		"/api/v1/role-bindings"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.

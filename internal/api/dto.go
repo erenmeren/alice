@@ -8,16 +8,18 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/auth"
+	"alice/internal/rbac"
 	"alice/internal/setup"
 )
 
 // userDTO is the wire form of auth.User.
 type userDTO struct {
-	ID          string     `json:"id"`
-	Username    string     `json:"username"`
-	DisplayName string     `json:"display_name"`
-	Email       string     `json:"email"`
-	Role        string     `json:"role"`
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	// Role is the global role; null for a person without one (R49 Phase 2: their rights are role bindings only).
+	Role        *string    `json:"role"`
 	Locale      string     `json:"locale"`
 	Disabled    bool       `json:"disabled"`
 	MFAEnrolled bool       `json:"mfa_enrolled"`
@@ -45,7 +47,7 @@ func userJSON(u auth.User) userDTO {
 		Username:    u.Username,
 		DisplayName: u.DisplayName,
 		Email:       u.Email,
-		Role:        string(u.Role),
+		Role:        roleOrNull(u.Role),
 		Locale:      u.Locale,
 		Disabled:    u.Disabled,
 		MFAEnrolled: u.MFAEnrolled,
@@ -56,6 +58,15 @@ func userJSON(u auth.User) userDTO {
 		SSOProviderID:   u.SSOProviderID,
 		LDAPDirectoryID: u.LDAPDirectoryID,
 	}
+}
+
+// roleOrNull is a global role on the wire: null for none.
+func roleOrNull(r rbac.Role) *string {
+	if r == "" {
+		return nil
+	}
+	s := string(r)
+	return &s
 }
 
 // authSource is a user's sign-in source; a user stored before single sign-on existed is local.
@@ -75,6 +86,9 @@ type sessionDTO struct {
 	IdleExpiresAt time.Time  `json:"idle_expires_at"`
 	StepUpUntil   *time.Time `json:"stepup_until"`
 	RecoveryCodes []string   `json:"recovery_codes,omitempty"`
+	// Access is the person's global role and roles on services, for the navigation (R49 Phase 2, design §8.2): in
+	// GET /auth/session only.
+	Access *sessionAccessDTO `json:"access,omitempty"`
 }
 
 func sessionJSON(si auth.SessionInfo, recoveryCodes []string) sessionDTO {

@@ -444,7 +444,7 @@ paths:
                 username: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$" }
                 display_name: { type: string, minLength: 1, maxLength: 100 }
                 email: { type: string, maxLength: 254 }
-                role: { type: string, enum: [admin, operator, auditor] }
+                role: { type: [string, "null"], enum: [admin, operator, auditor, null], description: "null: no global role (role bindings only, R49 Phase 2)" }
                 password: { type: string, minLength: 12, maxLength: 1024 }
       responses:
         "201":
@@ -486,7 +486,7 @@ paths:
               properties:
                 display_name: { type: string, minLength: 1, maxLength: 100 }
                 email: { type: string, maxLength: 254 }
-                role: { type: string, enum: [admin, operator, auditor] }
+                role: { type: [string, "null"], enum: [admin, operator, auditor, null], description: "null: no global role (role bindings only, R49 Phase 2)" }
                 disabled: { type: boolean }
       responses:
         "200":
@@ -573,6 +573,88 @@ paths:
         "204": { description: The lockout is ended }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}/access:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getUserAccess
+      summary: A person's effective access and where each part comes from
+      description: >-
+        The global role (null: none), every role binding with the services it covers now (an environment binding: every
+        service that carries the environment at this moment), the grants they add up to (one per role), and whether the
+        "SSO users may be Admin" switch lowers the person's Administrator bindings to Operator (R49 Phase 2).
+      x-permission: users.read
+      x-scope: platform
+      responses:
+        "200":
+          description: The access
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserAccess" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/role-bindings:
+    get:
+      operationId: listRoleBindings
+      summary: Role bindings (a role held on one service or on every service of an environment)
+      description: >-
+        Filters user_id, directory_group_id, environment_id and service_id (service_id also lists the environment
+        bindings that reach the service through its environment). The global role is not a binding: it is the user's
+        role (R49 Phase 2).
+      x-permission: users.read
+      x-scope: platform
+      parameters:
+        - { name: user_id, in: query, schema: { type: string, format: uuid } }
+        - { name: directory_group_id, in: query, schema: { type: string, format: uuid } }
+        - { name: service_id, in: query, schema: { type: string, format: uuid } }
+        - { name: environment_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The bindings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleBindingList" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createRoleBinding
+      summary: Give a person a role on one service or on every service of an environment
+      description: >-
+        Exactly one of service_id and environment_id. Takes effect at the person's next request. 409 ALC-ACC-0001 when
+        the person holds the role there already; 422 ALC-ACC-0005 beyond 200 bindings per person; 422 validation for an
+        unknown person, service or environment. Audited as access.binding_added. Administrator with a fresh step-up,
+        never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleBindingCreate" }
+      responses:
+        "201":
+          description: The binding
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleBinding" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/role-bindings/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteRoleBinding
+      summary: Remove a role binding
+      description: >-
+        Takes effect at the person's next request. Audited as access.binding_removed. Administrator with a fresh step-up,
+        never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      responses:
+        "204": { description: Removed }
+        "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/tokens:
     get:
@@ -5672,12 +5754,14 @@ components:
         name: { type: string }
     ServiceRef:
       type: object
-      description: The service that owns a row (R49).
-      required: [id, name, environment]
+      description: >-
+        The service that owns a row (R49): id, name and environment; or, for a service outside the caller's reach (a person
+        with role bindings, R49 Phase 2), {"outside": true} alone.
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         environment: { $ref: "#/components/schemas/EnvironmentRef" }
+        outside: { type: boolean, const: true }
     Environment:
       type: object
       required: [id, key, name, sort, version, services, created_at, updated_at]
@@ -5825,6 +5909,75 @@ components:
         target: { $ref: "#/components/schemas/ServiceRef" }
         created_by_name: { type: string }
         created_at: { type: string, format: date-time }
+    RoleBinding:
+      type: object
+      required: [id, user_id, directory_group_id, role, service, environment, services, created_by, created_by_name, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: [string, "null"], format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        directory_group_id: { type: [string, "null"], format: uuid, description: A directory group subject (Phase 3) }
+        role: { type: string, enum: [admin, operator, auditor] }
+        service:
+          description: The service of a binding on one service; null for an environment binding
+          oneOf:
+            - { $ref: "#/components/schemas/ServiceRef" }
+            - { type: "null" }
+        environment: { $ref: "#/components/schemas/EnvironmentRef" }
+        services: { type: array, items: { $ref: "#/components/schemas/ServiceRef" }, description: The services the binding covers now }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: string }
+        created_at: { type: string, format: date-time }
+    RoleBindingList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RoleBinding" } }
+    RoleBindingCreate:
+      type: object
+      required: [user_id, role]
+      additionalProperties: false
+      properties:
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [admin, operator, auditor] }
+        service_id: { type: string, format: uuid, description: One of service_id and environment_id }
+        environment_id: { type: string, format: uuid }
+    UserAccess:
+      type: object
+      required: [global_role, bindings, grants, admin_capped]
+      properties:
+        global_role: { type: [string, "null"], enum: [admin, operator, auditor, null] }
+        bindings: { type: array, items: { $ref: "#/components/schemas/RoleBinding" } }
+        grants:
+          type: array
+          items:
+            type: object
+            required: [role, services]
+            properties:
+              role: { type: string, enum: [admin, operator, auditor] }
+              services: { type: array, items: { $ref: "#/components/schemas/ServiceRef" } }
+        admin_capped: { type: boolean, description: An SSO or directory user's Administrator bindings count as Operator }
+    SessionAccess:
+      type: object
+      description: >-
+        The person's access for the navigation (R49 Phase 2): the global role (null: none), the services they hold a role
+        on with those roles, every permission they hold somewhere and those they hold with a global grant.
+      required: [global_role, services, permissions_anywhere, platform_permissions]
+      properties:
+        global_role: { type: [string, "null"], enum: [admin, operator, auditor, null] }
+        services:
+          type: array
+          items:
+            type: object
+            required: [id, name, environment, roles]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              environment: { $ref: "#/components/schemas/EnvironmentRef" }
+              roles: { type: array, items: { type: string, enum: [admin, operator, auditor] } }
+        permissions_anywhere: { type: array, items: { type: string } }
+        platform_permissions: { type: array, items: { type: string } }
     ServiceTrustList:
       type: object
       required: [items]
@@ -6923,7 +7076,7 @@ components:
         username: { type: string }
         display_name: { type: string }
         email: { type: string }
-        role: { type: string, enum: [admin, operator, auditor] }
+        role: { type: [string, "null"], enum: [admin, operator, auditor, null], description: "The global role; null: none (role bindings only, R49 Phase 2)" }
         locale: { type: string }
         disabled: { type: boolean }
         mfa_enrolled: { type: boolean }
@@ -6951,6 +7104,7 @@ components:
           format: date-time
           description: When the session ends without a person's activity (see the API description; a read without the activity marker does not extend it)
         stepup_until: { type: [string, "null"], format: date-time }
+        access: { $ref: "#/components/schemas/SessionAccess" }
     SessionWithCodes:
       description: SessionInfo plus the one-time recovery codes (only from administrator creation and MFA verification)
       allOf:

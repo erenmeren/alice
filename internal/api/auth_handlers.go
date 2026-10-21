@@ -102,7 +102,10 @@ func (s *server) authSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionJSON(si, nil))
+	d := sessionJSON(si, nil)
+	acc := s.sessionAccess(r)
+	d.Access = &acc
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (s *server) authLogout(w http.ResponseWriter, r *http.Request) {

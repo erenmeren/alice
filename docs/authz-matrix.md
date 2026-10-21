@@ -13,7 +13,9 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 Scope: how the operation meets scoped access (R49): platform (a global grant only), resource (the resource
 the path names, by its service), list (filtered by the caller's services), create (the body's service_id),
 cross (the source and the destination service), any (some grant), self (the caller's own records) or none (no
-grant is involved). Until scoped role bindings exist every grant is global, so the scope changes no answer.
+grant is involved). The role columns are global roles; a role held on a service or an environment (a role
+binding) allows the same on that service's resources for resource, list, create, cross and any operations,
+never a platform one. A resource outside the caller's services answers the operation's 404.
 
 | Method | Path | Permission | Scope | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -259,6 +261,10 @@ grant is involved). Until scoped role bindings exist every grant is global, so t
 | GET | `/api/v1/service-trusts` | `read` | list | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/service-trusts` | `services.trust` | cross | no | yes | no | no | no | yes | yes |
 | DELETE | `/api/v1/service-trusts/{id}` | `services.trust` | cross | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/role-bindings` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/role-bindings` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/role-bindings/{id}` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/users/{id}/access` | `users.read` | platform | no | yes | no | no | read | no | yes |
 
 ## Notes
 
