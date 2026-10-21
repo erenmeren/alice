@@ -402,6 +402,33 @@ func (s Subject) AllowsScopeAnywhere(sc Scope) bool {
 	return false
 }
 
+// Within narrows the subject to services (an API token limited to services, design §6.3, R54): its global role becomes
+// a grant on those services and every scoped grant keeps only those of its services; grants left without a service go.
+// The result never holds a global role, so no platform permission (Decide) allows it, whatever the owner's role.
+// Narrowing only: nothing outside the subject's own grants is ever added.
+func (s Subject) Within(services []uuid.UUID) Subject {
+	limit := slices.Clone(services)
+	slices.SortFunc(limit, compareUUID)
+	limit = slices.Compact(limit)
+	out := s
+	out.Role, out.Grants = "", nil
+	if _, ok := ParseRole(string(s.Role)); ok && len(limit) > 0 {
+		out.Grants = append(out.Grants, ScopedGrant{Role: s.Role, Services: limit})
+	}
+	for _, g := range s.Grants {
+		var kept []uuid.UUID
+		for _, sv := range g.Services {
+			if _, found := slices.BinarySearchFunc(limit, sv, compareUUID); found {
+				kept = append(kept, sv)
+			}
+		}
+		if len(kept) > 0 {
+			out.Grants = append(out.Grants, ScopedGrant{Role: g.Role, Services: kept})
+		}
+	}
+	return out
+}
+
 func compareUUID(a, b uuid.UUID) int {
 	for i := range a {
 		switch {

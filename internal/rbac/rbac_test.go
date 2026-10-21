@@ -399,3 +399,29 @@ func TestScopedGrants(t *testing.T) {
 	all, _ = rbac.Reach(rbac.Read, rbac.Subject{Kind: rbac.PendingSession, Role: rbac.Admin})
 	assert.False(t, all, "a pending sign-in reaches nothing")
 }
+
+// A token limited to services (design §6.3, R54): the owner's grants now, the token scope, and only those services. A
+// global Administrator's token limited to B passes no platform permission and reaches only B.
+func TestSubjectWithin(t *testing.T) {
+	a, b, c := uuid.MustParse("00000000-0000-0000-0000-00000000000a"), uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		uuid.MustParse("00000000-0000-0000-0000-00000000000c")
+	other := uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
+	admin := rbac.Subject{Kind: rbac.APIToken, Scope: rbac.ScopeOperate, Role: rbac.Admin}
+	limited := admin.Within([]uuid.UUID{b, b})
+	assert.Equal(t, rbac.Role(""), limited.Role)
+	assert.Equal(t, []rbac.ScopedGrant{{Role: rbac.Admin, Services: []uuid.UUID{b}}}, limited.Grants)
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.UsersRead, limited), "no platform route, even for a global Administrator's token")
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.TargetsManage, limited, b))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideIn(rbac.TargetsManage, limited, a))
+	all, svcs := rbac.Reach(rbac.Read, limited)
+	assert.False(t, all)
+	assert.Equal(t, []uuid.UUID{b}, svcs)
+
+	// Scoped grants keep only the limit's services; a grant left with none goes, and nothing is ever added.
+	op := rbac.Subject{Kind: rbac.APIToken, Scope: rbac.ScopeOperate, Grants: []rbac.ScopedGrant{
+		{Role: rbac.Operator, Services: []uuid.UUID{a, b}}, {Role: rbac.Auditor, Services: []uuid.UUID{c}}}}
+	got := op.Within([]uuid.UUID{b, c, other})
+	assert.Equal(t, []rbac.ScopedGrant{{Role: rbac.Operator, Services: []uuid.UUID{b}}, {Role: rbac.Auditor, Services: []uuid.UUID{c}}}, got.Grants)
+	assert.Empty(t, op.Within([]uuid.UUID{other}).Grants, "a service the owner holds nothing on adds nothing")
+	assert.False(t, op.Within(nil).HasAnyGrant())
+}

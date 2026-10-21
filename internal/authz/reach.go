@@ -140,18 +140,30 @@ func (a Access) Allows(p rbac.Permission, service uuid.UUID) bool {
 	return a.Reach(p).Contains(service)
 }
 
-// LoadGrants reads a person's scoped grants (design §5.1 steps 2, 4 and 5): every role binding of the user, an
-// environment binding expanded to the services that carry the environment now, one grant per role with the union of its
-// services. For an SSO or directory user, while "SSO users may be Admin" is off, an Administrator binding counts as an
+// LoadGrants reads a principal's scoped grants (design §5.1 steps 2 to 5): every role binding of the user, and for an
+// SSO or directory user every role binding of a directory group of the user's own provider or directory whose value was
+// among the user's groups at the last sign-in or step-up (user_directory_groups, R54); an environment binding expanded
+// to the services that carry the environment now, one grant per role with the union of its services. For an SSO or
+// directory user, while "SSO users may be Admin" is off, an Administrator binding (its own or a group's) counts as an
 // Operator one (the cap SEC-014 puts on the global role). Called on every request with the session or token lookup
-// (SEC-017: nothing is cached beyond the request). Bindings of directory groups come with Phase 3.
+// (SEC-017: nothing is cached beyond the request).
 func LoadGrants(ctx context.Context, q db.Querier, userID uuid.UUID) ([]rbac.ScopedGrant, error) {
-	rows, err := q.Query(ctx, `SELECT CASE WHEN rb.role = 'admin' AND u.auth_source IN ('oidc', 'ldap') AND NOT EXISTS (
-        SELECT 1 FROM settings st WHERE st.key = $2 AND st.value->'allow' = 'true'::jsonb) THEN 'operator' ELSE rb.role END,
-    CASE WHEN rb.service_id IS NOT NULL THEN ARRAY[rb.service_id]
-         ELSE ARRAY(SELECT s.id FROM services s WHERE s.environment_id = rb.environment_id) END
-FROM role_bindings rb JOIN users u ON u.id = rb.user_id
-WHERE rb.user_id = $1`, userID, SSOAllowAdminKey)
+	rows, err := q.Query(ctx, `WITH b AS (
+    SELECT rb.role, rb.service_id, rb.environment_id FROM role_bindings rb WHERE rb.user_id = $1
+    UNION ALL
+    SELECT rb.role, rb.service_id, rb.environment_id
+    FROM users u
+    JOIN user_directory_groups ug ON ug.user_id = u.id
+    JOIN directory_groups g ON g.value = ug.value
+         AND ((u.auth_source = 'oidc' AND g.source = 'oidc' AND g.oidc_provider_id = u.oidc_provider_id)
+           OR (u.auth_source = 'ldap' AND g.source = 'ldap' AND g.ldap_directory_id = u.ldap_directory_id))
+    JOIN role_bindings rb ON rb.directory_group_id = g.id
+    WHERE u.id = $1)
+SELECT CASE WHEN b.role = 'admin' AND u.auth_source IN ('oidc', 'ldap') AND NOT EXISTS (
+        SELECT 1 FROM settings st WHERE st.key = $2 AND st.value->'allow' = 'true'::jsonb) THEN 'operator' ELSE b.role END,
+    CASE WHEN b.service_id IS NOT NULL THEN ARRAY[b.service_id]
+         ELSE ARRAY(SELECT s.id FROM services s WHERE s.environment_id = b.environment_id) END
+FROM b JOIN users u ON u.id = $1`, userID, SSOAllowAdminKey)
 	if err != nil {
 		return nil, fmt.Errorf("authz: read the role bindings: %w", err)
 	}
