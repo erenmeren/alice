@@ -2,11 +2,13 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
+  acmeCertificateFixture,
   assignResultFixture,
   certificateFixture,
   DEFAULT_SERVICE_ID,
   defaultServiceFixture,
   defaultServiceRef,
+  discoveryScopeFixture,
   environmentFixture,
   PRODUCTION_ID,
   SERVICE_ID,
@@ -16,7 +18,9 @@ import {
   serviceTrustFixture,
   sessionFor,
   sessionHandlers,
+  sshKeyFixture,
   targetFixture,
+  vaultFixture,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
@@ -171,5 +175,91 @@ describe('ServicePage', () => {
     expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     expect(screen.queryByText('Add a trust')).not.toBeInTheDocument();
+  });
+
+  it('switches between the tabs and keeps the tab in the address', async () => {
+    services();
+    const { router } = await renderRoute(`/services/${SERVICE_ID}`);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Trusts' }));
+    expect(await screen.findByTestId('trusts-accepts')).toBeInTheDocument();
+    expect(router.state.location.search).toBe('?tab=trusts');
+    await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(await screen.findByTestId('policy-version')).toBeInTheDocument();
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('lets an Administrator edit the service with its version', async () => {
+    const seen: { body: unknown; ifMatch: string | null }[] = [];
+    services();
+    server.use(
+      http.patch(`/api/v1/services/${SERVICE_ID}`, async ({ request }) => {
+        seen.push({ body: await request.json(), ifMatch: request.headers.get('If-Match') });
+        return HttpResponse.json(serviceFixture({ name: 'Payments EU', version: 2 }));
+      }),
+    );
+    await renderRoute(`/services/${SERVICE_ID}`);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit service' });
+    const name = within(dialog).getByLabelText(/Name/);
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Payments EU');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(seen).toEqual([{ body: { name: 'Payments EU', description: 'Card payments and the checkout website.', environment_id: PRODUCTION_ID }, ifMatch: '"1"' }]);
+  });
+
+  it('deletes a service that owns nothing and goes back to the list; cancelling keeps it', async () => {
+    const seen = services();
+    const empty = serviceFixture({ version: 3, counts: { servers: 0, key_vaults: 0, certificates: 0, signing_requests: 0, acme_certificates: 0, ssh_keys: 0, discovery_scopes: 0 } });
+    server.use(
+      http.get(`/api/v1/services/${SERVICE_ID}`, () => HttpResponse.json(empty)),
+      http.delete(`/api/v1/services/${SERVICE_ID}`, ({ request }) => {
+        seen.push({ method: 'DELETE', path: new URL(request.url).pathname, body: null, ifMatch: request.headers.get('If-Match') });
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const { router } = await renderRoute(`/services/${SERVICE_ID}`);
+    const del = await screen.findByRole('button', { name: 'Delete service' });
+    expect(del).toBeEnabled();
+    await userEvent.click(del);
+    let dialog = await screen.findByRole('dialog', { name: 'Delete Payments?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(seen).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Delete service' }));
+    dialog = await screen.findByRole('dialog', { name: 'Delete Payments?' });
+    expect(within(dialog).getByText(/It owns nothing/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete service' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/services'));
+    expect(seen).toEqual([{ method: 'DELETE', path: `/api/v1/services/${SERVICE_ID}`, body: null, ifMatch: '"3"' }]);
+  });
+
+  it('offers no delete for the default service', async () => {
+    services();
+    await renderRoute(`/services/${DEFAULT_SERVICE_ID}`);
+    expect(await screen.findByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete service' })).not.toBeInTheDocument();
+  });
+
+  it('lists the Key Vaults, ACME certificates, SSH keys and scan scopes the service owns', async () => {
+    services();
+    const cert = certificateFixture({ label: '', subject_cn: '' });
+    server.use(
+      http.get('/api/v1/targets', () => HttpResponse.json({ items: [{ ...vaultFixture, service: serviceRef }], next_cursor: null })),
+      http.get('/api/v1/certificates', () => HttpResponse.json({ items: [{ ...cert, service: serviceRef }], next_cursor: null })),
+      http.get('/api/v1/acme/certificates', () => HttpResponse.json({ items: [acmeCertificateFixture()], next_cursor: null })),
+      http.get('/api/v1/ssh-keys', () => HttpResponse.json({ items: [sshKeyFixture({ comment: '' })], next_cursor: null })),
+      http.get('/api/v1/discovery/scopes', () =>
+        HttpResponse.json({ items: [{ ...discoveryScopeFixture(), service: serviceRef }, { ...discoveryScopeFixture({ id: 'other', name: 'Elsewhere' }), service: defaultServiceRef }], next_cursor: null }),
+      ),
+    );
+    await renderRoute(`/services/${SERVICE_ID}?tab=resources`);
+    expect(await screen.findByRole('link', { name: vaultFixture.name })).toHaveAttribute('href', `/key-vaults/${vaultFixture.id}`);
+    expect(await screen.findByRole('link', { name: 'www.example.com' })).toHaveAttribute('href', `/acme/${acmeCertificateFixture().id}`);
+    // A key without a comment is named by its fingerprint, a certificate without a label or CN by its fingerprint's start.
+    expect(await screen.findByRole('link', { name: sshKeyFixture().fingerprint })).toHaveAttribute('href', `/ssh-keys/${sshKeyFixture().id}`);
+    expect(await screen.findByRole('link', { name: cert.fingerprint.slice(0, 16) })).toHaveAttribute('href', `/certificates/${cert.id}`);
+    expect(await screen.findByRole('link', { name: 'Data centre' })).toHaveAttribute('href', '/discovery?tab=scopes');
+    expect(screen.queryByRole('link', { name: 'Elsewhere' })).not.toBeInTheDocument();
   });
 });

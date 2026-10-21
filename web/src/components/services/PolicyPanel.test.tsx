@@ -84,13 +84,77 @@ describe('PolicyPanel', () => {
     expect(await screen.findByText('The policy or the owners changed since you opened them.')).toBeInTheDocument();
   });
 
+  it('edits the ACME rules and the e-mail addresses, keeps a removed authority and says which version it saved', async () => {
+    let current: ServicePolicy = servicePolicyFixture({
+      version: 4,
+      body: { schema: 1, acme: { providers: ['gone-provider'] }, notifications: { addresses: [{ email: 'old@example.com', locale: 'en' }, { email: 'drop@example.com', locale: 'en' }] } },
+    });
+    const seen = policyWorld(globalSession('admin'), (body) => {
+      current = servicePolicyFixture({ version: 5, body: (body as { body: ServicePolicy['body'] }).body });
+      return HttpResponse.json(current);
+    });
+    server.use(http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(current)));
+    await renderRoute(`/services/${SERVICE_ID}?tab=policy`);
+    // The policy names an authority that no longer exists: it stays listed (and ticked) so it can be unticked.
+    expect(await screen.findByRole('checkbox', { name: 'A removed certificate authority' })).toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Web proof (file on the web server)' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'ECDSA P-384' }));
+    await userEvent.type(screen.getByLabelText('Renew before expiry (days)'), '21');
+    await userEvent.click(screen.getByRole('checkbox', { name: "Administrators of all services receive this service's e-mails" }));
+    const addresses = screen.getAllByLabelText('Extra address');
+    await userEvent.clear(addresses[0]);
+    await userEvent.type(addresses[0], 'team@example.com');
+    await userEvent.selectOptions(screen.getAllByLabelText('Language')[0], 'tr');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Remove this address' })[1]);
+    expect(screen.getAllByLabelText('Extra address')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Add an address' }));
+    await userEvent.type(screen.getAllByLabelText('Extra address')[1], 'ops@example.com');
+    await userEvent.click(screen.getByTestId('policy-save'));
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]).toEqual({
+      version: 4,
+      body: {
+        schema: 1,
+        acme: { providers: ['gone-provider'], challenges: ['http01'], key_types: ['ecdsa_p384'], renew_before_days: 21 },
+        notifications: {
+          administrators: false,
+          addresses: [
+            { email: 'team@example.com', locale: 'tr' },
+            { email: 'ops@example.com', locale: 'en' },
+          ],
+        },
+      },
+    });
+    expect(await screen.findByTestId('policy-saved')).toHaveTextContent('Saved as version 5.');
+  });
+
+  it('marks the field the server refuses, below its path', async () => {
+    policyWorld(globalSession('admin'), () => errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'body.domains.0', code: 'validation.pattern' }] }));
+    await renderRoute(`/services/${SERVICE_ID}?tab=policy`);
+    await userEvent.click(await screen.findByTestId('policy-save'));
+    await waitFor(() => expect(screen.getByTestId('policy-domains')).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByTestId('policy-auto-deploy')).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('says when no certificate authority is set up and when there are no versions', async () => {
+    policyWorld(globalSession('admin'));
+    server.use(
+      http.get('/api/v1/acme/providers', () => HttpResponse.json({ items: [] })),
+      http.get(`/api/v1/services/${SERVICE_ID}/policy/versions`, () => HttpResponse.json({ items: [] })),
+    );
+    await renderRoute(`/services/${SERVICE_ID}?tab=policy`);
+    expect(await screen.findByText('No certificate authority is set up yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No versions yet.')).toBeInTheDocument();
+    expect(screen.queryByTestId('policy-history')).not.toBeInTheDocument();
+  });
+
   it('gives an Operator the policy to read only, in Turkish too', async () => {
     policyWorld(scopedSession(['operator'], 'tr'));
     await renderRoute(`/services/${SERVICE_ID}?tab=policy`);
     expect(await screen.findByTestId('policy-domains')).toHaveAttribute('readonly');
     expect(screen.queryByTestId('policy-save')).not.toBeInTheDocument();
     expect(screen.getByTestId('policy-auto-deploy')).toBeDisabled();
-    expect(screen.getByText('Sürümler')).toBeInTheDocument();
+    expect(await screen.findByText('Sürümler')).toBeInTheDocument();
     expectNoRawKeys(document.body);
   });
 });
