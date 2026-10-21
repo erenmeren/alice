@@ -98,6 +98,9 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Notifier: notify.AdminNotifier{Clock: h.clock}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	require.NoError(t, h.lic.Start(h.ctx))
+	// registered after the state dir's TempDir, so it runs first: a background evaluation still
+	// writing the state file would make the TempDir cleanup fail ("directory not empty")
+	t.Cleanup(h.lic.Close)
 	h.prov = fake.New(providers.KindLinuxSSH)
 	h.reg = providers.NewRegistry()
 	h.reg.Register(h.prov)
