@@ -600,7 +600,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await axe(page, 'Deploy now', dialog);
       await dialog.getByRole('button', { name: kv.deployNow, exact: true }).click();
       await answerStepUp(page, request, lang, s.totpSecret, dialog.getByTestId('deployment-run'));
-      await settle(request, dialog.getByText(t('deploy.succeeded'), { exact: true }));
+      // The fake vault's test CA is no root Alice knows, so the deployment succeeds at "served" with the trust
+      // warning (R51: an unknown anchor warns, it never fails).
+      await settle(request, dialog.getByText(t('deploy.succeededUntrusted'), { exact: true }));
+      await expect(dialog.getByText(t('deployments.trust.error.unknown_authority'), { exact: false })).toBeVisible();
       expect(served(WWW), 'the new version is served').toBe(azureLeafFingerprint(CERT));
       expect(served(WWW)).not.toBe(original);
       await dialog.getByRole('button', { name: t('deploy.close') }).last().click();
@@ -799,7 +802,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await deployChain.check();
       await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
       await answerStepUp(page, request, lang, c0.s.totpSecret, deploy.getByTestId('deployment-run'));
-      await settle(request, deploy.getByText(t('deploy.succeeded'), { exact: true }));
+      // The fake vault's test CA is no root Alice knows, so the deployment succeeds at "served" with the trust
+      // warning (R51: an unknown anchor warns, it never fails).
+      await settle(request, deploy.getByText(t('deploy.succeededUntrusted'), { exact: true }));
+      await expect(deploy.getByText(t('deployments.trust.error.unknown_authority'), { exact: false })).toBeVisible();
       expect(served(WWW), 'Deploy now with the chain confirmed deploys it').toBe(azureLeafFingerprint(CHAIN_CERT, first));
       await deploy.getByRole('button', { name: t('deploy.close') }).last().click();
       await expect(deploy).toHaveCount(0);
@@ -871,7 +877,10 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await deployChain.check();
       await deploy.getByRole('button', { name: kv.deployNow, exact: true }).click();
       await answerStepUp(page, request, lang, c0.s.totpSecret, deploy.getByTestId('deployment-run'));
-      await settle(request, deploy.getByText(t('deploy.succeeded'), { exact: true }));
+      // The fake vault's test CA is no root Alice knows, so the deployment succeeds at "served" with the trust
+      // warning (R51: an unknown anchor warns, it never fails).
+      await settle(request, deploy.getByText(t('deploy.succeededUntrusted'), { exact: true }));
+      await expect(deploy.getByText(t('deployments.trust.error.unknown_authority'), { exact: false })).toBeVisible();
       expect(served(WWW)).toBe(azureLeafFingerprint(CHAIN_CERT, version));
     });
 
