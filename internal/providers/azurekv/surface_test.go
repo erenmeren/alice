@@ -67,7 +67,10 @@ const (
 
 // azidentityFiles are the only non-test files that may import azidentity: identity.go builds the
 // credentials, errors.go reads the SDK's error type to classify it.
-var azidentityFiles = map[string]bool{azurekvDir + "identity.go": true, azurekvDir + "errors.go": true}
+var azidentityFiles = map[string]bool{azurekvDir + "identity.go": true, azurekvDir + "errors.go": true, azurednsIdentity: true}
+
+// azurednsIdentity is the Azure DNS provider's sign-in (R57): the same credentials and guards, in its own package.
+const azurednsIdentity = "internal/acme/solver/dnsapi/azuredns/identity.go"
 
 var (
 	// forbiddenAnywhere: identifiers no Go file of the repository may use, whatever the value.
@@ -189,7 +192,7 @@ func scanSource(rel, src string) []string {
 			if !isTest && forbiddenInCode[x.Name] {
 				add("uses " + x.Name)
 			}
-			if !isTest && constructors[x.Name] && rel != azurekvDir+"identity.go" {
+			if !isTest && constructors[x.Name] && rel != azurekvDir+"identity.go" && rel != azurednsIdentity {
 				add("builds a credential outside identity.go: " + x.Name)
 			}
 			if inKV && x.Name == "InsecureSkipVerify" {
@@ -235,7 +238,7 @@ func scanSource(rel, src string) []string {
 				}
 			case x.Sel.Name == "ClientOptions" && (p == azcorePath || p == azcorePolicy):
 				// identity.go builds the guarded options; kvapi.go only names the type of its parameter.
-				if rel != azurekvDir+"identity.go" && (rel != azurekvDir+"kvapi.go" || !paramTypes[x]) {
+				if rel != azurekvDir+"identity.go" && rel != azurednsIdentity && (rel != azurekvDir+"kvapi.go" || !paramTypes[x]) {
 					add("references " + id.Name + ".ClientOptions outside identity.go")
 				}
 			case x.Sel.Name == "ClientOptions" && isSDK:

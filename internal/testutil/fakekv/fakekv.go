@@ -1,5 +1,6 @@
 // Package fakekv is an in-process fake of what Alice's Azure SDK clients talk to: the Key Vault data
-// plane of one vault, the Microsoft Entra ID token endpoint, and the managed-identity (IMDS) endpoint.
+// plane of one vault, the Microsoft Entra ID token endpoint, the managed-identity (IMDS) endpoint, and the
+// Azure DNS zones of one resource group on the Azure Resource Manager host (dns.go).
 //
 // It is test-support code: production code never imports it (archtest keeps it out of every release
 // binary). It is an http.Handler plus a small constructor and holds no global state, so the e2e
@@ -79,6 +80,19 @@ type Options struct {
 	VersionsOldestFirst bool
 	// TokenLifetime is the lifetime of issued tokens (default 1 hour).
 	TokenLifetime time.Duration
+
+	// The Azure DNS side (dns.go). DNSSubscriptionID defaults to a generated GUID, DNSResourceGroup to
+	// "alice-dns". DNSZones are the public zones of the resource group, DNSPrivateZones zones the listing
+	// reports with zoneType "Private" (record sets of those answer 404). DNSPageSize caps the zones of one
+	// listing page (0 = one page). DNSSink, when set, sees every TXT value added or removed. DNSReadOnly
+	// answers every write 403 AuthorizationFailed (no "DNS Zone Contributor" role).
+	DNSSubscriptionID string
+	DNSResourceGroup  string
+	DNSZones          []string
+	DNSPrivateZones   []string
+	DNSPageSize       int
+	DNSSink           DNSSink
+	DNSReadOnly       bool
 }
 
 // Request is one logged request: method, host, path and the sorted query KEYS. Never bodies, headers or
@@ -130,6 +144,7 @@ type Server struct {
 	pageFill   int    // 0 = full pages
 	emptyPages bool
 	origOID    string
+	dns        *dnsState // the Azure DNS side (dns.go); its own lock, taken before mu
 }
 
 // NewClientSecret returns "fake-" + 40 random hex characters.
@@ -168,13 +183,13 @@ func NewServer(o Options) (*Server, error) {
 		certs: map[string]*certEntry{}, keys: map[string]*keyEntry{}, secrets: map[string]*secretEntry{},
 		keyPool: map[string]any{}, tokens: map[string]issuedToken{}, revoked: map[string]bool{},
 		oid: uuid.NewString(), tid: o.TenantID, tokenLife: o.TokenLifetime,
-		vaultHostN: o.VaultName + ".vault.azure.net",
+		vaultHostN: o.VaultName + ".vault.azure.net", dns: newDNSState(o),
 	}
 	s.secret, s.origOID = o.Secret, s.oid
 	if o.ClientCert != nil {
 		s.extraCerts = append(s.extraCerts, o.ClientCert)
 	}
-	sans := append([]string{loginHost, s.vaultHostN, "127.0.0.1"}, o.ExtraHosts...)
+	sans := append([]string{loginHost, s.vaultHostN, managementHost, "127.0.0.1"}, o.ExtraHosts...)
 	leaf := s.ca.Issue(pki.Opts{CommonName: "fake azure", SANs: sans}, real)
 	s.tlsConf = &tls.Config{
 		Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.Cert.Raw, s.ca.Intermediate.Raw}, PrivateKey: leaf.Key}},
@@ -212,7 +227,7 @@ func (s *Server) Close() {
 	s.imds.Close()
 }
 
-// Handler serves the Entra ID and Key Vault routes, told apart by the Host header (for
+// Handler serves the Entra ID, Key Vault and Resource Manager routes, told apart by the Host header (for
 // cmd/alice-fakeazure, which listens itself).
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serve) }
 
@@ -220,7 +235,7 @@ func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serve) }
 func (s *Server) IMDSHandler() http.Handler { return http.HandlerFunc(s.serveIMDS) }
 
 // TLSConfig is the fake's server TLS configuration: its certificate names the login host, the vault
-// host, 127.0.0.1 and ExtraHosts.
+// host, the Resource Manager host, 127.0.0.1 and ExtraHosts.
 func (s *Server) TLSConfig() *tls.Config { return s.tlsConf.Clone() }
 
 // CAPool returns a pool holding only the fake's root.
@@ -233,7 +248,7 @@ func (s *Server) CAPool() *x509.CertPool {
 // CAPEM returns the fake's root certificate as PEM.
 func (s *Server) CAPEM() []byte { return s.ca.RootPEM }
 
-// DialAddr maps the fake's host names (login host, vault host, ExtraHosts on :443; IMDS on :80) to its
+// DialAddr maps the fake's host names (login, vault, Resource Manager, ExtraHosts on :443; IMDS on :80) to its
 // listeners and returns every other address unchanged.
 func (s *Server) DialAddr(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
@@ -247,7 +262,7 @@ func (s *Server) DialAddr(addr string) string {
 	if port != "443" {
 		return addr
 	}
-	if host == loginHost || host == s.vaultHostN {
+	if host == loginHost || host == s.vaultHostN || host == managementHost {
 		return s.srv.Listener.Addr().String()
 	}
 	for _, h := range s.o.ExtraHosts {
@@ -327,6 +342,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveWithFaults(sw, r, s.serveLogin)
 	case s.vaultHostN:
 		s.serveVault(sw, r)
+	case managementHost:
+		s.serveManagement(sw, r)
 	default:
 		// The fake never answers a name it does not own.
 		sw.WriteHeader(http.StatusNotFound)
