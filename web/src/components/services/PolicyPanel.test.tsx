@@ -81,7 +81,7 @@ describe('PolicyPanel', () => {
     policyWorld(globalSession('admin'), () => errorResponse(409, 'ALC-SVC-0010', 'service.version_conflict'));
     await renderRoute(`/services/${SERVICE_ID}?tab=policy`);
     await userEvent.click(await screen.findByTestId('policy-save'));
-    expect(await screen.findByText('The policy changed since you opened it.')).toBeInTheDocument();
+    expect(await screen.findByText('The policy or the owners changed since you opened them.')).toBeInTheDocument();
   });
 
   it('gives an Operator the policy to read only, in Turkish too', async () => {

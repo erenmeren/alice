@@ -774,6 +774,7 @@
       "access_binding_added": "Erişim eklendi",
       "access_binding_removed": "Erişim kaldırıldı",
       "service_policy_changed": "Hizmet ilkesi değiştirildi",
+      "service_owners_changed": "Hizmet sorumluları değiştirildi",
       "acme_auto_deploy_forbidden": "Sertifika yetkilisinden (ACME) gelen sertifika otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor",
       "kv_auto_deploy_forbidden": "Kasa sertifikası otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor",
       "automation_created": "Otomasyon hesabı oluşturuldu",
@@ -4440,7 +4441,7 @@
       "aliceDefault": "Alice'in varsayılanı (her yenisi doğrulandıktan sonra)",
       "notifications": {
         "title": "E-postalar",
-        "description": "Bu hizmetin e-postalarını başka kimlerin alacağı. İlkeyle birlikte kaydedilir; e-postalar hizmete göre yönlendirilene kadar eskisi gibi yöneticilere gider."
+        "description": "Bu hizmetin e-postalarını başka kimlerin alacağı; ilkeyle birlikte kaydedilir. Kutu işaretliyse tüm hizmetlerin yöneticileri de alır (platform e-postaları her zaman onlara gider); aşağıdaki adresler ve Genel bakış sekmesindeki sorumlular da alır."
       },
       "administrators": "Tüm hizmetlerdeki yöneticiler bu hizmetin e-postalarını alır",
       "address": "Ek adres",
@@ -4468,7 +4469,44 @@
         "system": "Alice (sistem)"
       }
     },
-    "forbiddenMark": "Bekletiliyor: hizmeti otomatik dağıtımı yasaklıyor"
+    "forbiddenMark": "Bekletiliyor: hizmeti otomatik dağıtımı yasaklıyor",
+    "owners": {
+      "title": "Sorumlular",
+      "description": "Bu hizmetten sorumlu kişiler ve dizin grupları. Hizmetin e-postalarını alırlar; sorumluluk erişim vermez.",
+      "empty": "Henüz sorumlu yok. Bu hizmetin e-postaları yöneticilere ve ilkesindeki ek adreslere gider.",
+      "edit": "Sorumluları düzenle",
+      "columns": {
+        "owner": "Sorumlu",
+        "kind": "Tür",
+        "notes": "Notlar",
+        "actions": "İşlemler"
+      },
+      "kind": {
+        "person": "Kişi",
+        "group": "Dizin grubu"
+      },
+      "disabled": "Devre dışı",
+      "noEmail": "E-posta adresi yok",
+      "membersSeen_one": "Oturum açarken görülen {{count}} üye",
+      "membersSeen_other": "Oturum açarken görülen {{count}} üye",
+      "noReach": "E-postaları alır ama bu hizmeti açamaz",
+      "noReachGroup": "Üyeleri bu grup üzerinden bu hizmete erişim almaz",
+      "dialogTitle": "{{name}} sorumluları",
+      "intro": "Sorumlular bu hizmetin e-postalarını alır ve hizmetten sorumlu olarak gösterilir. Sorumluluk erişim vermez: bunun için Erişim sekmesinden bir rol verin. Bir kişi, etkinse ve adresi varsa e-postaları alır; bir grup ise oturum açarken görülen, etkin ve adresi olan üyeleri aracılığıyla alır.",
+      "person": "Kişi",
+      "pickPerson": "Bir kişi seçin",
+      "addPerson": "Kişi ekle",
+      "group": "Dizin grubu",
+      "pickGroup": "Bir grup seçin",
+      "noGroups": "Henüz tanımlı dizin grubu yok",
+      "addGroup": "Grup ekle",
+      "remove": "Kaldır",
+      "removeNamed": "Kaldır: {{name}}",
+      "max": "En çok {{max}} sorumlu.",
+      "reloaded": "Yukarıdaki liste en güncel sorumlularla yeniden yüklendi. Kontrol edin, sonra yeniden kaydedin.",
+      "stepUp": "Kaydetmek yeni bir doğrulama kodu ister.",
+      "save": "Sorumluları kaydet"
+    }
   },
   "drift": {
     "health": {

@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { BindingGroup } from './access';
 import type { EnvironmentRef, OwnerService, ServiceRef } from './types';
 
 export type { EnvironmentRef, ServiceRef };
@@ -87,6 +88,36 @@ export interface ServicePolicy {
   created_by_name: string;
   created_at: string;
 }
+
+// A service's owner team (R56, design §7.1): people and directory groups who are responsible for the service and receive
+// its e-mails. Ownership gives no access. version is the service's version (a change of the owners names it).
+export interface ServiceOwner {
+  id: string;
+  kind: 'person' | 'group';
+  user_id: string | null;
+  username?: string;
+  display_name?: string;
+  // A disabled person receives nothing.
+  disabled: boolean;
+  // An enabled person with an address (a group: false; its members receive).
+  receives_email: boolean;
+  directory_group_id: string | null;
+  group?: BindingGroup;
+  // A group's people seen in it at their last sign-in.
+  members: number;
+  // Whether some role of the owner reaches the service; only present for a caller who may read people (users.read).
+  reaches_service?: boolean;
+  created_at: string;
+}
+
+export interface ServiceOwners {
+  version: number;
+  items: ServiceOwner[];
+}
+
+// One entry of a new owner list: a person or a directory group (never an automation account: 422 ALC-SVC-0019).
+export type ServiceOwnerInput = { user_id: string } | { directory_group_id: string };
+export const MAX_SERVICE_OWNERS = 50;
 
 export interface ServiceTrust {
   id: string;
@@ -184,6 +215,12 @@ export const listServicePolicyVersions = (id: string, signal?: AbortSignal) =>
 // need an Administrator of all services (403 ALC-SVC-0011).
 export const putServicePolicy = (id: string, version: number, body: PolicyDocument) =>
   apiFetch<ServicePolicy>(`${v1}/services/${enc(id)}/policy`, { method: 'PUT', body: { version, body } });
+
+export const getServiceOwners = (id: string, signal?: AbortSignal) => apiFetch<ServiceOwners>(`${v1}/services/${enc(id)}/owners`, { signal });
+// putServiceOwners replaces the whole owner list: version is the service's version read (409 ALC-SVC-0010 when the
+// service or its owners changed since); a global Administrator's with a fresh step-up (services.manage).
+export const putServiceOwners = (id: string, version: number, owners: ServiceOwnerInput[]) =>
+  apiFetch<ServiceOwners>(`${v1}/services/${enc(id)}/owners`, { method: 'PUT', body: { version, owners } });
 
 // changedPolicyKeys lists the top-level keys whose value differs between two policy documents (what a version changed).
 export function changedPolicyKeys(before: PolicyDocument | undefined, after: PolicyDocument): string[] {

@@ -30,6 +30,8 @@ describe('the services client', () => {
     await s.updateService('s1', 4, { environment_id: null });
     await s.deleteService('s1', 5);
     await s.getServicePolicy('s1');
+    await s.getServiceOwners('s1');
+    await s.putServiceOwners('s1', 6, [{ user_id: 'u1' }, { directory_group_id: 'g1' }]);
     await s.assignToService('s1', [{ type: 'target', id: 't1' }], true);
     await s.assignToService('s1', [{ type: 'certificate', id: 'c1' }], false);
     await s.listTrusts('s1');
@@ -46,6 +48,8 @@ describe('the services client', () => {
       'PATCH /api/v1/services/s1 "4"',
       'DELETE /api/v1/services/s1 "5"',
       'GET /api/v1/services/s1/policy',
+      'GET /api/v1/services/s1/owners',
+      'PUT /api/v1/services/s1/owners',
       'POST /api/v1/services/s1/actions/assign?dry_run=true',
       'POST /api/v1/services/s1/actions/assign',
       'GET /api/v1/service-trusts?service_id=s1',
@@ -53,8 +57,9 @@ describe('the services client', () => {
       'DELETE /api/v1/service-trusts/t1',
     ]);
     expect(seen[7].body).toEqual({ environment_id: null });
-    expect(seen[10].body).toEqual({ resources: [{ type: 'target', id: 't1' }] });
-    expect(seen[13].body).toEqual({ source_service_id: 'a', target_service_id: 'b' });
+    expect(seen[11].body).toEqual({ version: 6, owners: [{ user_id: 'u1' }, { directory_group_id: 'g1' }] });
+    expect(seen[12].body).toEqual({ resources: [{ type: 'target', id: 't1' }] });
+    expect(seen[15].body).toEqual({ source_service_id: 'a', target_service_id: 'b' });
   });
 
   it('sends the list filters of the certificate and SSH key lists', async () => {

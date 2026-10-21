@@ -116,6 +116,7 @@ export const SERVICES_KEY = ['services'] as const;
 export const SERVICE_LIST_KEY = ['services', 'list'] as const;
 export const serviceKey = (id: string) => ['services', id] as const;
 export const servicePolicyKey = (id: string) => ['services', id, 'policy'] as const;
+export const serviceOwnersKey = (id: string) => ['services', id, 'owners'] as const;
 export const servicePolicyVersionsKey = (id: string) => ['services', id, 'policy', 'versions'] as const;
 export const serviceResourcesKey = (id: string, kind: string) => ['services', id, 'resources', kind] as const;
 export const SERVICE_TRUSTS_KEY = ['services', 'trusts'] as const;

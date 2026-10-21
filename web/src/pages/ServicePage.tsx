@@ -14,6 +14,7 @@ import { ServiceAccess } from '../components/access/ServiceAccess';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { MoveDialog } from '../components/services/MoveDialog';
+import { OwnersPanel } from '../components/services/OwnersPanel';
 import { PolicyPanel } from '../components/services/PolicyPanel';
 import { ServiceDialog } from '../components/services/ServiceDialog';
 import { EnvironmentBadge } from '../components/services/shared';
@@ -27,7 +28,7 @@ const TABS = ['overview', 'resources', 'access', 'policy', 'trusts'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
-// ServicePage is one service (R49): its environment, description and policy summary (Overview), what it owns (Resources,
+// ServicePage is one service (R49): its environment, description, owners (R56) and policy summary (Overview), what it owns (Resources,
 // with Move here), who reaches it (Access, for the people administration), its policy and the versions of it (Policy,
 // R55) and which services it accepts certificates and keys from or sends them to (Trusts). Every role reads it; changes
 // are an Administrator's with a fresh step-up.
@@ -135,6 +136,7 @@ function Overview({ service }: { service: Service }) {
           ]}
         />
       </Panel>
+      <OwnersPanel service={service} />
       <Panel title={t('services.policy.title')} description={t('services.policy.description')}>
         <ErrorAlert error={policy.error} />
         {policy.data && (

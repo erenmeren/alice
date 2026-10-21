@@ -20,6 +20,8 @@ export const handlers = [
   http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
   // R55: a service's policy (the incident dialog reads its revocation default); no rules unless a test says otherwise.
   http.get('/api/v1/services/:id/policy', () => HttpResponse.json(servicePolicyFixture())),
+  // R56: the service page's Overview reads the owner team; none unless a test says otherwise.
+  http.get('/api/v1/services/:id/owners', () => HttpResponse.json({ version: 1, items: [] })),
   // Phase 7 single sign-on: the sign-in page lists the public providers (none by default).
   http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
   // Directory sign-in: the sign-in page lists the switched-on directories (none by default: no "Sign in to" select).

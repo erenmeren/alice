@@ -774,6 +774,7 @@
       "access_binding_added": "Access added",
       "access_binding_removed": "Access removed",
       "service_policy_changed": "Service policy changed",
+      "service_owners_changed": "Service owners changed",
       "acme_auto_deploy_forbidden": "Certificate from a certificate authority (ACME) not deployed automatically: its service's policy forbids it",
       "kv_auto_deploy_forbidden": "Vault certificate not deployed automatically: its service's policy forbids it",
       "automation_created": "Automation account created",
@@ -4440,7 +4441,7 @@
       "aliceDefault": "Alice's default (after every replacement is verified)",
       "notifications": {
         "title": "E-mails",
-        "description": "Who else receives this service's e-mails. Saved with the policy; until e-mails are routed by service, they still go to the Administrators as before."
+        "description": "Who else receives this service's e-mails, saved with the policy. With the box ticked, the Administrators of all services receive them too (platform e-mails always go to them); the addresses below receive them, and so do the owners on the Overview tab."
       },
       "administrators": "Administrators of all services receive this service's e-mails",
       "address": "Extra address",
@@ -4468,7 +4469,44 @@
         "system": "Alice"
       }
     },
-    "forbiddenMark": "Held: its service forbids automatic deployment"
+    "forbiddenMark": "Held: its service forbids automatic deployment",
+    "owners": {
+      "title": "Owners",
+      "description": "The people and directory groups responsible for this service. They receive its e-mails; ownership gives no access.",
+      "empty": "No owners yet. This service's e-mails go to the Administrators and to the extra addresses of its policy.",
+      "edit": "Edit owners",
+      "columns": {
+        "owner": "Owner",
+        "kind": "Kind",
+        "notes": "Notes",
+        "actions": "Actions"
+      },
+      "kind": {
+        "person": "Person",
+        "group": "Directory group"
+      },
+      "disabled": "Disabled",
+      "noEmail": "No e-mail address",
+      "membersSeen_one": "{{count}} member seen at sign-in",
+      "membersSeen_other": "{{count}} members seen at sign-in",
+      "noReach": "Receives e-mails but cannot open this service",
+      "noReachGroup": "Its members get no access to this service through it",
+      "dialogTitle": "Owners of {{name}}",
+      "intro": "Owners receive this service's e-mails and are shown as responsible for it. Ownership gives no access: give a role on the Access tab for that. A person receives the e-mails when enabled and with an address; a group, through its enabled members seen at sign-in with an address.",
+      "person": "Person",
+      "pickPerson": "Choose a person",
+      "addPerson": "Add person",
+      "group": "Directory group",
+      "pickGroup": "Choose a group",
+      "noGroups": "No directory group is declared yet",
+      "addGroup": "Add group",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "max": "At most {{max}} owners.",
+      "reloaded": "The list above was reloaded with the latest owners. Check it, then save again.",
+      "stepUp": "Saving asks for a fresh verification code.",
+      "save": "Save owners"
+    }
   },
   "drift": {
     "health": {
