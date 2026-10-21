@@ -269,6 +269,16 @@ func TestScopedIDOR(t *testing.T) {
 	tok.bearer = decodeBody[map[string]any](t, rec)["token"].(string)
 	ids = append(ids, scopedIdentity{name: "operate token of operator@B", c: tok,
 		subject: rbac.Subject{Kind: rbac.APIToken, Scope: rbac.ScopeOperate, Grants: ids[0].subject.Grants}})
+	// A global Administrator's operate token limited to B (R54, design §6.3): platform routes 403, A's resources the
+	// route's 404, as for a person of B.
+	s.stepUp(admin, adminAcct)
+	rec = admin.do(http.MethodPost, "/api/v1/tokens", map[string]any{"name": "deploy B", "scope": "operate", "expires_in_days": 30,
+		"service_ids": []string{w.b.String()}})
+	requireStatus(t, rec, http.StatusCreated)
+	limited := s.freshClient()
+	limited.bearer = decodeBody[map[string]any](t, rec)["token"].(string)
+	ids = append(ids, scopedIdentity{name: "Administrator's operate token limited to B", c: limited,
+		subject: rbac.Subject{Kind: rbac.APIToken, Scope: rbac.ScopeOperate, Grants: []rbac.ScopedGrant{{Role: rbac.Admin, Services: []uuid.UUID{w.b}}}}})
 
 	routes := s.api.s.apiRoutes()
 	kinds := map[string]bool{}
