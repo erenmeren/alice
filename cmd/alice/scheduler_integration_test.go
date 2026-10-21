@@ -32,7 +32,9 @@ import (
 // verification writes its audit row as the system, the hourly cleanup removes expired sessions
 // and finished jobs older than 90 days (and keeps newer ones), and discovery scheduling works
 // with no targets (R37 item 15); the SSH key rotation tasks run on the wired service (nothing to plan
-// or sweep; a key retired 31 days ago loses its private key).
+// or sweep; a key retired 31 days ago loses its private key). The incident, drift, TLS renewal, audit forwarding and
+// heartbeat tasks run on the wired services too: nothing to advance, observe or forward, no listener to renew, and the
+// heartbeat alice selfcheck reads is written.
 func TestServeSchedulerTasksRun(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
@@ -85,7 +87,8 @@ func TestServeSchedulerTasksRun(t *testing.T) {
 
 	for _, task := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup, jobs.DiscoverySchedule,
 		jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy, jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired,
-		jobs.AlertsScan, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep, jobs.NetdiscoSchedule, jobs.NetdiscoRetention} {
+		jobs.AlertsScan, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep, jobs.NetdiscoSchedule, jobs.NetdiscoRetention,
+		jobs.IncidentAdvance, jobs.DriftSchedule, jobs.DriftRepair, jobs.TLSRenew, jobs.AuditForward, jobs.JobsHeartbeat} {
 		require.NoError(t, sched.RunNow(ctx, task.Name), task.Name)
 	}
 
@@ -97,6 +100,10 @@ func TestServeSchedulerTasksRun(t *testing.T) {
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM managed_private_keys WHERE destroyed_at IS NOT NULL AND ciphertext IS NULL"),
 		"the retired key's private key was destroyed by the wired sshkey.destroy_retired task")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.private_key_destroyed'"))
+	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM settings WHERE key = '"+heartbeatKey+"'"),
+		"jobs.heartbeat wrote the heartbeat alice selfcheck reads")
+	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM audit_log WHERE action = 'https.temporary_renewed'"),
+		"a command has no listener: tls.renew renews nothing")
 	assert.Error(t, sched.RunNow(ctx, "unknown.task"), "only the listed tasks exist")
 }
 
