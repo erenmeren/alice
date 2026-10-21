@@ -88,7 +88,7 @@ describe('Get a certificate', () => {
     expect(within(d).getByRole('list', { name: 'Names of the certificate' })).toHaveTextContent('www.example.comexample.com');
     await next();
     await waitFor(() => expect(heading('How does Alice prove that you control the names?')).toHaveFocus());
-    await userEvent.selectOptions(within(d).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(d).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     // The hook allows only www.example.com: example.com is flagged early (the server decides).
     expect(within(d).getByTestId('names-not-allowed-hook')).toHaveTextContent('example.com');
     await next();
@@ -102,7 +102,7 @@ describe('Get a certificate', () => {
     await next();
     await waitFor(() => expect(heading('Check and save')).toHaveFocus());
     expect(d).toHaveTextContent('LE staging');
-    expect(d).toHaveTextContent('DNS proof (DNS hook): Internal DNS');
+    expect(d).toHaveTextContent('DNS proof (DNS record): Internal DNS');
     expect(d).toHaveTextContent('RSA 3072');
     expect(d).toHaveTextContent('Renews 30 days before it expires');
     await userEvent.click(within(d).getByRole('button', { name: 'Save certificate' }));
@@ -140,7 +140,7 @@ describe('Get a certificate', () => {
     await pickAuthority();
     await addName('www.example.com');
     await next();
-    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     await next();
     await next();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Save certificate' }));
@@ -161,7 +161,7 @@ describe('Get a certificate', () => {
     await pickAuthority();
     await addName('www.example.com');
     await next();
-    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     await next();
     await next();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Save certificate' }));
@@ -309,7 +309,7 @@ describe('Get a certificate', () => {
     await pickAuthority();
     await addName('www.example.com');
     await next();
-    expect(await within(dialog()).findByText('No DNS hook yet')).toBeInTheDocument();
+    expect(await within(dialog()).findByText('No DNS provider or hook yet')).toBeInTheDocument();
     await next();
     expect(heading('How does Alice prove that you control the names?')).toBeInTheDocument();
   });
@@ -322,7 +322,7 @@ describe('Get a certificate', () => {
     expect(name).toHaveAttribute('maxlength', '253');
     await addName('www.example.com');
     await next();
-    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     await next();
     const field = within(dialog()).getByLabelText(/^Renew how many days/);
     await userEvent.clear(field);
@@ -352,7 +352,7 @@ describe('Get a certificate', () => {
     await pickAuthority();
     await addName('www.example.com');
     await next();
-    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     await next();
     await next();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Save certificate' }));
@@ -372,7 +372,7 @@ describe('Get a certificate', () => {
     await pickAuthority();
     await addName('www.example.com');
     await next();
-    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS hook'), ACME_HOOK_ID);
+    await userEvent.selectOptions(within(dialog()).getByLabelText('DNS publishing'), ACME_HOOK_ID);
     await next();
     await next();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Save certificate' }));

@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import type { RoleBinding } from '../api/access';
 import { ROLE_PERMISSIONS } from '../auth/permissions';
-import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
+import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEDNSSettings, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { CertificateImpact, Incident } from '../api/incidents';
 import type { AssignResult, Environment, Service, ServicePolicy, ServiceTrust } from '../api/services';
 import type { LocationObservation } from '../api/drift';
@@ -1072,9 +1072,25 @@ export function acmeProviderFixture(o: Partial<ACMEProvider> = {}): ACMEProvider
   };
 }
 
+// emptyDNSSettings are a hook's settings (a built-in DNS provider's are filled in).
+export const emptyDNSSettings: ACMEDNSSettings = {
+  auth: '',
+  tenant_id: '',
+  client_id: '',
+  subscription_id: '',
+  resource_group: '',
+  cert_thumbprint: '',
+  cert_not_after: null,
+  access_key_id: '',
+  role_arn: '',
+  external_id: '',
+};
+
 export function acmeHookFixture(o: Partial<ACMEHook> = {}): ACMEHook {
   return {
     id: ACME_HOOK_ID,
+    kind: 'webhook',
+    settings: emptyDNSSettings,
     name: 'Internal DNS',
     url: 'https://dns-hook.example.com/acme',
     ca_bundle_pem: '',

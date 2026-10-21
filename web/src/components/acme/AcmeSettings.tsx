@@ -10,6 +10,7 @@ import {
   deleteACMEHook,
   deleteACMEProvider,
   directoryHost,
+  hookKindKey,
   listACMEHooks,
   listACMEProviders,
   presetKey,
@@ -28,6 +29,7 @@ import { DialogActions, EmptyState, Notice, StatusBadge } from '../ui';
 import ui from '../ui/ui.module.css';
 import settings from '../settings/settings.module.css';
 import { AccountPanel } from './AccountPanel';
+import { DnsProviderDialog } from './DnsProviderDialog';
 import { HookDialog } from './HookDialog';
 import { ProviderDialog } from './ProviderDialog';
 import classes from './acme.module.css';
@@ -36,10 +38,12 @@ type Dialog =
   | { kind: 'provider'; provider: ACMEProvider | null }
   | { kind: 'deleteProvider'; provider: ACMEProvider }
   | { kind: 'hook'; hook: ACMEHook | null }
+  | { kind: 'dnsProvider'; hook: ACMEHook | null }
   | { kind: 'deleteHook'; hook: ACMEHook };
 
 // AcmeSettings is the Certificate authorities section of Settings (design row 8): the certificate authorities (ACME
-// providers) with their accounts, and the DNS hooks. Reading needs acme.view; every change needs an Administrator with a
+// providers) with their accounts, and the DNS publishers: the DNS hooks and the built-in DNS providers (Cloudflare,
+// Azure DNS, Amazon Route 53; R57). Reading needs acme.view; every change needs an Administrator with a
 // fresh step-up (acme.manage), so another role sees the same lists without a single action button. Nothing here
 // contacts a certificate authority or a hook, except registering, rotating, checking and deactivating an account.
 export function AcmeSettings() {
@@ -104,9 +108,14 @@ export function AcmeSettings() {
             {t('acme.settings.hooks')}
           </Title>
           {canManage && (
-            <Button variant="default" leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'hook', hook: null })}>
-              {t('acme.settings.addHook')}
-            </Button>
+            <Group gap="xs">
+              <Button variant="default" leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'dnsProvider', hook: null })}>
+                {t('acme.settings.addDnsProvider')}
+              </Button>
+              <Button variant="default" leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'hook', hook: null })}>
+                {t('acme.settings.addHook')}
+              </Button>
+            </Group>
           )}
         </Group>
         <Text size="sm" mb="sm">
@@ -127,7 +136,7 @@ export function AcmeSettings() {
                   key={h.id}
                   hook={h}
                   canManage={canManage}
-                  onEdit={() => setDialog({ kind: 'hook', hook: h })}
+                  onEdit={() => setDialog({ kind: h.kind === 'webhook' ? 'hook' : 'dnsProvider', hook: h })}
                   onDelete={() => setDialog({ kind: 'deleteHook', hook: h })}
                 />
               ))}
@@ -139,6 +148,7 @@ export function AcmeSettings() {
 
       {dialog?.kind === 'provider' && <ProviderDialog provider={dialog.provider} onClose={close} />}
       {dialog?.kind === 'hook' && <HookDialog hook={dialog.hook} onClose={close} />}
+      {dialog?.kind === 'dnsProvider' && <DnsProviderDialog hook={dialog.hook} onClose={close} />}
       {dialog?.kind === 'deleteProvider' && (
         <DeleteDialog
           title={t('acme.provider.deleteTitle', { name: dialog.provider.name })}
@@ -279,29 +289,53 @@ function ProviderSection({ provider: p, canManage, onEdit, onDelete }: { provide
   );
 }
 
+// providerHosts are the fixed API hosts of the built-in DNS providers, shown where a hook shows its address.
+const providerHosts: Record<string, string> = {
+  cloudflare: 'https://api.cloudflare.com',
+  azure_dns: 'https://management.azure.com',
+  route53: 'https://route53.amazonaws.com',
+};
+
 function HookSection({ hook: h, canManage, onEdit, onDelete }: { hook: ACMEHook; canManage: boolean; onEdit: () => void; onDelete: () => void }) {
   const { t } = useTranslation();
+  const webhook = h.kind === 'webhook';
   return (
     <section aria-label={h.name} className={settings.provider}>
       <Head
-        icon="Network"
+        icon={webhook ? 'Network' : 'Cloud'}
         name={h.name}
-        address={h.url}
+        address={webhook ? h.url : (providerHosts[h.kind] ?? '')}
         canManage={canManage}
         onEdit={onEdit}
         onDelete={onDelete}
         badges={
-          h.secret_configured ? (
-            <StatusBadge tone="info" icon="KeyRound">
-              {t('acme.settings.secretConfigured')}
+          <Group gap={6}>
+            <StatusBadge tone="neutral" icon={webhook ? 'Network' : 'Cloud'}>
+              {t(hookKindKey(h.kind))}
             </StatusBadge>
-          ) : (
-            <StatusBadge tone="warning" icon="CircleAlert">
-              {t('acme.settings.secretMissing')}
-            </StatusBadge>
-          )
+            {h.secret_configured ? (
+              <StatusBadge tone="info" icon="KeyRound">
+                {t(webhook ? 'acme.settings.secretConfigured' : 'acme.settings.credentialsConfigured')}
+              </StatusBadge>
+            ) : (
+              <StatusBadge tone="warning" icon="CircleAlert">
+                {t('acme.settings.secretMissing')}
+              </StatusBadge>
+            )}
+          </Group>
         }
       />
+      {h.kind === 'azure_dns' && (
+        <Text size="xs" c="dimmed" mt={6} translate="no">
+          {t('acme.settings.azureWhere', { subscription: h.settings.subscription_id, group: h.settings.resource_group })}
+        </Text>
+      )}
+      {h.kind === 'route53' && (
+        <Text size="xs" c="dimmed" mt={6} translate="no">
+          {t('acme.settings.awsWhere', { key: h.settings.access_key_id })}
+          {h.settings.role_arn && ` · ${t('acme.settings.awsRole', { role: h.settings.role_arn })}`}
+        </Text>
+      )}
       <Names suffixes={h.allowed_suffixes} empty={t('acme.settings.noNamesHook')} />
       <Text size="xs" c="dimmed" mt={6}>
         {t('acme.settings.waits', { wait: h.propagation_wait_seconds, poll: h.poll_timeout_seconds })}

@@ -82,7 +82,7 @@ describe('Issued certificates list', () => {
     expect(within(first).getByText('LE staging')).toBeInTheDocument();
     expect(within(first).getByText('Active').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
     expect(within(first).getByText('Active').closest('.mantine-Badge-root')?.querySelector('svg')).not.toBeNull();
-    expect(within(first).getByText('DNS proof (DNS hook)')).toBeInTheDocument();
+    expect(within(first).getByText('DNS proof (DNS record)')).toBeInTheDocument();
     expect(within(first).getByText('Renews 30 days before it expires')).toBeInTheDocument();
     expect(within(first).getByText('Renews automatically')).toBeInTheDocument();
     expect(within(first).getByText('Deploys automatically')).toBeInTheDocument();

@@ -6,6 +6,7 @@ import {
   ACME_KEY_TYPES,
   challengeKey,
   createACMECertificate,
+  hookKindKey,
   keyTypeKey,
   orderACMECertificate,
   testACMECertificate,
@@ -345,7 +346,7 @@ export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void;
                         value={hookId}
                         onChange={(e) => setHookId(e.currentTarget.value)}
                         error={local === 'acme.issued.wizard.chooseHook' ? t(local) : fieldErrors.hook_id}
-                        data={[{ value: '', label: t('acme.issued.wizard.chooseHookOption') }, ...(hooks.data?.items ?? []).map((h) => ({ value: h.id, label: h.name }))]}
+                        data={[{ value: '', label: t('acme.issued.wizard.chooseHookOption') }, ...(hooks.data?.items ?? []).map((h) => ({ value: h.id, label: `${h.name} (${t(hookKindKey(h.kind))})` }))]}
                       />
                     )}
                     {notByHook.length > 0 && hook && (

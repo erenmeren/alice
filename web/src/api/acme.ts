@@ -80,8 +80,33 @@ export interface ACMEProviderPreview {
   website: string;
 }
 
+// A DNS publisher's kind (R57): the administrator's DNS hook, or a built-in DNS provider Alice drives through its API.
+export const ACME_HOOK_KINDS = ['webhook', 'cloudflare', 'azure_dns', 'route53'] as const;
+export type ACMEHookKind = (typeof ACME_HOOK_KINDS)[number];
+export type ACMEDNSProviderKind = Exclude<ACMEHookKind, 'webhook'>;
+export const ACME_DNS_PROVIDER_KINDS: readonly ACMEDNSProviderKind[] = ['cloudflare', 'azure_dns', 'route53'];
+// The Azure sign-in methods (the Key Vault credential's).
+export const AZURE_DNS_AUTHS = ['client_secret', 'certificate', 'managed_identity'] as const;
+export type AzureDNSAuth = (typeof AZURE_DNS_AUTHS)[number];
+
+// A built-in DNS provider's settings; every field is empty for a hook. Credentials are never returned.
+export interface ACMEDNSSettings {
+  auth: string;
+  tenant_id: string;
+  client_id: string;
+  subscription_id: string;
+  resource_group: string;
+  cert_thumbprint: string;
+  cert_not_after: string | null;
+  access_key_id: string;
+  role_arn: string;
+  external_id: string;
+}
+
 export interface ACMEHook {
   id: string;
+  kind: ACMEHookKind;
+  settings: ACMEDNSSettings;
   name: string;
   url: string;
   ca_bundle_pem: string;
@@ -105,6 +130,39 @@ export interface ACMEHookCreate {
 }
 
 export type ACMEHookPatch = Partial<ACMEHookCreate>;
+
+// A built-in DNS provider's body (R57): its settings and its write-only credentials, flat like the Key Vault
+// credential's. The kind is sent when it is added and never again.
+export interface ACMEDNSProviderFields {
+  name?: string;
+  allowed_suffixes?: string[];
+  propagation_wait_seconds?: number;
+  poll_timeout_seconds?: number;
+  auth?: AzureDNSAuth;
+  tenant_id?: string;
+  client_id?: string;
+  subscription_id?: string;
+  resource_group?: string;
+  access_key_id?: string;
+  role_arn?: string;
+  external_id?: string;
+  api_token?: string;
+  client_secret?: string;
+  certificate_pem?: string;
+  private_key_pem?: string;
+  secret_access_key?: string;
+}
+
+export interface ACMEDNSProviderCreate extends ACMEDNSProviderFields {
+  kind: ACMEDNSProviderKind;
+  name: string;
+}
+
+// The bounds of a provider's credentials (ACMEHookCreate in api/openapi.yaml; the server checks them again).
+export const DNS_TOKEN_MIN = 20;
+export const DNS_TOKEN_MAX = 256;
+export const AWS_SECRET_MIN = 16;
+export const AWS_SECRET_MAX = 128;
 
 export interface ACMECurrentCertificate {
   id: string;
@@ -289,6 +347,8 @@ export const HOOK_SECRET_MAX = 256;
 // A label key per enum value; a value from a newer server gets the neutral text.
 const labelOf = (group: string, values: readonly string[]) => (v: string) => (values.includes(v) ? `acme.enum.${group}.${v}` : 'enum.unknown');
 export const presetKey = labelOf('preset', ACME_PRESETS);
+export const hookKindKey = labelOf('hookKind', ACME_HOOK_KINDS);
+export const azureAuthKey = labelOf('azureAuth', AZURE_DNS_AUTHS);
 export const accountStateKey = labelOf('accountState', ACME_ACCOUNT_STATES);
 export const certificateStateKey = labelOf('certificateState', ACME_CERTIFICATE_STATES);
 export const challengeKey = labelOf('challenge', ACME_CHALLENGES);
@@ -343,8 +403,9 @@ export const deactivateACMEAccount = (id: string) => apiFetch<ACMEAccount>(`${v1
 // DNS hooks.
 export const listACMEHooks = (signal?: AbortSignal) => apiFetch<{ items: ACMEHook[] }>(`${v1}/hooks`, { signal });
 export const getACMEHook = (id: string, signal?: AbortSignal) => apiFetch<ACMEHook>(`${v1}/hooks/${enc(id)}`, { signal });
-export const createACMEHook = (body: ACMEHookCreate) => apiFetch<ACMEHook>(`${v1}/hooks`, { method: 'POST', body });
-export const updateACMEHook = (id: string, body: ACMEHookPatch) => apiFetch<ACMEHook>(`${v1}/hooks/${enc(id)}`, { method: 'PATCH', body });
+export const createACMEHook = (body: ACMEHookCreate | ACMEDNSProviderCreate) => apiFetch<ACMEHook>(`${v1}/hooks`, { method: 'POST', body });
+export const updateACMEHook = (id: string, body: ACMEHookPatch | ACMEDNSProviderFields) =>
+  apiFetch<ACMEHook>(`${v1}/hooks/${enc(id)}`, { method: 'PATCH', body });
 export const deleteACMEHook = (id: string) => apiFetch<void>(`${v1}/hooks/${enc(id)}`, { method: 'DELETE' });
 
 // ACME certificates (Issued certificates), their orders, bindings and deployments.

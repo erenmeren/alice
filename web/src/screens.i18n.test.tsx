@@ -499,8 +499,8 @@ describe.each(['en', 'tr'] as const)('the issued certificate dialogs in %s', (la
     await userEvent.click(within(wizard).getByRole('radio', { name: t('Web proof (file on the web server)', 'Web kanıtı (web sunucusunda bir dosya)') }));
     await next();
     expectNoRawKeys();
-    await userEvent.click(within(wizard).getByRole('radio', { name: t('DNS proof (DNS hook)', 'DNS kanıtı (DNS kancası)') }));
-    await userEvent.selectOptions(within(wizard).getByLabelText(t('DNS hook', 'DNS kancası')), acmeHookFixture().id);
+    await userEvent.click(within(wizard).getByRole('radio', { name: t('DNS proof (DNS record)', 'DNS kanıtı (DNS kaydı)') }));
+    await userEvent.selectOptions(within(wizard).getByLabelText(t('DNS publishing', 'DNS yayımlama')), acmeHookFixture().id);
     await next();
     expectNoRawKeys();
     await next();

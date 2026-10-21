@@ -1,4 +1,7 @@
 [
+  "acme.enum.hookKind.azure_dns",
+  "acme.enum.hookKind.cloudflare",
+  "acme.enum.hookKind.route53",
   "acme.enum.keyType.ecdsa_p384",
   "acme.enum.keyType.rsa_2048",
   "acme.enum.keyType.rsa_3072",

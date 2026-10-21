@@ -12,6 +12,7 @@ import {
   acmeHookFixture,
   acmeProviderFixture,
   adminSession,
+  emptyDNSSettings,
   errorResponse,
   sessionFor,
   sessionHandlers,
@@ -71,13 +72,13 @@ describe('Certificate authorities settings', () => {
     await open();
     expect(await screen.findByText('No certificate authorities yet')).toBeInTheDocument();
     expect(screen.getByText(/A certificate authority \(CA\) issues certificates/)).toBeInTheDocument();
-    expect(await screen.findByText('No DNS hooks yet')).toBeInTheDocument();
+    expect(await screen.findByText('No DNS provider or hook yet')).toBeInTheDocument();
     expect(screen.getByText('Nothing is contacted yet').closest('[role="note"]')).not.toBeNull();
     expect(screen.getByRole('tab', { name: 'Certificate authorities', selected: true })).toBeInTheDocument();
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { level: 2, name: 'Certificate authorities' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 3, name: 'Authorities and accounts' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 3, name: 'DNS hooks' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'DNS publishing' })).toBeInTheDocument();
     expectNoRawKeys();
   });
 
@@ -945,8 +946,286 @@ describe('roles', () => {
     await open();
     await screen.findByRole('region', { name: 'LE staging' });
     expect(screen.queryByText('You can look, not change')).not.toBeInTheDocument();
-    for (const name of ['Add certificate authority', 'Add DNS hook', 'Edit LE staging', 'Remove LE staging', 'Edit Internal DNS', 'Remove Internal DNS'])
+    for (const name of ['Add certificate authority', 'Add DNS hook', 'Add DNS provider', 'Edit LE staging', 'Remove LE staging', 'Edit Internal DNS', 'Remove Internal DNS'])
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
+  });
+});
+
+describe('DNS providers (R57)', () => {
+  const cfHook = () =>
+    acmeHookFixture({ id: 'cf1', kind: 'cloudflare', name: 'Cloudflare', url: '', allowed_suffixes: ['example.com'] });
+  const azHook = () =>
+    acmeHookFixture({
+      id: 'az1',
+      kind: 'azure_dns',
+      name: 'Azure',
+      url: '',
+      settings: {
+        ...emptyDNSSettings,
+        auth: 'certificate',
+        tenant_id: '11111111-2222-3333-4444-555555555555',
+        client_id: '66666666-7777-8888-9999-000000000000',
+        subscription_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        resource_group: 'dns-rg',
+        cert_thumbprint: 'ab'.repeat(20),
+        cert_not_after: '2027-01-01T00:00:00Z',
+      },
+    });
+  const r53Hook = () =>
+    acmeHookFixture({
+      id: 'r1',
+      kind: 'route53',
+      name: 'Route 53',
+      url: '',
+      settings: { ...emptyDNSSettings, access_key_id: 'TESTACCESSKEYID0001', role_arn: 'arn:aws:iam::123456789012:role/dns' },
+    });
+
+  it('lists each provider with its kind, its API host and where it publishes', async () => {
+    base({ hooks: [acmeHookFixture(), cfHook(), azHook(), r53Hook()] });
+    await open();
+    const cf = await screen.findByRole('region', { name: 'Cloudflare' });
+    expect(within(cf).getByText('api.cloudflare.com')).toBeInTheDocument();
+    expect(within(cf).getAllByText('Cloudflare').length).toBeGreaterThan(1);
+    expect(within(cf).getByText('Credentials stored')).toBeInTheDocument();
+    const az = screen.getByRole('region', { name: 'Azure' });
+    expect(within(az).getByText('Subscription aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee, resource group dns-rg')).toBeInTheDocument();
+    const r53 = screen.getByRole('region', { name: 'Route 53' });
+    expect(within(r53).getByText(/Access key TESTACCESSKEYID0001 · assumes arn:aws:iam::123456789012:role\/dns/)).toBeInTheDocument();
+    const hook = screen.getByRole('region', { name: 'Internal DNS' });
+    expect(within(hook).getByText('DNS hook')).toBeInTheDocument();
+    expect(within(hook).getByText('Secret stored')).toBeInTheDocument();
+  });
+
+  it('adds a Cloudflare provider: checks the token first, sends it once and keeps it out of every cache', async () => {
+    let body: Record<string, unknown> | undefined;
+    base({
+      hooks: [],
+      extra: [http.post(HOOKS, async ({ request }) => ((body = (await request.json()) as Record<string, unknown>), HttpResponse.json(cfHook(), { status: 201 })))],
+    });
+    const { client } = await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    expect(within(dialog).getByText(/Zone → DNS → Edit/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findAllByText('This field is required.')).toHaveLength(2);
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Cloudflare');
+    await userEvent.type(within(dialog).getByLabelText(/^API token/), 'short');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('The token needs 20 to 256 characters without spaces.')).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^API token/));
+    await userEvent.type(within(dialog).getByLabelText(/^API token/), 'canary-cloudflare-token-0123456789');
+    await userEvent.type(within(dialog).getByLabelText(/^Allowed names/), 'example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(body).toEqual({
+      kind: 'cloudflare',
+      name: 'Cloudflare',
+      allowed_suffixes: ['example.com'],
+      propagation_wait_seconds: 5,
+      poll_timeout_seconds: 60,
+      api_token: 'canary-cloudflare-token-0123456789',
+    });
+    expect(document.body.innerHTML).not.toContain('canary-cloudflare-token');
+    expect(cached(client)).not.toContain('canary-cloudflare-token');
+  });
+
+  it('adds an Azure DNS provider with each sign-in method and checks its IDs first', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    base({
+      hooks: [],
+      extra: [http.post(HOOKS, async ({ request }) => (bodies.push((await request.json()) as Record<string, unknown>), HttpResponse.json(azHook(), { status: 201 })))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Azure');
+    await userEvent.type(within(dialog).getByLabelText(/^Directory \(tenant\) ID/), 'not-a-guid');
+    await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'bad/group');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findAllByText('Enter an ID in the form 00000000-0000-0000-0000-000000000000.')).toHaveLength(3);
+    expect(within(dialog).getByText(/Use up to 90 letters/)).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^Directory \(tenant\) ID/));
+    await userEvent.type(within(dialog).getByLabelText(/^Directory \(tenant\) ID/), '11111111-2222-3333-4444-555555555555');
+    await userEvent.type(within(dialog).getByLabelText(/^Application \(client\) ID/), '66666666-7777-8888-9999-000000000000');
+    await userEvent.type(within(dialog).getByLabelText(/^Subscription ID/), 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    await userEvent.clear(within(dialog).getByLabelText(/^Resource group/));
+    await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'dns-rg');
+    await userEvent.type(within(dialog).getByLabelText(/^Client secret/), 'canary-azure-secret');
+    await userEvent.type(within(dialog).getByLabelText(/^Allowed names/), 'example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(bodies[0]).toMatchObject({
+      kind: 'azure_dns',
+      auth: 'client_secret',
+      tenant_id: '11111111-2222-3333-4444-555555555555',
+      client_id: '66666666-7777-8888-9999-000000000000',
+      subscription_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      resource_group: 'dns-rg',
+      client_secret: 'canary-azure-secret',
+    });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    // A certificate needs its key; a managed identity has no tenant and no secret.
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
+    dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Sign-in method'), 'certificate');
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Azure cert');
+    await userEvent.type(within(dialog).getByLabelText(/^Directory \(tenant\) ID/), '11111111-2222-3333-4444-555555555555');
+    await userEvent.type(within(dialog).getByLabelText(/^Application \(client\) ID/), '66666666-7777-8888-9999-000000000000');
+    await userEvent.type(within(dialog).getByLabelText(/^Subscription ID/), 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'dns-rg');
+    fireEvent.change(within(dialog).getByLabelText(/^Certificate registered/), { target: { value: '-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Paste the private key that belongs to this certificate.')).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText(/^Private key of the certificate/), { target: { value: '-----BEGIN PRIVATE KEY-----\nBB\n-----END PRIVATE KEY-----' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(bodies[1]).toMatchObject({ auth: 'certificate', certificate_pem: expect.stringContaining('BEGIN CERTIFICATE'), private_key_pem: expect.stringContaining('PRIVATE KEY') });
+    expect(bodies[1]).not.toHaveProperty('client_secret');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
+    dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Sign-in method'), 'managed_identity');
+    expect(within(dialog).queryByLabelText(/^Directory \(tenant\) ID/)).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Azure MI');
+    await userEvent.type(within(dialog).getByLabelText(/^Subscription ID/), 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'dns-rg');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(bodies[2]).toMatchObject({ kind: 'azure_dns', auth: 'managed_identity', tenant_id: '', client_id: '' });
+  });
+
+  it('adds a Route 53 provider with a role, and refuses a malformed key ID and role first', async () => {
+    let body: Record<string, unknown> | undefined;
+    base({
+      hooks: [],
+      extra: [http.post(HOOKS, async ({ request }) => ((body = (await request.json()) as Record<string, unknown>), HttpResponse.json(r53Hook(), { status: 201 })))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'route53');
+    expect(within(dialog).getByText(/route53:ChangeResourceRecordSets/)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Route 53');
+    await userEvent.type(within(dialog).getByLabelText(/^Access key ID/), 'lower-case');
+    await userEvent.type(within(dialog).getByLabelText(/^Secret access key/), 'short');
+    await userEvent.type(within(dialog).getByLabelText(/^Role to assume/), 'arn:aws:iam::1:user/x');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText(/16 to 128 capital letters and digits/)).toBeInTheDocument();
+    expect(within(dialog).getByText('The secret access key needs 16 to 128 characters without spaces.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Enter a role ARN like/)).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^Access key ID/));
+    await userEvent.type(within(dialog).getByLabelText(/^Access key ID/), 'TESTACCESSKEYID0001');
+    await userEvent.clear(within(dialog).getByLabelText(/^Secret access key/));
+    await userEvent.type(within(dialog).getByLabelText(/^Secret access key/), 'canary-aws-secret-key-0123');
+    await userEvent.clear(within(dialog).getByLabelText(/^Role to assume/));
+    await userEvent.type(within(dialog).getByLabelText(/^Role to assume/), 'arn:aws:iam::123456789012:role/dns');
+    await userEvent.type(within(dialog).getByLabelText(/^External ID/), 'ext-1');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(body).toMatchObject({
+      kind: 'route53',
+      access_key_id: 'TESTACCESSKEYID0001',
+      role_arn: 'arn:aws:iam::123456789012:role/dns',
+      external_id: 'ext-1',
+      secret_access_key: 'canary-aws-secret-key-0123',
+    });
+  });
+
+  it('changes a provider: the kind is fixed, stored credentials stay unless typed, and the settings go as a whole', async () => {
+    const patches: Record<string, unknown>[] = [];
+    base({
+      hooks: [azHook(), r53Hook(), cfHook()],
+      extra: [
+        http.patch(`${HOOKS}/:id`, async ({ request }) => {
+          patches.push((await request.json()) as Record<string, unknown>);
+          return patches.length === 1
+            ? errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'resource_group', code: 'validation.pattern' }] })
+            : HttpResponse.json(azHook());
+        }),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Azure' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Edit Azure' });
+    expect(within(dialog).queryByLabelText('DNS provider')).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/Stored certificate: thumbprint abab/)).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^Resource group/));
+    await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'other-rg');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('This value contains characters that are not allowed.')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(patches[1]).toEqual({
+      auth: 'certificate',
+      tenant_id: '11111111-2222-3333-4444-555555555555',
+      client_id: '66666666-7777-8888-9999-000000000000',
+      subscription_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      resource_group: 'other-rg',
+    });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    // Another sign-in method needs its credential before anything is sent.
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Azure' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit Azure' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Sign-in method'), 'client_secret');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('This field is required.')).toBeInTheDocument();
+    expect(patches).toHaveLength(2);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    // A new AWS key ID needs its secret; the name alone changes nothing else.
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Route 53' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit Route 53' });
+    expect(within(dialog).getByText('Credentials are stored. Leave this empty to keep them.')).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^Access key ID/));
+    await userEvent.type(within(dialog).getByLabelText(/^Access key ID/), 'TESTACCESSKEYID0002');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('This field is required.')).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^Access key ID/));
+    await userEvent.type(within(dialog).getByLabelText(/^Access key ID/), 'TESTACCESSKEYID0001');
+    await userEvent.clear(within(dialog).getByLabelText(/^Name shown/));
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'AWS');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(patches[2]).toEqual({ name: 'AWS' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    // A new Cloudflare token is checked and sent; an empty one keeps the stored token.
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Cloudflare' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit Cloudflare' });
+    await userEvent.type(within(dialog).getByLabelText(/^API token/), 'with space in it but long enough');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('The token needs 20 to 256 characters without spaces.')).toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText(/^API token/));
+    await userEvent.type(within(dialog).getByLabelText(/^API token/), 'a-new-cloudflare-token-0123456789');
+    const wait = within(dialog).getByLabelText(/^Wait after adding/);
+    await userEvent.clear(wait);
+    await userEvent.type(wait, '30');
+    const poll = within(dialog).getByLabelText(/^Time to wait for the record/);
+    await userEvent.clear(poll);
+    await userEvent.type(poll, '100');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Both times together can be at most 120 seconds.')).toBeInTheDocument();
+    await userEvent.clear(poll);
+    await userEvent.type(poll, '90');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(patches[3]).toEqual({ api_token: 'a-new-cloudflare-token-0123456789', propagation_wait_seconds: 30, poll_timeout_seconds: 90 });
+  });
+
+  it('words the provider dialog in Turkish', async () => {
+    base({ session: { ...sessionFor('admin', 'tr'), stepup_until: '2099-01-01T00:00:00Z' }, hooks: [cfHook()] });
+    await renderRoute('/settings?tab=acme', { languages: ['tr-TR'] });
+    await userEvent.click(await screen.findByRole('button', { name: 'DNS sağlayıcısı ekle' }));
+    const dialog = await screen.findByRole('dialog', { name: 'DNS sağlayıcısı ekle' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('DNS sağlayıcısı'), 'route53');
+    expect(within(dialog).getByLabelText(/^Gizli erişim anahtarı/)).toBeInTheDocument();
+    expectNoRawKeys();
   });
 });
 
@@ -956,7 +1235,7 @@ describe('Turkish', () => {
     await renderRoute('/settings?tab=acme', { languages: ['tr-TR'] });
     expect(await screen.findByRole('tab', { name: 'Sertifika yetkilileri', selected: true })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Hesap anahtarını yenile' })).toBeInTheDocument();
-    expect(screen.getByText(/alan adı kaydını sizin yerinize ekleyen küçük bir hizmettir/)).toBeInTheDocument();
+    expect(screen.getByText(/sizin küçük bir hizmetiniz olan bir DNS kancası/)).toBeInTheDocument();
     expectNoRawKeys();
     await userEvent.click(screen.getByRole('button', { name: 'Sertifika yetkilisi ekle' }));
     const dialog = await screen.findByRole('dialog');
