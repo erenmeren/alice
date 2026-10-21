@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Groundwork for Windows, F5 BIG-IP and Kubernetes targets (R59)
+
+**Added**
+- The groundwork the Windows server, F5 BIG-IP and Kubernetes targets share (phase G of the deployment targets roadmap):
+  certificate locations of other kinds than a file (an http.sys binding, a client SSL profile entry, a TLS Secret),
+  identified by a locator; a probe address per such location (the address Alice checks, for example a load balancer's
+  internal address); Alice-held backups for a target that keeps no copy of what it replaces, sealed and deleted 7 days
+  after the deployment is final; the sign-in secrets of API targets; TLS server identities pinned like SSH host keys.
+  No such target can be added yet: each comes with its own phase.
+- API: a website location gains `kind`, `locator`, `details` and `verify_address`; `PATCH /api/v1/locations/{id}` takes
+  `verify_address` for a location that is not a certificate file. Deployment steps may be named `import_chain`,
+  `import_certificate`, `bind`, `upload`, `install`, `commit`, `sync`, `save` and `write_secret` (labelled in English
+  and Turkish).
+
+**Changed**
+- Nothing changes for Nginx, Apache, HAProxy and Key Vault: their locations are certificate files, which keep no
+  locator and no probe address. Migration `00031` (its Down refuses while data of the new targets exists). Rulings:
+  `docs/superpowers/rulings/deployment-targets-groundwork.md`.
+
 ## Unreleased — Built-in DNS providers for the DNS proof (Cloudflare, Azure DNS, Amazon Route 53)
 
 **Added**

@@ -1,8 +1,8 @@
 # New deployment targets: roadmap and shared groundwork
 
-Status: design only, nothing built. Date: 2026-10-21. Written against `main` at `72fa1f9a`. Decision number:
-**R59+ when implemented**. No R-number is recorded in `alice-v1/00-decisions.md` for this work yet; R57 and R58 are
-taken by parallel work, and each phase that is built records its own decision then.
+Status: phase G built (§5); the target phases are design only. Date: 2026-10-21. Written against `main` at `72fa1f9a`. Decision number:
+**R59** for phase G (recorded in `alice-v1/00-decisions.md`); R57 and R58 are
+taken by parallel work, and each target phase that is built records its own decision then.
 
 | Design | Target | Recommended approach |
 |---|---|---|
@@ -114,3 +114,21 @@ From the three designs, the ones that cost money, change pricing or set the secu
 3. F5 Q3 and Kubernetes Q3: what counts as one licensed target (a device group, a cluster).
 4. F5 Q6: who provides a BIG-IP VE lab license for real-device testing.
 5. Kubernetes Q1: strict RBAC by default (named Secrets only) versus convenience.
+
+## 5. Phase G as built (2026-10-21, R59)
+
+Built on branch `worktree-agent-ac84dfca84fff4eb1` from `main` at `3ea8478c`; rulings in
+[deployment-targets-groundwork.md](../rulings/deployment-targets-groundwork.md). Migration `00031` (`00030` is the
+parallel DNS-provider work's), SQLSTATE `Z1031` (the Down refuses while any new data exists) and `Z1032` (a held backup
+of an unfinished deployment is never deleted). No behaviour change for Nginx, Apache, HAProxy and Key Vault.
+
+| Item | As built | Differs from §1 |
+|---|---|---|
+| G1 | Kinds `win_sslbinding`, `f5_clientssl`, `k8s_tls_secret`; `locator` (flat object, 1 KiB, unique per target and kind) and `details` (16 KiB); `cert_path` the canonical text (1024); `deployments.location_kind`; `providers.LocationKind`, `Locator`, `CanonicalDetails`, `CertLocation.Kind/Locator/Details`; the nine step names; the CAS token documented. Inventory stores, reads and deploys them. | `win_ccs_file` and `win_rdp` wait for W5/W6. A scan finds a location by kind and text and checks its locator (ruling 3). The certificate half of `Reconcile` still needs a web-server type (ruling 4). |
+| G2 | `tls-spki` identities in `host_keys` with the existing flow; `providers.TLSIdentity`; `internal/providers/tlspin` (pin or CA bundle; `Refusal` records the sighting and answers the SSH codes). | None. The UI copy "server identity" comes with the first target that shows one. |
+| G3 | Purposes `f5_device`, `kubernetes_cluster`; kinds `f5_password`, `k8s_token`, `k8s_client_cert`; trigger widened; `providers.TargetSecret`, `TargetSecretSource`; `inventory.TargetCredentials`. | A separate interface, not a new `CredentialSource` method (ruling 6). |
+| G4 | `verify_address` per location, `VerifyOptions.Address`, the PATCH field and the settings dialog field. | Refused for a certificate file in this phase (ruling 7). |
+| G5 | `RollbackTraits` (`BackupOnTarget`, `BackupHeldByAlice`, `SelfRestores`), `RollbackGuard.SatisfiedBy`; `deployment_backups` sealed, held once, purged by `maintenance.cleanup` 7 days after final; `HeldBackups` on every engine request. | None. |
+| G6 | Types `windows`, `f5_bigip`, `kubernetes`; reserved provider kinds `windows`, `f5bigip`, `kubernetes`. | Nothing registered: no such target can be added until its phase. |
+| G7 | `providertest.CheckLocationTarget`, `MemoryBackups`; a reference counterpart and one broken variant per rule. | Each target phase runs it against its own fake. |
+

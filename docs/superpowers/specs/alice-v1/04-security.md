@@ -372,6 +372,15 @@ transaction as the `certificates` row). Only the DER `secrets.Plaintext` is zero
 cannot be, so their lifetime is kept to the order function. None of these values is returned by the API, written to a
 log, an audit row, a job payload or an error (SEC-051's suite covers them: `TestACMESecretsNeverLeak`).
 
+(Amendment, R59 deployment targets groundwork 2026-10-21; rulings `docs/superpowers/rulings/deployment-targets-groundwork.md`.)
+New sealed secrets under SEC-040/041: an API target's credential (`credentials/<id>/ciphertext` with purpose `f5_device`
+or `kubernetes_cluster`: a password, a ServiceAccount token or a client key; the user name and the client certificate
+are public) and an Alice-held backup (`deployment_backups/<deployment id>/ciphertext`: the certificate chain and private
+key a location held before a deployment, for a target that keeps no copy itself). A held backup is written once, before
+the change, is never returned by the API, and is deleted 7 days after its deployment is final; the database refuses
+deleting it earlier (Z1032). `providers.TargetSecret` and `providers.HeldBackup` redact on format, log and JSON and are
+zeroed after use (SEC-044).
+
 ### 15.8 Logging and redaction
 
 - **SEC-050** Structured logging (`log/slog`, JSON). A central redaction handler removes keys named `password`, `secret`, `token`, `key`, `authorization`, `cookie`, `passphrase`, `totp`, `private*` and any value of type `Secret`. [T]
@@ -403,6 +412,12 @@ log, an audit row, a job payload or an error (SEC-051's suite covers them: `Test
 - **SEC-081** The platform's own authorized_keys entry is identified by fingerprint and cannot be removed or rotated by any job, API call or policy; attempts return an error and are audited. [T]
 - **SEC-082** The generated authorized_keys line for the platform key includes `from="<alice-ip>",no-agent-forwarding,no-port-forwarding,no-X11-forwarding` (`from=` optional if Alice IP unknown) and the service-user sudoers file is generated for the selected `alice-helper` profile (`nginx` or `linux`) only. [T, R]
 - **SEC-083** Azure credentials are stored as encrypted credentials; the UI shows the exact minimum role per feature (monitor-only = Key Vault Reader; deploy to Nginx = + Key Vault Secrets User, scoped by docs to individual cert-backing secrets; upload/import = + Key Vault Certificates Officer); Key Vault Reader sufficiency for data-plane listing (verify) is confirmed by the real-Azure test suite in Phase 5; the secret value is never returned after saving. [T]
+
+(Amendment, R59.) An API target's server identity is pinned like an SSH host key (SEC-080): the SubjectPublicKeyInfo
+of the certificate it presents, host key type `tls-spki`, confirmed by an Administrator; a changed identity blocks the
+target (`host_key_changed`). Alternatively the target's configuration carries a CA bundle and the chain is verified for
+its name against those roots only. TLS 1.2 or later; no request is sent before the identity matched
+(`internal/providers/tlspin`). The STRIDE rows and target-access requirements of each connector come with its phase.
 
 ### 15.12 Backups
 
