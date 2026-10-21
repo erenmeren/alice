@@ -66,6 +66,41 @@
         "title": "This reaches outside your services.",
         "cause": "The action also touches {{count}} service(s) where you hold no role for it. Alice does not name them.",
         "action": "Limit the action to your own services, or ask an Administrator with rights on every service involved to do it."
+      },
+      "domain_not_allowed": {
+        "title": "This name is outside the service's domains.",
+        "cause": "The service's policy lists the names its certificates may carry, and {{name}} is not one of them. Nothing was stored, ordered or generated.",
+        "action": "Use names inside the service's domains or choose another service, or ask an Administrator of all services to add the name to the policy."
+      },
+      "source_not_allowed": {
+        "title": "This service does not accept certificates this way.",
+        "cause": "The service's policy lets certificates enter only from the sources it lists, and {{source}} is not one of them (acme: an ACME certificate, uploaded: an upload, csr: a signing request).",
+        "action": "Use a source the policy allows or choose another service, or ask an Administrator of the service to change its policy."
+      },
+      "version_conflict": {
+        "title": "The policy changed since you opened it.",
+        "cause": "Someone saved a newer version of the service's policy in the meantime.",
+        "action": "Reload the policy, check what changed, then save again."
+      },
+      "domains_global_only": {
+        "title": "Only an Administrator of all services changes the domains.",
+        "cause": "The domains decide which names may enter the service, so an Administrator of this service alone cannot change them.",
+        "action": "Leave the domains as they are and save your other changes, or ask an Administrator who holds the role on all services."
+      },
+      "auto_deploy_forbidden": {
+        "title": "The service's policy forbids automatic deployment.",
+        "cause": "Automatic deployment cannot be switched on for this service's Key Vault bindings and ACME certificates; those switched on before wait until the policy allows it again.",
+        "action": "Deploy by hand with Deploy now, or ask an Administrator of the service to allow automatic deployment in its policy."
+      },
+      "acme_not_allowed": {
+        "title": "The service does not allow this ACME setting.",
+        "cause": "The service's policy limits the certificate authorities, proof methods and key types of its ACME certificates, and the chosen {{field}} is not among them.",
+        "action": "Choose a value the policy allows, or ask an Administrator of the service to change its policy."
+      },
+      "policy_field_unavailable": {
+        "title": "This policy setting is not available yet.",
+        "cause": "\"{{field}}\" is reserved for a later version of Alice.",
+        "action": "Remove it from the policy, then save again."
       }
     },
     "binding": {

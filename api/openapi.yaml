@@ -5594,6 +5594,36 @@ paths:
               schema: { $ref: "#/components/schemas/ServicePolicy" }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putServicePolicy
+      summary: Save a new version of the service's policy
+      description: >-
+        body is the whole policy document (schema 1, R55); version is the policy version the caller read (409
+        ALC-SVC-0010 when it is no longer the current one). Every field is optional and an empty list is no constraint.
+        An unknown field is 400; a reserved key (verification, drift, canary, windows, thresholds) is 422 ALC-SVC-0015; an
+        invalid value is 422 validation on body.<path>. Changing domains needs a global grant (403 ALC-SVC-0011 for an
+        Administrator of this service only). A document equal to the current one stores nothing and answers the current
+        version. Audited service.policy_changed with the changed top-level keys. Administrator of the service with a fresh
+        step-up, never an API token; works in lock.
+      x-permission: services.policy
+      x-scope: resource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServicePolicyUpdate" }
+      responses:
+        "200":
+          description: The current policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServicePolicy" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/services/{id}/policy/versions:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -5847,6 +5877,60 @@ components:
         created_by: { type: [string, "null"], format: uuid }
         created_by_name: { type: string }
         created_at: { type: string, format: date-time }
+    ServicePolicyUpdate:
+      type: object
+      required: [version, body]
+      additionalProperties: false
+      properties:
+        version: { type: integer, minimum: 1, description: The policy version the caller read }
+        body: { $ref: "#/components/schemas/ServicePolicyDocument" }
+    ServicePolicyDocument:
+      type: object
+      description: >-
+        A service policy, schema 1 (design §7.3). domains: DNS names, "*.suffix" wildcards (any depth, wildcard names
+        included), IP addresses and CIDR blocks; every name of a certificate entering the service must match one.
+        certificate_sources: how certificates may enter. acme: the allowed providers, challenges and key types, and the
+        renewal window new ACME certificates start with. deployment.auto_deploy forbidden holds automatic deployment.
+        incident.revoke_mode: the mode new incidents start with. notifications: who else receives the service's e-mails.
+      required: [schema]
+      additionalProperties: false
+      properties:
+        schema: { type: integer, enum: [1] }
+        domains: { type: array, maxItems: 200, items: { type: string, maxLength: 253 } }
+        certificate_sources: { type: array, items: { type: string, enum: [acme, uploaded, csr] } }
+        acme:
+          type: object
+          additionalProperties: false
+          properties:
+            providers: { type: array, maxItems: 50, items: { type: string, format: uuid } }
+            challenges: { type: array, items: { type: string, enum: [dns01, http01] } }
+            key_types: { type: array, items: { type: string, enum: [ecdsa_p256, ecdsa_p384, rsa_2048, rsa_3072, rsa_4096] } }
+            renew_before_days: { type: integer, minimum: 1, maximum: 60 }
+        deployment:
+          type: object
+          additionalProperties: false
+          properties:
+            auto_deploy: { type: string, enum: [allowed, forbidden] }
+        incident:
+          type: object
+          additionalProperties: false
+          properties:
+            revoke_mode: { type: string, enum: [after_verified, now] }
+        notifications:
+          type: object
+          additionalProperties: false
+          properties:
+            administrators: { type: boolean }
+            addresses:
+              type: array
+              maxItems: 20
+              items:
+                type: object
+                required: [email, locale]
+                additionalProperties: false
+                properties:
+                  email: { type: string, format: email }
+                  locale: { type: string, enum: [en, tr] }
     ServicePolicyList:
       type: object
       required: [items]

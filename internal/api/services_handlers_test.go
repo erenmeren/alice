@@ -37,6 +37,7 @@ type fakeServices struct {
 	ResolveFn       func(kind string, id any) (services.Resolution, error)
 	BindingsFn      func(f services.BindingFilter) ([]services.Binding, error)
 	CreateBindingFn func(in services.BindingInput) (services.Binding, error)
+	SetPolicyFn     func(id uuid.UUID, version int, body json.RawMessage, global bool) (services.Policy, error)
 }
 
 var _ ServicesService = (*fakeServices)(nil)
@@ -91,6 +92,13 @@ func (f *fakeServices) Policy(context.Context, uuid.UUID) (services.Policy, erro
 }
 func (f *fakeServices) PolicyVersions(context.Context, uuid.UUID) ([]services.Policy, error) {
 	return nil, errNotConfigured
+}
+func (f *fakeServices) SetPolicy(_ context.Context, a services.Actor, id uuid.UUID, version int, body json.RawMessage, global bool) (services.Policy, error) {
+	f.lastActor = a
+	if f.SetPolicyFn != nil {
+		return f.SetPolicyFn(id, version, body, global)
+	}
+	return services.Policy{}, errNotConfigured
 }
 func (f *fakeServices) Trusts(context.Context, *uuid.UUID) ([]services.Trust, error) {
 	return nil, errNotConfigured
@@ -374,4 +382,79 @@ func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// R55: the policy is saved with the version read and the whole document; a global Administrator may change the domains;
+// every refusal of a policy has its code, params and field.
+func TestPutServicePolicy(t *testing.T) {
+	d, f := servicesDeps(t)
+	var (
+		gotVersion int
+		gotBody    string
+		gotGlobal  bool
+	)
+	f.SetPolicyFn = func(_ uuid.UUID, version int, body json.RawMessage, global bool) (services.Policy, error) {
+		gotVersion, gotBody, gotGlobal = version, string(body), global
+		return services.Policy{Version: version + 1, Document: json.RawMessage(`{"schema":1}`), CreatedAt: testNow}, nil
+	}
+	h := NewHandler(d)
+	path := "/api/v1/services/" + svcPay.String() + "/policy"
+	rec := call(h, http.MethodPut, path, "admin-stepup", `{"version":4,"body":{"schema":1,"domains":["*.pay.example.com"]}}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, 4, gotVersion)
+	assert.JSONEq(t, `{"schema":1,"domains":["*.pay.example.com"]}`, gotBody)
+	assert.True(t, gotGlobal, "a global Administrator may change the domains")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.EqualValues(t, 5, body["version"])
+
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPut, path, "admin-stepup", `{"body":{"schema":1}}`).Code, "no version")
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPut, path, "admin-stepup", `{"version":1}`).Code, "no body")
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPut, path, "admin-stepup", `{"version":1,"body":{},"x":1}`).Code)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "admin", `{"version":1,"body":{"schema":1}}`).Code, "step-up")
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "operator-stepup", `{"version":1,"body":{"schema":1}}`).Code)
+	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPut, path, "alice_operate_admin", `{"version":1,"body":{"schema":1}}`).Code, "never a token")
+
+	for err, want := range map[error]struct {
+		status int
+		code   string
+		params map[string]any
+		field  string
+	}{
+		services.ErrPolicyVersion:                                 {http.StatusConflict, "ALC-SVC-0010", nil, ""},
+		services.ErrDomainsGlobalOnly:                             {http.StatusForbidden, "ALC-SVC-0011", nil, ""},
+		authz.ErrPolicyMalformed:                                  {http.StatusBadRequest, "ALC-SYS-0004", nil, ""},
+		&authz.FieldUnavailableError{Key: "drift"}:                {http.StatusUnprocessableEntity, "ALC-SVC-0015", map[string]any{"field": "drift"}, "body.drift"},
+		&authz.DomainError{Name: "x.example.org", Field: "names"}: {http.StatusUnprocessableEntity, "ALC-SVC-0008", map[string]any{"name": "x.example.org"}, "names"},
+		&authz.DomainError{Name: "bad\nname", Field: "names"}:     {http.StatusUnprocessableEntity, "ALC-SVC-0008", map[string]any{}, "names"},
+		&authz.SourceError{Source: "uploaded"}:                    {http.StatusUnprocessableEntity, "ALC-SVC-0009", map[string]any{"source": "uploaded"}, ""},
+		&authz.ACMEPolicyError{Field: "challenge"}:                {http.StatusUnprocessableEntity, "ALC-SVC-0014", map[string]any{"field": "challenge"}, "challenge"},
+		authz.ErrAutoDeployForbidden:                              {http.StatusUnprocessableEntity, "ALC-SVC-0013", nil, ""},
+	} {
+		f.SetPolicyFn = func(uuid.UUID, int, json.RawMessage, bool) (services.Policy, error) { return services.Policy{}, err }
+		rec := call(h, http.MethodPut, path, "admin-stepup", `{"version":1,"body":{"schema":1}}`)
+		assert.Equal(t, want.status, rec.Code, "%v", err)
+		var e struct {
+			Error struct {
+				Code    string         `json:"code"`
+				Params  map[string]any `json:"params"`
+				Details []struct {
+					Field string `json:"field"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &e))
+		assert.Equal(t, want.code, e.Error.Code, "%v", err)
+		switch {
+		case want.params == nil:
+		case len(want.params) == 0:
+			assert.Empty(t, e.Error.Params, "%v: a name that is not a host name is not repeated", err)
+		default:
+			assert.Equal(t, want.params, e.Error.Params, "%v", err)
+		}
+		if want.field != "" {
+			require.Len(t, e.Error.Details, 1, "%v", err)
+			assert.Equal(t, want.field, e.Error.Details[0].Field)
+		}
+	}
 }

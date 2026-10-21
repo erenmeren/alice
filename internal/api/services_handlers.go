@@ -33,6 +33,8 @@ type ServicesService interface {
 	DeleteService(ctx context.Context, a services.Actor, id uuid.UUID, version int) error
 	Policy(ctx context.Context, id uuid.UUID) (services.Policy, error)
 	PolicyVersions(ctx context.Context, id uuid.UUID) ([]services.Policy, error)
+	// R55: a new version of the policy (domainsGlobal: the caller holds a global grant, which the domains need).
+	SetPolicy(ctx context.Context, a services.Actor, id uuid.UUID, version int, body json.RawMessage, domainsGlobal bool) (services.Policy, error)
 	Trusts(ctx context.Context, service *uuid.UUID) ([]services.Trust, error)
 	CreateTrust(ctx context.Context, a services.Actor, source, target uuid.UUID) (services.Trust, error)
 	DeleteTrust(ctx context.Context, a services.Actor, id uuid.UUID) error
@@ -74,6 +76,7 @@ func (s *server) serviceRoutes() []route {
 		{method: http.MethodDelete, pattern: svcs + "/{id}", scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.deleteService},
 		{method: http.MethodGet, pattern: svcs + "/{id}/policy", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.getServicePolicy},
 		{method: http.MethodGet, pattern: svcs + "/{id}/policy/versions", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.listServicePolicies},
+		{method: http.MethodPut, pattern: svcs + "/{id}/policy", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.ServicesPolicy, lic: always, handler: s.putServicePolicy},
 		{method: http.MethodPost, pattern: svcs + "/{id}/actions/assign", scope: scopeCross, resolve: by(services.KindService, "id"), perm: rbac.ServicesAssign, lic: always, handler: s.assignToService},
 		{method: http.MethodGet, pattern: trusts, scope: scopeList, perm: rbac.Read, handler: s.listTrusts},
 		{method: http.MethodPost, pattern: trusts, scope: scopeCross, perm: rbac.ServicesTrust, lic: always, handler: s.createTrust},
@@ -83,9 +86,11 @@ func (s *server) serviceRoutes() []route {
 
 // Bodies of the service routes: names and descriptions are short; an assignment names at most services.MaxAssign
 // resources (about 80 bytes each).
+// A policy document is at most authz.MaxPolicyBytes, with its version beside it.
 const (
-	maxServiceBody = 8 << 10
-	maxAssignBody  = 64 << 10
+	maxServiceBody       = 8 << 10
+	maxAssignBody        = 64 << 10
+	maxServicePolicyBody = authz.MaxPolicyBytes + 1<<10
 )
 
 // serviceActor is the caller as the services module needs it.
@@ -637,6 +642,44 @@ func (s *server) listServicePolicies(w http.ResponseWriter, r *http.Request) {
 		items = append(items, servicePolicyJSON(p))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// putServicePolicy saves a new version of the service's policy (R55, design §7.3): {"version": the version read,
+// "body": the whole document}. A service Administrator (services.policy on the service) changes every field but the
+// domains, which need a global grant (ALC-SVC-0011); a stale version is ALC-SVC-0010.
+func (s *server) putServicePolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.servicesReady(w, r) {
+		return
+	}
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrSVCNotFound)
+		return
+	}
+	var req struct {
+		Version  int             `json:"version"`
+		Document json.RawMessage `json:"body"`
+	}
+	if !s.decodeLimit(w, r, &req, maxServicePolicyBody) {
+		return
+	}
+	var v validate.Errors
+	if req.Version < 1 {
+		v.Add("version", validate.Required, nil)
+	}
+	if len(req.Document) == 0 || string(req.Document) == "null" {
+		v.Add("body", validate.Required, nil)
+	}
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	p, err := s.deps.Services.SetPolicy(r.Context(), s.serviceActor(r), id, req.Version, req.Document, s.reachOf(r, rbac.ServicesPolicy).All())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, servicePolicyJSON(p))
 }
 
 // assignToService moves resources to the service of the path (design §8.1): ?dry_run=true answers what the move would

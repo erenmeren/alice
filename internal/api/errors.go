@@ -541,6 +541,17 @@ var (
 	ErrSVCNotAllowed    = ErrorCode{Code: "ALC-SVC-0006", Reason: "service.not_allowed", Status: http.StatusForbidden}
 	ErrSVCSpansServices = ErrorCode{Code: "ALC-SVC-0012", Reason: "service.spans_services", Status: http.StatusForbidden}
 
+	// Service policy (R55, design §7.3, §7.4). ErrSVCDomainNotAllowed names the first name outside the service's
+	// domains (params.name) and the request field; ErrSVCSourceNotAllowed the source (params.source); ErrSVCACMENotAllowed
+	// the field (provider_id, challenge or key_type); ErrSVCPolicyFieldUnavailable the reserved key (params.field).
+	ErrSVCDomainNotAllowed       = ErrorCode{Code: "ALC-SVC-0008", Reason: "service.domain_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrSVCSourceNotAllowed       = ErrorCode{Code: "ALC-SVC-0009", Reason: "service.source_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrSVCVersionConflict        = ErrorCode{Code: "ALC-SVC-0010", Reason: "service.version_conflict", Status: http.StatusConflict}
+	ErrSVCDomainsGlobalOnly      = ErrorCode{Code: "ALC-SVC-0011", Reason: "service.domains_global_only", Status: http.StatusForbidden}
+	ErrSVCAutoDeployForbidden    = ErrorCode{Code: "ALC-SVC-0013", Reason: "service.auto_deploy_forbidden", Status: http.StatusUnprocessableEntity}
+	ErrSVCACMENotAllowed         = ErrorCode{Code: "ALC-SVC-0014", Reason: "service.acme_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrSVCPolicyFieldUnavailable = ErrorCode{Code: "ALC-SVC-0015", Reason: "service.policy_field_unavailable", Status: http.StatusUnprocessableEntity}
+
 	// Role bindings (area ACC, R49 Phase 2, design §8.3): the same role on the same service or environment twice, and
 	// more bindings for one person than the bound allows.
 	ErrACCBindingDuplicate = ErrorCode{Code: "ALC-ACC-0001", Reason: "binding.duplicate", Status: http.StatusConflict}
@@ -624,6 +635,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrDSCScopeDisabled,
 		ErrSVCNotFound, ErrSVCNameTaken, ErrSVCNotEmpty, ErrSVCDefaultProtected, ErrSVCUntrusted, ErrSVCEnvironmentInUse,
 		ErrSVCEnvironmentTaken, ErrSVCTrustExists, ErrSVCRequired, ErrSVCNotAllowed, ErrSVCSpansServices,
+		ErrSVCDomainNotAllowed, ErrSVCSourceNotAllowed, ErrSVCVersionConflict, ErrSVCDomainsGlobalOnly, ErrSVCAutoDeployForbidden,
+		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable,
 		ErrACCBindingDuplicate, ErrACCBindingLimit, ErrBreakGlassGlobalRole,
 	}
 }
@@ -698,6 +711,15 @@ var errorMap = []struct {
 	{services.ErrBindingLimit, ErrACCBindingLimit, map[string]string{"max": strconv.Itoa(services.MaxBindingsPerSubject)}},
 	{auth.ErrBreakGlassGlobalRole, ErrBreakGlassGlobalRole, nil},
 	{services.ErrVersionMismatch, ErrPreconditionFailed, nil},
+	// Service policy (R55); the typed errors are answered with their params and field by policyRefusal.
+	{services.ErrPolicyVersion, ErrSVCVersionConflict, nil},
+	{services.ErrDomainsGlobalOnly, ErrSVCDomainsGlobalOnly, nil},
+	{authz.ErrPolicyMalformed, ErrBadRequest, nil},
+	{authz.ErrAutoDeployForbidden, ErrSVCAutoDeployForbidden, nil},
+	{authz.ErrDomainNotAllowed, ErrSVCDomainNotAllowed, nil},
+	{authz.ErrSourceNotAllowed, ErrSVCSourceNotAllowed, nil},
+	{authz.ErrACMENotAllowed, ErrSVCACMENotAllowed, nil},
+	{authz.ErrPolicyFieldUnavailable, ErrSVCPolicyFieldUnavailable, nil},
 	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},     // EnsurePlatformKey runs before serving; only a broken start reaches this
 	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil}, // a non-development build without the helper checksums
 	{inventory.ErrDuplicateTarget, ErrTargetDuplicate, nil},
@@ -986,6 +1008,10 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 			Params: map[string]string{"values": newKeyTypeValues()}}})
 		return
 	}
+	if ec, params, details, ok := policyRefusal(err); ok {
+		s.writeErrorWith(w, r, ec, params, details)
+		return
+	}
 	ec, params, ok := classify(err)
 	if !ok {
 		attrs := append([]any{"request_id", RequestID(r.Context()), "path", r.URL.Path}, errorAttrs(err)...)
@@ -1038,6 +1064,42 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		params["location_id"] = refused.LocationID.String()
 	}
 	s.writeErrorWith(w, r, ec, params, nil)
+}
+
+// policyName is a certificate name an answer may repeat: a DNS name, a wildcard or an IP address, never other text a
+// certificate's subject alternative name could carry.
+var policyName = regexp.MustCompile(`^[A-Za-z0-9*.:_-]{1,253}$`)
+
+// policyRefusal answers a refusal of a service's policy (R55) with what the caller needs to correct it: the name
+// outside the domains (and the field that carried it), the source, the ACME field, the reserved key.
+func policyRefusal(err error) (ErrorCode, map[string]string, []validate.FieldError, bool) {
+	var (
+		domain *authz.DomainError
+		source *authz.SourceError
+		acme   *authz.ACMEPolicyError
+		field  *authz.FieldUnavailableError
+	)
+	switch {
+	case errors.As(err, &domain):
+		params := map[string]string{}
+		if policyName.MatchString(domain.Name) {
+			params["name"] = domain.Name
+		}
+		var details []validate.FieldError
+		if domain.Field != "" {
+			details = []validate.FieldError{{Field: domain.Field, Code: ErrSVCDomainNotAllowed.Reason}}
+		}
+		return ErrSVCDomainNotAllowed, params, details, true
+	case errors.As(err, &source):
+		return ErrSVCSourceNotAllowed, map[string]string{"source": source.Source}, nil, true
+	case errors.As(err, &acme):
+		return ErrSVCACMENotAllowed, map[string]string{"field": acme.Field},
+			[]validate.FieldError{{Field: acme.Field, Code: ErrSVCACMENotAllowed.Reason}}, true
+	case errors.As(err, &field):
+		return ErrSVCPolicyFieldUnavailable, map[string]string{"field": field.Key},
+			[]validate.FieldError{{Field: "body." + field.Key, Code: ErrSVCPolicyFieldUnavailable.Reason}}, true
+	}
+	return ErrorCode{}, nil, nil, false
 }
 
 // acmeRetryAfter is the Retry-After of an ACME refusal in whole seconds ("" for none): the CA's own Retry-After of a

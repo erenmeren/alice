@@ -66,6 +66,41 @@
         "title": "Bu işlem hizmetlerinizin dışına uzanıyor.",
         "cause": "İşlem, bu iş için rolünüz olmayan {{count}} hizmete daha dokunuyor. Alice bu hizmetlerin adını vermez.",
         "action": "İşlemi kendi hizmetlerinizle sınırlayın ya da ilgili her hizmette yetkisi olan bir yöneticiden yapmasını isteyin."
+      },
+      "domain_not_allowed": {
+        "title": "Bu ad hizmetin alan adlarının dışında.",
+        "cause": "Hizmetin ilkesi sertifikalarının taşıyabileceği adları listeler; {{name}} bunlardan biri değil. Hiçbir şey kaydedilmedi, sipariş edilmedi ya da üretilmedi.",
+        "action": "Hizmetin alan adları içindeki adları kullanın ya da başka bir hizmet seçin; veya tüm hizmetlerde yönetici olan birinden adı ilkeye eklemesini isteyin."
+      },
+      "source_not_allowed": {
+        "title": "Bu hizmet sertifikaları bu yolla kabul etmiyor.",
+        "cause": "Hizmetin ilkesi sertifikaların yalnızca listelediği kaynaklardan girmesine izin verir; {{source}} bunlardan biri değil (acme: ACME sertifikası, uploaded: yükleme, csr: imzalama isteği).",
+        "action": "İlkenin izin verdiği bir kaynak kullanın ya da başka bir hizmet seçin; veya hizmetin bir yöneticisinden ilkesini değiştirmesini isteyin."
+      },
+      "version_conflict": {
+        "title": "İlke siz açtıktan sonra değişti.",
+        "cause": "Bu arada biri hizmetin ilkesinin daha yeni bir sürümünü kaydetti.",
+        "action": "İlkeyi yeniden yükleyin, neyin değiştiğine bakın ve yeniden kaydedin."
+      },
+      "domains_global_only": {
+        "title": "Alan adlarını yalnızca tüm hizmetlerde yönetici olan biri değiştirir.",
+        "cause": "Alan adları hizmete hangi adların girebileceğini belirler; bu yüzden yalnızca bu hizmetin yöneticisi olan biri bunları değiştiremez.",
+        "action": "Alan adlarını olduğu gibi bırakıp diğer değişikliklerinizi kaydedin ya da tüm hizmetlerde rolü olan bir yöneticiden isteyin."
+      },
+      "auto_deploy_forbidden": {
+        "title": "Hizmetin ilkesi otomatik dağıtımı yasaklıyor.",
+        "cause": "Bu hizmetin Key Vault bağlamaları ve ACME sertifikaları için otomatik dağıtım açılamaz; önceden açılmış olanlar ilke yeniden izin verene kadar bekler.",
+        "action": "Şimdi dağıt ile elle dağıtın ya da hizmetin bir yöneticisinden ilkede otomatik dağıtıma izin vermesini isteyin."
+      },
+      "acme_not_allowed": {
+        "title": "Hizmet bu ACME ayarına izin vermiyor.",
+        "cause": "Hizmetin ilkesi ACME sertifikalarının sertifika yetkililerini, kanıtlama yöntemlerini ve anahtar türlerini sınırlar; seçilen {{field}} bunlardan biri değil.",
+        "action": "İlkenin izin verdiği bir değer seçin ya da hizmetin bir yöneticisinden ilkesini değiştirmesini isteyin."
+      },
+      "policy_field_unavailable": {
+        "title": "Bu ilke ayarı henüz kullanılamıyor.",
+        "cause": "\"{{field}}\", Alice'in sonraki bir sürümü için ayrılmıştır.",
+        "action": "Bunu ilkeden kaldırın ve yeniden kaydedin."
       }
     },
     "binding": {

@@ -3561,6 +3561,74 @@ services (`params.count`) and never names them. (HTTP 403, reason `service.spans
 **What to do.** Limit the action to your own services (choose only their websites or servers), or ask an Administrator
 with a role on every service involved to do it.
 
+## ALC-SVC-0008: This name is outside the service's domains
+
+**Meaning.** The service's policy lists the domains its certificates may carry, and a name of the certificate does not
+match any of them: a new ACME certificate or a change of its names, a signing request, an upload, or a certificate,
+signing request or ACME certificate moved into the service. Nothing was stored, no order was placed and no key was
+generated. The answer names the first name outside (`params.name`) and the field that carried it. (HTTP 422, reason
+`service.domain_not_allowed`.)
+
+**Likely cause.** The certificate belongs to another service, or the domains do not list this name yet. A name
+matches an entry equal to it; `*.example.com` matches every name ending in `.example.com` at any depth (wildcard names
+included) but not `example.com` itself; an IP address matches an equal entry or a CIDR block that contains it.
+
+**What to do.** Use names inside the service's domains, or create the certificate in another service. To widen the
+domains, an Administrator of all services opens **Services**, the service, **Policy** tab, and adds the name.
+
+## ALC-SVC-0009: This service does not accept certificates this way
+
+**Meaning.** The service's policy lists how certificates may enter it (`acme`: an ACME certificate, `uploaded`: an
+upload, `csr`: a signing request), and this way is not one of them (`params.source`). Nothing was stored. (HTTP 422,
+reason `service.source_not_allowed`.)
+
+**What to do.** Use a way the policy allows, or another service. An Administrator of the service changes the
+**Certificate sources** on its **Policy** tab.
+
+## ALC-SVC-0010: The policy changed since you opened it
+
+**Meaning.** The policy was saved with the version you read, and someone saved a newer version in the meantime.
+Nothing was changed. (HTTP 409, reason `service.version_conflict`.)
+
+**What to do.** Reload the policy, look at the newer version in the history, and save your change again.
+
+## ALC-SVC-0011: Only an Administrator of all services changes the domains
+
+**Meaning.** The change would alter the service's domains, and you are an Administrator of this service only. The
+domains decide which names may enter the service, so a service's own Administrator cannot widen them. Nothing was
+changed. (HTTP 403, reason `service.domains_global_only`.)
+
+**What to do.** Leave the domains as they are and save the other fields, which you may change; or ask an Administrator
+who holds the role on all services to change the domains.
+
+## ALC-SVC-0013: The service's policy forbids automatic deployment
+
+**Meaning.** You tried to switch automatic deployment on for a Key Vault binding or an ACME certificate (or one of its
+websites) of a service whose policy says `auto_deploy: forbidden`. Nothing was changed. (HTTP 422, reason
+`service.auto_deploy_forbidden`.) Automatic deployments that were on before the policy changed are not switched off:
+they wait, and their websites show the mark `service.auto_deploy_forbidden`, until the policy allows automatic
+deployment again; then they resume at the planner's next run.
+
+**What to do.** Deploy by hand with **Deploy now**, or ask an Administrator of the service to set **Automatic
+deployment** to allowed on the service's **Policy** tab.
+
+## ALC-SVC-0014: The service does not allow this ACME setting
+
+**Meaning.** The service's policy limits the certificate authorities, the proof methods (DNS-01, HTTP-01) or the key
+types of its ACME certificates, and the value of `params.field` (`provider_id`, `challenge` or `key_type`) is not one of
+them. Nothing was stored and no order was placed. (HTTP 422, reason `service.acme_not_allowed`.)
+
+**What to do.** Choose a value the policy allows (the service's **Policy** tab lists them), or ask an Administrator of
+the service to change its policy.
+
+## ALC-SVC-0015: This policy setting is not available yet
+
+**Meaning.** The policy names a setting kept for a later version of Alice (`verification`, `drift`, `canary`, `windows`
+or `thresholds`; `params.field` names it). Nothing was changed. (HTTP 422, reason
+`service.policy_field_unavailable`.)
+
+**What to do.** Remove the setting from the policy document and save again.
+
 ## ALC-ACC-0001: This person already holds this role there
 
 **Meaning.** The role binding exists: the person holds this role on this service or environment already. Nothing was
