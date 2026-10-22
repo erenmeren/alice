@@ -280,13 +280,17 @@ type deploymentDTO struct {
 	CauseStep              string       `json:"cause_step"`
 	HelperError            string       `json:"helper_error"`
 	BackupDir              string       `json:"backup_dir"`
-	RequestedBy            *string      `json:"requested_by"`
-	RequestedByName        string       `json:"requested_by_name"`
-	RecoveryAttempts       int          `json:"recovery_attempts"`
-	RecoverAfter           *time.Time   `json:"recover_after"`
-	CreatedAt              time.Time    `json:"created_at"`
-	StartedAt              *time.Time   `json:"started_at"`
-	FinishedAt             *time.Time   `json:"finished_at"`
+	// A Windows deployment (R61 Ruling 17): the store and SHA-1 of the previous certificate, which stays in its store
+	// (backup_dir is ""); left out for every other deployment, whose JSON is unchanged.
+	BackupStore      string     `json:"backup_store,omitempty"`
+	BackupSHA1       string     `json:"backup_sha1,omitempty"`
+	RequestedBy      *string    `json:"requested_by"`
+	RequestedByName  string     `json:"requested_by_name"`
+	RecoveryAttempts int        `json:"recovery_attempts"`
+	RecoverAfter     *time.Time `json:"recover_after"`
+	CreatedAt        time.Time  `json:"created_at"`
+	StartedAt        *time.Time `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
 	// Key Vault deployments (Phase 5): where the certificate came from and, for a vault's, the connection and
 	// the vault version.
 	Source    string  `json:"source"`
@@ -382,7 +386,15 @@ var (
 var stepParamRules = map[string]*regexp.Regexp{
 	"error": codeValueRE, "port": paramPortRE, "mode": codeValueRE, "served": hex64ValueRE, "reason": reasonValueRE,
 	"operation_id": paramOperationRE, "trust": paramTrustRE, "trust_error": paramTrustErrorRE,
+	// R61 Ruling 16: a Windows verify step whose served chain is not the one Alice deployed (chain_differs "true") and
+	// the two lengths: what Alice deployed and what Windows built.
+	"chain_differs": paramTrueRE, "deployed_chain": chainLengthRE, "built_chain": chainLengthRE,
 }
+
+var (
+	paramTrueRE   = regexp.MustCompile(`^true$`)
+	chainLengthRE = regexp.MustCompile(`^[1-9][0-9]?$`)
+)
 
 func stepParams(in map[string]string) map[string]string {
 	out := map[string]string{}
@@ -456,11 +468,27 @@ func backupDir(b *providers.BackupRef) string {
 	return b.Dir
 }
 
+// backupCert is where a Windows deployment's previous certificate is (R61 Ruling 17): its store and SHA-1, each
+// "" when unset or outside its rule.
+func backupCert(b *providers.BackupRef) (store, sha1 string) {
+	if b == nil {
+		return "", ""
+	}
+	if paramStoreRE.MatchString(b.Store) {
+		store = b.Store
+	}
+	if paramSHA1RE.MatchString(b.PreviousSHA1) {
+		sha1 = b.PreviousSHA1
+	}
+	return store, sha1
+}
+
 func deploymentJSON(d inventory.Deployment) deploymentDTO {
 	verified := d.Verified
 	if !slices.Contains(verifiedValues, verified) {
 		verified = ""
 	}
+	backupStore, backupSHA1 := backupCert(d.Backup)
 	return deploymentDTO{
 		ID: d.ID.String(), CertificateID: d.CertificateID.String(), CertificateName: d.CertificateName, LocationID: d.LocationID.String(),
 		TargetID: d.TargetID.String(), TargetName: d.TargetName, CertPath: d.CertPath, KeyPath: d.KeyPath, JobID: idPtr(d.JobID),
@@ -469,7 +497,7 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 		PreviousFingerprint: d.PreviousFingerprint, ConfirmIncompleteChain: d.ConfirmIncompleteChain, Verified: verified,
 		VerifyFailed: verifyFailedJSON(d), Error: deploymentError(d), FailedStep: codeOrBlank(d.FailedStep),
 		CauseStep: codeOrBlank(d.CauseStep), HelperError: codeOrBlank(d.HelperError), BackupDir: backupDir(d.Backup),
-		RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
+		BackupStore: backupStore, BackupSHA1: backupSHA1, RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
 		RecoverAfter: utcPtr(d.RecoverAfter), CreatedAt: d.CreatedAt.UTC(), StartedAt: utcPtr(d.StartedAt), FinishedAt: utcPtr(d.FinishedAt),
 		Source: deploymentSource(d), BindingID: idPtr(d.BindingID), KVVersion: versionOrBlank(d.KVVersion), VaultName: d.VaultName,
 		Verification: verificationJSON(d),

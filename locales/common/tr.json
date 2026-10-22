@@ -1100,6 +1100,51 @@
         "title": "Bu Windows sunucusunda Alice hesabı yönetici belirteci almıyor.",
         "cause": "Yardımcı yükseltilmeden çalıştı, bu yüzden http.sys bağlamalarını ve makine sertifika depolarını okuyamıyor. Windows Server 2022 ve 2025'te yerel Yöneticiler grubundaki bir üyenin anahtarla girişi yükseltilmiş olur; bu yüzden çoğunlukla hesaba sıkılaştırılmış bir etki alanı temel ayarı ya da UAC uzaktan kısıtlaması uygulanıyordur.",
         "action": "docs/windows-host-preparation.md dosyasında anlatıldığı gibi sunucunun Yöneticiler grubunda üye olan bir etki alanı hesabı kullanın. Yerel hesap için belgelenmiş son çare olarak LocalAccountTokenFilterPolicy değerini 1 yapın, sonra Bağlantıyı sına'yı yeniden seçin."
+      },
+      "binding_changed": {
+        "title": "Windows bağlaması artık Alice'in beklediği sertifikayı sunmuyor. Hiçbir şey değiştirilmedi.",
+        "cause": "Son taramadan bu yana biri ya da başka bir program bu http.sys bağlamasını başka bir sertifikaya yöneltti (IIS Yöneticisi, netsh ya da bir betikle). Alice yalnızca gördüğü sertifikayı değiştirir; bu yüzden yardımcı hiçbir şeyi değiştirmedi.",
+        "action": "Alice'in bağlamayı şimdiki hâliyle görmesi için sunucuyu yeniden tarayın, sonra yeniden dağıtın."
+      },
+      "binding_not_found": {
+        "title": "Windows sunucusunda artık böyle bir bağlama yok. Hiçbir şey değiştirilmedi.",
+        "cause": "http.sys bu adres ve bağlantı noktası ya da bu ana bilgisayar adı ve bağlantı noktası için SSL bağlaması tutmuyor: sitenin HTTPS bağlaması son taramadan bu yana kaldırıldı ya da değiştirildi.",
+        "action": "Sunucuyu yeniden tarayın. Bağlamanın var olması gerekiyorsa IIS Yöneticisi'nde ekleyin, yeniden tarayın ve ona dağıtın."
+      },
+      "busy": {
+        "title": "Bu Windows sunucusunda başka bir sertifika değişikliği sürüyor.",
+        "cause": "Alice yardımcısı bir sunucuda aynı anda tek bir bağlamayı değiştirir ve başka bir yardımcı işlemi kilidini beklediği süreden uzun tuttu. Hiçbir şey değiştirilmedi.",
+        "action": "Bir dakika bekleyip yeniden deneyin."
+      },
+      "io_error": {
+        "title": "Windows sunucusu yardımcının dosya işlemlerini tamamlayamadı.",
+        "cause": "Yardımcı C:\\ProgramData\\Alice\\helper altındaki günlüğünü okuyamadı ya da yazamadı (dolu bir disk, sahibi Administrators ya da SYSTEM olmayan bir klasör, başka bir programın açık tuttuğu bir dosya) ya da Windows bir giriş/çıkış hatası bildirdi. Değişiklik başlamışsa yardımcı önceki sertifikayı geri koydu; dağıtımın adımları hangisinin olduğunu gösterir.",
+        "action": "Sunucudaki boş disk alanını ve C:\\ProgramData\\Alice\\helper klasörünün izinlerini kontrol edin, değiştirildilerse Windows kurulum betiğini yeniden çalıştırın, sonra yeniden deneyin."
+      },
+      "store_error": {
+        "title": "Windows sunucusu bir sertifika deposunu açamadı.",
+        "cause": "Yardımcı bağlamanın makine sertifika deposunu (My ya da WebHosting) veya ara sertifika deposunu (CA) açamadı ya da Windows ona sertifika eklemeyi reddetti.",
+        "action": "Bilgisayar hesabı için Sertifikalar ek bileşeninde deponun var olduğunu ve açıldığını kontrol edip yeniden deneyin. Windows Olay Günlüğü (Uygulama ve Sistem) nedeni gösterebilir."
+      },
+      "key_unusable": {
+        "title": "Windows sertifikanın özel anahtarını kullanamıyor.",
+        "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan zaten bulunuyor ya da bağlama değiştirilirken http.sys anahtarı reddetti (hata 1312). Bunun durdurduğu bir dağıtımda bağlama önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları gösterir.",
+        "action": "Sertifikalar ek bileşeninde sertifikanın kullanılabilir anahtarı olmayan kopyasını depodan kaldırın ya da anahtarın izinlerini kontrol edin, sonra yeniden dağıtın."
+      },
+      "backup_missing": {
+        "title": "Önceki sertifika Windows sunucusunda artık kullanılamıyor, bu yüzden Alice onu geri koyamadı.",
+        "cause": "Geri alma, önceki sertifikanın deposunda Windows'un kullanabileceği bir özel anahtarla bulunmasını gerektirir. Sertifika kaldırılmış ya da anahtarı silinmiş veya artık erişilemez durumda. Hiçbir şey değiştirilmedi: bağlama Alice'in dağıttığı sertifikayı sunmaya devam ediyor.",
+        "action": "Web sitesini hemen kontrol edin. Bağlamaya geçerli bir sertifika dağıtın ya da önceki sertifikayı anahtarıyla yeniden içe aktarın (dağıtım, deposunu ve SHA-1 parmak izini gösterir)."
+      },
+      "location_unsupported": {
+        "title": "Alice bu Windows bağlamasına dağıtım yapmaz.",
+        "cause": "Alice bir http.sys bağlamasına IP adresi ve bağlantı noktasıyla ya da ana bilgisayar adı ve bağlantı noktasıyla, ASCII bir ana bilgisayar adıyla (uluslararası alan adını xn-- biçimiyle) dağıtım yapar. Merkezi sertifika deposunun bir bağlaması ya da başka biçimde bir ana bilgisayar adı veya adresi olan bir bağlama listelenir ama değiştirilmez. Hiçbir şey gönderilmedi.",
+        "action": "ASCII ana bilgisayar adı (ya da IP adresi) olan bir IIS bağlaması kullanın, sunucuyu yeniden tarayın ve o bağlamaya dağıtın."
+      },
+      "helper_refused": {
+        "title": "Windows sunucusundaki Alice yardımcısı isteği reddetti.",
+        "cause": "Yardımcı her isteği denetler ve bunu Alice'in kendine ait bir iletisi olmayan bir kodla reddetti (hata bu kodu helper_code olarak gösterir).",
+        "action": "Sunucuyu yeniden tarayıp yeniden deneyin. Sürerse destekle iletişime geçin ve yardımcı kodunu ve istek kimliğini belirtin."
       }
     },
     "certificate": {

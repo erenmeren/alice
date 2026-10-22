@@ -11,22 +11,33 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/i18n"
+	"alice/internal/providers/windows"
 	"alice/locales"
 )
 
-// windowsTable is the pinned table of the Windows codes (area WIN, R60).
+// windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012).
 var windowsTable = []struct {
 	code, reason string
 	status       int
+	retryable    bool
 }{
-	{"ALC-WIN-0001", "windows.helper_missing", 502},
-	{"ALC-WIN-0002", "windows.helper_outdated", 502},
-	{"ALC-WIN-0003", "windows.not_elevated", 502},
+	{"ALC-WIN-0001", "windows.helper_missing", 502, false},
+	{"ALC-WIN-0002", "windows.helper_outdated", 502, false},
+	{"ALC-WIN-0003", "windows.not_elevated", 502, false},
+	{"ALC-WIN-0004", "windows.binding_changed", 409, true},
+	{"ALC-WIN-0005", "windows.binding_not_found", 409, false},
+	{"ALC-WIN-0006", "windows.busy", 409, true},
+	{"ALC-WIN-0007", "windows.io_error", 502, true},
+	{"ALC-WIN-0008", "windows.store_error", 502, false},
+	{"ALC-WIN-0009", "windows.key_unusable", 502, false},
+	{"ALC-WIN-0010", "windows.backup_missing", 502, false},
+	{"ALC-WIN-0011", "windows.location_unsupported", 409, false},
+	{"ALC-WIN-0012", "windows.helper_refused", 502, false},
 }
 
 // Each Windows code is registered as the table says, has EN and TR texts without placeholders (the provider sends
-// different params for helper_outdated depending on where it was found, so no text may need one) and a
-// troubleshooting section.
+// different params for helper_outdated depending on where it was found, and a W2 reason comes from several helper
+// answers with different params, so no text may need one) and a troubleshooting section.
 func TestWindowsErrorCodes(t *testing.T) {
 	cat, err := i18n.Load(locales.FS)
 	require.NoError(t, err)
@@ -48,7 +59,7 @@ func TestWindowsErrorCodes(t *testing.T) {
 		}
 		assert.Equal(t, row.reason, c.Reason, row.code)
 		assert.Equal(t, row.status, c.Status, row.code)
-		assert.False(t, c.Retryable, row.code)
+		assert.Equal(t, row.retryable, c.Retryable, row.code)
 		assert.Equal(t, c, codeForReason(row.reason), row.code)
 		title := cat.T("en", "errors."+c.Reason+".title", nil)
 		assert.Regexp(t, regexp.MustCompile(`(?m)^## `+c.Code+`: .+\n\n\*\*Meaning\.\*\* .*\(HTTP `+strconv.Itoa(c.Status)+`, reason `+"`"+
@@ -66,4 +77,37 @@ func TestWindowsErrorCodes(t *testing.T) {
 		}
 		assert.NotEqual(t, title, cat.T("tr", "errors."+c.Reason+".title", nil), "%s is translated", c.Code)
 	}
+}
+
+// Every reason the Windows provider produces is a registered code: its own reasons, and the engine's reasons its
+// helper codes map to (R61 Ruling 6).
+func TestWindowsProviderReasonsAreRegistered(t *testing.T) {
+	for _, reason := range []string{windows.ReasonHelperMissing, windows.ReasonHelperOutdated, windows.ReasonNotElevated,
+		windows.ReasonBindingChanged, windows.ReasonBindingNotFound, windows.ReasonBusy, windows.ReasonIOError,
+		windows.ReasonStoreError, windows.ReasonKeyUnusable, windows.ReasonBackupMissing, windows.ReasonLocationUnsupported,
+		windows.ReasonHelperRefused, "deployment.recovery_pending", "deployment.interrupted", "deployment.superseded",
+		"deployment.unknown_operation", "deployment.rollback_failed", "deployment.rollback_forbidden"} {
+		assert.NotEqual(t, ErrUnexpected, codeForReason(reason), reason)
+	}
+}
+
+// The params of the Windows errors pass the allowlist with their value rules (R61 Rulings 3 and 17): the helper's
+// version and the version Alice needs, the store and SHA-1 of the previous certificate. A value outside its rule is
+// dropped with its key.
+func TestWindowsErrorParams(t *testing.T) {
+	sha1 := strings.Repeat("ab", 20)
+	assert.Equal(t, map[string]string{"helper_version": "0.1.0", "required_version": "0.2.0"},
+		providerParams(map[string]string{"helper_version": "0.1.0", "required_version": "0.2.0"}))
+	assert.Equal(t, map[string]string{"helper_version": "0.2.0-rc1"}, providerParams(map[string]string{"helper_version": "0.2.0-rc1"}))
+	assert.Equal(t, map[string]string{"store": "WebHosting", "previous_sha1": sha1},
+		providerParams(map[string]string{"store": "WebHosting", "previous_sha1": sha1}))
+	assert.Equal(t, map[string]string{"store": "My"}, providerParams(map[string]string{"store": "My", "previous_sha1": strings.Repeat("AB", 20)}))
+	for k, v := range map[string]string{
+		"helper_version": "", "required_version": "v0.2.0", "store": `My\..`, "previous_sha1": sha1 + "00",
+	} {
+		assert.Nil(t, providerParams(map[string]string{k: v}), "%s=%q", k, v)
+	}
+	assert.Nil(t, providerParams(map[string]string{"helper_version": strings.Repeat("1", 33)}))
+	assert.Nil(t, providerParams(map[string]string{"helper_version": "0.1.0 <script>"}))
+	assert.Nil(t, providerParams(map[string]string{"store": strings.Repeat("a", 65)}))
 }

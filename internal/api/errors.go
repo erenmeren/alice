@@ -286,12 +286,26 @@ var (
 	ErrHAProxyProfileMissing = ErrorCode{Code: "ALC-HAP-0003", Reason: "haproxy.profile_missing", Status: http.StatusBadGateway}
 	ErrHAProxyHelperTooOld   = ErrorCode{Code: "ALC-HAP-0004", Reason: "haproxy.helper_too_old", Status: http.StatusBadGateway}
 
-	// Windows servers (R60). Every other helper refusal of a Windows server stays ssh.helper_refused with its helper_code.
-	// helper_outdated carries helper_protocol and required_protocol, or subcommand and helper_code (a helper that does
+	// Windows servers (R60). helper_outdated carries helper_protocol and required_protocol, helper_version and
+	// required_version (a W1 helper asked to write, R61 Ruling 3), or subcommand and helper_code (a helper that does
 	// not know a subcommand), so its texts name no number; not_elevated: the helper's token is not elevated.
 	ErrWINHelperMissing  = ErrorCode{Code: "ALC-WIN-0001", Reason: "windows.helper_missing", Status: http.StatusBadGateway}
 	ErrWINHelperOutdated = ErrorCode{Code: "ALC-WIN-0002", Reason: "windows.helper_outdated", Status: http.StatusBadGateway}
 	ErrWINNotElevated    = ErrorCode{Code: "ALC-WIN-0003", Reason: "windows.not_elevated", Status: http.StatusBadGateway}
+	// Windows deployments (R61 Ruling 6): every helper code of a Windows server has a reason of its own; nothing of the
+	// Windows provider is ssh.helper_refused any more. binding_changed (HASH_MISMATCH: the binding names another
+	// certificate than Alice expected; rediscover), busy (another helper process held the lock) and io_error (IO_ERROR,
+	// JOURNAL_FAILED) clear by themselves; helper_refused carries helper_code. location_unsupported: a binding Alice
+	// does not deploy to (R61 Ruling 5), refused before anything was sent.
+	ErrWINBindingChanged      = ErrorCode{Code: "ALC-WIN-0004", Reason: "windows.binding_changed", Status: http.StatusConflict, Retryable: true}
+	ErrWINBindingNotFound     = ErrorCode{Code: "ALC-WIN-0005", Reason: "windows.binding_not_found", Status: http.StatusConflict}
+	ErrWINBusy                = ErrorCode{Code: "ALC-WIN-0006", Reason: "windows.busy", Status: http.StatusConflict, Retryable: true}
+	ErrWINIOError             = ErrorCode{Code: "ALC-WIN-0007", Reason: "windows.io_error", Status: http.StatusBadGateway, Retryable: true}
+	ErrWINStoreError          = ErrorCode{Code: "ALC-WIN-0008", Reason: "windows.store_error", Status: http.StatusBadGateway}
+	ErrWINKeyUnusable         = ErrorCode{Code: "ALC-WIN-0009", Reason: "windows.key_unusable", Status: http.StatusBadGateway}
+	ErrWINBackupMissing       = ErrorCode{Code: "ALC-WIN-0010", Reason: "windows.backup_missing", Status: http.StatusBadGateway}
+	ErrWINLocationUnsupported = ErrorCode{Code: "ALC-WIN-0011", Reason: "windows.location_unsupported", Status: http.StatusConflict}
+	ErrWINHelperRefused       = ErrorCode{Code: "ALC-WIN-0012", Reason: "windows.helper_refused", Status: http.StatusBadGateway}
 
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
@@ -624,7 +638,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
 		ErrApacheNotFound, ErrApacheConfigInvalid, ErrApacheProfileMissing, ErrApacheHelperTooOld,
 		ErrHAProxyNotFound, ErrHAProxyConfigInvalid, ErrHAProxyProfileMissing, ErrHAProxyHelperTooOld,
-		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated,
+		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated, ErrWINBindingChanged, ErrWINBindingNotFound, ErrWINBusy,
+		ErrWINIOError, ErrWINStoreError, ErrWINKeyUnusable, ErrWINBackupMissing, ErrWINLocationUnsupported, ErrWINHelperRefused,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
@@ -1320,6 +1335,9 @@ var providerParamKeys = map[string]bool{
 	"certificate_name": true,
 	// auto_deploy_follows and bound: "true" or "false" (the import confirmation: a connection names the certificate).
 	"auto_deploy_follows": true, "bound": true,
+	// R61 (Windows): the helper's version and the version a write needs (windows.helper_outdated, Ruling 3); the
+	// store and SHA-1 of the previous certificate a Windows rollback failure names (Ruling 17, in place of backup_dir).
+	"helper_version": true, "required_version": true, "store": true, "previous_sha1": true,
 }
 
 var (
@@ -1353,6 +1371,13 @@ var (
 	paramTrustErrorRE = regexp.MustCompile(`^(unknown_authority|wrong_intermediate|incomplete_chain|chain_order|name_mismatch|expired|not_yet_valid|invalid_chain)$`)
 	// paramTrustRE: a trust status of a verify step (R51).
 	paramTrustRE = regexp.MustCompile(`^(trusted|untrusted|unchecked)$`)
+	// R61. paramHelperVersionRE: the version a Windows helper reported (any short token of version characters: an
+	// unparsable one is what makes it outdated); paramVersionRE: a dotted-decimal version Alice requires;
+	// paramStoreRE: a certificate store name (winproto.ValidStore); paramSHA1RE: a certificate's lower-case hex SHA-1.
+	paramHelperVersionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$`)
+	paramVersionRE       = regexp.MustCompile(`^[0-9]{1,5}(\.[0-9]{1,5}){0,3}$`)
+	paramStoreRE         = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
+	paramSHA1RE          = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -1370,6 +1395,7 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"role": paramRoleRE, "model": paramModelRE, "client_address": paramClientAddressRE, "aadsts": paramAADSTSRE,
 	"azure_code": paramAzureCodeRE, "azure_request_id": paramRequestIDRE, "certificate_name": paramCertNameRE,
 	"auto_deploy_follows": paramBoolRE, "bound": paramBoolRE,
+	"helper_version": paramHelperVersionRE, "required_version": paramVersionRE, "store": paramStoreRE, "previous_sha1": paramSHA1RE,
 }
 
 // validClientAddress is the second rule of client_address: the text must be an IP address.

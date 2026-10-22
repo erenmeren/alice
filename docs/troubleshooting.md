@@ -2145,6 +2145,78 @@ limitation).
 
 **What to do.** Use a domain account that is a member of the server's Administrators group, as `docs/windows-host-preparation.md` describes. As a documented last resort for a local account, set `LocalAccountTokenFilterPolicy` to 1, then choose **Test connection** again.
 
+## ALC-WIN-0004: Windows binding changed since the last scan
+
+**Meaning.** The http.sys binding no longer names the certificate Alice expected to replace, so the helper changed nothing (helper code `HASH_MISMATCH`). (HTTP 409, reason `windows.binding_changed`.)
+
+**Likely cause.** Someone or another program pointed the binding at another certificate after Alice's last scan: IIS Manager, `netsh http update sslcert`, a PowerShell script, or IIS's own certificate rebind (AutoCertRebind). A binding record that names a certificate its store no longer holds also counts as changed.
+
+**What to do.** Choose **Scan now** on the server's page so Alice sees the binding as it is, then deploy again. The error clears by itself once the scan is current; an automatic deployment retries.
+
+## ALC-WIN-0005: Windows binding not found
+
+**Meaning.** http.sys holds no SSL binding for the deployment's address and port (or host name and port), so nothing was changed (helper code `BINDING_NOT_FOUND`). (HTTP 409, reason `windows.binding_not_found`.)
+
+**Likely cause.** The site's HTTPS binding was removed or changed in IIS Manager since the last scan (another port, another host name, Require Server Name Indication switched on or off), or `netsh http delete sslcert` removed the record.
+
+**What to do.** Scan the server again. Alice deploys only to bindings it found; if the binding should exist, add it in IIS Manager, scan again and deploy to the new location.
+
+## ALC-WIN-0006: Another certificate change is running on the Windows server
+
+**Meaning.** The Alice helper changes one binding at a time on a server, and another helper process held its lock (`C:\ProgramData\Alice\helper\helper.lock`) for longer than the helper waits (20 seconds). Nothing was changed (helper code `BUSY`). (HTTP 409, reason `windows.busy`.)
+
+**Likely cause.** Another deployment or rollback to the same server was running, for example several bindings of the same certificate deployed at once, or Alice recovering an interrupted change on that server.
+
+**What to do.** Wait a minute and try again; an automatic deployment retries by itself.
+
+## ALC-WIN-0007: Windows server could not complete the helper's file work
+
+**Meaning.** The helper could not read or write its journal or one of its state files, or Windows reported an input or output error (helper codes `IO_ERROR`, `JOURNAL_FAILED`). Before the change started nothing was changed; after it started the helper put the previous certificate back, and the deployment's steps show which. (HTTP 502, reason `windows.io_error`.)
+
+**Likely cause.** A full system disk; `C:\ProgramData\Alice\helper` no longer owned by Administrators or SYSTEM, replaced by a link, or not writable; an antivirus or backup program holding a state file open; the time budget of the call ended before the helper started its first write.
+
+**What to do.** Check the free space of the system disk and the owner and permissions of `C:\ProgramData\Alice\helper` (Administrators and SYSTEM only, as the Windows setup script makes it); run the setup script again if they were changed, then try again.
+
+## ALC-WIN-0008: Windows server could not open a certificate store
+
+**Meaning.** The helper could not open the binding's machine certificate store (`My` or `WebHosting`) or the intermediate store (`CA`), or Windows refused to add a certificate to it (helper code `STORE_ERROR`). (HTTP 502, reason `windows.store_error`.)
+
+**Likely cause.** The binding names a store that no longer exists on the computer, a damaged store, a group policy that limits the machine stores, or a full system disk.
+
+**What to do.** Open the Certificates snap-in for the computer account (`certlm.msc`) and check that the store opens; look in the Event Log (Application and System) for CAPI2 or crypt32 errors, then try again.
+
+## ALC-WIN-0009: Windows cannot use the certificate's private key
+
+**Meaning.** The certificate is already in the binding's store without a private key Windows can use, or http.sys refused the key when the binding was changed (error 1312) (helper code `KEY_UNUSABLE`). A deployment stopped by it left the binding serving its previous certificate. (HTTP 502, reason `windows.key_unusable`.)
+
+**Likely cause.** Someone imported the certificate before without its key, or with a key whose permissions SYSTEM does not have; the key provider of an earlier import is not available any more. Alice does not attach a key to a certificate it did not import.
+
+**What to do.** Remove that copy of the certificate from the store in `certlm.msc` (check first that no other binding uses it), or give SYSTEM access to its key, then deploy again: Alice then imports the certificate with a new key.
+
+## ALC-WIN-0010: Previous certificate not usable on the Windows server
+
+**Meaning.** A rollback needs the previous certificate in its store with a private key Windows can use, and it is not there, so the helper did not restore it (helper code `BACKUP_MISSING`). Nothing was changed: the binding still serves the certificate Alice deployed. The deployment names the store and the SHA-1 thumbprint of the previous certificate (`params.store`, `params.previous_sha1`). (HTTP 502, reason `windows.backup_missing`.)
+
+**Likely cause.** The previous certificate was deleted from the store after the deployment started, or its key was removed or its permissions changed; a cleanup script removed old certificates.
+
+**What to do.** Check the website now. Either deploy a valid certificate to the binding, or import the previous certificate with its key into the named store again and bind it in IIS Manager.
+
+## ALC-WIN-0011: Alice does not deploy to this Windows binding
+
+**Meaning.** Alice deploys to an http.sys binding by IP address and port or by host name and port, with a host name in ASCII lower case (an international domain name in its `xn--` form) and an IP address in its canonical form. This binding is listed but not changed, and nothing was sent to the server. (HTTP 409, reason `windows.location_unsupported`.)
+
+**Likely cause.** A binding of the IIS central certificate store (CCS), a host header written with non-ASCII letters, or a record whose address is not in its canonical form.
+
+**What to do.** Change the IIS binding to an ASCII host name or an IP address binding, scan the server again and deploy to that binding.
+
+## ALC-WIN-0012: Alice helper on the Windows server refused the request
+
+**Meaning.** The helper checks every request and refused this one with a code Alice has no message of its own for. `params.helper_code` names it, and `params.subcommand` the command. (HTTP 502, reason `windows.helper_refused`.)
+
+**Likely cause.** A request the helper considers invalid (`INVALID_ARGUMENT`, `BAD_CONTENT`, `TOO_LARGE`), an operation the helper already knows (`OPERATION_EXISTS`), or a helper of another version than Alice expects.
+
+**What to do.** Scan the server again and try again. If it keeps happening, check that `alice-helper.exe` comes from the current Alice bundle, and contact support with the helper code and the request ID.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

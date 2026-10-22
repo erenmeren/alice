@@ -1100,6 +1100,51 @@
         "title": "The Alice account on this Windows server does not get an administrator token.",
         "cause": "The helper ran without elevation, so it cannot read the http.sys bindings or the machine certificate stores. On Windows Server 2022 and 2025 a key logon of a local Administrators member is elevated, so this usually means that a hardened domain baseline or a UAC remote restriction applies to the account.",
         "action": "Use a domain account that is a member of the server's Administrators group, as docs/windows-host-preparation.md describes. As a documented last resort for a local account, set LocalAccountTokenFilterPolicy to 1, then choose Test connection again."
+      },
+      "binding_changed": {
+        "title": "The Windows binding no longer serves the certificate Alice expected. Nothing was changed.",
+        "cause": "Since the last scan, someone or another program pointed this http.sys binding at another certificate (in IIS Manager, with netsh or a script). Alice replaces only the certificate it saw, so the helper changed nothing.",
+        "action": "Scan the server again so Alice sees the binding as it is now, then deploy again."
+      },
+      "binding_not_found": {
+        "title": "The Windows server has no such binding any more. Nothing was changed.",
+        "cause": "http.sys holds no SSL binding for this address and port, or for this host name and port: the site's HTTPS binding was removed or changed since the last scan.",
+        "action": "Scan the server again. If the binding should exist, add it in IIS Manager, scan again and deploy to it."
+      },
+      "busy": {
+        "title": "Another certificate change is running on this Windows server.",
+        "cause": "The Alice helper changes one binding at a time on a server, and another helper process held its lock for longer than it waits. Nothing was changed.",
+        "action": "Wait a minute and try again."
+      },
+      "io_error": {
+        "title": "The Windows server could not complete the helper's file work.",
+        "cause": "The helper could not read or write its journal under C:\\ProgramData\\Alice\\helper (a full disk, a folder that is not owned by Administrators or SYSTEM, a file another program holds open), or Windows reported an input or output error. When the change had started, the helper put the previous certificate back; the deployment's steps show which.",
+        "action": "Check the free disk space and the permissions of C:\\ProgramData\\Alice\\helper on the server, run the Windows setup script again if they were changed, then try again."
+      },
+      "store_error": {
+        "title": "The Windows server could not open a certificate store.",
+        "cause": "The helper could not open the machine certificate store of the binding (My or WebHosting) or the intermediate store (CA), or Windows refused to add a certificate to it.",
+        "action": "Check in the Certificates snap-in for the computer account that the store exists and opens, then try again. The Windows Event Log (Application and System) may name the cause."
+      },
+      "key_unusable": {
+        "title": "Windows cannot use the private key of the certificate.",
+        "cause": "The certificate is already in the store without a private key Windows can use, or http.sys refused the key when the binding was changed (error 1312). A deployment stopped by it left the binding serving its previous certificate; for a rollback, the deployment's steps show what was done.",
+        "action": "Remove the copy of the certificate without a usable key from the store in the Certificates snap-in, or check the key's permissions, then deploy again."
+      },
+      "backup_missing": {
+        "title": "The previous certificate is no longer usable on the Windows server, so Alice could not put it back.",
+        "cause": "A rollback needs the previous certificate in its store with a private key Windows can use. It was removed, or its key is gone or no longer accessible. Nothing was changed: the binding still serves the certificate Alice deployed.",
+        "action": "Check the website now. Deploy a valid certificate to the binding, or import the previous certificate with its key again (the deployment names its store and SHA-1 thumbprint)."
+      },
+      "location_unsupported": {
+        "title": "Alice does not deploy to this Windows binding.",
+        "cause": "Alice deploys to an http.sys binding by its IP address and port or by its host name and port, with an ASCII host name (an international domain name by its xn-- form). A binding of the central certificate store, or with a host name or address in another form, is listed but not changed. Nothing was sent.",
+        "action": "Use an IIS binding with an ASCII host name (or an IP address), scan the server again and deploy to that binding."
+      },
+      "helper_refused": {
+        "title": "The Alice helper on the Windows server refused the request.",
+        "cause": "The helper checks every request and refused this one with a code Alice has no message of its own for (the error names it as helper_code).",
+        "action": "Scan the server again and try again. If it keeps happening, contact support and quote the helper code and the request ID."
       }
     },
     "certificate": {

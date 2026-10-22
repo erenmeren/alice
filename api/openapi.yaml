@@ -8507,7 +8507,14 @@ components:
       properties:
         kind: { type: string, enum: [linuxssh, nginx, apache, haproxy, windows, azurekv] }
         display_name_key: { type: string }
-        capabilities: { type: array, items: { type: string } }
+        capabilities:
+          type: array
+          description: >-
+            Known values: test_connection, discover_certificates, discover_ssh_keys, discover_kv_keys,
+            discover_kv_secret_metadata, deploy_certificate, import_certificate, authorized_keys, verify_deployment,
+            read_certificate_secret, key_login; a newer server may add others. windows has test_connection,
+            discover_certificates, deploy_certificate and verify_deployment (R61); apache and haproxy discover only.
+          items: { type: string }
         config_schema:
           type: object
           required: [fields]
@@ -8936,8 +8943,10 @@ components:
           description: >-
             Allowlisted values only: error (a configuration error class or file_changed), port, mode (remote, local,
             skipped), served (a fingerprint), reason (a reason code), operation_id (on recover_pending: the
-            unfinished earlier change), trust (on verify: trusted, untrusted or unchecked) and trust_error (why a
-            served chain did not verify; R51).
+            unfinished earlier change), trust (on verify: trusted, untrusted or unchecked), trust_error (why a
+            served chain did not verify; R51), and on a Windows binding's verify chain_differs (true when Windows
+            serves a chain of another length than Alice deployed) with deployed_chain and built_chain (the two
+            lengths, 1-99; R61).
           additionalProperties: { type: string }
     Deployment:
       type: object
@@ -8980,7 +8989,8 @@ components:
           $ref: "#/components/schemas/ErrorRef"
           description: >-
             Why it did not succeed, as a documented code; null on success. Params are allowlisted (port, failed_step,
-            phase, profile, backup_dir, helper_code, subcommand, ...). deployment.rollback_failed is reported as
+            phase, profile, backup_dir, helper_code, subcommand, ...; for a Windows binding store and previous_sha1 in
+            place of backup_dir, and helper_version and required_version on windows.helper_outdated, R61). deployment.rollback_failed is reported as
             deployment.restored_unverified (ALC-DEP-0019) when the files are back but the website was not confirmed,
             and as deployment.rollback_file_changed (ALC-DEP-0020) when another program changed the files (Alice put
             back at most what it had written: the pair may not match). A deployment whose waiting job an
@@ -8992,7 +9002,9 @@ components:
         failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed; kv_secret when a Key Vault deployment could not read or accept its certificate secret); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
-        backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change' }
+        backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change and always "" for a Windows binding' }
+        backup_store: { type: string, description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate (My or WebHosting)' }
+        backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
         requested_by: { type: [string, "null"], format: uuid }
         requested_by_name: { type: string }
         recovery_attempts: { type: integer }
