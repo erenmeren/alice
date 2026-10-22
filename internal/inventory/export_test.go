@@ -273,3 +273,8 @@ const WindowsDefaultUser = windowsDefaultUser
 
 // ProblemCertMissing is the Windows problem whose location has no certificate.
 const ProblemCertMissing = problemCertMissing
+
+// WindowsAuthorizedKeysLine exposes windowsAuthorizedKeysLine to the equality test with the Windows provider's line.
+func WindowsAuthorizedKeysLine(publicKey, from string) string {
+	return windowsAuthorizedKeysLine(publicKey, from)
+}

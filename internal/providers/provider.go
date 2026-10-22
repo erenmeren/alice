@@ -187,15 +187,15 @@ type ConnectionCache interface {
 	ForgetTarget(target uuid.UUID)
 }
 
-// SetupGuide is implemented by providers that need host preparation (linuxssh).
+// SetupGuide is implemented by providers that need host preparation (linuxssh, windows).
 type SetupGuide interface {
-	SetupSnippets(authorizedKeysLine string) map[string]SetupSnippet // key: profile "linux" | "nginx" | "apache" | "haproxy"
-	HelperInfo() (path string, protocol int)                         // "/usr/local/libexec/alice-helper", helperproto.Protocol
+	SetupSnippets(authorizedKeysLine string) map[string]SetupSnippet // key: profile "linux" | "nginx" | "apache" | "haproxy" | "windows"
+	HelperInfo() (path string, protocol int)                         // "/usr/local/libexec/alice-helper", helperproto.Protocol (windows: winproto.HelperPath, winproto.Protocol)
 }
 
-// SetupSnippet is the host preparation for one sudoers profile.
+// SetupSnippet is the host preparation for one profile.
 type SetupSnippet struct {
-	Profile string // "linux" | "nginx" | "apache" | "haproxy"
-	Sudoers string // content of /etc/sudoers.d/alice
-	Script  string // shell script to run as root on the target
+	Profile string // "linux" | "nginx" | "apache" | "haproxy" | "windows"
+	Sudoers string // content of /etc/sudoers.d/alice; "" for "windows"
+	Script  string // shell script to run as root on the target; for "windows" a PowerShell script run once as an administrator
 }

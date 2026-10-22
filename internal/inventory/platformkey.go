@@ -170,7 +170,17 @@ func authorizedKeysLine(publicKey, from string) string {
 	return opts + " " + publicKey
 }
 
-// SetupGuide returns the platform key and the setup snippets for both sudoers profiles. from is an
+// windowsAuthorizedKeysLine is the line the Windows setup script puts into administrators_authorized_keys (R60
+// Task 10). It must equal windows.AuthorizedKeysLine for the same input (TestWindowsKeyLineEqualsTheProvidersLine).
+func windowsAuthorizedKeysLine(publicKey, from string) string {
+	if from == "" {
+		return "restrict " + publicKey
+	}
+	return `restrict,from="` + from + `" ` + publicKey
+}
+
+// SetupGuide returns the platform key and the setup snippets of every sudoers profile and, when the Windows
+// provider is registered, its "windows" profile (a PowerShell script with the Windows key line). from is an
 // optional IP address that the authorized_keys line restricts Alice's key to (§12.2). It is
 // placed in the line in its canonical form (an IPv6 address in lower case), so the text inside the
 // quoted from="…" option is always exactly an address. Zones and IPv4-mapped IPv6 addresses are
@@ -200,6 +210,16 @@ func (s *Service) SetupGuide(ctx context.Context, from string) (Guide, error) {
 	line := authorizedKeysLine(pk.PublicKey, from)
 	path, protocol := sg.HelperInfo()
 	profiles := sg.SetupSnippets(line)
+	if profiles == nil {
+		profiles = map[string]providers.SetupSnippet{}
+	}
+	if wp, ok := s.registry.Get(providers.KindWindows); ok {
+		if wg, ok := wp.(providers.SetupGuide); ok {
+			if w, ok := wg.SetupSnippets(windowsAuthorizedKeysLine(pk.PublicKey, from))["windows"]; ok {
+				profiles["windows"] = w
+			}
+		}
+	}
 	for _, p := range profiles {
 		if p.Script == "" {
 			// The provider refused the script (a build without the helper checksums; the line

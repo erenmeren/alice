@@ -67,3 +67,12 @@ func TestConfigUsableForIIS(t *testing.T) {
 func TestCertMissingMirrorsTheProvider(t *testing.T) {
 	assert.Equal(t, windows.ProblemCertMissing, inventory.ProblemCertMissing)
 }
+
+// The inventory builds the Windows key line itself (it may not import the provider); it must be exactly the line the
+// Windows setup script accepts (R60 Task 10), with and without from=.
+func TestWindowsKeyLineEqualsTheProvidersLine(t *testing.T) {
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform"
+	for _, from := range []string{"", "192.0.2.10", "2001:db8::9"} {
+		assert.Equal(t, windows.AuthorizedKeysLine(key, from), inventory.WindowsAuthorizedKeysLine(key, from), "from=%q", from)
+	}
+}

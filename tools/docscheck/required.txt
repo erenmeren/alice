@@ -12,3 +12,6 @@ docs/admin-guide.md	Anyone who can reach the sign-in page can lock a person's di
 docs/admin-guide.md	Unlike single sign-on, where the password goes only to the identity provider, a directory sign-in sends the person's password to Alice, which checks it against the directory.
 docs/admin-guide.md	Alice talks to a directory only over `ldaps://` (TLS from the first byte, port 636 by default). Plain `ldap://` and StartTLS are refused
 docs/security-overview.md	Directory sign-in (LDAP or Active Directory over `ldaps://`): **the directory password passes through Alice**, unlike single sign-on.
+docs/windows-host-preparation.md	Run it once in an elevated PowerShell
+docs/windows-host-preparation.md	## The sshd configuration
+docs/windows-host-preparation.md	The script never changes User Account Control and never sets `LocalAccountTokenFilterPolicy`.
