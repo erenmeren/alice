@@ -49,6 +49,10 @@ var rules = map[string][]string{
 	"alice/internal/providers/windows/winproto": {"alice/internal/providers/linuxssh/helperproto"},
 	// The Windows helper's platform-neutral core: the protocol and the shared validators only.
 	"alice/internal/providers/windows/winhelper": {"alice/internal/providers/windows/winproto", "alice/internal/providers/linuxssh/helperproto"},
+	// The emulated Windows host (test-only) runs the helper's core on a modelled machine behind the test SSH server and
+	// generates its certificates with the test PKI.
+	"alice/internal/providers/windows/wintest": {platform, "alice/internal/providers/windows/...", "alice/internal/providers/linuxssh/linuxsshtest",
+		"alice/internal/providers/linuxssh/helperproto", "alice/internal/testutil/pki"},
 	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
@@ -193,6 +197,7 @@ var denied = map[string][]string{
 	"alice/internal/providers":                         {"alice/internal/platform/db/..."},
 	"alice/internal/providers/...":                     {"alice/internal/platform/db/..."},
 	"alice/internal/providers/linuxssh/linuxsshtest":   {"alice/internal/platform/db/..."},
+	"alice/internal/providers/windows/wintest":         {"alice/internal/platform/db/..."},
 	"alice/internal/sshkeys/keymat":                    {"alice/internal/platform/db/..."},
 	"alice/internal/sshkeys/plan":                      {"alice/internal/platform/db/..."},
 	"alice/internal/alerts/expiry":                     {"alice/internal/platform/db/..."},
@@ -477,6 +482,11 @@ func TestAllowed(t *testing.T) {
 		{"winhelper to winproto allowed", "alice/internal/providers/windows/winhelper", "alice/internal/providers/windows/winproto", true},
 		{"winhelper to helperproto allowed", "alice/internal/providers/windows/winhelper", "alice/internal/providers/linuxssh/helperproto", true},
 		{"winhelper to providers denied", "alice/internal/providers/windows/winhelper", "alice/internal/providers", false},
+		{"wintest to winhelper allowed", "alice/internal/providers/windows/wintest", "alice/internal/providers/windows/winhelper", true},
+		{"wintest to linuxsshtest allowed", "alice/internal/providers/windows/wintest", linuxsshtest, true},
+		{"wintest to the test PKI allowed", "alice/internal/providers/windows/wintest", "alice/internal/testutil/pki", true},
+		{"wintest to providers denied", "alice/internal/providers/windows/wintest", "alice/internal/providers", false},
+		{"wintest to platform/db denied", "alice/internal/providers/windows/wintest", "alice/internal/platform/db", false},
 		{"haproxyconf to platform/db denied", "alice/internal/providers/haproxyconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},

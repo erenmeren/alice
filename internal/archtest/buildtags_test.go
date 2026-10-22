@@ -39,6 +39,7 @@ var testOnlyImports = []string{
 	"alice/internal/testutil/...",
 	"alice/internal/providers/linuxssh/linuxsshtest",
 	"alice/internal/providers/providertest",
+	"alice/internal/providers/windows/wintest",
 	"alice/internal/vconsole/sign/openpgp/openpgptest",
 }
 
@@ -52,7 +53,7 @@ var testOnlyImports = []string{
 // the fake ACME CA (internal/testutil/fakeacme); cmd/alice-fakefleet is the one of the fake TLS fleet of the
 // network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
-	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
+	"internal/providers/providertest", "internal/providers/windows/wintest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
 	"internal/testutil/fakefleet", "cmd/alice-fakefleet",
 	"internal/vconsole/sign/openpgp/openpgptest"}
 

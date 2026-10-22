@@ -1,0 +1,497 @@
+// Package wintest is the emulated Windows host of the tests of the Windows provider and of the e2e
+// fake (design 2026-10-21 §13, R60): a modelled machine (elevation, operating system, IIS, the
+// certificate stores, the http.sys binding table, the IIS sites) that implements winhelper.Host, so the
+// helper's own code (winhelper.RunForced) answers behind the linuxsshtest SSH server, plus real TLS
+// listeners that serve the certificate http.sys would. It is never linked into the alice binary.
+package wintest
+
+import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/sha1" //nolint:gosec // G505: Windows names certificates by their SHA-1 thumbprint
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
+	"encoding/xml"
+	"errors"
+	"net"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"alice/internal/providers/windows/winhelper"
+	"alice/internal/providers/windows/winproto"
+)
+
+// defaultKeyProvider is where a PFX import puts a key (design §14 F4).
+const defaultKeyProvider = "Microsoft Software Key Storage Provider"
+
+// CertOptions are the properties of a certificate added to a store.
+type CertOptions struct {
+	FriendlyName string
+	// KeyProvider names the key storage provider; "" is the Microsoft Software Key Storage Provider.
+	KeyProvider string
+	Exportable  bool
+	// KeyUsableBySystem is whether SYSTEM can use the key; nil with a key means yes.
+	KeyUsableBySystem *bool
+}
+
+type certEntry struct {
+	leaf     *x509.Certificate
+	sha1     string
+	key      crypto.PrivateKey // nil: the store holds the certificate without its key
+	friendly string
+	provider string
+	export   bool
+	usable   *bool
+}
+
+type store struct {
+	name  string // the spelling of the first use
+	certs []*certEntry
+}
+
+// Model is the emulated machine. All methods are safe for concurrent use.
+type Model struct {
+	mu       sync.Mutex
+	os       winhelper.OSFacts
+	elevated bool
+	iis      winproto.IISFacts
+	stores   map[string]*store // by folded name
+	inter    []*x509.Certificate
+	bindings []winproto.SSLBinding
+	sites    []winproto.Site
+	expired  map[string]int
+
+	failAppcmd    bool
+	helperMissing bool
+	noForced      bool
+	protocol      int
+	delays        map[string]time.Duration
+
+	root      []byte // CARootPEM
+	endpoints map[int]string
+	intents   map[string]string // client address -> the address the helper meant to reach
+	serving   sync.WaitGroup
+}
+
+// NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
+// WebHosting, CA and Root, and no bindings, certificates or sites.
+func NewModel() *Model {
+	m := &Model{
+		os: winhelper.OSFacts{Build: "10.0.20348.2700", Product: "Windows Server 2022 Datacenter", InstallationType: "Server",
+			OpenSSHVersion: "OpenSSH_for_Windows_8.1p1"},
+		elevated:  true,
+		iis:       winproto.IISFacts{Installed: true, Version: "10.0"},
+		stores:    map[string]*store{},
+		expired:   map[string]int{},
+		protocol:  winproto.Protocol,
+		delays:    map[string]time.Duration{},
+		endpoints: map[int]string{},
+		intents:   map[string]string{},
+	}
+	for _, s := range []string{"My", "WebHosting", "CA", "Root"} {
+		m.storeLocked(s)
+	}
+	return m
+}
+
+// fold is ASCII case folding: Windows compares store names and host names without case.
+func fold(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
+}
+
+// storeLocked returns the store of a name, creating it. A missing (NULL) store name is MY (W0 F2).
+func (m *Model) storeLocked(name string) *store {
+	if name == "" {
+		name = "MY"
+	}
+	s, ok := m.stores[fold(name)]
+	if !ok {
+		s = &store{name: name}
+		m.stores[fold(name)] = s
+	}
+	return s
+}
+
+// SetOS replaces the operating system facts.
+func (m *Model) SetOS(f winhelper.OSFacts) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.os = f
+}
+
+// SetElevated sets whether the helper's token is elevated.
+func (m *Model) SetElevated(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.elevated = v
+}
+
+// SetIIS replaces the IIS facts. Installed false is a machine without IIS: the facts say so and
+// AppcmdSites refuses with winhelper.ErrIISNotInstalled.
+func (m *Model) SetIIS(f winproto.IISFacts) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iis = f
+}
+
+// AddCertificate puts the first certificate of chainPEM into the machine store (created when new), with
+// the key of keyPEM (nil: the store holds the certificate without a key), and returns its SHA-1
+// thumbprint in lower case hex. Further certificates in chainPEM are ignored: the chain the model
+// presents is built from AddIntermediate's certificates, as Windows builds it. It panics on PEM that does
+// not parse or a key that does not match (a test helper).
+func (m *Model) AddCertificate(store string, chainPEM, keyPEM []byte, o CertOptions) (sha1 string) {
+	block, _ := pem.Decode(chainPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		panic("wintest: no certificate in the PEM")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		panic("wintest: " + err.Error())
+	}
+	e := &certEntry{leaf: leaf, sha1: thumbprint(leaf.Raw), friendly: o.FriendlyName, export: o.Exportable}
+	if keyPEM != nil {
+		pair, err := tls.X509KeyPair(pem.EncodeToMemory(block), keyPEM)
+		if err != nil {
+			panic("wintest: " + err.Error())
+		}
+		e.key = pair.PrivateKey
+		e.provider = o.KeyProvider
+		if e.provider == "" {
+			e.provider = defaultKeyProvider
+		}
+		e.usable = o.KeyUsableBySystem
+		if e.usable == nil {
+			t := true
+			e.usable = &t
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.storeLocked(store)
+	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == e.sha1 })
+	s.certs = append(s.certs, e)
+	return e.sha1
+}
+
+func thumbprint(der []byte) string {
+	sum := sha1.Sum(der) //nolint:gosec // G401: a thumbprint is an identifier, not a security hash
+	return hex.EncodeToString(sum[:])
+}
+
+// AddIntermediate puts a certificate into LocalMachine\CA: the chain the model builds for a leaf is the
+// certificates found there, up to (and excluding) a self-signed root.
+func (m *Model) AddIntermediate(certPEM []byte) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		panic("wintest: no certificate in the PEM")
+	}
+	c, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		panic("wintest: " + err.Error())
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inter = append(m.inter, c)
+}
+
+// RemoveCertificate deletes a certificate from a store (the binding naming it stays).
+func (m *Model) RemoveCertificate(storeName, sha1 string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.storeLocked(storeName)
+	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == sha1 })
+}
+
+// AddBinding appends a record to the http.sys table. A port a Serve call has not listened on yet gets
+// its listener with the next Serve.
+func (m *Model) AddBinding(b winproto.SSLBinding) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bindings = append(m.bindings, b)
+}
+
+// AddSite appends an IIS site.
+func (m *Model) AddSite(s winproto.Site) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sites = append(m.sites, s)
+}
+
+// SetExpired sets how many expired certificates the named store holds (what the dump counts).
+func (m *Model) SetExpired(storeName string, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.expired[fold(storeName)] = n
+}
+
+// FailAppcmd makes appcmd fail (the dump then answers IO_ERROR, Ruling 12).
+func (m *Model) FailAppcmd(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failAppcmd = v
+}
+
+// SetHelperMissing makes every line fail as on a host without the helper: exit 1, text on stderr only
+// (cmd.exe's "is not recognized").
+func (m *Model) SetHelperMissing(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.helperMissing = v
+}
+
+// SetNoForcedCommand models sshd without its ForceCommand: the login shell runs the line, which
+// answers the same as a missing helper (Review Focus 5).
+func (m *Model) SetNoForcedCommand(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.noForced = v
+}
+
+// SetProtocol makes "version" answer protocol p.
+func (m *Model) SetProtocol(p int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.protocol = p
+}
+
+// Delay makes the named subcommand answer after d (a slow host).
+func (m *Model) Delay(sub string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.delays[sub] = d
+}
+
+// CARootPEM is the root of the test CA Demo generated (nil on any other model).
+func (m *Model) CARootPEM() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]byte(nil), m.root...)
+}
+
+// Host returns the model as the machine the helper's code runs on.
+func (m *Model) Host() winhelper.Host { return host{m} }
+
+// host is the winhelper.Host view of a Model.
+type host struct{ m *Model }
+
+func (h host) Elevated() (bool, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return h.m.elevated, nil
+}
+
+func (h host) OSFacts(context.Context) (winhelper.OSFacts, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return h.m.os, nil
+}
+
+func (h host) IISFacts(context.Context) (winproto.IISFacts, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.m.iis.Installed {
+		return winproto.IISFacts{}, winhelper.ErrIISNotInstalled
+	}
+	return h.m.iis, nil
+}
+
+func (h host) Stores(context.Context) ([]string, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	names := make([]string, 0, len(h.m.stores))
+	for _, s := range h.m.stores {
+		names = append(names, s.name)
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+func (h host) SSLBindings(context.Context) ([]winproto.SSLBinding, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return slices.Clone(h.m.bindings), nil
+}
+
+func (h host) Certificate(_ context.Context, storeName, sha1 string) (winproto.StoreCertificate, bool, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	e := h.m.certLocked(storeName, sha1)
+	if e == nil {
+		return winproto.StoreCertificate{}, false, nil
+	}
+	sum := sha256.Sum256(e.leaf.Raw)
+	c := winproto.StoreCertificate{Store: storeName, SHA1: e.sha1, SHA256: hex.EncodeToString(sum[:]),
+		DER: base64.StdEncoding.EncodeToString(e.leaf.Raw), Chain: []string{}, FriendlyName: e.friendly,
+		NotAfter: e.leaf.NotAfter.UTC().Format(time.RFC3339), HasKey: e.key != nil, KeyProvider: e.provider,
+		KeyExportable: e.export, KeyUsableBySystem: e.usable}
+	for _, x := range h.m.chainLocked(e.leaf) {
+		c.Chain = append(c.Chain, base64.StdEncoding.EncodeToString(x.Raw))
+	}
+	switch {
+	case e.key == nil:
+		c.KeyProblem = "key_missing"
+	case e.usable != nil && !*e.usable:
+		c.KeyProblem = "key_inaccessible"
+	}
+	return c, true, nil
+}
+
+func (h host) ExpiredInStore(_ context.Context, storeName string) (int, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return h.m.expired[fold(storeName)], nil
+}
+
+var errAppcmd = errors.New("wintest: appcmd failed")
+
+func (h host) AppcmdSites(context.Context) ([]byte, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.m.iis.Installed {
+		return nil, winhelper.ErrIISNotInstalled
+	}
+	if h.m.failAppcmd {
+		return nil, errAppcmd
+	}
+	return renderAppcmd(h.m.sites), nil
+}
+
+// Dial reaches the listener of the binding port in addr (the model serves on its own addresses), and
+// remembers which address the caller meant, so the TLS selection sees it (an ipport entry for 10.0.0.5).
+func (h host) Dial(ctx context.Context, _, addr string) (net.Conn, error) {
+	ip, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return nil, err
+	}
+	h.m.mu.Lock()
+	ep := h.m.endpoints[port]
+	h.m.mu.Unlock()
+	if ep == "" {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	}
+	if a, err := net.ResolveTCPAddr("tcp", ep); err == nil && a.IP.IsUnspecified() {
+		a.IP = net.IPv4(127, 0, 0, 1)
+		ep = a.String()
+	}
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "tcp", ep)
+	if err != nil {
+		return nil, err
+	}
+	key := c.LocalAddr().String()
+	h.m.mu.Lock()
+	h.m.intents[key] = ip
+	h.m.mu.Unlock()
+	return &intentConn{Conn: c, m: h.m, key: key}, nil
+}
+
+type intentConn struct {
+	net.Conn
+	m    *Model
+	key  string
+	once sync.Once
+}
+
+func (c *intentConn) Close() error {
+	c.once.Do(func() {
+		c.m.mu.Lock()
+		delete(c.m.intents, c.key)
+		c.m.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// certLocked finds a certificate by store (any case; "" is MY) and thumbprint.
+func (m *Model) certLocked(storeName, sha1 string) *certEntry {
+	s, ok := m.stores[fold(orMy(storeName))]
+	if !ok {
+		return nil
+	}
+	for _, c := range s.certs {
+		if c.sha1 == sha1 {
+			return c
+		}
+	}
+	return nil
+}
+
+func orMy(s string) string {
+	if s == "" {
+		return "MY"
+	}
+	return s
+}
+
+// chainLocked is the chain Windows builds after the leaf: issuers found in LocalMachine\CA, a
+// self-signed root excluded.
+func (m *Model) chainLocked(leaf *x509.Certificate) []*x509.Certificate {
+	var out []*x509.Certificate
+	cur := leaf
+	for len(out) < winproto.MaxChainCerts && !selfSigned(cur) {
+		var next *x509.Certificate
+		for _, c := range m.inter {
+			if bytes.Equal(c.RawSubject, cur.RawIssuer) && !bytes.Equal(c.Raw, cur.Raw) && cur.CheckSignatureFrom(c) == nil {
+				next = c
+				break
+			}
+		}
+		if next == nil || selfSigned(next) {
+			break
+		}
+		out = append(out, next)
+		cur = next
+	}
+	return out
+}
+
+func selfSigned(c *x509.Certificate) bool {
+	return bytes.Equal(c.RawSubject, c.RawIssuer) && c.CheckSignatureFrom(c) == nil
+}
+
+// renderAppcmd writes the sites the way "appcmd list site /config /xml" does (design §14 F6).
+func renderAppcmd(sites []winproto.Site) []byte {
+	var b bytes.Buffer
+	esc := func(s string) string {
+		var e bytes.Buffer
+		_ = xml.EscapeText(&e, []byte(s))
+		return e.String()
+	}
+	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<appcmd>\n")
+	for _, s := range sites {
+		state := s.State
+		if state == "" {
+			state = "Started"
+		}
+		var list []string
+		for _, sb := range s.Bindings {
+			list = append(list, sb.Protocol+"/"+sb.Information)
+		}
+		b.WriteString("    <SITE SITE.NAME=\"" + esc(s.Name) + "\" SITE.ID=\"" + strconv.FormatInt(s.ID, 10) + "\" bindings=\"" +
+			esc(strings.Join(list, ",")) + "\" state=\"" + esc(state) + "\">\n")
+		b.WriteString("        <site name=\"" + esc(s.Name) + "\" id=\"" + strconv.FormatInt(s.ID, 10) + "\">\n            <bindings>\n")
+		for _, sb := range s.Bindings {
+			b.WriteString("                <binding protocol=\"" + esc(sb.Protocol) + "\" bindingInformation=\"" + esc(sb.Information) +
+				"\" sslFlags=\"" + strconv.Itoa(sb.SSLFlags) + "\" />\n")
+		}
+		b.WriteString("            </bindings>\n        </site>\n    </SITE>\n")
+	}
+	b.WriteString("</appcmd>\n")
+	return b.Bytes()
+}
