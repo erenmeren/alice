@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/windows"
 	"software.sslmate.com/src/go-pkcs12"
 
 	"alice/internal/testutil/pki"
@@ -115,6 +116,24 @@ func TestRealCertificateFacts(t *testing.T) {
 	_, found, err = certificate("alice-w1-no-such-store", thumb, now)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+// A FILETIME past 2262 (where Filetime.Nanoseconds overflows) converts without wrapping.
+func TestFiletimeBeyond2262(t *testing.T) {
+	ft := func(at time.Time) windows.Filetime {
+		ticks := uint64(at.Unix()+11644473600)*10_000_000 + uint64(at.Nanosecond()/100) //nolint:gosec // test values after 1601
+		return windows.Filetime{LowDateTime: uint32(ticks), HighDateTime: uint32(ticks >> 32)}
+	}
+	for _, at := range []time.Time{
+		time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 22, 9, 30, 15, 123456700, time.UTC),
+		time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		assert.True(t, at.Equal(filetime(ft(at))), "%s -> %s", at, filetime(ft(at)))
+	}
+	assert.False(t, filetime(ft(time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC))).Before(time.Now()),
+		"a certificate valid until 9999 is not expired")
 }
 
 func TestRealExpiredInStore(t *testing.T) {

@@ -235,11 +235,19 @@ func centralCertStore() (bool, string, error) {
 	return enabled != 0, path, nil
 }
 
+// openFact opens a fact file (tests replace it to simulate a token that may not read the file).
+var openFact = func(path string) (io.ReadCloser, error) {
+	return os.Open(path) //nolint:gosec // G304: a fixed path under the system directory
+}
+
 // readFact reads a configuration file of at most maxFactFile bytes as UTF-8 (a UTF-16 file with its
-// byte order mark is converted); found is false when it does not exist.
+// byte order mark is converted); found is false when it does not exist, and also when the token may
+// not read it: inetsrv\config and System32\Tasks admit only Administrators and SYSTEM, so a
+// non-elevated helper cannot open them, and win-facts must still answer (elevated:false, Ruling 3).
+// Such a fact is unknown and reported as false; iis-dump runs elevated and reads it.
 func readFact(path string) (data []byte, found bool, err error) {
-	f, err := os.Open(path) //nolint:gosec // G304: a fixed path under the system directory
-	if errors.Is(err, os.ErrNotExist) {
+	f, err := openFact(path)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -330,9 +338,12 @@ var factStores = []string{"My", "WebHosting", "CA", "Root"}
 func (host) Stores(context.Context) ([]string, error) {
 	out := []string{}
 	for _, name := range factStores {
-		h, err := openStore(name)
+		h, found, err := openExistingStore(name)
 		if err != nil {
-			continue // a store that does not open is not listed
+			return nil, err
+		}
+		if !found {
+			continue // a store that does not exist is not listed
 		}
 		if err := windows.CertCloseStore(h, 0); err != nil {
 			return nil, err

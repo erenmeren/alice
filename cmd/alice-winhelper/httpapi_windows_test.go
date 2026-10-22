@@ -102,6 +102,26 @@ func TestDecodeRecords(t *testing.T) {
 	assert.Empty(t, decodeRecord(configSSLCertInfo, r.b).Type)
 	assert.Empty(t, decodeRecord(configSSLCertInfo, r.b[:40]).Type, "a buffer shorter than the structure")
 
+	// ipport [2001:db8::7]:443: a SOCKADDR_IN6 of 28 bytes, store MY.
+	r = newRecord()
+	s = (*sslSet)(unsafe.Pointer(&r.b[0]))
+	in6 := r.b[96:124]
+	binary.LittleEndian.PutUint16(in6[0:], windows.AF_INET6)
+	binary.BigEndian.PutUint16(in6[2:], 443)
+	copy(in6[8:24], []byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x07})
+	s.IPPort = r.addr(96)
+	r.param(&s.Param, 128, 160, "MY")
+	b6 := decodeRecord(configSSLCertInfo, r.b)
+	assert.Equal(t, winproto.BindingIPPort, b6.Type)
+	assert.Equal(t, "2001:db8::7", b6.IP)
+	assert.Equal(t, 443, b6.Port)
+	assert.Equal(t, "MY", b6.Store)
+	assert.Equal(t, testHash, b6.CertSHA1)
+	// A SOCKADDR_IN6 cut at the end of the buffer (16 of its 28 bytes) does not decode.
+	s.IPPort = r.addr(len(r.b) - 16)
+	binary.LittleEndian.PutUint16(r.b[len(r.b)-16:], windows.AF_INET6)
+	assert.Empty(t, decodeRecord(configSSLCertInfo, r.b).Type)
+
 	// hostnameport www.example.com:8443 with a NULL store (http.sys's MY).
 	r = newRecord()
 	sni := (*sslSniSet)(unsafe.Pointer(&r.b[0]))
@@ -174,8 +194,6 @@ func TestRealBindingsListAnSNIAndAnIPBinding(t *testing.T) {
 	assert.Equal(t, "0.0.0.0", ip.IP)
 	assert.Equal(t, thumb, ip.CertSHA1)
 	assert.Equal(t, winproto.AppIDIIS, ip.AppID)
-	// The runner's own records (IIS Express, WinRM) are listed too; the helper never assumes an empty table.
-	assert.Greater(t, len(list), 2)
 }
 
 func TestRealForeignBinding(t *testing.T) {

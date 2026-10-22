@@ -171,7 +171,14 @@ func contextDER(ctx *windows.CertContext) []byte {
 }
 
 // filetime converts a FILETIME to UTC.
-func filetime(ft windows.Filetime) time.Time { return time.Unix(0, ft.Nanoseconds()).UTC() }
+// It counts 100 ns ticks since 1601 in seconds and a remainder: Filetime.Nanoseconds overflows int64
+// after 2262, and a NotAfter of 9999-12-31 (RFC 5280's "no expiry") must not wrap into the past.
+func filetime(ft windows.Filetime) time.Time {
+	const ticksPerSecond = 10_000_000
+	const unixFrom1601 = 11644473600 // seconds from 1601-01-01 to 1970-01-01
+	ticks := int64(ft.HighDateTime)<<32 | int64(ft.LowDateTime)
+	return time.Unix(ticks/ticksPerSecond-unixFrom1601, (ticks%ticksPerSecond)*100).UTC()
+}
 
 // contextProperty reads one property of a certificate context; found is false when it is not set.
 // The buffer is a []uint64, so a structure at its start is aligned.

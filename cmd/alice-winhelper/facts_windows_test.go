@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/windows"
 
+	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 )
 
@@ -94,6 +97,60 @@ func TestRealIISFacts(t *testing.T) {
 	assert.True(t, f.Installed)
 	assert.Equal(t, "10.0", f.Version)
 	assert.False(t, f.SharedConfig, "the runner has no shared configuration")
+	// AutoCertRebind as Task Scheduler reports it ("absent" when the task does not exist).
+	state := strings.TrimSpace(string(powershell(t,
+		`$task = Get-ScheduledTask -TaskPath '\Microsoft\Windows\CertificateServicesClient\' -TaskName AutoCertRebind -ErrorAction SilentlyContinue; `+
+			`if ($task) { [string]$task.State } else { 'absent' }`)))
+	assert.Equal(t, state != "absent" && state != "Disabled", f.AutoCertRebind, "task state %q", state)
+}
+
+// denyFactFiles makes every fact file unreadable, as for a non-elevated token (inetsrv\config and
+// System32\Tasks admit only Administrators and SYSTEM).
+func denyFactFiles(t *testing.T) {
+	t.Helper()
+	old := openFact
+	openFact = func(path string) (io.ReadCloser, error) {
+		return nil, &os.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+	}
+	t.Cleanup(func() { openFact = old })
+}
+
+func TestUnreadableFactFilesAreUnknown(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "redirection.config")
+	require.NoError(t, os.WriteFile(cfg, []byte(`<configuration><configurationRedirection enabled="true" /></configuration>`), 0o600))
+	task := filepath.Join(dir, "AutoCertRebind")
+	require.NoError(t, os.WriteFile(task, []byte(`<Task><Settings><Enabled>true</Enabled></Settings></Task>`), 0o600))
+	got, err := sharedConfig(cfg)
+	require.NoError(t, err)
+	require.True(t, got, "positive control: the file reads as shared when it can be opened")
+
+	denyFactFiles(t)
+	got, err = sharedConfig(cfg)
+	require.NoError(t, err, "access denied is not a failed reading")
+	assert.False(t, got)
+	got, err = taskEnabled(task)
+	require.NoError(t, err)
+	assert.False(t, got)
+}
+
+// Ruling 3: win-facts answers without an elevated token, whose reads of the IIS fact files are denied.
+func TestRealWinFactsWithUnreadableFactFiles(t *testing.T) {
+	requireReal(t)
+	denyFactFiles(t)
+	f, err := newHost().IISFacts(context.Background())
+	require.NoError(t, err)
+	assert.True(t, f.Installed)
+	assert.False(t, f.SharedConfig)
+	assert.False(t, f.AutoCertRebind)
+
+	var out bytes.Buffer
+	code := winhelper.Run(context.Background(), newHost(), []string{winproto.SubWinFacts}, nil, &out)
+	require.Equal(t, winproto.ExitOK, code, out.String())
+	var answer winproto.WinFactsResponse
+	require.NoError(t, json.Unmarshal(out.Bytes(), &answer))
+	assert.True(t, answer.OK)
+	assert.True(t, answer.IIS.Installed)
 }
 
 func TestRealStoresListTheMachineStores(t *testing.T) {
