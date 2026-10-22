@@ -1128,7 +1128,7 @@
       },
       "key_unusable": {
         "title": "Windows sertifikanın özel anahtarını kullanamıyor.",
-        "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan zaten bulunuyor ya da bağlama değiştirilirken http.sys anahtarı reddetti (hata 1312). Bunun durdurduğu bir dağıtımda bağlama önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları gösterir.",
+        "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan zaten bulunuyor ya da bağlama değiştirilirken http.sys anahtarı reddetti (hata 1312). Bu nedenle duran bir dağıtımda bağlama önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları gösterir.",
         "action": "Sertifikalar ek bileşeninde sertifikanın kullanılabilir anahtarı olmayan kopyasını depodan kaldırın ya da anahtarın izinlerini kontrol edin, sonra yeniden dağıtın."
       },
       "backup_missing": {
@@ -1144,7 +1144,7 @@
       "helper_refused": {
         "title": "Windows sunucusundaki Alice yardımcısı isteği reddetti.",
         "cause": "Yardımcı her isteği denetler ve bunu Alice'in kendine ait bir iletisi olmayan bir kodla reddetti (hata bu kodu helper_code olarak gösterir).",
-        "action": "Sunucuyu yeniden tarayıp yeniden deneyin. Sürerse destekle iletişime geçin ve yardımcı kodunu ve istek kimliğini belirtin."
+        "action": "Sunucuyu yeniden tarayıp yeniden deneyin. Sorun sürerse destek ekibine başvurun ve yardımcı kodunu ve istek kimliğini belirtin."
       }
     },
     "certificate": {

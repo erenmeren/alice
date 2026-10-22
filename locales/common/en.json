@@ -1138,7 +1138,7 @@
       },
       "location_unsupported": {
         "title": "Alice does not deploy to this Windows binding.",
-        "cause": "Alice deploys to an http.sys binding by its IP address and port or by its host name and port, with an ASCII host name (an international domain name by its xn-- form). A binding of the central certificate store, or with a host name or address in another form, is listed but not changed. Nothing was sent.",
+        "cause": "Alice deploys to an http.sys binding by its IP address and port or by its host name and port, with an ASCII host name (an international domain name in its xn-- form). A binding of the central certificate store, or with a host name or address in another form, is listed but not changed. Nothing was sent.",
         "action": "Use an IIS binding with an ASCII host name (or an IP address), scan the server again and deploy to that binding."
       },
       "helper_refused": {

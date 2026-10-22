@@ -61,11 +61,17 @@ func TestWindowsDeploymentDTO(t *testing.T) {
 	for _, b := range []providers.BackupRef{
 		{OperationID: op, Store: `My\x`, PreviousSHA1: strings.Repeat("AB", 20)},
 		{OperationID: op, Store: strings.Repeat("a", 65), PreviousSHA1: sha1 + "0"},
+		{OperationID: op, Store: "Call 555 0100 for support"},
+		{OperationID: op, Store: "Root"},
 		{OperationID: op},
 	} {
 		m := deploymentMap(t, deploymentJSON(inventory.Deployment{ID: op, Backup: &b}))
 		assert.NotContains(t, m, "backup_store", "%+v", b)
 		assert.NotContains(t, m, "backup_sha1", "%+v", b)
+	}
+	for _, store := range []string{"My", "MY", "my", "WebHosting", "WEBHOSTING"} {
+		m := deploymentMap(t, deploymentJSON(inventory.Deployment{ID: op, Backup: &providers.BackupRef{OperationID: op, Store: store}}))
+		assert.Equal(t, store, m["backup_store"])
 	}
 
 	// Nginx: the members and the backup folder as before.

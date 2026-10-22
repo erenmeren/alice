@@ -1,7 +1,11 @@
 package api
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -86,9 +90,38 @@ func TestWindowsProviderReasonsAreRegistered(t *testing.T) {
 		windows.ReasonBindingChanged, windows.ReasonBindingNotFound, windows.ReasonBusy, windows.ReasonIOError,
 		windows.ReasonStoreError, windows.ReasonKeyUnusable, windows.ReasonBackupMissing, windows.ReasonLocationUnsupported,
 		windows.ReasonHelperRefused, "deployment.recovery_pending", "deployment.interrupted", "deployment.superseded",
-		"deployment.unknown_operation", "deployment.rollback_failed", "deployment.rollback_forbidden"} {
+		"deployment.unknown_operation", "deployment.rollback_failed", "deployment.rollback_forbidden",
+		"deployment.nothing_to_restore", "deployment.verify_unreachable", "certificate.invalid"} {
 		assert.NotEqual(t, ErrUnexpected, codeForReason(reason), reason)
 	}
+	// And every reason-shaped string literal of the provider's source, so the list above cannot drift from the
+	// provider's unexported constants.
+	files, err := filepath.Glob("../providers/windows/*.go")
+	require.NoError(t, err)
+	reasonRE := regexp.MustCompile(`^(windows|deployment|certificate|ssh|target)\.[a-z][a-z0-9_]*$`)
+	seen := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), f, nil, 0)
+		require.NoError(t, err, f)
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			v, err := strconv.Unquote(lit.Value)
+			// target.invalid_config (W1, as linuxssh's Open) is unregistered: the API validated the stored
+			// configuration before Open reads it, so it never reaches a client.
+			if err == nil && reasonRE.MatchString(v) && v != "target.invalid_config" {
+				seen++
+				assert.NotEqual(t, ErrUnexpected, codeForReason(v), "%s: %s", f, v)
+			}
+			return true
+		})
+	}
+	assert.Greater(t, seen, 20, "the provider's reasons were found")
 }
 
 // The params of the Windows errors pass the allowlist with their value rules (R61 Rulings 3 and 17): the helper's
@@ -110,4 +143,7 @@ func TestWindowsErrorParams(t *testing.T) {
 	assert.Nil(t, providerParams(map[string]string{"helper_version": strings.Repeat("1", 33)}))
 	assert.Nil(t, providerParams(map[string]string{"helper_version": "0.1.0 <script>"}))
 	assert.Nil(t, providerParams(map[string]string{"store": strings.Repeat("a", 65)}))
+	assert.Nil(t, providerParams(map[string]string{"store": "Call 555 0100 for support"}), "only the stores Alice deploys to")
+	assert.Nil(t, providerParams(map[string]string{"store": "Root"}))
+	assert.Equal(t, map[string]string{"store": "MY"}, providerParams(map[string]string{"store": "MY"}), "a NULL store reads MY")
 }

@@ -8512,8 +8512,8 @@ components:
           description: >-
             Known values: test_connection, discover_certificates, discover_ssh_keys, discover_kv_keys,
             discover_kv_secret_metadata, deploy_certificate, import_certificate, authorized_keys, verify_deployment,
-            read_certificate_secret, key_login; a newer server may add others. windows has test_connection,
-            discover_certificates, deploy_certificate and verify_deployment (R61); apache and haproxy discover only.
+            read_certificate_secret, key_login, http01_challenge; a newer server may add others. windows has test_connection,
+            discover_certificates, deploy_certificate and verify_deployment (R61); apache and haproxy do not deploy certificates.
           items: { type: string }
         config_schema:
           type: object
@@ -9003,7 +9003,7 @@ components:
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change and always "" for a Windows binding' }
-        backup_store: { type: string, description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate (My or WebHosting)' }
+        backup_store: { type: string, pattern: '^([Mm][Yy]|[Ww][Ee][Bb][Hh][Oo][Ss][Tt][Ii][Nn][Gg])$', description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate, My or WebHosting in any letter case (a binding without a store name reads MY)' }
         backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
         requested_by: { type: [string, "null"], format: uuid }
         requested_by_name: { type: string }

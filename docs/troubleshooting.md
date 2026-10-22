@@ -2133,7 +2133,7 @@ limitation).
 
 **Meaning.** The `alice-helper.exe` on this Windows server is outdated. (HTTP 502, reason `windows.helper_outdated`.)
 
-**Likely cause.** The helper on the server is older than this version of Alice expects, or it does not know a command Alice sent. The params name either `helper_protocol` and `required_protocol`, or the `subcommand` and the `helper_code` the helper answered.
+**Likely cause.** The helper on the server is older than this version of Alice expects, or it does not know a command Alice sent. The params name either `helper_protocol` and `required_protocol`, or the `subcommand` and the `helper_code` the helper answered, or `helper_version` and `required_version` (a helper too old to deploy certificates).
 
 **What to do.** Copy `alice-helper.exe` from the current Alice bundle to the server and run the Windows setup script again. `docs/windows-host-preparation.md` describes the steps.
 
