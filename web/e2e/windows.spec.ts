@@ -82,6 +82,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(script).toMatch(/'ARM64' = '[0-9a-f]{64}'/);
       expect(script, 'a build with checksums never installs an unchecked helper').not.toContain('cannot verify alice-helper.exe');
       expect(script).toContain("$AliceUser = 'alice'");
+      // The key line itself forces the helper, on every administrator account (final review C1).
+      expect(script).toContain(String.raw`$AuthorizedKey = 'restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh" ssh-`);
       // The administrator runs it on the server: the emulated server authorizes the key of its $AuthorizedKey line.
       expect(JSON.parse(windowsExec(['ctl', 'prepare'], script))).toEqual({ ok: true });
 
@@ -125,7 +127,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
         await expect(bindingRow(page, t, text).getByText(t('locations.notSupported'), { exact: true }), text).toHaveCount(0);
       }
       await expect(bindingRow(page, t, WINRM)).toContainText(t('locations.notSupported'));
-      await expect(bindingRow(page, t, WINRM)).toContainText(t('locations.unsupported.win_foreign_app', { application: 'winrm' }));
+      await expect(bindingRow(page, t, WINRM)).toContainText(t('locations.unsupported.win_foreign_app', { application: 'WinRM' }));
       await expect(bindingRow(page, t, CCS)).toContainText(t('locations.notSupported'));
       await expect(bindingRow(page, t, CCS)).toContainText(t('locations.unsupported.win_ccs'));
 
