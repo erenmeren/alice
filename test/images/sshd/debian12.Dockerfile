@@ -16,7 +16,7 @@
 # haproxy is the distribution's package with its default configuration: installed, never started
 # (discovery only; Nginx owns 80 and 443); the test writes its fixture configuration on ports
 # 9443-9445 (TestRealHAProxy, internal/providers/haproxy/containers_integration_test.go).
-FROM debian:12@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26
+FROM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx libnginx-mod-stream libnginx-mod-mail apache2 haproxy openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \
