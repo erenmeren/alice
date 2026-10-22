@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	xwindows "golang.org/x/sys/windows"
 
 	"alice/internal/providers/windows/winproto"
 )
@@ -119,7 +120,7 @@ func setupPowershell(t *testing.T, env map[string]string, script string) string 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	require.NoError(t, err, "powershell: %s: %s", script, stderr.String())
+	require.NoError(t, err, "powershell: %s\nstdout: %s\nstderr: %s", script, out, stderr.String())
 	return strings.TrimSpace(string(out))
 }
 
@@ -252,25 +253,69 @@ func localForwardServesNothing(t *testing.T, key, knownHosts string) {
 // otherAdministrator is the second local administrator TestRealSetupScript signs in as with Alice's key.
 const otherAdministrator = "alice-w1-other"
 
-// newOtherAdministrator creates the local account otherAdministrator (a random password nobody sees) in
-// Administrators (by SID) and removes it, with its profile, when the test ends.
+// runNet runs net.exe and returns its exit code and combined output, with secret (if not "") replaced in the
+// output, so neither a log line nor a failure message ever holds it.
+func runNet(t *testing.T, secret string, args ...string) (int, string) {
+	t.Helper()
+	cmd := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "net.exe"), args...) //nolint:gosec // G204: the system's net.exe with the test's arguments
+	cmd.Stdin = strings.NewReader("Y\r\n")
+	out, err := cmd.CombinedOutput()
+	text := string(out)
+	if secret != "" {
+		text = strings.ReplaceAll(text, secret, "<password>")
+	}
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, text
+	case errors.As(err, &exit):
+		return exit.ExitCode(), text
+	}
+	require.NoError(t, err, "net.exe could not run: %s", text)
+	return -1, text
+}
+
+// redactedArgs is args for a failure message, with secret replaced.
+func redactedArgs(secret string, args []string) string {
+	return strings.ReplaceAll(strings.Join(args, " "), secret, "<password>")
+}
+
+// deleteOtherAdministrator removes the account; "no such user" (exit 2 with NET HELPMSG 2221) is success.
+func deleteOtherAdministrator(t *testing.T) {
+	t.Helper()
+	code, out := runNet(t, "", "user", otherAdministrator, "/delete")
+	if code != 0 && (code != 2 || !strings.Contains(out, "2221")) {
+		t.Errorf("net user %s /delete: exit %d: %s", otherAdministrator, code, out)
+	}
+}
+
+// newOtherAdministrator creates the local account otherAdministrator with a random 32-character password nobody
+// sees, adds it to the local Administrators group (its name resolved from S-1-5-32-544, whatever the language of
+// Windows) and deletes it when the test ends. It uses net.exe, not the LocalAccounts cmdlets: those exit 1 without
+// an error when the test starts Windows PowerShell (runner run 6), which is also why the setup script uses ADSI.
+// The profile a sign-in creates is left behind (a runner is thrown away).
 func newOtherAdministrator(t *testing.T) string {
 	t.Helper()
-	pw := make([]byte, 18)
-	_, err := rand.Read(pw)
+	raw := make([]byte, 14)
+	_, err := rand.Read(raw)
 	require.NoError(t, err)
-	env := map[string]string{"ALICE_W1_USER": otherAdministrator, "ALICE_W1_PW": "Aa1!" + hex.EncodeToString(pw),
-		"ALICE_W1_ADMINS": setupAdministrators}
-	remove := `$u = Get-LocalUser -Name $env:ALICE_W1_USER -ErrorAction SilentlyContinue
-if ($u) {
-    Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.SID -eq $u.SID.Value } | Remove-CimInstance -ErrorAction SilentlyContinue
-    Remove-LocalUser -Name $env:ALICE_W1_USER
-}`
-	setupPowershell(t, env, remove)
-	t.Cleanup(func() { setupPowershell(t, env, remove) })
-	setupPowershell(t, env, `$pw = ConvertTo-SecureString -String $env:ALICE_W1_PW -AsPlainText -Force
-New-LocalUser -Name $env:ALICE_W1_USER -Password $pw -AccountNeverExpires -Description 'Alice W1 test (removed by the test)' | Out-Null
-Add-LocalGroupMember -SID $env:ALICE_W1_ADMINS -Member $env:ALICE_W1_USER`)
+	pw := "Aa1!" + hex.EncodeToString(raw) // 32 characters: upper, lower, digit, symbol
+
+	sid, err := xwindows.StringToSid(setupAdministrators)
+	require.NoError(t, err)
+	group, _, _, err := sid.LookupAccount("")
+	require.NoError(t, err, "the name of %s", setupAdministrators)
+
+	deleteOtherAdministrator(t)
+	t.Cleanup(func() { deleteOtherAdministrator(t) })
+	// /Y answers the "longer than 14 characters" question of net.exe.
+	for _, args := range [][]string{
+		{"user", otherAdministrator, pw, "/add", "/Y", "/comment:Alice W1 test (removed by the test)"},
+		{"localgroup", group, otherAdministrator, "/add"},
+	} {
+		code, out := runNet(t, pw, args...)
+		require.Equal(t, 0, code, "net %s: %s", redactedArgs(pw, args), out)
+	}
 	return otherAdministrator
 }
 
