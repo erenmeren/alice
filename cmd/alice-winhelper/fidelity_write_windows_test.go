@@ -613,7 +613,7 @@ func TestFidelityUnchangedAndSameHashWrite(t *testing.T) {
 	assert.Equal(t, 1, tw.servedBoth(portW2Chain, "", m1Sum))
 
 	// The same certificate again: the intermediate is in CA already (op5 added it), but the binding
-	// record's chain was cleared before op5's bind, so it no longer says Alice's last committed bind left
+	// record's chain was cleared with op5's prepared write, so it no longer says Alice's last committed bind left
 	// this chain served: a same-hash write (committed), and only after it is the intermediate served.
 	got = tw.deploy(op6, loc, m1, m1.FullchainPEM, m1Sum)
 	assertPhase(t, got, winproto.PhaseCommitted)
