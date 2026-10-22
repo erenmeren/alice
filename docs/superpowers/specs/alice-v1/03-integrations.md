@@ -479,3 +479,134 @@ Details:
 - Test login is best-effort; unverifiable locations require an admin decision.
 - No API-token download of private keys.
 - No Windows or macOS targets.
+
+## 13A. Windows servers and IIS over SSH (amendment, R60)
+
+(Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
+rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
+target, connection and discovery. Deployment, verification, rollback (W2), drift and cleanup (W3) follow.
+
+### 13A.1 Supported systems
+
+Windows Server 2019, 2022 and 2025, Desktop Experience or Server Core, x64 or ARM64; IIS 10 when the server runs
+IIS. The automated tests run on Windows Server 2022 and 2025 with Desktop Experience (GitHub runners); 2019, Server
+Core and a domain account under a hardened baseline are the owner's manual matrix. A server without IIS can be added:
+its other http.sys bindings are listed, unsupported.
+
+### 13A.2 Transport and account
+
+- Windows OpenSSH Server (the Windows capability; preinstalled on 2025), port 22 by default, Alice's platform SSH key,
+  the host key pinned through the existing confirm flow (SEC-080). No password exists anywhere.
+- `targets.config`: `host`, `port`, `username` (default `alice`; a local SAM name of at most 20 characters, optionally
+  preceded by a NetBIOS domain and a backslash, `CORP\alice-svc`), stored as typed. The account is a member of the
+  local Administrators group: a local account the setup script creates (random 32-character password, never shown,
+  "Deny log on locally" and "Deny log on through Remote Desktop Services"), or a domain account a GPO makes a local
+  administrator (for a hardened baseline that denies network logon to local administrators, S-1-5-114).
+- `C:\ProgramData\ssh\administrators_authorized_keys` holds the key line `restrict[,from="<addresses>"] <key>` (ACL
+  Administrators and SYSTEM only). `sshd_config` ends with the Alice block:
+
+  ```
+  # BEGIN Alice
+  Match User <account in lower case>
+      ForceCommand "C:\Program Files\Alice\alice-helper.exe" ssh
+      AuthenticationMethods publickey
+      PermitTTY no
+      AllowTcpForwarding no
+      AllowStreamLocalForwarding no
+      X11Forwarding no
+      PermitTunnel no
+  # END Alice
+  ```
+
+- **Forced command.** Alice sends `<subcommand> <arg> ...`: tokens of `^[A-Za-z0-9._:@+-]{1,253}$` joined by one
+  space, at most 16 tokens and 4096 bytes, built only by `linuxssh.ForcedCommand` (no quoting, no `sudo`). sshd runs
+  `alice-helper.exe ssh`, which splits `SSH_ORIGINAL_COMMAND` with the same rule and refuses anything else
+  (`INVALID_ARGUMENT`, `UNKNOWN_SUBCOMMAND`); no shell or `cmd.exe` ever parses the line.
+- **One fresh SSH connection per helper call.** Windows OpenSSH (8.1p1, 9.5p2) gives every session after the first on a
+  connection the first session's `SSH_ORIGINAL_COMMAND`, so the provider never runs a second command on a connection;
+  each call dials (pinned host key, the pool's slot limits and budgets) and closes the connection afterwards.
+
+### 13A.3 Setup
+
+The setup guide's profile `windows` is a PowerShell script shown for review, never pushed. The administrator copies
+`alice-winhelper-windows-<arch>.exe` from the bundle as `.\alice-helper.exe` next to it, edits `$AliceUser` if needed
+and runs it once as an administrator (Windows PowerShell 5.1 or pwsh 7). It installs OpenSSH Server if missing and sets
+sshd to start automatically, creates or takes the account and its deny rights, writes the key line once (a line with
+the same key is replaced), appends the Alice block after `sshd -t` accepted it, checks the helper's SHA-256 against the
+value embedded for `$env:PROCESSOR_ARCHITECTURE` (hashed in place, then again after staging), installs it into
+`C:\Program Files\Alice` (Administrators and SYSTEM full control, the account read and execute), creates
+`C:\ProgramData\Alice\helper` (Administrators and SYSTEM only; a reparse point or a foreign owner stops the script),
+adds a firewall rule for the SSH port from the key line's `from=` addresses (else `Any`, with a notice), registers the
+event source `Alice Helper` and prints the host key fingerprints. It never sets `LocalAccountTokenFilterPolicy`.
+
+### 13A.4 Helper interface (`winproto` protocol 1)
+
+| Subcommand | Elevation | Answer |
+|---|---|---|
+| `version` | not needed | helper version (`0.1.0`), protocol 1, `MinProtocol` 1 |
+| `win-facts` | not needed | OS product, build, installation type; IIS installed and version; elevated or not; stores; OpenSSH version |
+| `iis-dump` | required (`NOT_ELEVATED`, exit 2) | http.sys SSL bindings, their certificates, IIS sites, warning facts (13A.5) |
+| `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa>` | not needed | the chain served on that address, as the Linux helper's probe |
+
+Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 adds `iis-deploy`, `iis-restore`,
+`iis-status`, `iis-fence`, `iis-cleanup` to protocol 1; W1's helper answers `UNKNOWN_SUBCOMMAND` for them. Every answer
+is bounded by the 50 s budget (`IO_ERROR` when it ends) and the output caps.
+
+### 13A.5 Discovery algorithm
+
+1. Fresh connection, `version` (protocol check; a login shell instead of the helper, or no helper, is
+   `windows.helper_missing`; an older protocol or `UNKNOWN_SUBCOMMAND` is `windows.helper_outdated`).
+2. Fresh connection, `win-facts`: `elevated:false` fails the test with `windows.not_elevated`; the facts fill the OS
+   fact and the Windows facts of the server.
+3. Fresh connection, `iis-dump`. The helper reads every http.sys SSL record (`HttpQueryServiceConfiguration`:
+   `ipport`, `hostnameport`, `ccs`; IPv4 or IPv6; a NULL store is `MY`), each bound certificate once per (store,
+   SHA-1) with its DER, the chain Windows builds in the machine context (cache only, no network), the key's presence,
+   provider, exportability and whether SYSTEM can use it; with IIS installed, the sites and their bindings through
+   `%windir%\system32\inetsrv\appcmd.exe list site /config /xml` (shared configuration resolved by IIS; a failure,
+   timeout or unparsable XML fails the dump with `IO_ERROR`, nothing stored); the facts that warn (shared
+   configuration, the `IIS-AutoCertRebind` task, the Centralized Certificate Store, expired certificates in `My` and
+   `WebHosting`).
+4. Alice matches each IIS https binding (`ip:port:host`, `sslFlags`) to an http.sys entry: the CCS flag to
+   `ccs:<port>`; the SNI flag to `hostnameport <host>:<port>` (host folded to ASCII lower case); otherwise `ipport`,
+   where `*` matches `0.0.0.0:<port>` and `[::]:<port>`, and a specific address its own entry, else the wildcard
+   (`[::]` first for an IPv6 address). Stopped sites still count.
+5. Each http.sys entry is one location of kind `win_sslbinding`: locator `{"type":"hostnameport","host",...}`,
+   `{"type":"ipport","ip",...}` or `{"type":"ccs",...}` with `port` and the lower-case braced `app_id`; canonical text
+   `http.sys/hostnameport/www.example.com:443`, `http.sys/ipport/0.0.0.0:443`, `http.sys/ipport/[::]:443`,
+   `http.sys/ccs/443`; servers = the matched IIS sites (site name, host header, `ip:port`); `details` = store,
+   application, key facts, flags. An IIS https binding without an entry is a location with the IIS application id and
+   `cert_missing`.
+6. Supported rule, in order: `ccs` → `win_ccs`; no IIS binding uses the entry → `win_foreign_app` (`application`
+   `iis`, `iisexpress`, `winrm`, `sstp`, or "" with the raw id shown); a store other than `My` or `WebHosting`
+   (case-insensitive) → `win_store_unsupported`; else supported. Problems: `cert_missing` (the store lacks the named
+   certificate), `key_missing`, `key_inaccessible`; a location with a problem is `file_problem`. A binding with a CTL or
+   client-certificate negotiation or mapping keeps its reason and gets the warning `win_ctl`.
+7. Inventory links each bound certificate by its DER hash (network discovery and inventory show it managed), stores
+   the server warnings, and after a complete scan marks vanished locations missing.
+
+Bounds: 1000 bindings, 1000 certificates, 2000 sites, 10000 site bindings, 20 chain certificates, 64 KiB per
+certificate, 32 MiB of appcmd output, 16 MiB of answer. A cut list sets `list_truncated`; Alice adds
+`locations_dropped`, so inventory marks nothing missing on that scan. Hostile text (control and format characters,
+overlong names) is cleaned or the record dropped.
+
+### 13A.6 Failure and edge cases covered in W1
+
+| Case | Outcome |
+|---|---|
+| sshd unreachable, timeout, sign-in refused, host key changed | The `ssh.*` codes and target statuses of the Linux connector |
+| Helper missing, or sshd without the forced command (a login shell answers) | `windows.helper_missing` (ALC-WIN-0001); nothing else sent |
+| Helper too old, or a subcommand unknown to it | `windows.helper_outdated` (ALC-WIN-0002) |
+| Token not elevated (UAC remote restrictions, a hardened baseline) | `windows.not_elevated` (ALC-WIN-0003) with the domain-account fix |
+| IIS not installed | Facts say so; other applications' bindings listed, unsupported; nothing supported |
+| appcmd fails while IIS is installed | The scan fails; the previous scan stays |
+| A cut dump | `list_truncated`, nothing marked missing |
+| A certificate removed from the store, a key removed or unusable | `cert_missing`, `key_missing`, `key_inaccessible` |
+
+### 13A.7 Explicit W1 limits
+
+- Read only: no import, bind, removal or restart; the deploy controls are disabled for a Windows server.
+- No SSH key inventory or rotation on Windows (`inventory.IsServer` is false for it).
+- No Centralized Certificate Store deployment (W5), no Remote Desktop certificate (W6), no WinRM transport (W7).
+- The TLS extended parameters of the Ex records are not read (W2 reads and preserves them before writing).
+- The AD FS application id is unknown: its bindings show the raw id.
+- One location per http.sys binding; the grouping of bindings that share a certificate waits for W2.

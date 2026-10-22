@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-243 IDs: 234 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+257 IDs: 248 test, 7 partial, 0 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -163,6 +163,20 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | F-101 | The provider never reports the change live (Route 53 stays PENDING) | test | `internal/acme/solver/dnsapi:TestPresentWaitsForTheChange`<br>`internal/acme/solver/dnsapi/route53:TestEndToEndPresentAndCleanUpWaitsForInsync` |
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | test | `internal/acme/solver/dnsapi/azuredns:TestPreconditionFailedIsRetried`<br>`internal/acme/solver/dnsapi/azuredns:TestPreconditionFailedForeverGivesUp`<br>`internal/acme/solver/dnsapi/route53:TestRemoveTXTDeleteRace` |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | test | `internal/jobs/acmejobs:TestCleanupThroughADeletedProvider` |
+| WIN-01 | A Windows server is added with a local account (alice) or a domain account (CORP\alice-svc) | test | `internal/inventory:TestCreateWindowsTargetKeepsTheDomainAccount`<br>`internal/providers/windows:TestParseConfigTakesDomainAccounts`<br>`internal/api:TestCreateWindowsTarget`<br>`web/e2e/windows.spec.ts:Windows server` |
+| WIN-02 | First contact, then a changed host key | test | `internal/providers/windows:TestHostKeyChangedRefuses`<br>`web/e2e/windows.spec.ts:confirm its host key` |
+| WIN-03 | The helper is missing, or sshd has no forced command (a login shell answers) | test | `internal/providers/windows:TestOpenHelperMissing`<br>`internal/providers/windows:TestOpenWithoutForcedCommandIsHelperMissing`<br>`internal/api:TestWindowsErrorCodes` |
+| WIN-04 | The helper is outdated, or answers UNKNOWN_SUBCOMMAND | test | `internal/providers/windows:TestOpenHelperOutdated`<br>`internal/providers/windows:TestUnknownSubcommandIsOutdated` |
+| WIN-05 | The account's token is not elevated | test | `internal/providers/windows:TestTestConnectionNotElevated`<br>`internal/providers/windows/winhelper:TestElevationGate`<br>`cmd/alice-winhelper:TestRealHostIsElevated` |
+| WIN-06 | A shell line arrives through SSH_ORIGINAL_COMMAND (&, &&, an empty line, a NUL, a double space, a newline) | test | `internal/providers/windows/winhelper:TestRunForcedSplitsTheOriginalCommand`<br>`cmd/alice-winhelper:TestMainRefusesAShellLine`<br>`internal/providers/windows:TestRealSetupScript` |
+| WIN-07 | http.sys holds SNI, IP and wildcard bindings used by IIS sites (upper-case host headers, * against 0.0.0.0 and [::], a s... | test | `internal/providers/windows:TestDiscoverMatchesIISBindings`<br>`internal/providers/windows:TestDiscoverListsBindingsWithSites`<br>`cmd/alice-winhelper:TestFidelityDumpSNIAndIPBindings` |
+| WIN-08 | Bindings of other applications (WinRM, IIS Express, SSTP), a CCS binding, a binding in another store; IIS not installed | test | `internal/providers/windows:TestDiscoverSupportedRules`<br>`internal/providers/windows:TestDiscoverWithoutIISListsForeignBindings` |
+| WIN-09 | The bound certificate is removed from its store, its key is missing or SYSTEM cannot use it | test | `internal/providers/windows:TestDiscoverProblems`<br>`internal/inventory:TestWindowsProblemsAreFileProblems`<br>`cmd/alice-winhelper:TestFidelityDumpCertificateRemoved` |
+| WIN-10 | The dump is cut (more than 1000 bindings, or the output cap) | test | `internal/providers/windows/winhelper:TestDumpCutsAtItsBounds`<br>`internal/providers/windows:TestDiscoverTruncatedDumpDropsLocations`<br>`internal/inventory:TestWindowsTruncatedScanMarksNothingMissing` |
+| WIN-11 | appcmd fails, times out or answers unparsable XML while IIS is installed | test | `internal/providers/windows/winhelper:TestBuildDumpAppcmdFailureFailsTheDump`<br>`internal/providers/windows:TestDiscoverAppcmdFailure` |
+| WIN-12 | A binding's certificate is also found by network discovery | test | `internal/inventory:TestWindowsScanStoresBindingLocations` |
+| WIN-13 | Hostile helper output (control characters, overlong names, invalid records, hostile appcmd XML) | test | `internal/providers/windows:TestDiscoverCleansHostileText`<br>`internal/providers/windows/winhelper:TestBuildDumpDropsInvalidRecords`<br>`internal/providers/windows/winhelper:TestParseAppcmdSites` |
+| WIN-14 | The emulator and the real helper answer the read subcommands (version, refusals, win-facts, tls-probe, iis-dump) | test | `cmd/alice-winhelper:TestFidelityVersionAndRefusals`<br>`cmd/alice-winhelper:TestFidelityWinFacts`<br>`cmd/alice-winhelper:TestFidelityTLSProbe` |
 | S-01 | Run the full integration suite and the E2E suite with log capture (zap/slog handler wrapping a buffer, plus container st... | test | `internal/api:TestPlatformKeyNeverLeaks`<br>`internal/api:TestSecretLeakSuiteWithGeneratedKeys`<br>`internal/api:TestSecretsNeverLeak` |
 | S-02 | Response scanner middleware in test builds: every HTTP response body, header, and cookie is scanned for canaries and PEM... | test | `internal/api:TestSecretsNeverLeak` |
 | S-03 | Error paths: force failures (invalid key upload, wrong password for PFX, SSH failure, KV 403 echoing a body containing a... | test | `internal/api:TestSecretsNeverLeak` |

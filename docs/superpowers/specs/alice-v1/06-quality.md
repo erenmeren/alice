@@ -349,6 +349,29 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
 
+### 24.7 Windows servers (R60)
+
+(Phase W1, read only; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
+`docs/superpowers/rulings/windows-iis.md`.) The emulated host `internal/providers/windows/wintest` runs the helper's own
+decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (windows-2022, windows-2025).
+
+| ID | Failure or case injected | Expected behavior |
+|---|---|---|
+| WIN-01 | A Windows server is added with a local account (`alice`) or a domain account (`CORP\alice-svc`) | The name reaches the API, `targets.config`, the SSH sign-in and the setup script as typed; a Linux server still refuses it |
+| WIN-02 | First contact, then a changed host key | The fingerprint is shown for confirmation and nothing runs before it; a changed key blocks the server (`host_key_changed`) |
+| WIN-03 | The helper is missing, or sshd has no forced command (a login shell answers) | `windows.helper_missing` (ALC-WIN-0001) from `version`; nothing else is sent |
+| WIN-04 | The helper is outdated, or answers `UNKNOWN_SUBCOMMAND` | `windows.helper_outdated` (ALC-WIN-0002); nothing else is sent |
+| WIN-05 | The account's token is not elevated | `iis-dump` refuses with `NOT_ELEVATED`; the connection test fails with `windows.not_elevated` (ALC-WIN-0003); a real key logon of a local administrator is elevated |
+| WIN-06 | A shell line arrives through `SSH_ORIGINAL_COMMAND` (`&`, `&&`, an empty line, a NUL, a double space, a newline) | The helper refuses it (`INVALID_ARGUMENT`) without running anything; the setup script's sshd refuses a shell, a TTY, forwarding and a password |
+| WIN-07 | http.sys holds SNI, IP and wildcard bindings used by IIS sites (upper-case host headers, `*` against `0.0.0.0` and `[::]`, a specific IP without its own entry) | Every binding is a location with its canonical text and its IIS sites as servers; an IIS binding without an entry is a `cert_missing` location |
+| WIN-08 | Bindings of other applications (WinRM, IIS Express, SSTP), a CCS binding, a binding in another store; IIS not installed | Unsupported `win_foreign_app` (the application named), `win_ccs`, `win_store_unsupported`; without IIS the other bindings are still listed and nothing is supported |
+| WIN-09 | The bound certificate is removed from its store, its key is missing or SYSTEM cannot use it | `cert_missing`, `key_missing`, `key_inaccessible`; the location is `file_problem`; a removed certificate loses its link |
+| WIN-10 | The dump is cut (more than 1000 bindings, or the output cap) | `list_truncated` and `locations_dropped`; inventory marks no stored location missing |
+| WIN-11 | appcmd fails, times out or answers unparsable XML while IIS is installed | `iis-dump` answers `IO_ERROR`; the scan fails and the previous scan stays |
+| WIN-12 | A binding's certificate is also found by network discovery | The certificate is linked by its DER fingerprint and shown as managed |
+| WIN-13 | Hostile helper output (control characters, overlong names, invalid records, hostile appcmd XML) | Text is cleaned or the record dropped; the dump is bounded; no hostile value reaches inventory unchecked |
+| WIN-14 | The emulator and the real helper answer the read subcommands (`version`, refusals, `win-facts`, `tls-probe`, `iis-dump`) | The answers agree field by field on windows-2022 and windows-2025 (fidelity test) |
+
 ## 25. Security Test Plan
 
 ### 25.1 Authorization matrix (generated)

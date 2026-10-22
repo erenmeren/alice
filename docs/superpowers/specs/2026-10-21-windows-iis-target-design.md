@@ -1,6 +1,6 @@
 # Windows servers and IIS as a deployment target: design
 
-Status: design only, nothing built. Date: 2026-10-21. Written against `main` at `72fa1f9a` (migrations up to `00029`,
+Status: W0 spike done (§14.1); **W1 built (R60)** (§16); W2-W7 design only. Date: 2026-10-21. Written against `main` at `72fa1f9a` (migrations up to `00029`,
 decisions up to R56; R57 and R58 are taken by parallel work). Decision number: **R59+ when implemented** (recorded in
 `alice-v1/00-decisions.md` by the phase that builds it, not before). Migration and error-code numbers: the next free
 ones at merge time. Roadmap and shared groundwork: [2026-10-21-deployment-targets-roadmap.md](2026-10-21-deployment-targets-roadmap.md).
@@ -580,3 +580,22 @@ Images measured in W0 (§14.1): `windows-2022` = Windows Server 2022 Datacenter 
 | Q9 | Store for new imports when the binding's store is not `WebHosting`? | **The binding's current store** (`My` by default); never move a binding between stores. |
 | Q10 | Does the Windows Application event log get an event per change? | **Yes** (hashes and binding names only), so the customer's SIEM sees Alice's changes from the server's side. |
 | Q11 | Licensing: does a Windows server count as one target whatever it hosts (IIS, later RDP)? | **Yes, one target**, like a Linux server with Nginx. |
+
+## 16. Phase W1 as built (2026-10-22, R60)
+
+Built on branch `windows-w1` (plan `docs/superpowers/plans/2026-10-22-windows-w1-target-connection-discovery.md`,
+17 tasks); decision R60, rulings in [windows-iis.md](../rulings/windows-iis.md), host preparation
+`docs/windows-host-preparation.md`, test IDs `WIN-01`..`WIN-14` (`alice-v1/06-quality.md` §24.7). No migration.
+
+| Item | As built | Differs from this design |
+|---|---|---|
+| Target | Type `windows`, provider `windows`, capabilities `test_connection`, `discover_certificates`; config `host`, `port`, `username` (local or `DOMAIN\name`, stored as typed) | Not §8's `address`/`os_user` (ruling 1); no SSH key inventory (`IsServer` false; `IsSSHTarget`, `HasCertificateLocations` new) |
+| Transport | Windows OpenSSH, `Match User` block (account in lower case) with `ForceCommand ... ssh`, `restrict` key line; bare validated tokens through `linuxssh.ForcedCommand`; one fresh connection per helper call | As §4.3 and §8 (W0-amended) |
+| Protocol | `winproto` 1: `version`, `win-facts`, `iis-dump`, `tls-probe`; helper `0.1.0`; W2 adds its subcommands to protocol 1 | `HttpUpdate/SetServiceConfiguration` bindings wait for W2 |
+| Helper | `cmd/alice-winhelper` (amd64, arm64, no cgo): httpapi.dll (non-Ex queries), crypt32/ncrypt (chain cache only, key facts from the CNG key's DACL), token elevation, appcmd with an allow-listed environment; decisions shared with the emulator in `winhelper` | Ex records' TLS extended parameters not read (W2 must); `key_usable_by_system` counts SYSTEM's groups (owner to confirm) |
+| Elevation | `iis-dump` refuses `NOT_ELEVATED`; `version`, `win-facts`, `tls-probe` run without; the connection test fails with `windows.not_elevated` | None |
+| Discovery | One `win_sslbinding` location per http.sys entry (and per IIS https binding without one, `cert_missing`); locator and canonical text of §5; IIS sites as servers; bounds and `list_truncated` / `locations_dropped` | `win_ctl` is a location warning, not an unsupported reason (it is "deployable, warned"); `file_problem` set for problems |
+| Setup | PowerShell script (profile `windows`) with the embedded helper checksums (`make winhelper`), ADSI account creation, minimal INF for the deny rights, ACLs without recursion, firewall from `from=` | The helper directory grants the account read and execute (so a filtered token is named `not_elevated`, owner to confirm) |
+| Errors | `ALC-WIN-0001` `helper_missing`, `ALC-WIN-0002` `helper_outdated`, `ALC-WIN-0003` `not_elevated` | None |
+| UI | Add a Windows server, setup script, Windows and IIS facts, bindings with "IIS site", deploy disabled; EN and TR | The grouping of bindings per certificate (Q5) waits for W2 |
+| Tests | Emulator `wintest` (with Windows OpenSSH's first-command behaviour), real-Windows workflow `windows.yml` on windows-2022 and windows-2025 (fidelity test of the read subcommands, setup script smoke test; ports 45300-45399), e2e fake `cmd/alice-fakewindows` | `internal/api/nul.go` renamed (reserved name on Windows) instead of the spike's sparse checkout |

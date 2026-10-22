@@ -83,6 +83,16 @@ func TestExtractsEveryMatrixID(t *testing.T) {
 	assert.Error(t, err, "a duplicate ID in the specification")
 }
 
+func TestSpecIDsFindWindowsRows(t *testing.T) {
+	spec := "## 24. Failures\n\n### 24.7 Windows servers (R60)\n\n| ID | Case | Expected |\n| --- | --- | --- |\n" +
+		"| WIN-01 | A Windows server is added | kept |\n| WIN-14 | The emulator answers | as the helper |\n" +
+		"| WINX-01 | not a matrix prefix | ignored |\n"
+	ids, titles, err := SpecIDs(strings.NewReader(spec))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"WIN-01", "WIN-14"}, ids, "the WIN prefix of section 24.7 is a matrix ID")
+	assert.Equal(t, "A Windows server is added", titles["WIN-01"])
+}
+
 func TestRefusesMissingUnknownAndBrokenEntries(t *testing.T) {
 	for name, tc := range map[string]struct{ mapJSON, want string }{
 		"missing":          {`[{"id":"L-01","status":"owner","owner":"x"}]`, "L-02: no entry"},

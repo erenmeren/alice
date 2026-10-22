@@ -1396,13 +1396,14 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 
 - **Add server** (administrators): see [nginx-host-preparation.md](nginx-host-preparation.md) and, for an Apache
   server, [apache-host-preparation.md](apache-host-preparation.md) and, for a HAProxy server,
-  [haproxy-host-preparation.md](haproxy-host-preparation.md). Each server counts
+  [haproxy-host-preparation.md](haproxy-host-preparation.md) and, for a Windows server,
+  [windows-host-preparation.md](windows-host-preparation.md) ([Windows servers](#windows-servers)). Each server counts
   toward the license; when the license is full, Alice says "Your license allows N targets." and adds nothing. A
   server's address, SSH port and user cannot be changed later: remove the server and add it again.
 - **Test connection** and **Scan for SSH keys** (administrators and operators) run in the background; the page
   updates when they finish. Test connection always opens a new connection to the server. On an **Nginx server**, an **Apache server** or a **HAProxy server** the
   scan is called **Discover** (in **Websites on this server**) and reads the SSH keys and the websites together.
-- A server's **Server type** (**Linux server**, **Nginx server**, **Apache server** or **HAProxy server**) is chosen when it is added and
+- A server's **Server type** (**Linux server**, **Nginx server**, **Apache server**, **HAProxy server** or **Windows server**) is chosen when it is added and
   cannot be changed; see [nginx-host-preparation.md](nginx-host-preparation.md#changing-a-linux-server-into-an-nginx-server).
   An **Apache server** is discovery only: Alice reads its websites and certificates (with **Discover**, as on an
   Nginx server) and its SSH keys, and never deploys to it
@@ -1438,6 +1439,26 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
   **Run now** or **Discard** for each item; nothing starts on its own. **Discard** is possible at any time, also
   while the license is expired. Work requested while Alice could not check its license (see [License](#license)) is
   not listed here: it waits and starts by itself after the next successful check.
+
+### Windows servers
+
+A **Windows server** (Windows Server 2019, 2022 or 2025, with or without IIS) is discovery only in this release. Alice
+signs in over the Windows OpenSSH Server with its own key, as a local account `alice` or a domain account such as
+`CORP\alice-svc`, and sshd runs only **alice-helper.exe** for that account: Alice never gets a shell. Prepare the
+server once with the PowerShell setup script that **Add server** shows for **Windows server**; see
+[windows-host-preparation.md](windows-host-preparation.md).
+
+- **Test connection** checks the helper and its version and that the account gets an administrator token, and shows
+  the Windows and IIS facts. A missing, outdated or not elevated helper is named (`ALC-WIN-0001`, `ALC-WIN-0002`,
+  `ALC-WIN-0003`, see [troubleshooting.md](troubleshooting.md)).
+- **Discover** (in **Websites on this server**) lists every HTTPS binding of http.sys, with the IIS sites that use it
+  in the column **IIS site** and the certificate bound there, which **Certificates** shows like any certificate Alice
+  found. Bindings of other applications (WinRM, SSTP, AD FS, IIS Express), Centralized Certificate Store bindings and
+  bindings in a store other than Personal (`My`) or Web Hosting are listed as not supported, with the reason. A
+  certificate missing from its store, a missing key or a key Windows cannot use is shown as a problem.
+- Alice does not manage the SSH keys of a Windows server, and never changes anything on it in this release:
+  deployment, drift and cleanup follow in a later release. The deploy controls are shown disabled with "Not available
+  for IIS servers yet".
 
 ## SSH keys
 

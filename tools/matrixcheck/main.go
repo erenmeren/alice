@@ -1,5 +1,5 @@
 // Command matrixcheck proves that every ID of the test matrices of the quality specification
-// (sections 23 to 25: L-, F-, S-, R-, A-, O-, X- and SR- rows) is accounted for: it names tests that
+// (sections 23 to 25: L-, F-, S-, R-, A-, O-, X-, SR- and WIN- rows) is accounted for: it names tests that
 // exist, an owner step, or a ruling that defers it, or it is listed as a gap.
 //
 //	go run ./tools/matrixcheck -spec 06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md [-strict] [-update]
@@ -86,7 +86,7 @@ func main() {
 }
 
 var (
-	idRowRe    = regexp.MustCompile(`^\|\s*((?:SR|[LFSRAOX])-\d+)\s*\|`)
+	idRowRe    = regexp.MustCompile(`^\|\s*((?:SR|WIN|[LFSRAOX])-\d+)\s*\|`)
 	sectionRe  = regexp.MustCompile(`^##\s+(\d+)\.`)
 	testFnRe   = regexp.MustCompile(`(?m)^func ((?:Test|Fuzz|Benchmark|Example)\w*)\(`)
 	testNameRe = regexp.MustCompile(`^(?:Test|Fuzz)\w+$`)

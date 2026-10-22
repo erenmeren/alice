@@ -2141,6 +2141,127 @@
   ]
  },
  {
+  "id": "WIN-01",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCreateWindowsTargetKeepsTheDomainAccount",
+   "internal/providers/windows:TestParseConfigTakesDomainAccounts",
+   "internal/api:TestCreateWindowsTarget",
+   "web/e2e/windows.spec.ts:Windows server"
+  ]
+ },
+ {
+  "id": "WIN-02",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestHostKeyChangedRefuses",
+   "web/e2e/windows.spec.ts:confirm its host key"
+  ]
+ },
+ {
+  "id": "WIN-03",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestOpenHelperMissing",
+   "internal/providers/windows:TestOpenWithoutForcedCommandIsHelperMissing",
+   "internal/api:TestWindowsErrorCodes"
+  ]
+ },
+ {
+  "id": "WIN-04",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestOpenHelperOutdated",
+   "internal/providers/windows:TestUnknownSubcommandIsOutdated"
+  ]
+ },
+ {
+  "id": "WIN-05",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestTestConnectionNotElevated",
+   "internal/providers/windows/winhelper:TestElevationGate",
+   "cmd/alice-winhelper:TestRealHostIsElevated"
+  ]
+ },
+ {
+  "id": "WIN-06",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRunForcedSplitsTheOriginalCommand",
+   "cmd/alice-winhelper:TestMainRefusesAShellLine",
+   "internal/providers/windows:TestRealSetupScript"
+  ]
+ },
+ {
+  "id": "WIN-07",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDiscoverMatchesIISBindings",
+   "internal/providers/windows:TestDiscoverListsBindingsWithSites",
+   "cmd/alice-winhelper:TestFidelityDumpSNIAndIPBindings"
+  ]
+ },
+ {
+  "id": "WIN-08",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDiscoverSupportedRules",
+   "internal/providers/windows:TestDiscoverWithoutIISListsForeignBindings"
+  ]
+ },
+ {
+  "id": "WIN-09",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDiscoverProblems",
+   "internal/inventory:TestWindowsProblemsAreFileProblems",
+   "cmd/alice-winhelper:TestFidelityDumpCertificateRemoved"
+  ]
+ },
+ {
+  "id": "WIN-10",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestDumpCutsAtItsBounds",
+   "internal/providers/windows:TestDiscoverTruncatedDumpDropsLocations",
+   "internal/inventory:TestWindowsTruncatedScanMarksNothingMissing"
+  ]
+ },
+ {
+  "id": "WIN-11",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestBuildDumpAppcmdFailureFailsTheDump",
+   "internal/providers/windows:TestDiscoverAppcmdFailure"
+  ]
+ },
+ {
+  "id": "WIN-12",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestWindowsScanStoresBindingLocations"
+  ]
+ },
+ {
+  "id": "WIN-13",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDiscoverCleansHostileText",
+   "internal/providers/windows/winhelper:TestBuildDumpDropsInvalidRecords",
+   "internal/providers/windows/winhelper:TestParseAppcmdSites"
+  ]
+ },
+ {
+  "id": "WIN-14",
+  "status": "test",
+  "tests": [
+   "cmd/alice-winhelper:TestFidelityVersionAndRefusals",
+   "cmd/alice-winhelper:TestFidelityWinFacts",
+   "cmd/alice-winhelper:TestFidelityTLSProbe"
+  ]
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [

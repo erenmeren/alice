@@ -1,6 +1,6 @@
 # New deployment targets: roadmap and shared groundwork
 
-Status: phase G built (§5); the target phases are design only. Date: 2026-10-21. Written against `main` at `72fa1f9a`. Decision number:
+Status: phase G built (§5); the Windows W0 spike done and W1 built (R60, [design §16](2026-10-21-windows-iis-target-design.md)); the other target phases are design only. Date: 2026-10-21. Written against `main` at `72fa1f9a`. Decision number:
 **R59** for phase G (recorded in `alice-v1/00-decisions.md`); R57 and R58 are
 taken by parallel work, and each target phase that is built records its own decision then.
 
@@ -89,7 +89,7 @@ and the guard contract against each target's fake.
 |---|---|---|---|---|
 | 1 | G — shared groundwork (G1-G7) | M (~6 tasks) | — | Every target needs it; small and testable with the existing Nginx path (no behaviour change). |
 | 2 | Windows W0 (spike on real Windows) | S | — (can run alongside G) | The design rests on Windows facts that must be confirmed first. |
-| 3 | Windows W1-W4 | L + XL + M + M | G, W0 | Highest priority for the owner; the largest market of the three in the customer base; reuses the most (SSH, helper journal, emulator). |
+| 3 | Windows W1-W4 (W1 built, R60) | L + XL + M + M | G, W0 | Highest priority for the owner; the largest market of the three in the customer base; reuses the most (SSH, helper journal, emulator). |
 | 4 | Kubernetes K1-K3 | M + L + M | G | Pure API, fully testable in CI (fake, envtest, kind), smallest of the three. |
 | 5 | F5 BIG-IP F1-F4 | L + L + M + M | G, an owner-provided BIG-IP VE lab license | Common in banks, but confidence needs a real device that only the owner can provide. |
 | later | Windows W5 (CCS), W6 (RDP), W7 (WinRM); K4; AS3 | M / M / L / M / L | the above | On customer demand. |

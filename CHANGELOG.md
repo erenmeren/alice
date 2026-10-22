@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Windows servers (discovery, R60)
+
+**Added**
+- Windows servers (discovery): **Add server → Server type Windows server** adds a Windows Server 2019, 2022 or 2025
+  machine, with or without IIS, signed in over Windows OpenSSH with Alice's own key as a local account (`alice`) or a
+  domain account (`CORP\alice-svc`). A PowerShell setup script, shown for review, prepares the server once: OpenSSH
+  Server, the account, the key, an sshd block that runs only `alice-helper.exe` for the account, the helper after
+  checking its SHA-256, and a firewall rule ([windows-host-preparation.md](docs/windows-host-preparation.md)).
+- Alice lists every HTTPS binding of http.sys (the Windows HTTP server of IIS, WinRM, SSTP and others) under
+  **Websites on this server**, with the IIS sites that use it (column **IIS site**) and the certificate bound there,
+  linked to the certificate inventory by its fingerprint. Bindings of other applications, Centralized Certificate
+  Store bindings and bindings in other stores are listed as not supported, with the reason; a certificate missing from
+  its store, a missing key or a key Windows cannot use are shown as problems. The server shows its Windows and IIS
+  facts and warnings (shared IIS configuration, the AutoCertRebind task, expired certificates in the store).
+- Codes `ALC-WIN-0001` (the helper is missing or sshd does not run it), `ALC-WIN-0002` (the helper is outdated) and
+  `ALC-WIN-0003` (the account does not get an administrator token), with troubleshooting entries. English and Turkish.
+- `make winhelper` builds `alice-helper.exe` for Windows x64 and ARM64 reproducibly; its checksums are built into Alice
+  and the setup script. A real-Windows test workflow runs on Windows Server 2022 and 2025.
+
+**Changed**
+- On a Windows server Alice only reads in this release: deployment, drift and cleanup follow in a later release (the
+  deploy controls are shown disabled). No migration. `internal/api/nul.go` was renamed so the repository checks out on
+  Windows. Rulings: `docs/superpowers/rulings/windows-iis.md`.
+
 ## Unreleased — Groundwork for Windows, F5 BIG-IP and Kubernetes targets (R59)
 
 **Added**
