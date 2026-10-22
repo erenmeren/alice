@@ -234,6 +234,29 @@ function Set-AdminOnlyAcl([string]$Path, [switch]$Container, [string[]]$ReadExec
     Invoke-Checked "icacls (access of $Path)" $icacls (@($Path, '/inheritance:r') + $grants + @('/Q')) | Out-Null
 }
 
+# The SIDs of a local group's direct members (orphaned SIDs included), compared instead of ADSI paths: the path
+# Add takes (WinNT://COMPUTER/alice) is not a form the ADSI membership test recognises on every server. No SIDs when the members
+# cannot be read; the Add below then decides.
+function Get-GroupMemberSids($Group) {
+    try {
+        return @(@($Group.Invoke('Members')) | ForEach-Object {
+            $bytes = [byte[]]$_.GetType().InvokeMember('objectSid', 'GetProperty', $null, $_, $null)
+            (New-Object System.Security.Principal.SecurityIdentifier($bytes, 0)).Value
+        })
+    } catch {
+        return @()
+    }
+}
+
+# Whether an exception (or one it wraps) is ERROR_MEMBER_IN_ALIAS (1378, HRESULT 0x80070562): the account is
+# already a member, which is what Add was for.
+function Test-AlreadyMember($Exception) {
+    for ($e = $Exception; $null -ne $e; $e = $e.InnerException) {
+        if ($e.HResult -eq -2147023518 -or $e.HResult -eq 1378) { return $true }
+    }
+    return $false
+}
+
 function Get-AccountSid([string]$Name) {
     try {
         return (New-Object System.Security.Principal.NTAccount($Name)).Translate([System.Security.Principal.SecurityIdentifier]).Value
@@ -325,9 +348,13 @@ if (-not $UserSid) {
 $adminsName = (New-Object System.Security.Principal.SecurityIdentifier($AdministratorsSid)).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
 $group = [ADSI]"WinNT://$env:COMPUTERNAME/$adminsName,group"
 $memberPath = 'WinNT://' + $QualifiedUser.Replace('\', '/')
-if (-not $group.IsMember($memberPath)) {
+if ((Get-GroupMemberSids $group) -notcontains $UserSid) {
     Write-Host "Adding $AliceUser to $adminsName."
-    $group.Add($memberPath)
+    try {
+        $group.Add($memberPath)
+    } catch {
+        if (-not (Test-AlreadyMember $_.Exception)) { throw }
+    }
 }
 
 $work = Join-Path $env:TEMP ('alice-setup-' + [guid]::NewGuid().ToString('N'))

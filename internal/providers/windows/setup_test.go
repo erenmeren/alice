@@ -84,6 +84,15 @@ func TestSetupScriptEmbedsTheHelperChecksums(t *testing.T) {
 	assert.Contains(t, s, "Remove-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue\n")
 	assert.Contains(t, s, "-cnotcontains $keyBlob", "key blobs are compared with case")
 	assert.Regexp(t, `(?s)Test-Helper \$staging\n\} catch \{\n\s+Remove-Item -LiteralPath \$staging`, s, "a staged copy that fails the check is removed")
+
+	// Real-Windows smoke test, second run: IsMember did not recognise the member Add had added.
+	assert.NotContains(t, s, "IsMember", "membership is compared by SID")
+	assert.Contains(t, s, "$Group.Invoke('Members')")
+	assert.Contains(t, s, "InvokeMember('objectSid', 'GetProperty', $null, $_, $null)")
+	assert.Contains(t, s, "if ((Get-GroupMemberSids $group) -notcontains $UserSid) {")
+	assert.Regexp(t, `(?s)\$group\.Add\(\$memberPath\)\n\s+\} catch \{\n\s+if \(-not \(Test-AlreadyMember \$_\.Exception\)\) \{ throw \}`, s,
+		"already a member is success")
+	assert.Contains(t, s, "-2147023518", "ERROR_MEMBER_IN_ALIAS as HRESULT 0x80070562")
 	assert.NotContains(t, s, "LocalAccountTokenFilterPolicy", "the script never sets the policy (W0 F3)")
 	assert.NotContains(t, s, "StrictHostKeyChecking")
 	for i, r := range s {
