@@ -38,7 +38,8 @@ var rules = map[string][]string{
 	"alice/internal/auth/...":       {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/...", "alice/internal/authz"},
 	"alice/internal/certs/...":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":      {platform, "alice/internal/secrets/..."},
-	"alice/internal/providers/...":  {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer
+	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver", // a web-server provider embeds the shared layer
+		"alice/internal/providers/tlsverify"}, // and judges what its endpoints serve with the shared verification (W2 Ruling 15)
 	// The test world of the linuxssh provider runs the real nginx, Apache and HAProxy configuration parsers, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf",
@@ -53,6 +54,11 @@ var rules = map[string][]string{
 	// generates its certificates with the test PKI.
 	"alice/internal/providers/windows/wintest": {platform, "alice/internal/providers/windows/...", "alice/internal/providers/linuxssh/linuxsshtest",
 		"alice/internal/providers/linuxssh/helperproto", "alice/internal/testutil/pki"},
+	// The served-certificate judgement shared by the Nginx and Windows providers (W2 Ruling 15): the provider contract
+	// and the probe's shared configuration and validators; of the platform only the clock (the waits, the trust check's
+	// now) and netaddr (Alice's own probe dials through the target rule, AUD-25 a). No transport, no other provider.
+	"alice/internal/providers/tlsverify": {"alice/internal/providers", "alice/internal/providers/linuxssh/helperproto",
+		"alice/internal/platform/clock", "alice/internal/platform/netaddr"},
 	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
@@ -477,6 +483,18 @@ func TestAllowed(t *testing.T) {
 		{"apacheconf to platform/db denied", "alice/internal/providers/apacheconf", "alice/internal/platform/db", false},
 		{"apacheconf to linuxssh denied", "alice/internal/providers/apacheconf", "alice/internal/providers/linuxssh", false},
 		{"haproxyconf to helperproto allowed", "alice/internal/providers/haproxyconf", "alice/internal/providers/linuxssh/helperproto", true},
+		{"tlsverify to the interface package allowed", "alice/internal/providers/tlsverify", "alice/internal/providers", true},
+		{"tlsverify to helperproto allowed", "alice/internal/providers/tlsverify", "alice/internal/providers/linuxssh/helperproto", true},
+		{"tlsverify to the clock allowed", "alice/internal/providers/tlsverify", "alice/internal/platform/clock", true},
+		{"tlsverify to netaddr allowed", "alice/internal/providers/tlsverify", "alice/internal/platform/netaddr", true},
+		{"tlsverify to the SSH transport denied", "alice/internal/providers/tlsverify", "alice/internal/providers/linuxssh", false},
+		{"tlsverify to the shared web-server layer denied", "alice/internal/providers/tlsverify", "alice/internal/providers/webserver", false},
+		{"tlsverify to the nginx provider denied", "alice/internal/providers/tlsverify", "alice/internal/providers/nginx", false},
+		{"tlsverify to the Windows protocol denied", "alice/internal/providers/tlsverify", "alice/internal/providers/windows/winproto", false},
+		{"tlsverify to platform/db denied", "alice/internal/providers/tlsverify", "alice/internal/platform/db", false},
+		{"nginx to tlsverify allowed", "alice/internal/providers/nginx", "alice/internal/providers/tlsverify", true},
+		{"windows to tlsverify allowed", "alice/internal/providers/windows", "alice/internal/providers/tlsverify", true},
+		{"winhelper to tlsverify denied", "alice/internal/providers/windows/winhelper", "alice/internal/providers/tlsverify", false},
 		{"winproto to helperproto allowed", "alice/internal/providers/windows/winproto", "alice/internal/providers/linuxssh/helperproto", true},
 		{"winproto to providers denied", "alice/internal/providers/windows/winproto", "alice/internal/providers", false},
 		{"winhelper to winproto allowed", "alice/internal/providers/windows/winhelper", "alice/internal/providers/windows/winproto", true},

@@ -178,7 +178,7 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 	assert.Contains(t, fn, needle, "the one place is pinnedTLS")
 	assert.Contains(t, fn, "VerifyConnection:", "pinnedTLS checks the pinned leaf itself")
 	assert.Contains(t, fn, "subtle.ConstantTimeCompare(", "pinnedTLS compares the pin")
-	for _, f := range []string{"probe.go", "../../../cmd/alice-helper/probe.go"} {
+	for _, f := range []string{"../tlsverify/tlsverify.go", "../../../cmd/alice-helper/probe.go"} {
 		b, err := os.ReadFile(f) //nolint:gosec // G304: a fixed source file of the repository
 		require.NoError(t, err)
 		assert.Contains(t, string(b), "helperproto.ProbeTLSConfig(", "%s builds its TLS client from ProbeTLSConfig", f)
