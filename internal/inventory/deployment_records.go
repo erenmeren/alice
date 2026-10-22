@@ -38,6 +38,7 @@ package inventory
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // G505: a Windows thumbprint is an identifier (leafThumbprint), not a security hash
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -250,6 +251,35 @@ func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
 		return ""
 	}
 	return sha256Hex(b.Bytes)
+}
+
+// deployedThumbprint is the Windows thumbprint (the SHA-1 of the leaf's DER, lower-case hex) of certificate id's
+// stored chain, "" when it has none that parses. It is an identifier (what http.sys and the store name the
+// certificate by), never a security measure.
+func deployedThumbprint(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
+	var chain string
+	err := tx.QueryRow(ctx, `SELECT pem_chain FROM certificates WHERE id = $1`, id).Scan(&chain)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inventory: read the deployed certificate: %w", err)
+	}
+	return leafThumbprint([]byte(chain)), nil
+}
+
+// leafThumbprint is the SHA-1 (lower-case hex) of the first CERTIFICATE block's DER in chain, "" without one.
+func leafThumbprint(chain []byte) string {
+	for rest := chain; ; {
+		var b *pem.Block
+		if b, rest = pem.Decode(rest); b == nil {
+			return ""
+		}
+		if b.Type == "CERTIFICATE" {
+			s := sha1.Sum(b.Bytes) //nolint:gosec // G401: a Windows thumbprint is an identifier, not a security hash
+			return hex.EncodeToString(s[:])
+		}
+	}
 }
 
 // DeploymentMaterial reads what a job needs (see Material). withKey unseals the certificate's
@@ -1031,10 +1061,17 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		// The file now holds the deployed certificate: the location says so at once, so the next
 		// deployment's pre-check and compare-and-swap expect what Alice wrote (the next discovery
 		// confirms it).
+		// An http.sys binding now names the deployed leaf: its thumbprint replaces the one the last discovery read, so
+		// the next deployment's rollback info (W2 Ruling 17) names this certificate as the previous one (R61 Task 14).
+		thumb, err := deployedThumbprint(ctx, tx, d.certificate)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET deployed_fingerprint = $2, changed_outside_at = NULL, certificate_id = $3,
     key_type = (SELECT CASE WHEN key_algorithm IN ('rsa', 'ecdsa') THEN key_algorithm ELSE '' END FROM certificates WHERE id = $3),
-    cert_file_sha256 = $4, version = version + 1
-WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA); err != nil {
+    cert_file_sha256 = $4, version = version + 1,
+    details = CASE WHEN kind = 'win_sslbinding' AND $5::text <> '' THEN jsonb_set(details, '{cert_sha1}', to_jsonb($5::text)) ELSE details END
+WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA, thumb); err != nil {
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}
 	}

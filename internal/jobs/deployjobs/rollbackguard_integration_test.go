@@ -40,8 +40,9 @@ func (e *env) assertForbidden(d inventory.Deployment) {
 	assert.Equal(e.t, providers.ReasonRollbackForbidden, d.ErrorCode)
 	assert.Equal(e.t, providers.PhaseRestoreForbidden, d.Phase)
 	assert.Equal(e.t, providers.StepNameRestore, d.FailedStep)
-	assert.Equal(e.t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'deployment.rollback_forbidden'"))
-	assert.Zero(e.t, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'deployment.rollback_failed'"),
+	// A Windows deployment's notice is queued in its Windows text (_windows, notify-windows 2db347aa).
+	assert.Equal(e.t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key IN ('deployment.rollback_forbidden', 'deployment.rollback_forbidden_windows')"))
+	assert.Zero(e.t, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key IN ('deployment.rollback_failed', 'deployment.rollback_failed_windows')"),
 		"never the e-mail that says to restore the backup")
 }
 

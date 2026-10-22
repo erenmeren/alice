@@ -152,6 +152,33 @@ func TestWindowsManualDeployment(t *testing.T) {
 	}
 }
 
+// R61 Task 14 (found by the e2e journey): after a deployment the location names the thumbprint the binding names now,
+// so the next deployment's rollback info (Ruling 17) and a rollback's "Previous certificate" line name the certificate
+// Alice deployed, not the one the last discovery read before it.
+func TestWindowsNextDeploymentNamesTheDeployedCertificateAsPrevious(t *testing.T) {
+	e := newEnv(t)
+	s := e.addWinServer("iis-01")
+	first := e.request(s.loc)[0]
+	e.drain()
+	require.Equal(t, inventory.DeployStatusSucceeded, e.deployment(first).Status)
+	var sha1 string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT coalesce(details->>'cert_sha1', '') FROM certificate_locations WHERE id = $1", s.loc).Scan(&sha1))
+	assert.Equal(t, thumbprintOf(e.nw.Cert.Raw), sha1, "the location names the deployed certificate's thumbprint")
+
+	third := e.ca.Issue(pki.Opts{CommonName: wwwName, SANs: []string{wwwName, apiName}}, e.clock.Now())
+	c, _, err := e.inv.UploadCertificate(e.ctx, e.admin, inventory.UploadInput{CertificatePEM: string(third.FullchainPEM), PrivateKeyPEM: string(third.KeyPEM)})
+	require.NoError(t, err)
+	got, err := e.inv.RequestDeployment(e.ctx, e.admin, inventory.DeployRequestInput{CertificateID: c.ID, LocationIDs: []uuid.UUID{s.loc}})
+	require.NoError(t, err)
+	e.drain()
+	d := e.deployment(got[0].ID)
+	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
+	require.NotNil(t, d.Backup)
+	assert.Equal(t, providers.BackupRef{OperationID: got[0].ID, Store: "My", PreviousSHA1: thumbprintOf(e.nw.Cert.Raw),
+		PreviousSHA256: pki.Fingerprint(e.nw.Cert)}, *d.Backup, "the previous certificate is the one Alice deployed")
+	e.assertWinServes(s, third)
+}
+
 // Design §13 W2 item 1: the R51 levels on Windows. A private CA Alice has no root of: served, the untrusted chain a
 // warning (not enforced). Verification skipped: installed.
 func TestWindowsDeploymentLevels(t *testing.T) {
@@ -258,7 +285,8 @@ func TestWindowsFailedVerificationRollsBack(t *testing.T) {
 	assert.Equal(t, winproto.PhaseRestored, s.phase(t, id))
 	assert.Equal(t, 1, s.sent(winproto.SubIISRestore))
 	e.assertWinServes(s, e.old)
-	assert.Equal(t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = 'deployment.failed'"))
+	// A Windows deployment's notice is queued in its Windows text (notify-windows, 2db347aa).
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = '"+inventory.WindowsTemplate(inventory.TemplateDeploymentFailed)+"'"))
 }
 
 // incidentOn opens an incident of the old certificate with the location pending (an incident replacement: the
