@@ -2258,7 +2258,10 @@
   "tests": [
    "cmd/alice-winhelper:TestFidelityVersionAndRefusals",
    "cmd/alice-winhelper:TestFidelityWinFacts",
-   "cmd/alice-winhelper:TestFidelityTLSProbe"
+   "cmd/alice-winhelper:TestFidelityTLSProbe",
+   "cmd/alice-winhelper:TestFidelityDumpSNIAndIPBindings",
+   "cmd/alice-winhelper:TestFidelityDumpCertificateRemoved",
+   "cmd/alice-winhelper:TestFidelityDumpKeyMissing"
   ]
  },
  {

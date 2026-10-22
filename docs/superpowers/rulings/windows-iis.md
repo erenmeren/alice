@@ -148,6 +148,11 @@ One line each: the ruling, then why.
 - A store name is passed through verbatim from the host (after the empty-is-`MY` rule); folding is Alice-side: the
   certificate entry is listed under the first binding's spelling.
 - Host names pass through cleaned, not folded; folding is Alice-side (Ruling 6).
+- A certificate read error fails the whole dump with `STORE_ERROR`: a silently missing certificate would look like
+  `cert_missing` on a binding that has one.
+- An `ExpiredInStore` error leaves that store out of the warning: it is a warning fact, not worth failing the dump.
+- An invalid DER, chain or `key_problem` from the host drops that certificate and sets `truncated`: the record cannot
+  be trusted, and a cut list marks nothing missing.
 
 ### Task 6 (checksums)
 
@@ -169,6 +174,10 @@ One line each: the ruling, then why.
 
 - The host key in the connection report is the `win-facts` connection's: every call dials and is pinned.
 - Fact bounds: 16 stores, store names 64 runes, other facts 200 runes (linuxssh's bound), helper version 40.
+- `Options.AllowUnverifiedHelper` is used by the setup guide only (a development build without checksums gets a
+  script that says it cannot verify the helper): the connection itself never depends on it.
+- Task 8's minimal `Discover` (an empty result) was superseded by Task 9: it only kept the provider complete before
+  discovery was built.
 
 ### Task 9 (discovery)
 
@@ -218,6 +227,13 @@ One line each: the ruling, then why.
   that rule is enabled: removing it could cut other administrators off.
 - Inventory merges only the `windows` snippet of the Windows provider; `Guide.AuthorizedKeysLine` stays the Linux line
   (the Windows line is inside the script).
+- Fix round: no `icacls /T` anywhere: a recursive grant follows junctions a user planted under ProgramData.
+- Fix round: an existing Alice directory is refused unless it is owned by Administrators, SYSTEM or the running
+  administrator and holds no reparse point: a user-created directory must not be adopted.
+- Fix round: the script body runs inside `& { }`: pasted into a console it runs as one block and stops at the first
+  error instead of continuing line by line.
+- Administrators membership is compared by SID, and "already a member" (0x80070562) is success: the runner's second
+  run of the script failed on the name comparison and the duplicate add (commit `b5312cda`).
 
 ### Task 12 (inventory)
 
@@ -259,6 +275,9 @@ One line each: the ruling, then why.
   well is a possible refinement).
 - A FILETIME past 2262 (a NotAfter of 9999-12-31) is converted without wrapping into the past, and a store fails
   on any error other than "not found" (fix round 1).
+- Runner finding (run 2): appcmd with only `SystemRoot` reports every site state `Unknown`; the helper passes an
+  allow-list of 22 system variables, never `PATH`, `PATHEXT`, `PSModulePath` or `SSH_*` (Ruling 12): a planted path
+  entry or a variable from the SSH session must not reach appcmd.
 
 ### Task 11 (real-Windows tests and workflow)
 
@@ -277,6 +296,21 @@ One line each: the ruling, then why.
 - The setup smoke test checks `sshd_config` text, `sshd -t` and behaviour over real connections (forced command, a
   shell line refused, no TTY, no forwarding, no password) instead of `sshd -T`: Win32-OpenSSH's `-T -C user=` cannot
   resolve the local account (run 2).
+- The smoke test accepts the client ending a session whose PTY sshd refused (`PermitTTY no`) and still requires no
+  shell output: the Windows ssh client closes such a session itself (run 4).
+- IIS is installed with `Web-Server` only: W0 F6 showed appcmd is present without the `Web-Mgmt-*` features.
+- The model's http.sys records use netsh's documented defaults, independent of the helper: copying the helper's
+  readings into the model would make the fidelity test compare the helper with itself.
+- The log-only diagnostic `TestRealAppcmdStateByEnvironment` stays as a record of the appcmd environment finding
+  (Ruling 12): a later image change shows in its log.
+
+### Task 15 (e2e)
+
+- The fake accepts Alice's key for any user name and does not enforce `restrict` or `from=`: that is sshd's job, which
+  the real-runner smoke test proves; the fake models the helper.
+- `alice-fakewindows ctl endpoints` was added: the journey needs the binding endpoints the fake serves.
+- The Makefile's `E2E_PROJECT :=` ignores the environment, so the e2e ran as project `alice-e2e` (the owner's `alice`
+  stack untouched), not `alice-e2e-w1`; the owner may want `?=`.
 
 ## Deferred to W2
 
@@ -304,4 +338,6 @@ One line each: the ruling, then why.
 - **Confirm** `key_usable_by_system` counting SYSTEM's groups (Administrators, Everyone, Authenticated Users), not
   SYSTEM's SID only.
 - Groundwork ruling 7 (a probe address for the web-server providers later or never) is still open.
-- Real-runner acceptance (design §13 W1 item 4): pending — filled in by Task 17
+- Real-runner acceptance (design §13 W1 item 4): met — windows.yml green on windows-2022 and windows-2025, run
+  39778045600 (5th run; runs 1-4 fixed PSModulePath in tests, site state via appcmd env, sshd -T, PTY expectation,
+  group-membership idempotency): <https://github.com/erenmeren/alice/actions/runs/39778045600>
