@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"os"
 	"runtime"
@@ -34,8 +35,13 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/providers/nginx"
+	"alice/internal/providers/tlsverify"
+	"alice/internal/providers/windows"
+	"alice/internal/providers/windows/winproto"
+	"alice/internal/providers/windows/wintest"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
 	"alice/internal/testutil/pgtest"
@@ -149,7 +155,8 @@ type env struct {
 	queue   *jobs.Queue
 	inv     *inventory.Service
 	prov    *nginx.Provider
-	az      *fake.Provider // the scripted azurekv provider (Key Vault deployments, kv_integration_test.go)
+	win     *windows.Provider // the Windows provider, its servers emulated by wintest (windows_integration_test.go)
+	az      *fake.Provider    // the scripted azurekv provider (Key Vault deployments, kv_integration_test.go)
 	reg     *providers.Registry
 	runner  *jobs.Runner
 	admin   inventory.Actor
@@ -158,6 +165,7 @@ type env struct {
 	cert    inventory.Certificate // nw, uploaded with its key
 	mu      sync.Mutex
 	servers []*server
+	wins    []*winServer
 	wrap    atomic.Pointer[func(providers.TargetRef, providers.Session) providers.Session]
 	probe   atomic.Pointer[func(nginx.Probe) (nginx.Probe, error)]
 }
@@ -191,6 +199,11 @@ func newEnv(t *testing.T) *env {
 	// the fake clock here.
 	e.prov = nginx.New(nginx.Options{SSH: ssh, Prober: emuProber{emus: e.serverList, hook: e.probeHook}, Attempts: 1})
 	e.reg.Register(hookProvider{Provider: e.prov, wrap: e.wrapSession})
+	// The Windows provider on the same pool, Alice's probe reaching the emulated listeners (winProber), one
+	// verification attempt (its waits run on the session clock, the fake clock here).
+	e.win = windows.New(windows.Options{Pool: pool, AllowUnverifiedHelper: true, Prober: winProber{wins: e.winList}, Attempts: 1,
+		RetryWait: time.Millisecond})
+	e.reg.Register(winHookProvider{Provider: e.win, wrap: e.wrapSession})
 	e.az = fake.New(providers.KindAzureKV, providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapReadCertificateSecret)
 	e.reg.Register(e.az)
 	e.reg.Freeze()
@@ -550,6 +563,9 @@ func (e *env) startDying(k *killer) <-chan struct{} {
 	reg.Register(hookProvider{Provider: e.prov, wrap: func(_ providers.TargetRef, s providers.Session) providers.Session {
 		return killSession{Session: s, k: k}
 	}})
+	reg.Register(winHookProvider{Provider: e.win, wrap: func(_ providers.TargetRef, s providers.Session) providers.Session {
+		return killSession{Session: s, k: k}
+	}})
 	reg.Register(e.az)
 	reg.Freeze()
 	targetjobs.Register(r, targetjobs.Deps{Inventory: e.inv, Registry: e.reg, Clock: e.clock})
@@ -569,4 +585,120 @@ func (e *env) restart() {
 	e.clock.Advance(46 * time.Second)
 	_, err := e.runner.Recover(e.ctx)
 	require.NoError(e.t, err)
+}
+
+// winHookProvider lets a test wrap the sessions the Windows provider opens (the same switch as hookProvider).
+type winHookProvider struct {
+	*windows.Provider
+	wrap func(providers.TargetRef, providers.Session) providers.Session
+}
+
+func (p winHookProvider) Open(ctx context.Context, t providers.TargetRef, c providers.CredentialSource, e providers.Env) (providers.Session, error) {
+	s, err := p.Provider.Open(ctx, t, c, e)
+	if err != nil || p.wrap == nil {
+		return s, err
+	}
+	return p.wrap(t, s), nil
+}
+
+// winServer is one emulated Windows server (wintest's model behind its SSH server, which runs in the mode of
+// Windows OpenSSH) and its target: IIS with the site "Default Web Site" whose https binding *:443:www.example.test
+// is the http.sys hostnameport record www.example.test:443 in My, serving the old certificate.
+type winServer struct {
+	model   *wintest.Model
+	srv     *linuxsshtest.Server
+	host    string
+	sshPort int
+	target  uuid.UUID
+	loc     uuid.UUID // the location of the binding (winText)
+	locator winproto.Locator
+	oldSHA1 string
+}
+
+// winText is the canonical text (the location's cert path) of the emulated binding.
+const winText = "http.sys/hostnameport/" + wwwName + ":443"
+
+func (e *env) winList() []*winServer {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.wins)
+}
+
+// addWinServer starts an emulated Windows server, adds it as a target, confirms its host key and runs the first
+// connection test and discovery: the binding is a deployable location.
+func (e *env) addWinServer(name string) *winServer {
+	e.t.Helper()
+	pk, err := e.inv.PlatformKey(e.ctx)
+	require.NoError(e.t, err)
+	m := wintest.NewModel()
+	m.SetLockWait(50 * time.Millisecond) // BUSY in milliseconds, not winproto.LockWait
+	m.AddIntermediate(e.ca.IntermediatePEM)
+	s := &winServer{model: m, locator: winproto.Locator{Type: winproto.BindingHostnamePort, Host: wwwName, Port: 443, AppID: winproto.AppIDIIS}}
+	s.oldSHA1 = m.AddCertificate("My", e.old.CertPEM, e.old.KeyPEM, wintest.CertOptions{FriendlyName: "www"})
+	m.AddBinding(winproto.SSLBinding{Type: winproto.BindingHostnamePort, Host: wwwName, Port: 443, AppID: winproto.AppIDIIS,
+		CertSHA1: s.oldSHA1, Store: "My"})
+	m.AddSite(winproto.Site{Name: "Default Web Site", ID: 1, State: "Started", Bindings: []winproto.SiteBinding{
+		{Protocol: "https", Information: "*:443:" + wwwName, SSLFlags: 1}}})
+	s.srv = wintest.NewServer(e.t, m) // after the binding: its TLS listener starts with the server
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pk.PublicKey))
+	require.NoError(e.t, err)
+	s.srv.Authorize(pub)
+	s.host, s.sshPort = s.srv.Addr()
+	e.mu.Lock()
+	e.wins = append(e.wins, s)
+	e.mu.Unlock()
+	tg, _, err := e.inv.CreateTarget(e.ctx, e.admin, inventory.NewTarget{Name: name, Type: inventory.TypeWindows, Host: s.host, Port: s.sshPort})
+	require.NoError(e.t, err)
+	s.target = tg.ID
+	e.drain()
+	keys, err := e.inv.ListHostKeys(e.ctx, tg.ID)
+	require.NoError(e.t, err)
+	require.Len(e.t, keys, 1)
+	_, err = e.inv.ConfirmHostKey(e.ctx, e.admin, tg.ID, keys[0].ID, keys[0].Fingerprint)
+	require.NoError(e.t, err)
+	e.drain()
+	got, err := e.inv.GetTarget(e.ctx, tg.ID)
+	require.NoError(e.t, err)
+	require.Equal(e.t, inventory.StatusOK, got.Status, "the Windows server is connected and discovered")
+	list, err := e.inv.ListLocations(e.ctx, tg.ID, false)
+	require.NoError(e.t, err)
+	for _, l := range list.Items {
+		if l.CertPath == winText {
+			require.True(e.t, l.Deployable, "the binding is deployable: %s", l.UnsupportedReason)
+			s.loc = l.ID
+		}
+	}
+	require.NotEqual(e.t, uuid.Nil, s.loc, "the binding is a location")
+	return s
+}
+
+// winProber is Alice's own TLS probe against the emulated Windows servers: a probe of a binding port reaches the
+// model's listener for it (Model.Endpoint), with a fresh handshake (no session cache). Every emulated server listens on
+// 127.0.0.1, so with several Windows servers Alice's probe cannot tell which one it would reach: it is then unreachable
+// and the helper's tls-probe decides.
+type winProber struct{ wins func() []*winServer }
+
+func (p winProber) Probe(ctx context.Context, _ string, port int, sni, keyType string) (tlsverify.Probe, error) {
+	wins := p.wins()
+	if len(wins) != 1 {
+		return tlsverify.Probe{}, tlsverify.ErrProbeUnreachable
+	}
+	ep := wins[0].model.Endpoint(port)
+	if ep == "" {
+		return tlsverify.Probe{}, tlsverify.ErrProbeUnreachable
+	}
+	cfg := helperproto.ProbeTLSConfig(sni, keyType)
+	cfg.ClientSessionCache, cfg.SessionTicketsDisabled = nil, true
+	conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", ep)
+	if err != nil {
+		return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
+	}
+	defer func() { _ = conn.Close() }()
+	cs := conn.(*tls.Conn).ConnectionState()
+	chain := make([][]byte, 0, len(cs.PeerCertificates))
+	for _, c := range cs.PeerCertificates {
+		chain = append(chain, c.Raw)
+	}
+	return tlsverify.Probe{LeafSHA256: pki.Fingerprint(cs.PeerCertificates[0]), ChainLength: len(chain), NotAfter: cs.PeerCertificates[0].NotAfter,
+		Chain: chain}, nil
 }
