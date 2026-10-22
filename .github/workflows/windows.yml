@@ -12,6 +12,7 @@ on:
       - internal/providers/linuxssh/helperproto/**
       - internal/providers/linuxssh/linuxsshtest/**
       - internal/testutil/pki/**
+      - internal/providers/tlsverify/**
       - internal/providers/*.go
       - internal/platform/**
       - .github/workflows/windows.yml
@@ -25,6 +26,7 @@ on:
       - internal/providers/linuxssh/helperproto/**
       - internal/providers/linuxssh/linuxsshtest/**
       - internal/testutil/pki/**
+      - internal/providers/tlsverify/**
       - internal/providers/*.go
       - internal/platform/**
       - .github/workflows/windows.yml
@@ -93,8 +95,13 @@ jobs:
           # Windows PowerShell 5.1, which the tests start, must not inherit pwsh 7's module path.
           $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
           $log = Join-Path $env:RUNNER_TEMP 'go-test.log'
-          go test -count=1 -v ./cmd/alice-winhelper/... ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
+          # The provider packages first, then the helper's package, alone and last: its fidelity tests
+          # need the test build's kill hook (-tags alicetest, never in the binaries built above), and
+          # its TestRealRunnerIsClean (its last test) sees what every real test left (W2 Ruling 22).
+          go test -count=1 -v ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
+          go test -count=1 -v -tags alicetest ./cmd/alice-winhelper/... 2>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { $status = $LASTEXITCODE }
           $required = @(
             'TestRealHostIsElevated',
             'TestRealOSFactsMatchTheRegistryReadIndependently',
@@ -105,7 +112,20 @@ jobs:
             'TestFidelityDumpCertificateRemoved',
             'TestFidelityDumpKeyMissing',
             'TestFidelityTLSProbe',
-            'TestRealSetupScript'
+            'TestRealSetupScript',
+            'TestRealStructSizes',
+            'TestRealUpdateKeepsTheRecordAndExParams',
+            'TestRealImportPFX',
+            'TestRealStateFiles',
+            'TestRealEvent',
+            'TestFidelityDeploySNIAndIP',
+            'TestFidelityDeployKeepsEverySetting',
+            'TestFidelityDeployRefusals',
+            'TestFidelityUnchangedAndSameHashWrite',
+            'TestFidelityStatusAndFence',
+            'TestRealRestoreForbidden',
+            'TestFidelityKeyUnusable',
+            'TestRealRunnerIsClean'
           )
           $text = Get-Content -LiteralPath $log -Raw
           $missing = @($required | Where-Object { $text -notmatch ('(?m)^--- PASS: ' + [regex]::Escape($_) + ' \(') })

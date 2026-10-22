@@ -59,7 +59,8 @@ var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil",
 	"internal/vconsole/sign/openpgp/openpgptest"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
-var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
+// "_alicetest" marks the Windows helper's test hooks (ALICE_WIN_TEST_KILL_AT, W2 Task 9).
+var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense", "_alicetest": "alicetest"}
 
 // releaseTags are the tags true in a release build (CGO_ENABLED=0, Linux; the image and make build).
 var releaseTags = map[string]bool{"linux": true, "unix": true, "amd64": true, "gc": true}
@@ -472,6 +473,22 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 		for _, bad := range testOnlyImports {
 			assert.False(t, covers(bad, dep), "the Windows helper links %s", dep)
 		}
+	}
+	// The kill hook of the fidelity tests (ALICE_WIN_TEST_KILL_AT) is compiled with -tags alicetest only:
+	// the shipped build's files never include it, the test build's do (positive control).
+	hook := "point_alicetest_windows.go"
+	files := func(tags string) []string {
+		return goListDepsFor(t, "windows", `{{if eq .ImportPath "alice/cmd/alice-winhelper"}}{{join .GoFiles " "}}{{end}}`, tags,
+			"./cmd/alice-winhelper")
+	}
+	shipped := files("")
+	require.Contains(t, shipped, "main.go", "positive control: the helper's own files are listed")
+	assert.NotContains(t, shipped, hook, "the shipped Windows helper compiles the kill hook")
+	assert.Contains(t, files("alicetest"), hook, "positive control: the test build compiles the kill hook")
+	for _, f := range shipped {
+		src, err := os.ReadFile(filepath.Join(moduleRoot(t), "cmd", "alice-winhelper", f))
+		require.NoError(t, err)
+		assert.NotContains(t, string(src), "ALICE_WIN_TEST_KILL_AT", "%s of the shipped helper reads the kill hook", f)
 	}
 	// Positive control: the e2e build does link a test-only package, so the check can see one.
 	assert.Contains(t, goListDeps(t, "e2e testlicense", "./cmd/alice"), "alice/internal/license/licensetest")

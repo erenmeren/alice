@@ -87,6 +87,8 @@ type twin struct {
 	sites  map[string]bool
 	siteID int64
 	webDir string
+	// httpPort is the plain http binding of every fixture site (W1 portSiteHTTP, W2 portW2SiteHTTP).
+	httpPort int
 }
 
 // newTwin is the real machine and a fresh model with the same IIS facts and expired counts. Its
@@ -95,7 +97,7 @@ func newTwin(t *testing.T) *twin {
 	t.Helper()
 	requireReal(t)
 	tw := &twin{t: t, real: newHost(winproto.DataDir), model: wintest.NewModel(), ports: map[int]bool{}, sites: map[string]bool{},
-		siteID: firstSiteID}
+		siteID: firstSiteID, httpPort: portSiteHTTP}
 	t.Cleanup(func() {
 		for i := len(tw.cleanup) - 1; i >= 0; i-- {
 			tw.cleanup[i]()
@@ -406,9 +408,10 @@ func appcmdPath() string {
 // (No test stops a site; one that did would mirror "Stopped".)
 func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 	tw.t.Helper()
-	require.True(tw.t, strings.HasPrefix(name, "alice-w1-"))
+	prefix := name[:min(len(name), len("alice-w1-"))]
+	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-", "fixture site names start alice-w1- or alice-w2-")
 	if tw.webDir == "" {
-		tw.webDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", "alice-w1-fidelity")
+		tw.webDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", prefix+"fidelity")
 		require.NoError(tw.t, os.MkdirAll(tw.webDir, 0o750))
 		dir := tw.webDir
 		tw.later(func() { _ = os.RemoveAll(dir) }) // after the sites (reverse order)
@@ -421,7 +424,7 @@ func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 		}
 	})
 	appcmd(tw.t, "add", "site", "/name:"+name, "/id:"+strconv.FormatInt(id, 10), "/physicalPath:"+tw.webDir,
-		"/bindings:http/*:"+strconv.Itoa(portSiteHTTP)+":"+name+".invalid")
+		"/bindings:http/*:"+strconv.Itoa(tw.httpPort)+":"+name+".invalid")
 	for _, b := range bindings {
 		appcmd(tw.t, "set", "site", "/site.name:"+name, fmt.Sprintf("/+bindings.[protocol='https',bindingInformation='%s',sslFlags='%d']",
 			b.Information, b.SSLFlags))
@@ -457,7 +460,10 @@ func TestFidelityVersionAndRefusals(t *testing.T) {
 	}{
 		{[]string{winproto.SubVersion}, ""},
 		{[]string{winproto.SubVersion, "x"}, winproto.CodeUsage},
-		{[]string{"iis-deploy"}, winproto.CodeUnknownSubcommand},
+		// W2: iis-deploy is known (USAGE without --op, on both: the model is a WriteHost); iis-cleanup is
+		// W3's and stays unknown.
+		{[]string{"iis-cleanup"}, winproto.CodeUnknownSubcommand},
+		{[]string{winproto.SubIISDeploy}, winproto.CodeUsage},
 		{[]string{winproto.SubTLSProbe, "--addr"}, winproto.CodeUsage},
 	} {
 		got := tw.same(c.args...)

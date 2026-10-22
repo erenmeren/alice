@@ -33,6 +33,3 @@ func (host) Event(id uint32, text string) {
 	defer func() { _ = windows.DeregisterEventSource(h) }()
 	_ = windows.ReportEvent(h, windows.EVENTLOG_INFORMATION_TYPE, 0, id, 0, 1, 0, &s, nil)
 }
-
-// Point is a crash point of the platform-neutral transaction; the real helper never stops at one.
-func (host) Point(string) error { return nil }
