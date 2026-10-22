@@ -1,6 +1,6 @@
 import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
@@ -29,6 +29,8 @@ import { WRAP } from './wrap';
 
 // COLUMNS is the number of columns of the table (a group row spans them all).
 const COLUMNS = 7;
+// GROUP_ROW: a group row is a heading, not a row to point at, so the table's hover highlight leaves it alone.
+const GROUP_ROW = { '--tr-hover-bg': 'transparent' } as CSSProperties;
 
 const BLOCK_KEYS: Record<DeployBlock, string> = {
   status: 'locations.unavailable.status',
@@ -166,7 +168,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               // R61, design §15 Q5: a Windows server's bindings grouped by the certificate they serve.
               certificateGroups(items).map((g) => (
                 <Table.Tbody key={g.key} data-testid="certificate-group">
-                  <Table.Tr data-testid="certificate-group-row">
+                  <Table.Tr data-testid="certificate-group-row" style={GROUP_ROW}>
                     <Table.Th colSpan={COLUMNS} scope="rowgroup">
                       <Group gap="sm">
                         {g.cert ? (

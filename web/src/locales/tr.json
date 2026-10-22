@@ -2032,7 +2032,10 @@
     "selectGroup": "Bu sertifikanın tüm bağlamalarını seç",
     "selectGroupNamed": "Bu sertifikanın tüm bağlamalarını seç: {{name}}",
     "succeededUnverifiedWindows": "Yeni sertifika dağıtıldı ve bağlama onu gösteriyor.",
-    "rollbackFailedRestoredWindows": "Bağlama yeniden önceki sertifikayı gösteriyor, ancak Alice web sitesinin onu sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin."
+    "rollbackFailedRestoredWindows": "Bağlama yeniden önceki sertifikayı gösteriyor, ancak Alice web sitesinin onu sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
+    "serverOperationPendingWindows": "Yeni sertifika dağıtılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu bağlamayı engelliyor; aşağıya bakın.",
+    "pendingChangeRestoredWindows": "Yeni sertifika dağıtılmadı. Alice bağlamayı tamamlanmamış önceki bir değişiklikten önceki sertifikaya geri yöneltti; web sitesi şimdi o sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunduğu sertifika olmayabilir.",
+    "chosenNoLongerFits": "Seçilen sertifika işaretli her bağlamaya uymuyor (başka bir anahtar türü). Başka bir sertifika seçin ya da o bağlamanın işaretini kaldırın."
   },
   "deployments": {
     "page": {
@@ -2233,6 +2236,70 @@
           "title": "Dağıtım sırasında başka bir program bağlamayı değiştirdi. Elle işlem gerekiyor.",
           "cause": "Alice dağıtım yaparken ya da bağlamayı geri yöneltirken başka bir program bağlamayı değiştirdi: bağlama, Alice'in dağıtmadığı bir sertifikayı gösteriyor; bu yüzden Alice onu yeniden değiştirmedi.",
           "action": "Web sitesini şimdi denetleyin. Bağlamayı hangi programın değiştirdiğini bulun (örneğin IIS Yöneticisi ya da bir yenileme aracı), ardından sunucunun sayfasında Keşfet'i seçin."
+        },
+        "in_progress": {
+          "cause": "Alice bir bağlamaya aynı anda tek bir dağıtım yapar."
+        },
+        "verify_failed": {
+          "cause": "Değişiklikten sonra web sitesi önceki sertifikayı sunmaya devam etti; örneğin bu web sitesinin adına ya da bağlantı noktasına başka bir bağlama yanıt veriyor ya da sunucunun önündeki bir şey kendi sertifikasını sunuyor. Dağıtımın durumu, bağlamanın yeniden önceki sertifikayı gösterip göstermediğini belirtir.",
+          "action": "Sunucuda bu web sitesinin adına ve bağlantı noktasına hangi bağlamanın yanıt verdiğini denetleyin (netsh http show sslcert ve IIS Yöneticisi'nde sitenin bağlamaları), ardından yeniden dağıtın."
+        },
+        "interrupted": {
+          "cause": "Dağıtım sürerken sunucuyla bağlantı koptu, Alice yeniden başladı ya da yardımcı bağlamayı değiştirmeyi bitiremedi. Dağıtımın durumu bağlamanın hangi sertifikayı gösterdiğini belirtir; Alice bunu henüz bilmiyorsa denetlemeyi sürdürür."
+        },
+        "verify_chain": {
+          "cause": "Web sitesinin gönderdiği sertifika sayısı Alice'in beklediği zincirden farklı; örneğin Windows zinciri depolarındaki başka ara sertifikalardan kurdu ya da bir vekil sunucu bazılarını ekliyor veya çıkarıyor. Dağıtımın durumu bir şeyin değişip değişmediğini belirtir.",
+          "action": "Sunucunun Ara Sertifika Yetkilileri deposundaki ara sertifikaları ve sunucunun önündeki her şeyi denetleyin, ardından yeniden dağıtın."
+        },
+        "verify_untrusted": {
+          "action": "Sunucunun Ara Sertifika Yetkilileri deposundaki ara sertifikaları ve sunucunun önündeki hiçbir şeyin (bir vekil sunucu ya da yük dengeleyici) başka bir zincir göndermediğini denetleyin, ardından yeniden dağıtın."
+        },
+        "nothing_to_restore": {
+          "cause": "Yardımcı bu dağıtımın bağlamayı değiştirmediğini buldu; bu yüzden geri konacak bir şey yoktu."
+        },
+        "superseded": {
+          "title": "Sonraki bir değişiklik bağlamayı değiştirdi; bu yüzden Alice onu geri yüklemedi.",
+          "cause": "Alice bu dağıtımı bitirirken sunucudaki sonraki bir işlem bağlamayı değiştirdi. Alice bağlamanın şimdi hangi sertifikayı gösterdiğini bilemiyor."
+        },
+        "target_deleted": {
+          "action": "Sunucu hâlâ varsa web sitesini ve bağlamasının gösterdiği sertifikayı denetleyin."
+        },
+        "recovery_exhausted": {
+          "cause": "Alice yaklaşık bir gün boyunca dağıtımın nasıl bittiğini öğrenemedi; çoğunlukla sunucuya ulaşamadığı için. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır."
+        },
+        "outcome_unknown": {
+          "cause": "Alice bu dağıtımı denetlemek ya da geri almak için gereken kayıtlara artık sahip değil. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır."
+        },
+        "rescan_needed": {
+          "title": "Alice dağıtımdan önce bu sunucunun bağlamalarını yeniden okumalı.",
+          "cause": "Alice bağlamanın şimdi hangi sertifikayı gösterdiğini bilmiyor; bağlamayı bu arada kimsenin değiştirmediğinden emin olmak için buna ihtiyacı var."
+        },
+        "pending_change_restored": {
+          "title": "Alice bu bağlamanın tamamlanmamış önceki bir değişikliğini geri aldı; bu sertifika dağıtılmadı.",
+          "cause": "Sunucuda bu bağlamanın önceki bir değişikliği tamamlanmadı ve Alice onu artık izlemiyordu. Alice bağlamayı o değişiklikten önceki sertifikaya geri yöneltti; web sitesi şimdi o sertifikayı sunuyor. Bu dağıtımın sertifikası dağıtılmadı.",
+          "action": "Alice'in bağlamaları yeniden okuması için sunucunun sayfasında Keşfet'i seçin, ardından sertifikayı yeniden dağıtın."
+        },
+        "server_operation_pending": {
+          "title": "Sunucuda bu bağlamanın tamamlanmamış bir değişikliği yeni değişiklikleri durduruyor.",
+          "cause": "Sunucuda bu bağlamanın önceki bir değişikliği tamamlanmadı ve Alice onu artık izlemiyor; bu yüzden yardımcı yeni değişiklikleri reddediyor. Alice o değişikliği geri almadı. Bu dağıtımın sertifikası dağıtılmadı.",
+          "action": "Dağıtımın ayrıntıları tamamlanmamış değişikliği (işlem kimliği) belirtir. Bağlamanın hangi sertifikayı gösterdiğini denetleyin (netsh http show sslcert), sunucunun sayfasında Keşfet'i seçin, ardından yeniden dağıtın."
+        },
+        "rollback_forbidden": {
+          "cause": "Yeni sertifika kullanıma alınamadı ve bağlamanın değişiklikten önce gösterdiği sertifika iptal edilmiş ya da özel anahtarı ele geçirilmiş. Alice böyle bir sertifikayı asla yeniden bağlamaz; bu yüzden bağlama başarısız değişikliğin bıraktığı gibi kalır. Başka bir sertifika dağıtılana kadar web sitesi çalışmayabilir.",
+          "action": "Web sitesini hemen denetleyin. Dağıtım geçmişinde gösterilen nedeni (bağlama ya da web sitesinin denetimi) bulup giderin, ardından geçerli bir sertifikayı yeniden dağıtın ya da olayda Yeniden dene'yi seçin. Bağlamayı asla elle önceki sertifikaya geri yöneltmeyin: anahtarı ele geçirilmiş."
+        }
+      },
+      "nginx": {
+        "location_unsupported": {
+          "cause": "Bu bağlama Alice'in değiştirmediği bir bağlama (başka bir uygulamaya ait ya da sertifikası veya deposu Alice'in kurallarına uymuyor) ya da artık yok. Hiçbir şey değiştirilmedi."
+        }
+      },
+      "ssh": {
+        "output_too_large": {
+          "action": "Sunucuda Alice'in okuduklarında olağandışı büyük içerik olup olmadığını denetleyin: http.sys bağlamaları, IIS yapılandırması ya da sertifika depoları."
+        },
+        "protocol_error": {
+          "action": "alice-helper.exe dosyasını güncel Alice paketinden sunucuya kopyalayın ve Windows kurulum betiğini yeniden çalıştırın, ardından bağlantıyı test edin."
         }
       }
     }

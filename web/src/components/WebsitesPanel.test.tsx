@@ -457,6 +457,8 @@ describe('WebsitesPanel on a Windows server', () => {
     expect(within(head(groups[1])).getByText(/Sep 1, 2027/)).toBeInTheDocument();
     expect(head(groups[2])).toHaveTextContent('No certificate');
     expect(head(groups[2])).toHaveTextContent('1 binding');
+    // A group row is a heading, not a row to point at: no hover highlight.
+    for (const g of groups) expect(head(g).style.getPropertyValue('--tr-hover-bg')).toBe('transparent');
     // The bindings of a group are sorted by their canonical text.
     const texts = (g: HTMLElement) => within(g).getAllByTestId('location-row').map((r) => r.getAttribute('data-location'));
     expect(texts(groups[0])).toEqual(['w-api']);

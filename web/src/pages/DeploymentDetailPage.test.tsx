@@ -2,6 +2,11 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import type { DeploymentDetail } from '../api/types';
 import { deploymentDetailFixture, errorResponse, sessionFor, sessionHandlers, stepFixture, WIN_PREVIOUS_SHA1, windowsDeploymentFixture } from '../test/fixtures';
+import commonEn from '@locales/common/en.json';
+import commonTr from '@locales/common/tr.json';
+import enWeb from '../locales/en.json';
+import trWeb from '../locales/tr.json';
+import { goFiles, readRepoFile } from '../test/goSources';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -720,5 +725,92 @@ describe('DeploymentDetailPage of a Windows binding', () => {
     expect(screen.getByText(`Önceki sertifika: My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
     expect(screen.getByTestId('win-chain-differs')).toHaveTextContent('Windows 2 sertifikalık bir zincir sunuyor; Alice 3 sertifika dağıttı.');
     await waitFor(() => expectNoRawKeys());
+  });
+});
+
+// R61, Task 13 review I1: no text a Windows deployment can show speaks of Nginx, its files, a reload or the Linux
+// backup folder. The reasons are read from the Windows provider, the shared verification judgement and the deployment
+// engine; a reason only the Linux helper or the Nginx provider produces is left out by name, with the reason why.
+describe('Windows deployment texts', () => {
+  const LINUX_ONLY: Record<string, string> = {
+    // The Windows provider maps these transport answers to windows.helper_refused, windows.binding_changed,
+    // windows.helper_missing and windows.helper_outdated (W2 Ruling 6).
+    'ssh.helper_refused': 'mapped',
+    'ssh.file_changed': 'mapped',
+    'ssh.helper_missing': 'mapped',
+    'ssh.helper_outdated': 'mapped',
+    // The engine's names for a configuration test or reload of the Linux helper (causeReason), and its pre-check of a
+    // web server whose configuration is invalid (a Windows server has no configuration test).
+    'deployment.config_test_failed': 'nginx helper steps',
+    'deployment.reload_failed': 'nginx helper steps',
+    'deployment.rollback_reload_failed': 'nginx helper steps',
+    'deployment.rollback_config_invalid': 'nginx helper steps',
+    'nginx.config_invalid': 'nginx configuration',
+    'nginx.file_changed': 'nginx provider',
+    'nginx.no_space': 'nginx provider',
+    'nginx.profile_missing': 'nginx profile',
+  };
+  const quoted = (rel: string) => [...readRepoFile(rel).matchAll(/"((?:deployment|ssh|nginx|windows)\.[a-z_]+)"/g)].map((m) => m[1]);
+  const sources = [...goFiles('internal/providers/windows').filter((f) => !f.includes('/winhelper/') && !f.includes('/wintest/')), ...goFiles('internal/providers/tlsverify'), ...goFiles('internal/jobs/deployjobs')];
+  // The deployment records' own reasons (the sweep's recovery_exhausted, a deleted server, a rescan) and the API's
+  // in_progress apply to every deployment; only their deployment.* reasons are taken.
+  const recordSources = ['internal/inventory/deployment_records.go', 'internal/inventory/sweep.go', 'internal/inventory/deployment_outcome.go', 'internal/api/errors.go'];
+  const catalogue = (lang: 'en' | 'tr') => (lang === 'en' ? commonEn : commonTr).errors as Record<string, Record<string, Record<string, string> | undefined>>;
+  const shared = (lang: 'en' | 'tr', reason: string) => {
+    const [ns, name] = reason.split('.');
+    return catalogue(lang)[ns]?.[name];
+  };
+  // The reasons a Windows deployment can end with that have texts (an audit event such as deployment.started has none).
+  const reasons = [...new Set([...sources.flatMap(quoted), ...recordSources.flatMap(quoted).filter((r) => r.startsWith('deployment.'))])].filter((r) => !(r in LINUX_ONLY) && shared('en', r) !== undefined).sort();
+  const own = (lang: 'en' | 'tr', reason: string) => {
+    const [ns, name] = reason.split('.');
+    const w = ((lang === 'en' ? enWeb : trWeb).deployments as unknown as { windowsErrors: Record<string, Record<string, Record<string, string>>> }).windowsErrors;
+    return w[ns]?.[name] ?? {};
+  };
+  // "files" in lower case: "C:\\Program Files" is a Windows path.
+  const WRONG_EN = /nginx|certificate file|key file|\/var\/lib|\/usr\/local|systemctl|reload|as root/i;
+  const WRONG_TR = /nginx|dosyalar|sertifika dosya|anahtar dosya|\/var\/lib|\/usr\/local|systemctl|yeniden yükle|root olarak/i;
+  const wrong = (lang: 'en' | 'tr', text: string) => (lang === 'en' ? WRONG_EN.test(text) || /\bfiles\b/.test(text) : WRONG_TR.test(text));
+
+  it('finds the reasons of the Windows provider and the engine', () => {
+    expect(reasons).toEqual(expect.arrayContaining(['deployment.verify_failed', 'deployment.interrupted', 'deployment.verify_chain', 'deployment.recovery_exhausted', 'deployment.outcome_unknown', 'windows.key_unusable']));
+  });
+
+  it.each(['en', 'tr'] as const)('words every such reason for a binding (%s)', (lang) => {
+    const bad: string[] = [];
+    for (const r of reasons) {
+      for (const part of ['title', 'cause', 'action']) {
+        const text = own(lang, r)[part] ?? shared(lang, r)?.[part] ?? '';
+        if (wrong(lang, text)) bad.push(`${r}.${part}: ${text}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it.each([
+    ['ALC-DEP-0003', 'deployment.verify_failed', 'rolled_back', 'restored'],
+    ['ALC-DEP-0010', 'deployment.interrupted', 'rollback_failed', 'writing'],
+    ['ALC-DEP-0012', 'deployment.verify_chain', 'rolled_back', 'restored'],
+    ['ALC-DEP-0017', 'deployment.recovery_exhausted', 'rollback_failed', 'writing'],
+    ['ALC-DEP-0018', 'deployment.outcome_unknown', 'rollback_failed', 'writing'],
+    ['ALC-DEP-0023', 'deployment.server_operation_pending', 'failed', 'none'],
+    ['ALC-DEP-0024', 'deployment.pending_change_restored', 'rolled_back', 'restored'],
+  ])('shows %s %s on a Windows deployment page without Nginx, files or the backup folder', async (code, reason, status, phase) => {
+    show(windowsDeploymentFixture({ id: ID, status: status as DeploymentDetail['status'], phase: phase as DeploymentDetail['phase'], verified: '', error: { code, reason, params: { port: '443' } } }));
+    await renderRoute(`/deployments/${ID}`);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveAttribute('data-reason', reason);
+    expect(wrong('en', alert.textContent ?? ''), alert.textContent ?? '').toBe(false);
+    expect(alert.textContent ?? '').not.toMatch(/\{\{/);
+    // The headline above it too.
+    for (const s of screen.getAllByRole('status')) expect(wrong('en', s.textContent ?? ''), s.textContent ?? '').toBe(false);
+    const ownText = own('en', reason);
+    for (const part of Object.values(ownText)) expect(alert).toHaveTextContent(part.replace(/\{\{port\}\}/g, '443'));
+  });
+
+  it('keeps the shared texts for a Linux deployment', async () => {
+    show(deploymentDetailFixture({ id: ID, status: 'rolled_back', error: { code: 'ALC-DEP-0003', reason: 'deployment.verify_failed' } }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check which part of the Nginx configuration answers for this website');
   });
 });

@@ -783,6 +783,30 @@ describe('DeployDialog on a Windows server', () => {
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
   });
 
+  it('names each certificate group as a group with a level-3 heading below the dialog title', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    await showDialog({ location: W1, siblings });
+    const group = await screen.findByRole('group', { name: 'www.example.test' });
+    expect(within(group).getByRole('heading', { level: 3, name: 'www.example.test' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'No certificate' })).toBeInTheDocument();
+  });
+
+  it('says why a chosen certificate no longer fits when a binding of another key type is ticked', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const rsa = windowsBindingFixture({ id: 'w-rsa', cert_path: 'http.sys/ipport/0.0.0.0:7443', certificate: SERVED, key_type: 'rsa' });
+    await showDialog({ location: W1, siblings: [...siblings, rsa] });
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: /0\.0\.0\.0:7443/ }));
+    expect(screen.getByText('The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: /0\.0\.0\.0:7443/ }));
+    expect(screen.queryByText(/does not fit every ticked binding/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+  });
+
   it('keeps a Linux website a single place without the picker', async () => {
     asRole('operator');
     certificates([NEW_CERT]);

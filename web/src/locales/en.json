@@ -2032,7 +2032,10 @@
     "selectGroup": "Select all bindings of this certificate",
     "selectGroupNamed": "Select all bindings of this certificate: {{name}}",
     "succeededUnverifiedWindows": "The new certificate was deployed and the binding points to it.",
-    "rollbackFailedRestoredWindows": "The binding names the previous certificate again, but Alice could not confirm that the website serves it. Check the website now."
+    "rollbackFailedRestoredWindows": "The binding names the previous certificate again, but Alice could not confirm that the website serves it. Check the website now.",
+    "serverOperationPendingWindows": "The new certificate was not deployed. An unfinished earlier change on the server blocks this binding; see below.",
+    "pendingChangeRestoredWindows": "The new certificate was not deployed. Alice pointed the binding back to the certificate from before an unfinished earlier change, so the website now serves that certificate. That may not be the certificate it served when you chose Deploy.",
+    "chosenNoLongerFits": "The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding."
   },
   "deployments": {
     "page": {
@@ -2233,6 +2236,70 @@
           "title": "Another program changed the binding during the deployment. Manual action is needed.",
           "cause": "While Alice was deploying or pointing the binding back, another program changed the binding: it names a certificate Alice did not deploy, so Alice did not change it again.",
           "action": "Check the website now. Find out which program changed the binding (for example IIS Manager or a renewal tool), then choose Discover on the server's page."
+        },
+        "in_progress": {
+          "cause": "Alice runs one deployment per binding at a time."
+        },
+        "verify_failed": {
+          "cause": "After the change the website kept serving the previous certificate, for example because another binding answers for this website's name or port, or something in front of the server serves its own certificate. The deployment's status shows whether the binding names the previous certificate again.",
+          "action": "Check which binding answers for this website's name and port on the server (netsh http show sslcert, and the site's bindings in IIS Manager), then deploy again."
+        },
+        "interrupted": {
+          "cause": "While the deployment ran, the connection to the server was lost, Alice restarted, or the helper could not finish changing the binding. The deployment's status shows which certificate the binding names; if Alice does not know yet, it keeps checking."
+        },
+        "verify_chain": {
+          "cause": "The number of certificates the website sends differs from the chain Alice expected, for example because Windows built the chain from other intermediate certificates in its stores, or a proxy adds or drops some. The deployment's status shows whether anything was changed.",
+          "action": "Check the intermediate certificates in the server's Intermediate Certification Authorities store and anything in front of the server, then deploy again."
+        },
+        "verify_untrusted": {
+          "action": "Check the intermediate certificates in the server's Intermediate Certification Authorities store, and that nothing in front of the server (a proxy or a load balancer) sends another chain, then deploy again."
+        },
+        "nothing_to_restore": {
+          "cause": "The helper found that this deployment had not changed the binding, so there was nothing to put back."
+        },
+        "superseded": {
+          "title": "A later change replaced the binding, so Alice did not restore it.",
+          "cause": "While Alice was finishing this deployment, a later operation on the server changed the binding. Alice cannot tell which certificate it names now."
+        },
+        "target_deleted": {
+          "action": "If the server still exists, check its website and the certificate its binding names."
+        },
+        "recovery_exhausted": {
+          "cause": "For about a day Alice could not find out how the deployment ended, usually because it could not reach the server. If the change reached the server, the previous certificate is still in its certificate store."
+        },
+        "outcome_unknown": {
+          "cause": "Alice no longer has the records it needs to check or undo this deployment. If the change reached the server, the previous certificate is still in its certificate store."
+        },
+        "rescan_needed": {
+          "title": "Alice must read this server's bindings again before deploying.",
+          "cause": "Alice does not know which certificate the binding names now, which it needs to make sure nobody changed the binding in the meantime."
+        },
+        "pending_change_restored": {
+          "title": "Alice undid an unfinished earlier change of this binding; this certificate was not deployed.",
+          "cause": "An earlier change of this binding on the server did not finish, and Alice no longer followed it. Alice pointed the binding back to the certificate from before that change, so the website now serves that certificate. The certificate of this deployment was not deployed.",
+          "action": "Choose Discover on the server's page so that Alice reads the bindings again, then deploy the certificate again."
+        },
+        "server_operation_pending": {
+          "title": "An unfinished change of this binding on the server stops new changes.",
+          "cause": "An earlier change of this binding on the server did not finish, and Alice no longer follows it, so the helper refuses new changes. Alice did not undo that change. This deployment's certificate was not deployed.",
+          "action": "The deployment's details name the unfinished change (operation id). Check which certificate the binding names (netsh http show sslcert), choose Discover on the server's page, then deploy again."
+        },
+        "rollback_forbidden": {
+          "cause": "The new certificate could not be put in service, and the certificate the binding named before the change was revoked or its private key is compromised. Alice never binds such a certificate again, so the binding stays as the failed change left it. The website may not work until another certificate is deployed.",
+          "action": "Check the website now. Find and fix the cause shown in the deployment history (the binding or the check of the website), then deploy a valid certificate again or choose Retry on the incident. Never point the binding back to the previous certificate by hand: its key is compromised."
+        }
+      },
+      "nginx": {
+        "location_unsupported": {
+          "cause": "The binding is one Alice does not change (it belongs to another application, or its certificate or store does not meet Alice's rules), or it no longer exists. Nothing was changed."
+        }
+      },
+      "ssh": {
+        "output_too_large": {
+          "action": "Check the server for unusually large content in what Alice reads there: the http.sys bindings, the IIS configuration or the certificate stores."
+        },
+        "protocol_error": {
+          "action": "Copy alice-helper.exe from the current Alice bundle to the server and run the Windows setup script again, then test the connection."
         }
       }
     }

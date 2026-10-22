@@ -135,6 +135,8 @@ function DeployForm({
   const candidates = certs.data && location ? fitting.reduce((cs, l) => deployCandidates(cs, l, now), certs.data.items) : [];
   const chosen: Certificate | undefined = certificate ?? candidates.find((c) => c.id === chosenId);
   const block = chosen ? certificateBlock(chosen, now) : null;
+  // A certificate chosen for the bindings picked then that does not fit one ticked since (another key type).
+  const noLongerFits = bindings !== null && certificate === undefined && chosenId !== '' && chosen === undefined && certs.isSuccess;
   const incompleteChain = chosen !== undefined && !chosen.chain_complete;
   const chainBlocked = incompleteChain && !admin;
 
@@ -336,6 +338,12 @@ function DeployForm({
           </>
         )}
 
+        {noLongerFits && (
+          <Alert color="yellow" role="status">
+            {t('deploy.chosenNoLongerFits')}
+          </Alert>
+        )}
+
         {certificate !== undefined && block !== null && (
           <Alert color="red" role="alert">
             {t(block === 'no_key' ? 'certificates.detail.noKey' : block === 'expired' ? 'certificates.detail.expiredNoDeploy' : 'deploy.notYetValid')}
@@ -348,10 +356,12 @@ function DeployForm({
               {groups.map((g) => {
                 const name = g.cert ? certificateSubject(g.cert) : '';
                 const choosable = g.items.filter((p) => p.deployable && canDeployTo(p)).map((p) => p.id);
+                const headingId = `deploy-group-${g.key || 'none'}`;
                 return (
-                  <Box key={g.key} data-testid="deploy-certificate-group">
+                  // A group per certificate, named by its heading (level 3: the dialog's title is the h2).
+                  <Box key={g.key} data-testid="deploy-certificate-group" role="group" aria-labelledby={headingId}>
                     <Group gap="xs" justify="space-between">
-                      <Title order={4} size="sm" translate={g.cert ? 'no' : undefined}>
+                      <Title order={3} size="sm" id={headingId} translate={g.cert ? 'no' : undefined}>
                         {g.cert ? name : t('locations.group.noCertificate')}
                       </Title>
                       {g.cert && choosable.length > 0 && (

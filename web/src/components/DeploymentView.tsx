@@ -138,11 +138,11 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
       case 'failed':
         // A cancelled deployment sent nothing: a decision, not a failure of the server.
         color = isCancelled(d) ? 'gray' : 'red';
-        headline = t(d.error?.reason === SERVER_OPERATION_PENDING ? 'deploy.serverOperationPending' : 'deploy.noChange');
+        headline = t(d.error?.reason === SERVER_OPERATION_PENDING ? (windows ? 'deploy.serverOperationPendingWindows' : 'deploy.serverOperationPending') : 'deploy.noChange');
         break;
       case 'rolled_back':
         color = 'orange';
-        headline = t(d.error?.reason === PENDING_CHANGE_RESTORED ? 'deploy.pendingChangeRestored' : 'deploy.rolledBack');
+        headline = t(d.error?.reason === PENDING_CHANGE_RESTORED ? (windows ? 'deploy.pendingChangeRestoredWindows' : 'deploy.pendingChangeRestored') : 'deploy.rolledBack');
         break;
       default:
         // rollback_failed: the headline follows the phase, so it never contradicts the cause. With
