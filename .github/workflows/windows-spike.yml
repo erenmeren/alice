@@ -98,6 +98,7 @@ jobs:
           $b = New-SelfSignedCertificate -DnsName ip.spike.test,sni.spike.test -CertStoreLocation Cert:\LocalMachine\My -FriendlyName spikeB
           "CERT_A=$($a.Thumbprint)" | Add-Content $env:GITHUB_ENV
           "CERT_B=$($b.Thumbprint)" | Add-Content $env:GITHUB_ENV
+          Set-Content C:\winspike\cert-b.txt $b.Thumbprint
           Copy-Item "$env:windir\system32\inetsrv\config\applicationHost.config" "$env:R\applicationHost-after-site.config"
 
       - name: F1 re-point through http.sys only
@@ -175,7 +176,9 @@ jobs:
           } else {
             $new = $orig -replace '</configuration>', '<configurationRedirection enabled="true" path="C:\sharedcfg" /></configuration>'
           }
-          Set-Content "$cfg\redirection.config" $new
+          # The file is briefly held open by IIS (seen on 2025: "Stream was not readable"): retry.
+          for ($i = 0; $i -lt 20; $i++) { try { [IO.File]::WriteAllText("$cfg\redirection.config", $new); break } catch { Start-Sleep -Milliseconds 500 } }
+          "redirection_write_attempts,$($i + 1)" | Add-Content "$env:R\timings.csv"
           & $env:SPIKE f6 | Set-Content "$env:R\f6-redirected.json"
           & $appcmd add site /name:sharedonly /id:9003 /physicalPath:C:\inetpub\spike "/bindings:http/*:8091:" 2>&1 | Set-Content "$env:R\f6-add-redirected.txt"
           $res = @{
@@ -183,7 +186,7 @@ jobs:
             sharedonly_in_shared_file = [bool](Select-String -Path C:\sharedcfg\applicationHost.config -Pattern 'sharedonly' -Quiet)
             sharedonly_in_local_file = [bool](Select-String -Path "$cfg\applicationHost.config" -Pattern 'sharedonly' -Quiet)
           }
-          Set-Content "$cfg\redirection.config" $orig
+          for ($i = 0; $i -lt 20; $i++) { try { [IO.File]::WriteAllText("$cfg\redirection.config", $orig); break } catch { Start-Sleep -Milliseconds 500 } }
           & $appcmd delete site localonly | Out-Null
           $res | ConvertTo-Json | Set-Content "$env:R\f6-shared.json"
           Get-Content "$env:R\f6-shared.json"
@@ -296,11 +299,17 @@ jobs:
         shell: powershell
         run: |
           $res = @{}
-          $res.quickconfig = (winrm quickconfig -quiet 2>&1 | Out-String)
-          $c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
-          New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbprint $c.Thumbprint -Force | Out-Null
-          $res.listener_thumbprint = $c.Thumbprint
-          $res.listeners = (winrm enumerate winrm/config/listener 2>&1 | Out-String)
+          # The images already carry an HTTPS listener (run 39742512340: New-Item says it exists); record it, and only
+          # create one when it is absent.
+          $res.listeners_before = (winrm enumerate winrm/config/listener 2>&1 | Out-String)
+          $https = Get-ChildItem WSMan:\localhost\Listener | Where-Object { $_.Keys -contains 'Transport=HTTPS' }
+          if (-not $https) {
+            $c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
+            New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbprint $c.Thumbprint -Force | Out-Null
+            $res.created = $c.Thumbprint
+          } else {
+            $res.existing_thumbprint = (Get-ChildItem "WSMan:\localhost\Listener\$($https.Name)" | Where-Object Name -eq CertificateThumbprint).Value
+          }
           $res | ConvertTo-Json | Out-File -Encoding utf8 "$env:R\f8-winrm.json"
           & $env:SPIKE sslenum | Out-File -Encoding utf8 "$env:R\f8-winrm-sslenum.json"
           netsh http show sslcert | Out-File -Encoding utf8 "$env:R\f8-winrm-netsh.txt"
@@ -319,6 +328,15 @@ jobs:
           } catch { $res.feature_error = "$_" }
           $res.feature_seconds = $sw.Elapsed.TotalSeconds
           try { Install-RemoteAccess -VpnType Vpn -ErrorAction Stop | Out-Null; $res.install_remoteaccess = 'ok' } catch { $res.install_remoteaccess = "$_" }
+          # Run 39742512340: Install-RemoteAccess alone left no SSTP record in http.sys; give SSTP a certificate.
+          try {
+            $sc = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.1')
+            Set-RemoteAccess -SslCertificate $sc -ErrorAction Stop
+            Restart-Service RemoteAccess -ErrorAction Stop
+            Start-Sleep 5
+            $res.sstp_cert = $sc.Thumbprint
+            $res.remoteaccess = (Get-RemoteAccess | Select-Object VpnStatus, SslCertificate | Out-String)
+          } catch { $res.set_remoteaccess = "$_" }
           $res.total_seconds = $sw.Elapsed.TotalSeconds
           "sstp_attempt,$($sw.Elapsed.TotalSeconds)" | Add-Content "$env:R\timings.csv"
           $res | ConvertTo-Json | Out-File -Encoding utf8 "$env:R\f8-sstp.json"

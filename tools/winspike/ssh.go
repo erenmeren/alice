@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,11 @@ func cmdElevation() map[string]any {
 		"command_line":             windows.UTF16PtrToString(windows.GetCommandLine()),
 		"ssh_connection":           os.Getenv("SSH_CONNECTION"),
 		"username_env":             os.Getenv("USERNAME"),
+	}
+	if in, err := io.ReadAll(io.LimitReader(os.Stdin, 4096)); err == nil {
+		out["stdin"] = string(in)
+	} else {
+		out["stdin_error"] = err.Error()
 	}
 	tok := windows.GetCurrentProcessToken()
 	if u, err := tok.GetTokenUser(); err == nil {
@@ -78,8 +84,14 @@ func cmdElevation() map[string]any {
 	list, err := enumerate(configSSLCertInfo)
 	out["http_query_ipport_count"] = len(list)
 	out["http_query_error"] = errString(err)
-	// A real write: set and delete a throwaway record with the hash of any certificate in LocalMachine\My.
-	if thumb := anyMachineCert(); thumb != "" {
+	// A real write: set and delete a throwaway record with the hash of a certificate with a key in LocalMachine\My
+	// (C:\winspike\cert-b.txt from the workflow; http.sys refuses a hash without a usable key with errno 1312).
+	thumb := anyMachineCert()
+	if b, err := os.ReadFile(`C:\winspike\cert-b.txt`); err == nil {
+		thumb = strings.ToLower(strings.TrimSpace(string(b)))
+	}
+	out["http_set_hash"] = thumb
+	if thumb != "" {
 		b := Binding{Type: "ipport", IP: "127.0.0.2", Port: 65001, Hash: thumb, Store: "MY", AppID: iisAppID}
 		err := setBinding(b)
 		out["http_set_error"] = errString(err)
@@ -173,44 +185,63 @@ func cmdSSHRun(addr, user, keyFile, hostKeyFile, passwordEnv string, cmds []stri
 		out["error"] = "dial: " + err.Error()
 		return out
 	}
-	defer c.Close()
 	out["dial_seconds"] = time.Since(start).Seconds()
 	out["server_version"] = string(c.ServerVersion())
-	var results []map[string]any
+	// Several sessions on one connection (what linuxssh's pool does), then one fresh connection per command.
+	var same []map[string]any
 	for _, cmd := range cmds {
-		r := map[string]any{"sent": cmd}
-		s, err := c.NewSession()
+		same = append(same, runSession(c, cmd))
+	}
+	c.Close()
+	out["results"] = same
+	var fresh []map[string]any
+	for _, cmd := range cmds {
+		c, err := ssh.Dial("tcp", addr, cfg)
 		if err != nil {
-			r["error"] = err.Error()
-			results = append(results, r)
+			fresh = append(fresh, map[string]any{"sent": cmd, "error": "dial: " + err.Error()})
 			continue
 		}
-		var so, se bytes.Buffer
-		s.Stdout, s.Stderr = &so, &se
-		t := time.Now()
-		err = s.Run(cmd)
-		r["seconds"] = time.Since(t).Seconds()
-		var ee *ssh.ExitError
-		switch {
-		case errors.As(err, &ee):
-			r["exit_status"] = ee.ExitStatus()
-		case err != nil:
-			r["error"] = err.Error()
-		default:
-			r["exit_status"] = 0
-		}
-		var parsed map[string]any
-		if json.Unmarshal(so.Bytes(), &parsed) == nil {
-			r["remote"] = parsed
-			got, _ := parsed["ssh_original_command"].(string)
-			r["original_command_intact"] = got == cmd
-		} else {
-			r["stdout"] = head(so.String(), 2000)
-		}
-		r["stderr"] = head(se.String(), 2000)
-		s.Close()
-		results = append(results, r)
+		fresh = append(fresh, runSession(c, cmd))
+		c.Close()
 	}
-	out["results"] = results
+	out["results_fresh_connection"] = fresh
 	return out
+}
+
+// runSession runs one command with a known standard input (the channel key material would travel on).
+func runSession(c *ssh.Client, cmd string) map[string]any {
+	r := map[string]any{"sent": cmd}
+	s, err := c.NewSession()
+	if err != nil {
+		r["error"] = err.Error()
+		return r
+	}
+	defer s.Close()
+	stdin := "stdin for " + cmd
+	var so, se bytes.Buffer
+	s.Stdin, s.Stdout, s.Stderr = strings.NewReader(stdin), &so, &se
+	t := time.Now()
+	err = s.Run(cmd)
+	r["seconds"] = time.Since(t).Seconds()
+	var ee *ssh.ExitError
+	switch {
+	case errors.As(err, &ee):
+		r["exit_status"] = ee.ExitStatus()
+	case err != nil:
+		r["error"] = err.Error()
+	default:
+		r["exit_status"] = 0
+	}
+	var parsed map[string]any
+	if json.Unmarshal(so.Bytes(), &parsed) == nil {
+		r["remote"] = parsed
+		got, _ := parsed["ssh_original_command"].(string)
+		r["original_command_intact"] = got == cmd
+		gotIn, _ := parsed["stdin"].(string)
+		r["stdin_intact"] = gotIn == stdin
+	} else {
+		r["stdout"] = head(so.String(), 2000)
+	}
+	r["stderr"] = head(se.String(), 2000)
+	return r
 }

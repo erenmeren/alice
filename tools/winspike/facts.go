@@ -439,6 +439,10 @@ func cmdF5(restore string) map[string]any {
 	step("served_2_intermediate_absent", probeIP())
 	addCA("CA", inter2)
 	step("served_2_intermediate_added_no_rebind", probeIP())
+	// Does an update that names the same hash refresh schannel's cached chain?
+	_, _, err := repoint(ipKey, t2, "")
+	out["same_hash_update_error"] = errString(err)
+	step("served_2_intermediate_added_after_same_hash_update", probeIP())
 	rebind(t2)
 	step("served_2_intermediate_added_after_rebind", probeIP())
 
