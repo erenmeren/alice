@@ -1,15 +1,20 @@
 package winhelper
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // a certificate store's thumbprint is SHA-1
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net"
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -161,13 +166,22 @@ type fakeWriteHost struct {
 	readStateErr error
 	// writeStateErr, when set, decides each WriteState (nil writes).
 	writeStateErr func(name string) error
-	bindingErr    error
-	updateErr     func(b winproto.SSLBinding) error
+	// phaseErr fails the WriteState of a journal in one of these phases.
+	phaseErr []string
+	// passwordCopies are the PFX passwords ImportPFX saw, copied as text when it was called.
+	passwordCopies []string
+	bindingErr     error
+	updateErr      func(b winproto.SSLBinding) error
 	// afterUpdate, when set, is what http.sys keeps of an update (read-back faults).
 	afterUpdate func(b winproto.SSLBinding) winproto.SSLBinding
 	// updateBlock, when set, makes UpdateBinding wait until it is closed (the context does not end the
 	// wait: a host call that ignores its context).
-	updateBlock        chan struct{}
+	updateBlock chan struct{}
+	// updateFailAfter, when set, decides each UpdateBinding after the record was replaced (a partial
+	// write that then fails: the real host's base update succeeded and an Ex update did not).
+	updateFailAfter func(b winproto.SSLBinding) error
+	// bindingErrFn, when set, decides each Binding read before bindingErr (read-back faults).
+	bindingErrFn       func() error
 	importErr          error
 	addIntermediateErr error
 	// pointErr, when set, decides each Point (a non-nil answer is a kill there).
@@ -306,6 +320,12 @@ func (f *fakeWriteHost) WriteState(name string, data []byte) error {
 			return err
 		}
 	}
+	if len(f.phaseErr) > 0 && strings.HasPrefix(name, journalDir) {
+		var j journal
+		if json.Unmarshal(data, &j) == nil && slices.Contains(f.phaseErr, j.Phase) {
+			return errors.New("disk")
+		}
+	}
 	f.wmu.Lock()
 	defer f.wmu.Unlock()
 	f.state[name] = slices.Clone(data)
@@ -321,6 +341,11 @@ func (f *fakeWriteHost) DataDirSafe() error {
 
 func (f *fakeWriteHost) Binding(_ context.Context, l winproto.Locator) (winproto.SSLBinding, bool, error) {
 	f.calls.Add(1)
+	if f.bindingErrFn != nil {
+		if err := f.bindingErrFn(); err != nil {
+			return winproto.SSLBinding{}, false, err
+		}
+	}
 	if f.bindingErr != nil {
 		return winproto.SSLBinding{}, false, f.bindingErr
 	}
@@ -355,6 +380,9 @@ func (f *fakeWriteHost) UpdateBinding(_ context.Context, b winproto.SSLBinding) 
 	}
 	f.records[key] = kept // the whole record is replaced (W0 F2)
 	f.log = append(f.log, "update "+key)
+	if f.updateFailAfter != nil {
+		return f.updateFailAfter(b)
+	}
 	return nil
 }
 
@@ -380,6 +408,7 @@ func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password
 	f.wmu.Lock()
 	f.pfxs = append(f.pfxs, pfx)
 	f.passwords = append(f.passwords, password)
+	f.passwordCopies = append(f.passwordCopies, string(password))
 	f.friendlyNames = append(f.friendlyNames, friendlyName)
 	f.wmu.Unlock()
 	if f.importErr != nil {
@@ -390,13 +419,39 @@ func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password
 		return "", ErrStore
 	}
 	sha := f.addCert(store, leaf.Raw, true)
+	chain := f.builtChain(leaf)
 	f.mu.Lock()
 	c := f.certs[[2]string{store, sha}]
-	c.FriendlyName = friendlyName
+	c.FriendlyName, c.Chain = friendlyName, chain
 	f.certs[[2]string{store, sha}] = c
 	f.mu.Unlock()
 	f.logf("import " + store + " " + sha)
 	return sha, nil
+}
+
+// builtChain is CertGetCertificateChain's answer for leaf over LocalMachine\CA as it is now: the
+// issuers found there, base64, root (self-signed) excluded.
+func (f *fakeWriteHost) builtChain(leaf *x509.Certificate) []string {
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	chain := []string{}
+	cur := leaf
+	for range winproto.MaxChainCerts {
+		var next *x509.Certificate
+		for _, der := range f.ca {
+			c, err := x509.ParseCertificate(der)
+			if err == nil && bytes.Equal(c.RawSubject, cur.RawIssuer) && !bytes.Equal(c.RawSubject, c.RawIssuer) {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			break
+		}
+		chain = append(chain, base64.StdEncoding.EncodeToString(next.Raw))
+		cur = next
+	}
+	return chain
 }
 
 func (f *fakeWriteHost) Event(id uint32, text string) {

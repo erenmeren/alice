@@ -75,6 +75,13 @@ var commands = map[string]command{
 	winproto.SubWinFacts: {handle: cmdWinFacts},
 	winproto.SubTLSProbe: {handle: cmdTLSProbe},
 	winproto.SubIISDump:  {elevated: true, handle: cmdIISDump},
+
+	// The write subcommands (W2): iis-deploy, iis-restore and iis-fence change the machine under their
+	// gate; iis-status is an elevated read under no lock.
+	winproto.SubIISDeploy:  {write: true, input: winproto.MaxDeployInput, run: cmdIISDeploy},
+	winproto.SubIISRestore: {write: true, input: winproto.MaxRestoreInput, run: cmdIISRestore},
+	winproto.SubIISStatus:  {elevated: true, run: cmdIISStatus},
+	winproto.SubIISFence:   {write: true, run: cmdIISFence},
 }
 
 // RunForced is the "ssh" entry: it splits SSH_ORIGINAL_COMMAND with winproto.SplitCommandLine and runs it.
