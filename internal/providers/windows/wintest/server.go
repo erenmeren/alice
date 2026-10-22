@@ -12,7 +12,8 @@ import (
 	"alice/internal/providers/windows/winproto"
 )
 
-// Handler answers helper command lines with the helper's own code (winhelper.RunForced) on the model.
+// Handler answers helper command lines with the helper's own code (winhelper.ExecuteForced) on the
+// model; a call killed at a crash point (KillAt) answers nothing, with KilledExit.
 // A missing helper or a missing ForceCommand answers like cmd.exe: exit 1, the text on stderr only.
 func (m *Model) Handler() linuxsshtest.Handler {
 	return func(cmd string, stdin []byte) linuxsshtest.Response {
@@ -30,8 +31,12 @@ func (m *Model) Handler() linuxsshtest.Handler {
 			b, _ := json.Marshal(winproto.VersionResponse{OK: true, Helper: winproto.Version, Protocol: protocol})
 			return linuxsshtest.Response{Stdout: append(b, '\n'), Delay: delay}
 		}
-		code := winhelper.RunForced(context.Background(), m.Host(), cmd, bytes.NewReader(stdin), &out)
-		return linuxsshtest.Response{Stdout: out.Bytes(), Exit: code, Delay: delay}
+		o := winhelper.ExecuteForced(context.Background(), m.Host(), cmd, bytes.NewReader(stdin), &out)
+		if o.Killed {
+			// A helper killed at a crash point printed nothing (KillAt).
+			return linuxsshtest.Response{Exit: KilledExit, Delay: delay}
+		}
+		return linuxsshtest.Response{Stdout: out.Bytes(), Exit: o.Exit, Delay: delay}
 	}
 }
 

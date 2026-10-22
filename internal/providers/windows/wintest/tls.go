@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,9 +24,8 @@ const handshakeTimeout = 10 * time.Second
 
 // selectLocked is http.sys's choice for a connection to ip:port with the given SNI (""): a hostnameport
 // entry for (SNI, port), else an ipport entry for (ip, port), else the wildcard 0.0.0.0:port (and
-// [::]:port); a ccs entry alone serves nothing. The entry must name a certificate that is in its store
-// with a key SYSTEM can use, else the handshake fails (design §11 "key unusable").
-func (m *Model) selectLocked(ip string, port int, sni string) (*certEntry, error) {
+// [::]:port); a ccs entry alone serves nothing.
+func (m *Model) selectLocked(ip string, port int, sni string) (*winproto.SSLBinding, error) {
 	addr, _ := netip.ParseAddr(ip)
 	addr = addr.Unmap()
 	var pick *winproto.SSLBinding
@@ -54,23 +54,51 @@ func (m *Model) selectLocked(ip string, port int, sni string) (*certEntry, error
 	default:
 		return nil, errNoCertificate
 	}
-	if pick.CertSHA1 == "" {
+	return pick, nil
+}
+
+// servedEntry is schannel's cache of one record (W0 F5): the chain built when the record was last
+// written (built at the first handshake for a record the model was given, or after a reboot), and,
+// with StaleTLS, the certificate the listener kept serving across a write (Ruling 23).
+type servedEntry struct {
+	chain  []*x509.Certificate
+	pinned *tls.Certificate
+}
+
+// usableLocked is the certificate a record names when it is in its store with a key SYSTEM can use;
+// else a handshake fails (design §11 "key unusable").
+func (m *Model) usableLocked(b *winproto.SSLBinding) (*certEntry, error) {
+	if b.CertSHA1 == "" {
 		return nil, errNoCertificate
 	}
-	e := m.certLocked(pick.Store, pick.CertSHA1)
+	e := m.certLocked(b.Store, b.CertSHA1)
 	if e == nil || e.key == nil || (e.usable != nil && !*e.usable) {
 		return nil, errNoCertificate
 	}
 	return e, nil
 }
 
-// presentedLocked is the TLS certificate a handshake sends: the leaf and the chain built after it.
-func (m *Model) presentedLocked(e *certEntry) *tls.Certificate {
+// presentedLocked is the TLS certificate a handshake for a record sends: what a stale listener kept,
+// else the leaf and the chain schannel cached for the record (built now when there is none).
+func (m *Model) presentedLocked(b *winproto.SSLBinding) (*tls.Certificate, error) {
+	k := keyOf(*b)
+	s := m.served[k]
+	if s != nil && s.pinned != nil {
+		return s.pinned, nil
+	}
+	e, err := m.usableLocked(b)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		s = &servedEntry{chain: m.chainLocked(e.leaf)}
+		m.served[k] = s
+	}
 	c := &tls.Certificate{Certificate: [][]byte{e.leaf.Raw}, PrivateKey: e.key}
-	for _, x := range m.chainLocked(e.leaf) {
+	for _, x := range s.chain {
 		c.Certificate = append(c.Certificate, x.Raw)
 	}
-	return c
+	return c, nil
 }
 
 // Served is what a TLS handshake to ip:port with the given SNI shows: the SHA-256 of the leaf (lower
@@ -78,12 +106,16 @@ func (m *Model) presentedLocked(e *certEntry) *tls.Certificate {
 func (m *Model) Served(ip string, port int, sni string) (leafSHA256 string, chainLength int, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e, err := m.selectLocked(ip, port, sni)
+	b, err := m.selectLocked(ip, port, sni)
 	if err != nil {
 		return "", 0, false
 	}
-	sum := sha256.Sum256(e.leaf.Raw)
-	return hex.EncodeToString(sum[:]), 1 + len(m.chainLocked(e.leaf)), true
+	c, err := m.presentedLocked(b)
+	if err != nil {
+		return "", 0, false
+	}
+	sum := sha256.Sum256(c.Certificate[0])
+	return hex.EncodeToString(sum[:]), len(c.Certificate), true
 }
 
 // Endpoint is the real address of the listener for a binding port ("" when none): tests listen on
@@ -161,11 +193,11 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int) {
 			if meant, ok := m.intents[hi.Conn.RemoteAddr().String()]; ok {
 				ip = meant
 			}
-			e, err := m.selectLocked(ip, port, hi.ServerName)
+			b, err := m.selectLocked(ip, port, hi.ServerName)
 			if err != nil {
 				return nil, err
 			}
-			return m.presentedLocked(e), nil
+			return m.presentedLocked(b)
 		},
 	}
 	for {

@@ -1,8 +1,9 @@
 // Package wintest is the emulated Windows host of the tests of the Windows provider and of the e2e
-// fake (design 2026-10-21 §13, R60): a modelled machine (elevation, operating system, IIS, the
-// certificate stores, the http.sys binding table, the IIS sites) that implements winhelper.Host, so the
-// helper's own code (winhelper.RunForced) answers behind the linuxsshtest SSH server, plus real TLS
-// listeners that serve the certificate http.sys would. It is never linked into the alice binary.
+// fake (design 2026-10-21 §13, R60, R61): a modelled machine (elevation, operating system, IIS, the
+// certificate stores, the http.sys binding table, the IIS sites, the helper's data directory and lock,
+// the Application log) that implements winhelper.WriteHost, so the helper's own code
+// (winhelper.ExecuteForced) answers and changes it behind the linuxsshtest SSH server, plus real TLS
+// listeners that serve what http.sys and schannel would. It is never linked into the alice binary.
 package wintest
 
 import (
@@ -79,6 +80,25 @@ type Model struct {
 	endpoints map[int]string
 	intents   map[string]string // client address -> the address the helper meant to reach
 	serving   sync.WaitGroup
+
+	// The write half (write.go).
+	served       map[string]*servedEntry // schannel's cache per record, by http.sys key (tls.go)
+	state        map[string][]byte       // the helper's data directory: "journal/<op>.json", ...
+	dataDirBad   bool
+	lockOwned    bool // a helper call holds helper.lock
+	lockOutside  int  // HoldLock holders (other helper processes)
+	lockGen      int  // bumped by Reboot: a release from before it changes nothing
+	lockWait     time.Duration
+	killAt       string
+	points       []string
+	failUpdate   error
+	corruptArmed bool // CorruptReadBack: the next update arms corruptNext
+	corruptNext  bool // the next Binding read loses an Ex parameter
+	failImport   bool
+	stale        bool
+	chainExtra   *x509.Certificate
+	events       []Event
+	imported     []string
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -95,6 +115,9 @@ func NewModel() *Model {
 		delays:    map[string]time.Duration{},
 		endpoints: map[int]string{},
 		intents:   map[string]string{},
+		served:    map[string]*servedEntry{},
+		state:     map[string][]byte{},
+		lockWait:  winproto.LockWait,
 	}
 	for _, s := range []string{"My", "WebHosting", "CA", "Root"} {
 		m.storeLocked(s)
@@ -220,7 +243,8 @@ func (m *Model) RemoveCertificate(storeName, sha1 string) {
 func (m *Model) AddBinding(b winproto.SSLBinding) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.bindings = append(m.bindings, b)
+	m.bindings = append(m.bindings, cloneRecord(b))
+	delete(m.served, keyOf(b))
 }
 
 // AddSite appends an IIS site.
@@ -282,7 +306,7 @@ func (m *Model) CARootPEM() []byte {
 }
 
 // Host returns the model as the machine the helper's code runs on.
-func (m *Model) Host() winhelper.Host { return host{m} }
+func (m *Model) Host() winhelper.WriteHost { return host{m} }
 
 // host is the winhelper.Host view of a Model.
 type host struct{ m *Model }
@@ -334,10 +358,16 @@ func (h host) Stores(context.Context) ([]string, error) {
 	return append(names, others...), nil
 }
 
+// SSLBindings is the dump's read of the table: like the real helper's, it reads no extended
+// parameters (only Binding, the deploy and restore path's live read, does).
 func (h host) SSLBindings(context.Context) ([]winproto.SSLBinding, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
-	return slices.Clone(h.m.bindings), nil
+	out := slices.Clone(h.m.bindings)
+	for i := range out {
+		out[i].Extended = nil
+	}
+	return out, nil
 }
 
 func (h host) Certificate(_ context.Context, storeName, sha1 string) (winproto.StoreCertificate, bool, error) {
@@ -455,8 +485,17 @@ func orMy(s string) string {
 }
 
 // chainLocked is the chain Windows builds after the leaf: issuers found in LocalMachine\CA, a
-// self-signed root excluded.
+// self-signed root excluded, then the cross-signed certificate of ChainDiffers when there is one.
 func (m *Model) chainLocked(leaf *x509.Certificate) []*x509.Certificate {
+	out := m.issuersLocked(leaf)
+	if m.chainExtra != nil && len(out) < winproto.MaxChainCerts {
+		out = append(out, m.chainExtra)
+	}
+	return out
+}
+
+// issuersLocked is the chain built from LocalMachine\CA alone.
+func (m *Model) issuersLocked(leaf *x509.Certificate) []*x509.Certificate {
 	var out []*x509.Certificate
 	cur := leaf
 	for len(out) < winproto.MaxChainCerts && !selfSigned(cur) {
