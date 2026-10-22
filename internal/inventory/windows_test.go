@@ -1,8 +1,11 @@
 package inventory_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -12,6 +15,7 @@ import (
 	"alice/internal/providers/fake"
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 // The inventory may not import the Windows provider (archtest), so it mirrors windows.ValidUser (R60 Ruling 1); the
@@ -162,4 +166,19 @@ func TestBackupRulesEqualTheProtocols(t *testing.T) {
 		strings.Repeat("g", 40), strings.Repeat("a", 40) + "\n"} {
 		assert.Equal(t, winproto.ValidSHA1(s), inventory.ValidBackupSHA1(s), "%q", s)
 	}
+}
+
+// R61 Task 11: after a deployment the location's compare-and-swap token is what its provider compares the next send
+// against: the SHA-256 of the file's bytes for a file (the helper writes the PEM sent verbatim), the SHA-256 of the
+// leaf's DER for an http.sys binding (what iis-deploy's expect_sha256 names). With the file's rule a second Windows
+// deployment was refused HASH_MISMATCH.
+func TestTheTokenAfterADeploymentIsTheProvidersForm(t *testing.T) {
+	now := time.Now()
+	ca := pki.NewCA("Token", pki.ECDSA256, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
+	file := sha256.Sum256(leaf.FullchainPEM)
+	assert.Equal(t, hex.EncodeToString(file[:]), inventory.NewCertSHA256(providers.LocationServerFile, leaf.FullchainPEM))
+	assert.Equal(t, hex.EncodeToString(file[:]), inventory.NewCertSHA256("", leaf.FullchainPEM), "a file's material has no kind")
+	assert.Equal(t, pki.Fingerprint(leaf.Cert), inventory.NewCertSHA256(providers.LocationWinSSLBinding, leaf.FullchainPEM))
+	assert.Empty(t, inventory.NewCertSHA256(providers.LocationWinSSLBinding, []byte("not PEM")), "no leaf: no token")
 }

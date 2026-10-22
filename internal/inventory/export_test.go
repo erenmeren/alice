@@ -286,3 +286,8 @@ func (s *Service) DeployTypes() []string { return s.deployTypes() }
 func ValidBackupStore(s string) bool { return backupStoreRE.MatchString(s) }
 
 func ValidBackupSHA1(s string) bool { return backupSHA1RE.MatchString(s) }
+
+// NewCertSHA256 exposes newCertSHA256: the location's compare-and-swap token once a deployment wrote certPEM.
+func NewCertSHA256(kind providers.LocationKind, certPEM []byte) string {
+	return newCertSHA256(kind, certPEM)
+}

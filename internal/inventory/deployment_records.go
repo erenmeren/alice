@@ -103,7 +103,7 @@ type Material struct {
 	// Task 15 additions.
 	OldKeyType          string // the previous leaf's key type ("" = KeyType)
 	NewChainLength      int    // certificates in the chain sent (recorded once Recorded)
-	NewCertSHA256       string // SHA-256 of CertificatePEM: the file's hash once the helper wrote it
+	NewCertSHA256       string // the location's token once the helper wrote CertificatePEM (newCertSHA256)
 	PreviousFingerprint string // recorded; "" before the first send
 	PreviousChainLength int    // recorded; 0 before the first send
 	Recorded            bool   // state deploying, recovering or done: the send values come from the record
@@ -237,6 +237,21 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
+// newCertSHA256 is Material.NewCertSHA256: the location's compare-and-swap token once a deployment wrote certPEM, in
+// the form its provider compares (DeployRequest.ExpectCertSHA256): the SHA-256 of the DER of the leaf an http.sys
+// binding names (R61; "" when certPEM holds no certificate), else of the file's bytes (the helper writes the PEM sent
+// verbatim).
+func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
+	if kind != providers.LocationWinSSLBinding {
+		return sha256Hex(certPEM)
+	}
+	b, _ := pem.Decode(certPEM)
+	if b == nil || b.Type != "CERTIFICATE" {
+		return ""
+	}
+	return sha256Hex(b.Bytes)
+}
+
 // DeploymentMaterial reads what a job needs (see Material). withKey unseals the certificate's
 // private key through loadKey with the certificate's own private_key_id, checks that it is the
 // key of the certificate (its public key hash) and returns it as PEM; only before the first send
@@ -324,7 +339,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	}
 	m.NotBefore, m.NotAfter = m.NotBefore.UTC(), m.NotAfter.UTC()
 	m.CertificatePEM = []byte(pemChain)
-	m.NewCertSHA256 = sha256Hex(m.CertificatePEM)
+	m.NewCertSHA256 = newCertSHA256(m.Location.Kind, m.CertificatePEM)
 	// R51: the system roots, and the CA bundle of the ACME authority that issued the certificate (its private root).
 	m.TrustRoots, m.TrustStore, m.TrustAt = s.roots, providers.TrustStoreSystem, s.clock.Now().UTC()
 	if bundle != nil && strings.TrimSpace(*bundle) != "" {

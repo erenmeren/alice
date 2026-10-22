@@ -148,7 +148,7 @@ func (s *Service) KVDeployMaterial(ctx context.Context, id uuid.UUID, secret pro
 	}
 	m.CertificatePEM = []byte(v.PEMChain)
 	m.NewChainLength = chainLength(m.CertificatePEM)
-	m.NewCertSHA256 = sha256Hex(m.CertificatePEM)
+	m.NewCertSHA256 = newCertSHA256(m.Location.Kind, m.CertificatePEM)
 	m.PrivateKeyPEM = key
 	if !v.ChainComplete {
 		m.Warnings = append(m.Warnings, WarnChainIncomplete)
