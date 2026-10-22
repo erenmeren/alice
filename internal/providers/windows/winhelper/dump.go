@@ -82,19 +82,23 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 	}
 
 	// Each distinct certificate once. The bindings are cut at MaxBindings (= MaxCertificates), so the
-	// certificate list needs no cut of its own.
+	// certificate list needs no cut of its own. Store names compare with ASCII case folding (http.sys
+	// answers MY and My for one store, W0 F2); the certificate is read and listed under the spelling of
+	// the first binding that names it, in the order of the bindings list.
 	type key struct{ store, sha1 string }
+	type entry struct{ store, folded, sha1 string }
 	seen := map[key]bool{}
-	var keys []key
+	var keys []entry
 	for _, b := range d.Bindings {
-		if k := (key{b.Store, b.CertSHA1}); b.CertSHA1 != "" && !seen[k] {
+		folded := asciiLower(b.Store)
+		if k := (key{folded, b.CertSHA1}); b.CertSHA1 != "" && !seen[k] {
 			seen[k] = true
-			keys = append(keys, k)
+			keys = append(keys, entry{b.Store, folded, b.CertSHA1})
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].store != keys[j].store {
-			return keys[i].store < keys[j].store
+		if keys[i].folded != keys[j].folded {
+			return keys[i].folded < keys[j].folded
 		}
 		return keys[i].sha1 < keys[j].sha1
 	})
@@ -204,11 +208,28 @@ func cleanBinding(b winproto.SSLBinding) (winproto.SSLBinding, bool) {
 		return out, true
 	}
 	sha := strings.ToLower(b.CertSHA1) //nolint:forbidigo // hex digits, ASCII only
-	if !winproto.ValidSHA1(sha) || !winproto.ValidStore(b.Store) {
+	if !winproto.ValidSHA1(sha) || (b.Store != "" && !winproto.ValidStore(b.Store)) {
 		return b, false
 	}
-	out.CertSHA1, out.Store = sha, b.Store
+	store := b.Store
+	if store == "" {
+		store = defaultStore // http.sys returns a NULL store name for MY
+	}
+	out.CertSHA1, out.Store = sha, store
 	return out, true
+}
+
+// defaultStore is the store http.sys means by a NULL store name (W0 F2).
+const defaultStore = "MY"
+
+// asciiLower folds ASCII upper case letters and leaves every other byte alone.
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
 }
 
 // cleanCertificate validates one certificate read from a store; false drops it (the binding stays).

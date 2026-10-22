@@ -73,12 +73,16 @@ const (
 // AppIDIIS is the application id IIS registers its http.sys bindings under.
 const AppIDIIS = "{4dc3e181-e14b-4a21-b022-59fc669b0914}"
 
+// AppIDIISExpress is the application id of IIS Express, whose records fill the http.sys table of the
+// GitHub runner images.
+const AppIDIISExpress = "{214124cd-d05b-4309-9af9-9caa44b2b74a}"
+
 // KnownApps names the applications whose http.sys bindings Alice recognises (win_foreign_app).
-// Phase W0 (F8) has not confirmed these ids yet.
+// Confirmed in W0 (design §14 F8); the AD FS id is unknown, so Alice shows the raw id for it.
 var KnownApps = map[string]string{
 	AppIDIIS:                                 "iis",
+	AppIDIISExpress:                          "iisexpress",
 	"{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}": "winrm",
-	"{5d89a20c-beab-4389-9447-324788eb944a}": "adfs",
 	"{ba195980-cd49-458b-9e23-c84ee0adcd75}": "sstp",
 }
 

@@ -148,6 +148,26 @@ func TestKnownAppsAreCanonical(t *testing.T) {
 	}
 }
 
+func TestKnownAppsArePinned(t *testing.T) {
+	want := map[string]string{
+		"{4dc3e181-e14b-4a21-b022-59fc669b0914}": "iis",
+		"{214124cd-d05b-4309-9af9-9caa44b2b74a}": "iisexpress",
+		"{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}": "winrm",
+		"{ba195980-cd49-458b-9e23-c84ee0adcd75}": "sstp",
+	}
+	if len(winproto.KnownApps) != len(want) {
+		t.Fatalf("%v", winproto.KnownApps)
+	}
+	for id, name := range want {
+		if winproto.KnownApps[id] != name {
+			t.Errorf("%s -> %q, want %q", id, winproto.KnownApps[id], name)
+		}
+	}
+	if winproto.AppIDIISExpress != "{214124cd-d05b-4309-9af9-9caa44b2b74a}" {
+		t.Error("AppIDIISExpress")
+	}
+}
+
 func TestValidators(t *testing.T) {
 	if !winproto.ValidSHA1(strings.Repeat("ab", 20)) || winproto.ValidSHA1(strings.Repeat("AB", 20)) || winproto.ValidSHA1("ab") {
 		t.Error("ValidSHA1")

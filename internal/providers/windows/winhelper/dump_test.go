@@ -325,6 +325,79 @@ func TestDumpJSONShapes(t *testing.T) {
 	}
 }
 
+func TestBuildDumpEmptyStoreIsMY(t *testing.T) {
+	h := dumpHost()
+	h.bindings = []winproto.SSLBinding{ipb(5986, "", h1), ipb(443, "my", h2)}
+	h.certs = map[[2]string]winproto.StoreCertificate{{"MY", h1}: cert("MY", h1)}
+	d, err := BuildDump(context.Background(), h)
+	if err != nil || len(d.Bindings) != 2 {
+		t.Fatalf("%v %+v", err, d)
+	}
+	if d.Bindings[0].Store != "MY" || d.Bindings[1].Store != "my" {
+		t.Fatalf("empty store must become MY, others verbatim: %+v", d.Bindings)
+	}
+	if len(d.Certificates) != 1 || d.Certificates[0].Store != "MY" {
+		t.Fatalf("%+v", d.Certificates)
+	}
+}
+
+func TestBuildDumpFoldsStoreCaseForCertificateReads(t *testing.T) {
+	// The certificate is read once and listed under the spelling of the first binding.
+	h := dumpHost()
+	h.bindings = []winproto.SSLBinding{ipb(443, "MY", h1), ipb(444, "My", h1)}
+	h.certs = map[[2]string]winproto.StoreCertificate{{"MY", h1}: cert("MY", h1), {"My", h1}: cert("My", h1)}
+	d, err := BuildDump(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, n := range h.certReads {
+		total += n
+	}
+	if total != 1 || len(d.Certificates) != 1 || d.Certificates[0].Store != "MY" {
+		t.Fatalf("reads %v certs %+v", h.certReads, d.Certificates)
+	}
+	if d.Bindings[0].Store != "MY" || d.Bindings[1].Store != "My" {
+		t.Fatalf("bindings keep their spelling: %+v", d.Bindings)
+	}
+}
+
+func TestBuildDumpKeepsIPv6AndCCSZeroIP(t *testing.T) {
+	h := dumpHost()
+	h.bindings = []winproto.SSLBinding{
+		{Type: winproto.BindingIPPort, IP: "::", Port: 443, AppID: app1, CertSHA1: h1, Store: "My"},
+		{Type: winproto.BindingIPPort, IP: "2001:0db8:0:0:0:0:0:1", Port: 443, AppID: app1, CertSHA1: h1, Store: "My"},
+		{Type: winproto.BindingCCS, IP: "0.0.0.0", Port: 443, AppID: app1},
+	}
+	d, err := BuildDump(context.Background(), h)
+	if err != nil || len(d.Bindings) != 3 || d.Truncated {
+		t.Fatalf("%v %+v", err, d)
+	}
+	if d.Bindings[0].IP != "::" || d.Bindings[1].IP != "2001:db8::1" {
+		t.Fatalf("%+v", d.Bindings)
+	}
+	if c := d.Bindings[2]; c.Type != winproto.BindingCCS || c.IP != "0.0.0.0" || c.CertSHA1 != "" || c.Store != "" {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestBuildDumpKeepsNoisyRunnerRecords(t *testing.T) {
+	h := dumpHost()
+	for i := 0; i < 100; i++ {
+		h.bindings = append(h.bindings, winproto.SSLBinding{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 44300 + i,
+			AppID: winproto.AppIDIISExpress, CertSHA1: h1, Store: "MY"})
+	}
+	h.bindings = append(h.bindings, winproto.SSLBinding{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 5986,
+		AppID: "{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}", CertSHA1: h2, Store: ""})
+	d, err := BuildDump(context.Background(), h)
+	if err != nil || d.Truncated || len(d.Bindings) != 101 {
+		t.Fatalf("%v truncated=%v n=%d", err, d.Truncated, len(d.Bindings))
+	}
+	if w := d.Bindings[100]; w.Port != 5986 || w.Store != "MY" {
+		t.Fatalf("%+v", w)
+	}
+}
+
 func TestDumpReportsSites(t *testing.T) {
 	h := dumpHost()
 	h.appcmd = readFixture(t, "appcmd-ws2022.xml")
