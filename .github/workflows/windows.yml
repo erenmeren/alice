@@ -86,11 +86,14 @@ jobs:
           ALICE_WIN_SETUP: "1"
           ALICE_WIN_HELPER_DIR: ${{ github.workspace }}\bin
         run: |
+          # Windows PowerShell 5.1, which the tests start, must not inherit pwsh 7's module path.
+          $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
           $log = Join-Path $env:RUNNER_TEMP 'go-test.log'
           go test -count=1 -v ./cmd/alice-winhelper/... ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
           $required = @(
             'TestRealHostIsElevated',
+            'TestRealOSFactsMatchTheRegistryReadIndependently',
             'TestRealBindingsListAnSNIAndAnIPBinding',
             'TestFidelityVersionAndRefusals',
             'TestFidelityWinFacts',

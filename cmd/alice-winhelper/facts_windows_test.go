@@ -38,7 +38,7 @@ func requireReal(t *testing.T) {
 func runPowershell(env map[string]string, script string) ([]byte, error) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
 		"$ErrorActionPreference = 'Stop'; "+script)
-	cmd.Env = os.Environ()
+	cmd.Env = powershellEnviron()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -49,6 +49,20 @@ func runPowershell(env map[string]string, script string) ([]byte, error) {
 		return out, errors.New(err.Error() + ": " + stderr.String())
 	}
 	return out, nil
+}
+
+// powershellEnviron is this process's environment without PSModulePath. A go test started from
+// PowerShell 7 (the workflow's pwsh steps) inherits pwsh's module path, and Windows PowerShell 5.1 then
+// loads 7's modules: no Cert: drive, no Microsoft.PowerShell.Security (Windows run 1). Without the
+// variable Windows PowerShell builds its default machine path.
+func powershellEnviron() []string {
+	out := []string{}
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !strings.EqualFold(k, "PSModulePath") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func powershellEnv(t *testing.T, env map[string]string, script string) []byte {

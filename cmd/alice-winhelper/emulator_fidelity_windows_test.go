@@ -44,17 +44,19 @@ import (
 //     0.0.0.0:44300-44399 and the WinRM listener on 0.0.0.0:5986, W0 F2), its sites ("Default Web
 //     Site") and their certificates: a dump is filtered to the twin's own ports (45300-45399), its own
 //     sites (alice-w1-*) and the certificates its bindings name;
-//   - win-facts' os_build, os_product, installation_type and openssh_version are copied from the real
-//     answer into the model's (TestRealOSFactsMatchTheRegistryReadIndependently checks them against
-//     an independent reading; OpenSSH may be installed meanwhile by TestRealSetupScript, which runs in
-//     another package at the same time);
-//   - the IIS facts and the expired counts of the model are set from independent PowerShell readings
-//     of this machine (Get-ItemProperty, the XML of redirection.config, Get-ScheduledTask,
-//     Get-ChildItem Cert:), so the helper's own reading is still compared;
-//   - store names compare without case (http.sys answers MY and My for one store, W0 F2) and the
-//     store list of win-facts as a set (the model sorts it; the helper lists My, WebHosting, CA, Root);
-//   - netsh's defaults for a new record (flags, check mode, freshness, URL timeout) are read back from
-//     http.sys and given to the model's record;
+//   - win-facts' os_build, os_product and openssh_version are copied from the real answer into the
+//     model's (TestRealOSFactsMatchTheRegistryReadIndependently checks them against an independent
+//     reading, and the workflow requires it to pass; OpenSSH may be installed meanwhile by
+//     TestRealSetupScript, which runs in another package at the same time);
+//   - the model's installation type, IIS facts and expired counts are set from independent PowerShell
+//     readings of this machine (Get-ItemProperty, the XML of redirection.config, Get-ScheduledTask,
+//     Get-ChildItem Cert:), so the helper's own reading is compared;
+//   - store names of bindings compare without case (http.sys answers MY and My for one store, W0 F2),
+//     and so do those of certificates, which carry the spelling of the first binding naming them
+//     (winhelper.BuildDump); the store list of win-facts is compared as it is, in the helper's order;
+//   - the model's records carry netsh's documented defaults for what the twin does not set (no flags,
+//     check mode 0, freshness 0, URL timeout 0: netshDefaults), so the helper's reading of them is
+//     compared too;
 //   - message is dropped (fixed texts on both sides, but not part of the protocol).
 
 // fixturePorts are the ports of the twin's http.sys records and IIS bindings (W0: the runner images
@@ -103,6 +105,9 @@ func newTwin(t *testing.T) *twin {
 	powershell(t, `$s = New-Object System.Security.Cryptography.X509Certificates.X509Store('WebHosting', 'LocalMachine'); `+
 		`$s.Open('ReadWrite'); $s.Close()`)
 	tw.model.SetIIS(independentIISFacts(t))
+	// Only the installation type of the model's OS facts is compared (see the top of the file).
+	tw.model.SetOS(winhelper.OSFacts{InstallationType: strings.TrimSpace(string(powershell(t,
+		`(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').InstallationType`)))})
 	for store, n := range independentExpired(t) {
 		tw.model.SetExpired(store, n)
 	}
@@ -172,7 +177,7 @@ func (tw *twin) same(args ...string) map[string]any {
 	modelCode, model := runOn(tw.t, tw.model.Host(), args)
 	tw.normalize(args[0], real, model)
 	require.Equal(tw.t, realCode, modelCode, "exit status of %v (real %v, model %v)", args, real, model)
-	assert.Equal(tw.t, real, model, "answer of %v", args)
+	require.Equal(tw.t, real, model, "answer of %v", args)
 	return real
 }
 
@@ -185,11 +190,8 @@ func (tw *twin) normalize(sub string, real, model map[string]any) {
 	}
 	switch sub {
 	case winproto.SubWinFacts:
-		for _, k := range []string{"os_build", "os_product", "installation_type", "openssh_version"} {
+		for _, k := range []string{"os_build", "os_product", "openssh_version"} {
 			model[k] = real[k]
-		}
-		for _, m := range []map[string]any{real, model} {
-			m["stores"] = sortedStrings(m["stores"])
 		}
 	case winproto.SubIISDump:
 		for _, m := range []map[string]any{real, model} {
@@ -220,7 +222,7 @@ func (tw *twin) filterDump(m map[string]any) {
 	certs := []map[string]any{}
 	for _, c := range asList(m["certificates"]) {
 		if named[asString(c["sha1"])] {
-			c["store"] = foldASCII(asString(c["store"]))
+			c["store"] = foldASCII(asString(c["store"])) // the spelling of the binding that names it
 			certs = append(certs, c)
 		}
 	}
@@ -256,13 +258,6 @@ func anyList(l []map[string]any) []any {
 func asString(v any) string {
 	s, _ := v.(string)
 	return s
-}
-
-func sortedStrings(v any) []any {
-	l, _ := v.([]any)
-	out := append([]any(nil), l...)
-	sort.Slice(out, func(i, j int) bool { return asString(out[i]) < asString(out[j]) })
-	return out
 }
 
 // foldASCII folds ASCII upper case letters (store names compare so on Windows).
@@ -364,24 +359,27 @@ func sslKey(b winproto.SSLBinding) string {
 	return "ipport=" + b.IP + ":" + strconv.Itoa(b.Port)
 }
 
-// addBinding writes an http.sys record with netsh and the same record into the model, with the
-// settings netsh gave the real one.
+// netshDefaults gives a record the settings "netsh http add sslcert" writes when only certhash, appid
+// and certstorename are named (netsh's documented defaults: verifyclientcertrevocation enable,
+// verifyrevocationwithcachedclientcertonly disable, usagecheck enable, revocationfreshnesstime 0,
+// urlretrievaltimeout 0, no CTL, dsmapperusage and clientcertnegotiation disable, the later
+// disable* options not set): DefaultCertCheckMode 0, freshness 0, URL timeout 0, DefaultFlags 0.
+func netshDefaults(b winproto.SSLBinding) winproto.SSLBinding {
+	b.Flags, b.CertCheckMode, b.RevocationFreshnessTime, b.URLRetrievalTimeout = 0, 0, 0, 0
+	b.CTLIdentifier, b.CTLStore = "", ""
+	return b
+}
+
+// addBinding writes an http.sys record with netsh (checked with netsh show, not with the helper's
+// reading) and the same record, with netsh's defaults, into the model.
 func (tw *twin) addBinding(b winproto.SSLBinding) {
 	tw.t.Helper()
 	require.True(tw.t, b.Port >= 45300 && b.Port <= 45399, "fixture ports are 45300-45399")
 	addSSLCertIn(tw.t, sslKey(b), b.CertSHA1, b.AppID, b.Store)
-	list, err := sslBindings()
-	require.NoError(tw.t, err)
-	found := false
-	for _, r := range list {
-		if r.Type == b.Type && r.Port == b.Port && r.IP == b.IP && foldASCII(r.Host) == foldASCII(b.Host) {
-			b.Flags, b.CertCheckMode, b.RevocationFreshnessTime, b.URLRetrievalTimeout = r.Flags, r.CertCheckMode,
-				r.RevocationFreshnessTime, r.URLRetrievalTimeout
-			found = true
-		}
-	}
-	require.True(tw.t, found, "netsh wrote %s", sslKey(b))
-	tw.model.AddBinding(b)
+	out, err := exec.Command("netsh", "http", "show", "sslcert", sslKey(b)).CombinedOutput()
+	require.NoError(tw.t, err, "netsh http show sslcert %s: %s", sslKey(b), out)
+	require.Contains(tw.t, strings.ToLower(string(out)), b.CertSHA1, "netsh wrote %s", sslKey(b)) //nolint:forbidigo // hex digits
+	tw.model.AddBinding(netshDefaults(b))
 	tw.ports[b.Port] = true
 }
 
@@ -475,12 +473,8 @@ func TestFidelityWinFacts(t *testing.T) {
 	assert.Equal(t, true, got["elevated"], "the runner's token is elevated")
 	iis, _ := got["iis"].(map[string]any)
 	assert.Equal(t, true, iis["installed"], "the workflow installs IIS")
-	stores := sortedStrings(got["stores"])
-	assert.Equal(t, []any{"CA", "My", "Root", "WebHosting"}, stores)
-	osf, err := tw.real.OSFacts(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, osf.Build, got["os_build"])
-	assert.Equal(t, osf.Product, got["os_product"])
+	assert.Equal(t, []any{"My", "WebHosting", "CA", "Root"}, got["stores"], "the helper's order")
+	assert.NotEmpty(t, got["installation_type"])
 }
 
 // fidelityCA issues the twin's leaves; its intermediate is in LocalMachine\CA (addIntermediate).
