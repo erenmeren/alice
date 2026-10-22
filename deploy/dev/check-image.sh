@@ -103,8 +103,14 @@ bin_go="$(awk 'NR == 1 { print $2 }' <<<"$info")"
 if [[ "$host_go" == "$bin_go" ]]; then
   check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
   check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
-  check "binary holds the Windows amd64 helper checksum of make winhelper" "$(count -acF "$wsum_amd64" "$bin")" "1"
-  check "binary holds the Windows arm64 helper checksum of make winhelper" "$(count -acF "$wsum_arm64" "$bin")" "1"
+  # The linker drops the -X variables of a package nothing in cmd/alice imports yet; the function
+  # names of a linked package stay in the binary's symbol table even stripped.
+  if [[ "$(count -acF 'alice/internal/providers/windows.' "$bin")" != 0 ]]; then
+    check "binary holds the Windows amd64 helper checksum of make winhelper" "$(count -acF "$wsum_amd64" "$bin")" "1"
+    check "binary holds the Windows arm64 helper checksum of make winhelper" "$(count -acF "$wsum_arm64" "$bin")" "1"
+  else
+    echo "skip: binary holds the Windows helper checksums (the Windows provider is not linked into alice yet)"
+  fi
 elif [[ -n "${CI:-}" ]]; then
   echo "FAIL: host Go $host_go differs from the Go that built the image's binary ($bin_go); in CI they must match (deploy/Dockerfile's Go image and go.mod), so the helper checksums cannot be skipped"
   fail=1
