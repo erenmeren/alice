@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"net/netip"
@@ -35,6 +36,9 @@ type Event struct {
 }
 
 var errModelKilled = errors.New("wintest: the helper was killed at this point")
+
+// errNoHash is UpdateBinding's answer to a record whose hash is no hash (the real helper's errBadValue).
+var errNoHash = errors.New("wintest: the record names no certificate hash")
 
 // keyOf is http.sys's key of a record: (IP, port) for ipport (the address unmapped), (host, port)
 // without case for hostnameport, the port for ccs.
@@ -313,10 +317,18 @@ func (h host) Binding(_ context.Context, l winproto.Locator) (winproto.SSLBindin
 	return b, ok, nil
 }
 
-// UpdateBinding is HttpUpdateServiceConfiguration: the record of the same key is replaced by exactly
-// what it is given (W0 F2: a field left out is reset), only when the certificate it names is in its
-// store with a usable key (else 1312: ErrKeyUnusable, nothing changed). schannel's chain for the record
-// is built at this write and served until the next one (W0 F5); a stale listener keeps what it served.
+// UpdateBinding is the real helper's UpdateBinding (HttpUpdateServiceConfiguration of the base record,
+// then the Ex writes): the record of the same key is replaced by exactly what it is given, only when the
+// certificate it names is in its store with a usable key (else 1312: ErrKeyUnusable, nothing changed).
+// A hash that is no hash (empty, not hex) never reaches http.sys: a plain error, as the real helper's
+// encodeBase gives. schannel's chain for the record is built at this write and served until the next
+// one (W0 F5); a stale listener keeps what it served.
+//
+// The base fields reset as on Windows (W0 F2: a field left out is reset). The extended parameters are
+// stricter than Windows on purpose: real http.sys keeps them across a base update (F9, confirmed on
+// 2022 and 2025), while the model resets those the record it is given leaves out, so a helper that
+// forgot to send them back fails here (Review Focus 2). Not modelled: a CTL name the machine does not
+// hold, which http.sys refuses with 1312 (W0 F2); the model takes any CTLIdentifier.
 func (h host) UpdateBinding(_ context.Context, b winproto.SSLBinding) error {
 	m := h.m
 	m.mu.Lock()
@@ -324,6 +336,9 @@ func (h host) UpdateBinding(_ context.Context, b winproto.SSLBinding) error {
 	if err := m.failUpdate; err != nil {
 		m.failUpdate = nil
 		return err
+	}
+	if raw, err := hex.DecodeString(b.CertSHA1); err != nil || len(raw) == 0 {
+		return errNoHash
 	}
 	k := keyOf(b)
 	i := m.indexLocked(k)

@@ -22,7 +22,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -463,6 +465,7 @@ func logRawEx(t *testing.T, k key) {
 				id, in, inLen = configSSLSniCertInfoEx, unsafe.Pointer(q), unsafe.Sizeof(*q)
 			}
 			rec, err := queryConfig(id, in, inLen)
+			runtime.KeepAlive(a) // the query's host string lives in the arena until the call returned
 			if err != nil {
 				t.Logf("raw Ex type %d: %v", typ, err)
 				continue
@@ -484,12 +487,25 @@ func TestArenaIsOnTheHeap(t *testing.T) {
 	}
 }
 
-// machineKeys counts the software KSP's machine key files (C:\ProgramData\Microsoft\Crypto\Keys).
-func machineKeys(t *testing.T) int {
+// machineKeysSince lists the software KSP's machine key files (C:\ProgramData\Microsoft\Crypto\Keys)
+// created after since: only the test's own window counts, so a key another process kept from before
+// (or a count changed by a deletion elsewhere) does not move it.
+func machineKeysSince(t *testing.T, since time.Time) []string {
 	t.Helper()
-	entries, err := os.ReadDir(`C:\ProgramData\Microsoft\Crypto\Keys`)
+	dir := `C:\ProgramData\Microsoft\Crypto\Keys`
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	return len(entries)
+	var out []string
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue // deleted meanwhile
+		}
+		if d, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && time.Unix(0, d.CreationTime.Nanoseconds()).After(since) {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }
 
 // exportRefused reports whether a plaintext PKCS #8 export of the certificate's key is refused.
@@ -581,7 +597,7 @@ func TestRealImportPFX(t *testing.T) {
 
 	// A second import of the same certificate reports the existing copy and leaves it as it was; it,
 	// a cut PFX and an unknown store leave no key behind (Ruling 22).
-	keysBefore := machineKeys(t)
+	since := time.Now()
 	password2 := winhelper.NewPFXPassword()
 	pfx2, err := winhelper.BuildPFX(leaf.Cert.Raw, pkcs8, password2)
 	require.NoError(t, err)
@@ -598,7 +614,7 @@ func TestRealImportPFX(t *testing.T) {
 	assert.Error(t, err, "a cut PFX")
 	_, err = h.ImportPFX(ctx, "alice-w2-no-such-store", pfx2, password2, "x")
 	assert.ErrorIs(t, err, winhelper.ErrStore)
-	assert.Equal(t, keysBefore, machineKeys(t), "no machine key left by the repeat, cut-PFX and unknown-store imports")
+	assert.Empty(t, machineKeysSince(t, since), "no machine key left by the repeat, cut-PFX and unknown-store imports")
 }
 
 const lockDirEnv = "ALICE_W2_LOCK_DIR"

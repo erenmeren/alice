@@ -161,7 +161,9 @@ var errKilled = errors.New("winhelper: killed at a point")
 
 // ExitKilled is the exit status of a call killed at a crash point: 128+SIGKILL, what a shell reports
 // for a killed child (linuxsshtest's KillAtWithExit137). Only a host whose Point kills (the emulator,
-// tests) ever sees it.
+// tests, the real helper's -tags alicetest build) ever sees it, and only in process (Outcome.Exit):
+// what the emulator's SSH server answers for a killed call is wintest.KilledExit (255, no answer),
+// which is what an SSH client reports for a session that ended without an exit status.
 const ExitKilled = 137
 
 // point is a crash point of a write subcommand: when the host's Point kills, the handler returns
@@ -177,8 +179,8 @@ func point(h WriteHost, name string) error {
 // while the handler was still running (with Code OUTCOME_UNKNOWN that handler had passed its gate),
 // and for a kill. The caller must then end the process at once (the real helper's main returns and
 // exits; nothing may run after the answer), so the journal decides at the next iis-status. Killed: the
-// call was killed at a crash point, nothing was printed and Exit is ExitKilled (the emulator answers
-// like a dead process).
+// call was killed at a crash point, nothing was printed and Exit is ExitKilled (the emulator's SSH
+// server then answers like a dead process: no output, wintest.KilledExit).
 type Outcome struct {
 	Exit      int
 	Code      string // the ErrorResponse code; "" for an answer

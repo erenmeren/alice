@@ -202,11 +202,21 @@ func TestModelUpdateReplacesTheWholeRecord(t *testing.T) {
 	nk := f.m.AddCertificate("My", nokey.CertPEM, nil, CertOptions{})
 	unusable := f.issue("unusable.example.test")
 	un := f.m.AddCertificate("My", unusable.CertPEM, unusable.KeyPEM, CertOptions{KeyUsableBySystem: yes(false)})
-	for _, sha := range []string{nk, un, strings.Repeat("ab", 20), ""} {
+	for _, sha := range []string{nk, un, strings.Repeat("ab", 20)} {
 		b := f.record
 		b.CertSHA1 = sha
 		if err := h.UpdateBinding(ctx, b); !errors.Is(err, winhelper.ErrKeyUnusable) {
 			t.Fatalf("%s: %v", sha, err)
+		}
+	}
+	// A hash that is no hash never reaches http.sys (the real helper's encodeBase refuses it): a plain
+	// error, neither 1312 nor not found, nothing changed.
+	for _, sha := range []string{"", "not hex"} {
+		b := f.record
+		b.CertSHA1 = sha
+		err := h.UpdateBinding(ctx, b)
+		if err == nil || errors.Is(err, winhelper.ErrKeyUnusable) || errors.Is(err, winhelper.ErrBindingNotFound) {
+			t.Fatalf("%q: %v", sha, err)
 		}
 	}
 	if got := f.current(t); !reflectEqual(got, f.record) {
@@ -353,6 +363,10 @@ func TestModelKillAtEveryPoint(t *testing.T) {
 			// A killed helper answers nothing.
 			if len(r.Stdout) != 0 || r.Exit != KilledExit {
 				t.Fatalf("killed at %s: %d %q", p, r.Exit, r.Stdout)
+			}
+			// The dead process's lock is gone before any reboot (the OS releases LockFileEx locks).
+			if s := status(t, f.m, op); s.Active {
+				t.Fatalf("the lock outlived the killed helper at %s: %+v", p, s)
 			}
 			f.m.Reboot()
 			s := status(t, f.m, op)

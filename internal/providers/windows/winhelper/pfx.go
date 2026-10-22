@@ -249,6 +249,12 @@ func shroud(w *asn1Writer, pkcs8, password []byte) []byte {
 // public certificates (W2 Ruling 9). BuildPFX clears every buffer of its own that held the key or the
 // password in clear; it does not clear its inputs (the caller does, and the returned PFX after the
 // import). Its error is one fixed text.
+//
+// It must never write a friendlyName or a key container (Microsoft CSP/KSP name) attribute on the key
+// bag: PFXImportCertStore then always persists the key in a fresh, randomly named container, and the
+// real helper's ImportPFX deletes that container again when the store already held the certificate
+// (cmd/alice-winhelper import_windows.go), which is safe only because the container is never one that
+// existed before the import.
 func BuildPFX(leafDER, keyPKCS8, password []byte) ([]byte, error) {
 	if len(leafDER) == 0 || len(keyPKCS8) == 0 || !validPassword(password) {
 		return nil, errPFX
