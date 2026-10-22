@@ -40,6 +40,10 @@ var errModelKilled = errors.New("wintest: the helper was killed at this point")
 // errNoHash is UpdateBinding's answer to a record whose hash is no hash (the real helper's errBadValue).
 var errNoHash = errors.New("wintest: the record names no certificate hash")
 
+// maxHashBytes is the longest hash the real helper sends to http.sys (cmd/alice-winhelper's
+// maxHashBytes, the HTTP_SERVICE_CONFIG_SSL_PARAM hash it encodes).
+const maxHashBytes = 64
+
 // keyOf is http.sys's key of a record: (IP, port) for ipport (the address unmapped), (host, port)
 // without case for hostnameport, the port for ccs.
 func keyOf(b winproto.SSLBinding) string {
@@ -337,7 +341,7 @@ func (h host) UpdateBinding(_ context.Context, b winproto.SSLBinding) error {
 		m.failUpdate = nil
 		return err
 	}
-	if raw, err := hex.DecodeString(b.CertSHA1); err != nil || len(raw) == 0 {
+	if raw, err := hex.DecodeString(b.CertSHA1); err != nil || len(raw) == 0 || len(raw) > maxHashBytes {
 		return errNoHash
 	}
 	k := keyOf(b)

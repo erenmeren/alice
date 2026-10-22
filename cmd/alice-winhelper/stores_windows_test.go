@@ -62,11 +62,12 @@ func importLeafWithKey(t *testing.T, leaf pki.Leaf) string {
 
 func removeCertificate(t *testing.T, store, thumb string, withKey bool) {
 	t.Helper()
-	script := `$p = "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB"; if (Test-Path $p) { Remove-Item -Path $p`
+	// withKey deletes the key too when the certificate has one (a copy without its key is removed alone).
+	script := `$p = "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB"; if (Test-Path $p) { Remove-Item -Path $p }`
 	if withKey {
-		script += " -DeleteKey"
+		script = `$p = "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB"; if (Test-Path $p) { ` +
+			`if ((Get-Item -Path $p).HasPrivateKey) { Remove-Item -Path $p -DeleteKey } else { Remove-Item -Path $p } }`
 	}
-	script += " }"
 	if _, err := runPowershell(map[string]string{"ALICE_W1_STORE": store, "ALICE_W1_THUMB": thumb}, script); err != nil {
 		t.Logf("cleanup of %s\\%s: %v", store, thumb, err)
 	}

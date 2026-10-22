@@ -211,7 +211,7 @@ func TestModelUpdateReplacesTheWholeRecord(t *testing.T) {
 	}
 	// A hash that is no hash never reaches http.sys (the real helper's encodeBase refuses it): a plain
 	// error, neither 1312 nor not found, nothing changed.
-	for _, sha := range []string{"", "not hex"} {
+	for _, sha := range []string{"", "not hex", strings.Repeat("ab", maxHashBytes+1)} {
 		b := f.record
 		b.CertSHA1 = sha
 		err := h.UpdateBinding(ctx, b)

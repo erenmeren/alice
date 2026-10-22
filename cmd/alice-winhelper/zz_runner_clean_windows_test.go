@@ -13,10 +13,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// packageStart is when this test binary started: every machine key a test of it made is newer.
+var packageStart = time.Now()
 
 func TestRealRunnerIsClean(t *testing.T) {
 	requireReal(t)
@@ -55,9 +59,16 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	require.NotEmpty(t, count, "the certificate listing ran: %s", out)
 	assert.NotEqual(t, "0", count, "positive control: the machine stores hold the image's own certificates")
 
+	// No machine key made during this run is left: the fixtures' keys go with their certificates
+	// (Remove-Item -DeleteKey), the helper's imports with theirs (removeLater), and a key the helper
+	// imported again is deleted by ImportPFX itself. Key container names are random, so a key is told by
+	// its file's creation time (the image's own keys are older than this test binary).
+	assert.Empty(t, machineKeysSince(t, packageStart), "machine keys created during this run are left")
+
 	// No alice-w2- site.
 	sites, err := exec.Command(appcmdPath(), "list", "site", "/text:name").Output()
 	require.NoError(t, err)
+	require.Contains(t, string(sites), "Default Web Site", "positive control: appcmd lists the image's own site")
 	for _, name := range strings.Fields(string(sites)) {
 		assert.False(t, strings.HasPrefix(name, "alice-w2-"), "an IIS site is left: %s", name)
 	}

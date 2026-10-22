@@ -40,7 +40,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,12 +81,14 @@ const (
 	op4 = "a4444444-4444-4444-8444-444444444444"
 	op5 = "a5555555-5555-4555-8555-555555555555"
 	op6 = "a6666666-6666-4666-8666-666666666666"
+	op7 = "a7777777-7777-4777-8777-777777777777"
 )
 
 // wtwin is the twin of the write subcommands: the real write host on a private data directory.
 type wtwin struct {
 	*twin
-	w host
+	w    host
+	kept []string // the netsh options the last addRecord's record was made with
 }
 
 func newWriteTwin(t *testing.T) *wtwin {
@@ -138,6 +142,7 @@ func (tw *wtwin) addRecord(l winproto.Locator, thumb string, ex *winproto.Extend
 		out, err = exec.Command("netsh", args...).CombinedOutput()
 	}
 	require.NoError(tw.t, err, "netsh: %s", out)
+	tw.kept = append([]string{}, args[7:]...) // the options netsh took (after http add sslcert key certhash appid certstorename)
 	if ex != nil {
 		k, err := keyOf(l.Type, l.IP, l.Host, l.Port)
 		require.NoError(tw.t, err)
@@ -427,6 +432,42 @@ func TestFidelityDeploySNIAndIP(t *testing.T) {
 	assert.EqualValues(t, 1001, ev[0].ID)
 }
 
+// netshShow is "netsh http show sslcert <key>", its lines trimmed (blank ones dropped).
+func netshShow(t *testing.T, l winproto.Locator) []string {
+	t.Helper()
+	out, err := exec.Command("netsh", "http", "show", "sslcert", netshKeyOf(l)).CombinedOutput()
+	require.NoError(t, err, "netsh http show sslcert: %s", out)
+	var lines []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	require.NotEmpty(t, lines)
+	return lines
+}
+
+// linesWith and linesWithout split netsh's lines by whether they name a thumbprint (any case).
+func linesWith(lines []string, thumb string) []string {
+	var out []string
+	for _, l := range lines {
+		if strings.Contains(strings.ToLower(l), thumb) { //nolint:forbidigo // hex digits
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func linesWithout(lines []string, thumb string) []string {
+	var out []string
+	for _, l := range lines {
+		if !strings.Contains(strings.ToLower(l), thumb) { //nolint:forbidigo // hex digits
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // keepOpts are netsh's settings beside the certificate (Review Focus 2): client-certificate
 // negotiation, revocation values and the TLS 1.3 / legacy TLS flags. A CTL is left out: http.sys refuses
 // a record naming a CTL the machine does not hold (W0 F2), and the test makes none.
@@ -448,6 +489,15 @@ func TestFidelityDeployKeepsEverySetting(t *testing.T) {
 		assert.EqualValues(t, 3600, before.RevocationFreshnessTime)
 		assert.EqualValues(t, 5000, before.URLRetrievalTimeout)
 		assert.Contains(t, before.Extended, window, "the HTTP/2 window set by the fixture")
+		for opt, bit := range map[string]uint32{"disabletls13=enable": 0x40, "disablelegacytls=enable": 0x400} {
+			if slices.Contains(tw.kept, opt) {
+				assert.NotZero(t, uint32(before.Flags)&bit, "%s: flag %#x", opt, bit)
+			} else {
+				t.Logf("this netsh refused %s: its flag is not covered on this image", opt)
+			}
+		}
+		// netsh's own reading of the record, so the helper's reader is not the only judge.
+		netshBefore := netshShow(t, loc)
 
 		leaf := issue(ca, "alice-w2-keep.test")
 		got := tw.deploy(op, loc, leaf, leaf.FullchainPEM, oldSum)
@@ -455,11 +505,16 @@ func TestFidelityDeployKeepsEverySetting(t *testing.T) {
 		after := tw.sameState(op, loc, leaf.Cert)
 		assert.Equal(t, thumbprint(leaf.Cert), after.CertSHA1)
 		assert.Empty(t, diffExceptHash(before, after), "every setting but the hash kept: %+v", after)
+		netshAfter := netshShow(t, loc)
+		assert.Len(t, linesWith(netshAfter, thumbprint(leaf.Cert)), 1, "netsh shows the new hash: %v", netshAfter)
+		assert.Equal(t, linesWithout(netshBefore, thumbprint(old.Cert)), linesWithout(netshAfter, thumbprint(leaf.Cert)),
+			"netsh shows every setting but the hash as before")
 
 		got = tw.restore(op)
 		assertPhase(t, got, winproto.PhaseRestored)
 		back := tw.sameState(op, loc, leaf.Cert, old.Cert)
 		assert.Equal(t, before, back, "the whole record is back")
+		assert.Equal(t, netshBefore, netshShow(t, loc), "netsh shows the record as it was")
 	}
 }
 
@@ -541,6 +596,39 @@ func TestFidelityUnchangedAndSameHashWrite(t *testing.T) {
 	assert.EqualValues(t, 2, got["built_chain_length"])
 	tw.sameState(op3, loc, leaf.Cert)
 	assert.Equal(t, 2, tw.servedBoth(portW2Chain, "", newSum))
+
+	// W0 F5 between the import and the write: a leaf of another CA alone (served 1), then the same leaf
+	// with its intermediate, the helper killed at deploy.writing: the intermediate is in CA, the record
+	// was not written, and schannel still serves the chain it built at the last write.
+	ca2 := fixtureCA("alice-w2-chain2")
+	m1 := ca2.Issue(pki.Opts{CommonName: "alice-w2-chain.test", SANs: []string{"alice-w2-chain.test"}}, time.Now())
+	m1Sum := sum256hex(m1.Cert.Raw)
+	assertPhase(t, tw.deploy(op4, loc, m1, m1.CertPEM, newSum), winproto.PhaseCommitted)
+	assert.Equal(t, 1, tw.servedBoth(portW2Chain, "", m1Sum))
+	tw.killDeploy("deploy.writing", op5, loc, m1, m1.FullchainPEM, m1Sum)
+	tw.sameState(op5, loc, m1.Cert)
+	assert.Len(t, journalOf(t, tw.w, op5)["intermediates_added"], 1, "the intermediate was imported before the kill")
+	assert.Equal(t, 1, tw.servedBoth(portW2Chain, "", m1Sum), "W0 F5: an imported intermediate is not served before a write")
+	assertPhase(t, tw.restore(op5), winproto.PhaseRestored) // nothing was written: nothing to put back
+	assert.Equal(t, 1, tw.servedBoth(portW2Chain, "", m1Sum))
+
+	// The same certificate again: the intermediate is in CA already, so the helper answers unchanged and
+	// writes nothing, and the stale chain stays (Ruling 10: unchanged only when this operation added no
+	// intermediate). Both hosts agree; Alice's verification sees the shorter chain (built 2, served 1).
+	got = tw.deploy(op6, loc, m1, m1.FullchainPEM, m1Sum)
+	assertPhase(t, got, winproto.PhaseUnchanged)
+	assert.EqualValues(t, 2, got["built_chain_length"])
+	served := tw.servedBoth(portW2Chain, "", m1Sum)
+	t.Logf("F5: after an interrupted deployment that imported the intermediate, a redeploy of the bound certificate is unchanged and the served chain is %d", served)
+	assert.Equal(t, 1, served)
+
+	// Only a write makes schannel build the chain again: another leaf of that CA is served with it.
+	m2 := ca2.Issue(pki.Opts{CommonName: "alice-w2-chain.test", SANs: []string{"alice-w2-chain.test"}}, time.Now())
+	got = tw.deploy(op7, loc, m2, m2.FullchainPEM, m1Sum)
+	assertPhase(t, got, winproto.PhaseCommitted)
+	assert.EqualValues(t, 2, got["built_chain_length"])
+	tw.sameState(op7, loc, m2.Cert)
+	assert.Equal(t, 2, tw.servedBoth(portW2Chain, "", sum256hex(m2.Cert.Raw)))
 }
 
 func TestFidelityStatusAndFence(t *testing.T) {
@@ -643,6 +731,7 @@ func TestFidelityKeyUnusable(t *testing.T) {
 	// The certificate in My without its key (the test's own import), on both.
 	tw.importCER("My", leaf.Cert.Raw, thumbprint(leaf.Cert))
 	tw.model.AddCertificate("My", leaf.CertPEM, nil, wintest.CertOptions{})
+	tw.removeLater(leaf.CertPEM) // with its key, should the helper ever attach one
 
 	got := tw.call(deployInput(t, loc, leaf.CertPEM, leaf.KeyPEM, oldSum), winproto.SubIISDeploy, winproto.ArgOp, op1)
 	assert.Equal(t, winproto.CodeKeyUnusable, got["code"], "%v", got)

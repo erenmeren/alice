@@ -330,24 +330,26 @@ func (tw *twin) importCER(store string, der []byte, thumb string) {
 		`Import-Certificate -FilePath $env:ALICE_W1_FILE -CertStoreLocation "Cert:\LocalMachine\$env:ALICE_W1_STORE" | Out-Null`)
 }
 
-// removeCertificate deletes a certificate from a store on both (certutil -delstore on the machine);
-// the binding naming it stays.
+// removeCertificate deletes a certificate with its key from a store on both (Remove-Item -DeleteKey on
+// the machine, so no orphaned key stays on the runner: TestRealRunnerIsClean); the binding naming it
+// stays.
 func (tw *twin) removeCertificate(store, sha1 string) {
 	tw.t.Helper()
-	out, err := exec.Command("certutil", "-delstore", store, sha1).CombinedOutput()
-	require.NoError(tw.t, err, "certutil -delstore %s %s: %s", store, sha1, out)
+	powershellEnv(tw.t, map[string]string{"ALICE_W1_STORE": store, "ALICE_W1_THUMB": upperASCII(sha1)},
+		`Remove-Item -LiteralPath "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB" -DeleteKey`)
 	tw.model.RemoveCertificate(store, sha1)
 }
 
-// dropKey leaves the certificate in its store without its key: the certificate is deleted, then
-// imported again alone (same thumbprint, no key provider information: the key is no longer the
-// certificate's). W0 F2/F4: http.sys refuses to bind a certificate without a usable key, so the record
-// is written first and the key goes afterwards. The orphaned CNG key stays on the runner.
+// dropKey leaves the certificate in its store without its key: the certificate and its key are
+// deleted, then the certificate is imported again alone (same thumbprint, no key provider
+// information). W0 F2/F4: http.sys refuses to bind a certificate without a usable key, so the record
+// is written first and the key goes afterwards. Deleting the key (not only the certificate) leaves no
+// orphaned key on the runner (TestRealRunnerIsClean).
 func (tw *twin) dropKey(store string, leaf pki.Leaf) {
 	tw.t.Helper()
 	thumb := thumbprint(leaf.Cert)
 	powershellEnv(tw.t, map[string]string{"ALICE_W1_STORE": store, "ALICE_W1_THUMB": upperASCII(thumb)},
-		`Remove-Item -LiteralPath "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB"`)
+		`Remove-Item -LiteralPath "Cert:\LocalMachine\$env:ALICE_W1_STORE\$env:ALICE_W1_THUMB" -DeleteKey`)
 	tw.importCER(store, leaf.Cert.Raw, thumb)
 	tw.model.RemoveCertificate(store, thumb)
 	tw.model.AddCertificate(store, leaf.CertPEM, nil, wintest.CertOptions{})
@@ -412,9 +414,9 @@ func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-", "fixture site names start alice-w1- or alice-w2-")
 	if tw.webDir == "" {
 		tw.webDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", prefix+"fidelity")
-		require.NoError(tw.t, os.MkdirAll(tw.webDir, 0o750))
 		dir := tw.webDir
-		tw.later(func() { _ = os.RemoveAll(dir) }) // after the sites (reverse order)
+		tw.later(func() { _ = os.RemoveAll(dir) }) // after the sites (reverse order); registered first
+		require.NoError(tw.t, os.MkdirAll(tw.webDir, 0o750))
 	}
 	id := tw.siteID
 	tw.siteID++
