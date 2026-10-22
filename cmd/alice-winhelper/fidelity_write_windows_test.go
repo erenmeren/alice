@@ -612,17 +612,18 @@ func TestFidelityUnchangedAndSameHashWrite(t *testing.T) {
 	assertPhase(t, tw.restore(op5), winproto.PhaseRestored) // nothing was written: nothing to put back
 	assert.Equal(t, 1, tw.servedBoth(portW2Chain, "", m1Sum))
 
-	// The same certificate again: the intermediate is in CA already, so the helper answers unchanged and
-	// writes nothing, and the stale chain stays (Ruling 10: unchanged only when this operation added no
-	// intermediate). Both hosts agree; Alice's verification sees the shorter chain (built 2, served 1).
+	// The same certificate again: the intermediate is in CA already (op5 added it), but the binding
+	// record's chain was cleared before op5's bind, so it no longer says Alice's last committed bind left
+	// this chain served: a same-hash write (committed), and only after it is the intermediate served.
 	got = tw.deploy(op6, loc, m1, m1.FullchainPEM, m1Sum)
-	assertPhase(t, got, winproto.PhaseUnchanged)
+	assertPhase(t, got, winproto.PhaseCommitted)
 	assert.EqualValues(t, 2, got["built_chain_length"])
-	served := tw.servedBoth(portW2Chain, "", m1Sum)
-	t.Logf("F5: after an interrupted deployment that imported the intermediate, a redeploy of the bound certificate is unchanged and the served chain is %d", served)
-	assert.Equal(t, 1, served)
+	assert.Equal(t, false, got["alice_imported"])
+	assert.Empty(t, journalOf(t, tw.w, op6)["intermediates_added"], "op5 added it")
+	tw.sameState(op6, loc, m1.Cert)
+	assert.Equal(t, 2, tw.servedBoth(portW2Chain, "", m1Sum), "the same-hash write makes schannel build the chain again")
 
-	// Only a write makes schannel build the chain again: another leaf of that CA is served with it.
+	// A write of another leaf of that CA serves it with the chain too.
 	m2 := ca2.Issue(pki.Opts{CommonName: "alice-w2-chain.test", SANs: []string{"alice-w2-chain.test"}}, time.Now())
 	got = tw.deploy(op7, loc, m2, m2.FullchainPEM, m1Sum)
 	assertPhase(t, got, winproto.PhaseCommitted)
@@ -656,11 +657,17 @@ func TestFidelityStatusAndFence(t *testing.T) {
 	assertPhase(t, tw.fence(op1), winproto.PhaseRestored) // a finished operation: its status, nothing changed
 	status(op1, winproto.PhaseRestored, oldSum)
 
-	// The bound certificate with its key: unchanged, the store's copy used as it is.
+	// The bound certificate with its key, the store's copy used as it is: Alice's last committed bind
+	// here left another chain served (op1's), so a same-hash write first; the same deployment again is
+	// then unchanged.
 	got := tw.deploy(op2, loc, old, old.CertPEM, oldSum)
+	assertPhase(t, got, winproto.PhaseCommitted)
+	assert.Equal(t, false, got["alice_imported"])
+	status(op2, winproto.PhaseCommitted, oldSum)
+	got = tw.deploy(op7, loc, old, old.CertPEM, oldSum)
 	assertPhase(t, got, winproto.PhaseUnchanged)
 	assert.Equal(t, false, got["alice_imported"])
-	status(op2, winproto.PhaseUnchanged, oldSum)
+	status(op7, winproto.PhaseUnchanged, oldSum)
 
 	// Killed at prepared: the fence hands the binding back and leaves a tombstone.
 	tw.killDeploy("deploy.prepared", op3, loc, leaf, leaf.FullchainPEM, oldSum)
