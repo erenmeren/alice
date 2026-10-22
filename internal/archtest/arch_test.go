@@ -47,6 +47,8 @@ var rules = map[string][]string{
 	"alice/internal/providers/apacheconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The Windows helper's protocol: pure, imported by the Windows helper.
 	"alice/internal/providers/windows/winproto": {"alice/internal/providers/linuxssh/helperproto"},
+	// The Windows helper's platform-neutral core: the protocol and the shared validators only.
+	"alice/internal/providers/windows/winhelper": {"alice/internal/providers/windows/winproto", "alice/internal/providers/linuxssh/helperproto"},
 	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
@@ -472,6 +474,9 @@ func TestAllowed(t *testing.T) {
 		{"haproxyconf to helperproto allowed", "alice/internal/providers/haproxyconf", "alice/internal/providers/linuxssh/helperproto", true},
 		{"winproto to helperproto allowed", "alice/internal/providers/windows/winproto", "alice/internal/providers/linuxssh/helperproto", true},
 		{"winproto to providers denied", "alice/internal/providers/windows/winproto", "alice/internal/providers", false},
+		{"winhelper to winproto allowed", "alice/internal/providers/windows/winhelper", "alice/internal/providers/windows/winproto", true},
+		{"winhelper to helperproto allowed", "alice/internal/providers/windows/winhelper", "alice/internal/providers/linuxssh/helperproto", true},
+		{"winhelper to providers denied", "alice/internal/providers/windows/winhelper", "alice/internal/providers", false},
 		{"haproxyconf to platform/db denied", "alice/internal/providers/haproxyconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},
