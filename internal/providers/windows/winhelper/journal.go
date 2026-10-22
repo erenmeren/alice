@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"reflect"
 	"slices"
 
@@ -21,9 +22,9 @@ const (
 	bindingsDir = "bindings/"
 	importsName = "imports.json"
 
-	// maxStateBytes bounds a state file the helper reads: a journal's previous record carries up to
+	// MaxStateBytes bounds a state file the helper reads: a journal's previous record carries up to
 	// MaxExtendedParams parameters of MaxExtendedBytes (base64), the import inventory maxImports entries.
-	maxStateBytes = 512 << 10
+	MaxStateBytes = 512 << 10
 	// maxSteps bounds the steps a journal keeps (its validation refuses more): repeated restores of one
 	// operation keep its deployment's steps and its latest attempts (trimSteps), as on Linux.
 	maxSteps = 64
@@ -105,16 +106,37 @@ func validStep(s winproto.Step) bool {
 		(s.Error == "" || slices.Contains(errorClasses, s.Error))
 }
 
-// validRecord reports a previous record the journal may hold for locator l: the record of l's type
-// and port, naming a valid SHA-1 in a valid (or NULL) store, its texts and Extended within the bounds.
-func validRecord(b winproto.SSLBinding, l winproto.Locator) bool {
+// validRecord reports a previous record the journal may hold for the binding with canonical text
+// canonical: the record's own key (type, IP or host, port; the host folded, the IP in canonical form)
+// names that binding, so a restore that writes it back whole targets the same record; it names a valid
+// SHA-1 in a valid (or NULL) store, its texts and Extended within the bounds.
+func validRecord(b winproto.SSLBinding, canonical string) bool {
 	for _, s := range []string{b.IP, b.Host, b.AppID, b.CTLIdentifier, b.CTLStore} {
 		if len(s) > winproto.MaxText {
 			return false
 		}
 	}
-	return b.Type == l.Type && b.Port == l.Port && winproto.ValidSHA1(b.CertSHA1) &&
+	return recordCanonical(b) == canonical && winproto.ValidSHA1(b.CertSHA1) &&
 		(b.Store == "" || winproto.ValidStore(b.Store)) && winproto.ValidExtended(b.Extended)
+}
+
+// recordCanonical is the canonical text of an http.sys record as the host read it ("" when it has
+// none: ccs, an unparsable IP, a host Alice does not deploy to).
+func recordCanonical(b winproto.SSLBinding) string {
+	app, _ := winproto.CanonicalAppID(b.AppID)
+	l := winproto.Locator{Type: b.Type, Host: asciiLower(b.Host), Port: b.Port, AppID: app}
+	if b.IP != "" {
+		ip, err := netip.ParseAddr(b.IP)
+		if err != nil {
+			return ""
+		}
+		l.IP = ip.Unmap().String()
+	}
+	c, ok := l.Canonical()
+	if !ok {
+		return ""
+	}
+	return c
 }
 
 // valid reports a journal that describes operation op and that the helper may act on. A fence's
@@ -132,7 +154,7 @@ func (j journal) valid(op string) bool {
 		len(j.Intermediates) > winproto.MaxChainCerts {
 		return false
 	}
-	if !validRecord(j.Previous, j.Locator) || j.Previous.CertSHA1 != j.PreviousSHA1 || !winproto.ValidSHA1(j.NewSHA1) ||
+	if !validRecord(j.Previous, j.Binding) || j.Previous.CertSHA1 != j.PreviousSHA1 || !winproto.ValidSHA1(j.NewSHA1) ||
 		!validSHA256(j.PreviousSHA256) || !validSHA256(j.NewSHA256) || !winproto.ValidStore(j.Store) {
 		return false
 	}
@@ -159,7 +181,7 @@ func journalName(op string) string { return journalDir + op + ".json" }
 
 // decodeState decodes one bounded state file strictly: one JSON value, no unknown member.
 func decodeState(data []byte, v any) error {
-	if len(data) > maxStateBytes {
+	if len(data) > MaxStateBytes {
 		return errBadJournal
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -291,8 +313,8 @@ func superseded(h WriteHost, j journal) (bool, error) {
 // handBack gives the binding record back to j's prev_record when it still names j (a fence of a
 // prepared operation, which changed nothing). A tombstone has no binding and nothing to hand back.
 func handBack(h WriteHost, j journal) error {
-	if j.Binding == "" {
-		return nil
+	if j.Binding == "" || !changedNothing(j.Phase) {
+		return nil // an operation that changed the record keeps it (Linux's releaseRecord)
 	}
 	rec, err := readBindingRecord(h, j.Binding)
 	if err != nil {

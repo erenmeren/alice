@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,19 +155,104 @@ func TestWriteGateNeverLiesAfterTheFirstWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("a refusal after enter is the refusal", func(t *testing.T) {
+	t.Run("entered then any refusal: OUTCOME_UNKNOWN", func(t *testing.T) {
+		for _, e := range []error{failed(winproto.CodeIOError, "x"), failed(winproto.CodeJournalFailed, "x"),
+			failed(winproto.CodeStoreError, "x"), refused(winproto.CodeHashMismatch, "x"), errors.New("plain")} {
+			h := newWriteHost()
+			withCommand(t, "test-write", command{elevated: true, write: true, run: func(_ context.Context, c *call) (any, error) {
+				if _, err := c.gate.enter(); err != nil {
+					return nil, err
+				}
+				_ = c.host.WriteState("journal/x.json", []byte("{}"))
+				return nil, e
+			}})
+			o, out := execute(t, context.Background(), h, nil, "test-write")
+			wantError(t, o.Exit, out, 4, winproto.CodeOutcomeUnknown)
+			if o.Abandoned || o.Killed {
+				t.Fatalf("%v: %+v", e, o)
+			}
+		}
+	})
+
+	t.Run("a refusal before enter is the refusal", func(t *testing.T) {
+		withCommand(t, "test-write", command{elevated: true, write: true, run: func(context.Context, *call) (any, error) {
+			return nil, refused(winproto.CodeHashMismatch, "the binding names another certificate")
+		}})
+		o, out := execute(t, context.Background(), newWriteHost(), nil, "test-write")
+		wantError(t, o.Exit, out, 2, winproto.CodeHashMismatch)
+	})
+
+	t.Run("a phase answer after enter passes through", func(t *testing.T) {
 		withCommand(t, "test-write", command{elevated: true, write: true, run: func(_ context.Context, c *call) (any, error) {
 			if _, err := c.gate.enter(); err != nil {
 				return nil, err
 			}
-			return nil, failed(winproto.CodeJournalFailed, "the journal could not be written")
+			return winproto.DeployResponse{OK: false, Phase: winproto.PhaseRestoreForbidden, Error: winproto.ErrForbidden}, nil
 		}})
 		o, out := execute(t, context.Background(), newWriteHost(), nil, "test-write")
-		wantError(t, o.Exit, out, 4, winproto.CodeJournalFailed)
-		if o.Abandoned {
-			t.Fatal("abandoned")
+		if o.Exit != 0 || !strings.Contains(string(out), `"phase":"restore_forbidden"`) {
+			t.Fatalf("%+v %s", o, out)
 		}
 	})
+
+	t.Run("entered then killed at a point: no answer, like a dead process", func(t *testing.T) {
+		h := newWriteHost()
+		h.pointErr = func(name string) error {
+			if name == "deploy.prepared" {
+				return errors.New("kill")
+			}
+			return nil
+		}
+		withCommand(t, "test-write", command{elevated: true, write: true, run: func(_ context.Context, c *call) (any, error) {
+			if _, err := c.gate.enter(); err != nil {
+				return nil, err
+			}
+			_ = c.host.WriteState("journal/x.json", []byte("{}"))
+			if err := point(c.host, "deploy.prepared"); err != nil {
+				return nil, err
+			}
+			t.Error("ran past the kill")
+			return struct{}{}, nil
+		}})
+		var out bytes.Buffer
+		o := Execute(context.Background(), h, []string{"test-write"}, nil, &out)
+		if out.Len() != 0 || o.Exit != ExitKilled || !o.Killed || !o.Abandoned || o.Code != "" {
+			t.Fatalf("%+v %q", o, out.String())
+		}
+		if code := Run(context.Background(), h, []string{"test-write"}, nil, &out); code != ExitKilled || out.Len() != 0 {
+			t.Fatal(code, out.String())
+		}
+	})
+}
+
+// The gate's enter and close race under -race: close's answer is exactly whether some enter won.
+func TestGateEnterCloseConcurrently(t *testing.T) {
+	for range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		g := newGate(ctx)
+		var wg sync.WaitGroup
+		var won atomic.Int32
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := g.enter(); err == nil {
+					won.Add(1)
+				}
+			}()
+		}
+		entered := g.close()
+		wg.Wait()
+		// enters that ran after close all failed; those before it are what close saw
+		if entered != g.wasEntered() || entered != (won.Load() > 0) {
+			t.Fatalf("close %v, won %d", entered, won.Load())
+		}
+		if _, err := g.enter(); err == nil {
+			t.Fatal("enter after close")
+		}
+		g.finish()
+		cancel()
+	}
 }
 
 func TestGateCloseAndEnter(t *testing.T) {
@@ -319,10 +406,13 @@ func TestPointIsAKill(t *testing.T) {
 		}
 		return nil
 	}
-	err := point(h, "deploy.bound")
-	var he *helperError
-	if !errors.As(err, &he) || he.code != winproto.CodeIOError || strings.Contains(he.message, "kill") {
+	if err := point(h, "deploy.bound"); !errors.Is(err, errKilled) {
 		t.Fatalf("%v", err)
+	}
+	// before any gate (a read command or before enter) a kill is a dead process too
+	var out bytes.Buffer
+	if o := finalAnswer(&out, nil, nil, errKilled); !o.Killed || o.Exit != ExitKilled || out.Len() != 0 {
+		t.Fatalf("%+v", o)
 	}
 	if strings.Join(h.points, ",") != "deploy.prepared,deploy.bound" {
 		t.Fatal(h.points)

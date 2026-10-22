@@ -39,8 +39,12 @@ func (g guard) forbids(certDER []byte) bool { return Forbids(certDER, g.SPKI, g.
 // Forbids reports whether a restore must not put back the certificate whose DER is certDER (read from
 // the store, never from the journal): its DER SHA-256 is in leaf, or the SHA-256 of its public key's
 // SubjectPublicKeyInfo is in spki. With a list, a DER that does not parse is forbidden too: what it
-// holds cannot be shown safe. Without a list nothing is checked (Linux's rule). On Windows the key
-// stays in the store with its certificate, so the certificate's public key is the key's.
+// holds cannot be shown safe. Without a list nothing is checked (Linux's rule).
+//
+// Linux also checks the key file's own public key, because there the key is a separate file a restore
+// puts back. On Windows the private key is bound to the store certificate (CERT_KEY_PROV_INFO) and
+// schannel uses it only with that certificate's public key: a key that differs from the certificate's
+// SPKI cannot complete a handshake for it, so checking the certificate's SPKI is not a weakening.
 func Forbids(certDER []byte, spki, leaf []string) bool {
 	if len(spki) == 0 && len(leaf) == 0 {
 		return false

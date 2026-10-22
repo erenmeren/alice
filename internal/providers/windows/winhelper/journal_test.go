@@ -87,6 +87,8 @@ func TestJournalRoundTripAndValidation(t *testing.T) {
 		"bad binding":        func(j *journal) { j.Binding = "http.sys/ipport/0.0.0.0:444" },
 		"bad locator":        func(j *journal) { j.Locator.Type = winproto.BindingCCS },
 		"prev other port":    func(j *journal) { j.Previous.Port = 444 },
+		"prev other ip":      func(j *journal) { j.Previous.IP = "10.0.0.5" },
+		"prev bad ip":        func(j *journal) { j.Previous.IP = "x" },
 		"prev other type":    func(j *journal) { j.Previous.Type = winproto.BindingHostnamePort },
 		"prev long text":     func(j *journal) { j.Previous.CTLStore = strings.Repeat("x", winproto.MaxText+1) },
 		"prev bad extended":  func(j *journal) { j.Previous.Extended = []winproto.ExtendedParam{{Type: 1, Data: "!"}} },
@@ -135,6 +137,21 @@ func TestJournalRoundTripAndValidation(t *testing.T) {
 	if !j.valid(op1) {
 		t.Fatal("hostnameport journal invalid")
 	}
+	// the record as http.sys spells it (upper-case host, app id without braces) names the same binding
+	j.Previous.Host, j.Previous.AppID = "WWW.Example.com", "4DC3E181-E14B-4A21-B022-59FC669B0914"
+	if !j.valid(op1) {
+		t.Fatal("record spelling refused")
+	}
+	j.Previous.Host = "api.example.com"
+	if j.valid(op1) {
+		t.Fatal("a previous record of another host accepted")
+	}
+	// an IPv4-mapped IPv6 spelling of the record's IP names the same ipport binding
+	j = sampleJournal(op1)
+	j.Previous.IP = "::ffff:0.0.0.0"
+	if !j.valid(op1) {
+		t.Fatal("mapped IP refused")
+	}
 
 	// fenced tombstones: the operation, the phase and a handed-back record only
 	tomb := journal{Op: op1, Phase: winproto.PhaseFenced}
@@ -175,7 +192,7 @@ func TestReadJournalRefusesBadFiles(t *testing.T) {
 		"unknown field": strings.Replace(string(good), `{"op"`, `{"key_pem":"x","op"`, 1),
 		"two values":    string(good) + " {}",
 		"another op":    strings.Replace(string(good), op1, op2, 1),
-		"too large":     string(good) + strings.Repeat(" ", maxStateBytes),
+		"too large":     string(good) + strings.Repeat(" ", MaxStateBytes),
 	} {
 		h := newWriteHost()
 		h.state["journal/"+op1+".json"] = []byte(data)
@@ -301,9 +318,21 @@ func TestBindingRecordAndSuperseded(t *testing.T) {
 		t.Fatal("op2 superseded by a fence")
 	}
 
-	// handing back: the record names op3 (a no-op) and goes back to op2; a record naming another op stays.
+	// handing back: only an operation that changed nothing hands the record back.
 	j3 := sampleJournal(op3)
 	j3.PrevRecord = op2
+	for _, phase := range []string{winproto.PhaseWriting, winproto.PhaseCommitted, winproto.PhaseRestoring, winproto.PhaseRestored} {
+		_ = writeBindingRecord(h, canon443, op3)
+		jc := j3
+		jc.Phase = phase
+		if err := handBack(h, jc); err != nil {
+			t.Fatal(err)
+		}
+		if op, _ := readBindingRecord(h, canon443); op != op3 {
+			t.Fatalf("%s handed the record back", phase)
+		}
+	}
+	// the record names op3 (prepared, a no-op) and goes back to op2; a record naming another op stays.
 	if err := handBack(h, j3); err != nil {
 		t.Fatal(err)
 	}

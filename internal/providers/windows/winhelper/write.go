@@ -21,7 +21,10 @@ type WriteHost interface {
 	// LockHeld reports whether another process holds the lock now (a status's Active).
 	LockHeld() bool
 	// ReadState reads a state file under the data directory: "journal/<op>.json",
-	// "bindings/<hash>.json", "imports.json". found is false when there is none.
+	// "bindings/<hash>.json", "imports.json". found is false when there is none. The host reads at
+	// most MaxStateBytes+1 bytes (the caller refuses more), opens only a regular file and never
+	// follows a reparse point (symbolic link, junction, mount point) on the way: such a file is an
+	// error, not data (Linux's readJournal: O_NOFOLLOW, fstat, a LimitReader).
 	ReadState(name string) (data []byte, found bool, err error)
 	// WriteState replaces a state file durably: a temporary file, flushed, renamed over (write through).
 	WriteState(name string, data []byte) error
@@ -64,7 +67,9 @@ var writeGrace = winproto.WriteGrace
 // gate guards a write command's first durable write (W2 Ruling 7). The handler calls enter right
 // before it; Run calls close when the budget ends. Both under one mutex, so exactly one of these
 // holds: the handler entered before close (the answer is OUTCOME_UNKNOWN), or it never enters (the
-// answer is IO_ERROR: nothing changed).
+// answer is IO_ERROR: nothing changed). After a successful enter the handler never answers a refusal
+// (settle): any error it returns is answered OUTCOME_UNKNOWN; a failure after enter is recorded in
+// the journal and answered with a phase.
 type gate struct {
 	mu      sync.Mutex
 	entered bool
@@ -107,6 +112,13 @@ func (g *gate) close() bool {
 	return g.entered
 }
 
+// wasEntered reports whether an enter succeeded.
+func (g *gate) wasEntered() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.entered
+}
+
 // finish ends the write context once the handler returned.
 func (g *gate) finish() {
 	g.stop()
@@ -143,23 +155,56 @@ func readInput(r io.Reader, limit int) ([]byte, error) {
 	return buf[:n], nil
 }
 
-// point is a crash point of a write subcommand: the handler returns its error at once, without any
-// cleanup, as a killed process would stop there.
+// errKilled is what point returns for a kill at a crash point: Execute then answers like a dead
+// process (no line on stdout, ExitKilled, Outcome.Killed).
+var errKilled = errors.New("winhelper: killed at a point")
+
+// ExitKilled is the exit status of a call killed at a crash point: 128+SIGKILL, what a shell reports
+// for a killed child (linuxsshtest's KillAtWithExit137). Only a host whose Point kills (the emulator,
+// tests) ever sees it.
+const ExitKilled = 137
+
+// point is a crash point of a write subcommand: when the host's Point kills, the handler returns
+// errKilled at once, without any cleanup, as a killed process would stop there.
 func point(h WriteHost, name string) error {
 	if h.Point(name) != nil {
-		return failed(winproto.CodeIOError, "the helper was stopped")
+		return errKilled
 	}
 	return nil
 }
 
-// Outcome is what one call answered. Abandoned is set when Run answered at the end of the budget
-// while the handler was still running; with Code OUTCOME_UNKNOWN that handler had made its first
-// durable write. The caller must then end the process at once (the real helper's main returns and
-// exits; nothing may run after the answer), so the journal decides at the next iis-status.
+// Outcome is what one call answered. Abandoned is set when Execute answered at the end of the budget
+// while the handler was still running (with Code OUTCOME_UNKNOWN that handler had passed its gate),
+// and for a kill. The caller must then end the process at once (the real helper's main returns and
+// exits; nothing may run after the answer), so the journal decides at the next iis-status. Killed: the
+// call was killed at a crash point, nothing was printed and Exit is ExitKilled (the emulator answers
+// like a dead process).
 type Outcome struct {
 	Exit      int
 	Code      string // the ErrorResponse code; "" for an answer
 	Abandoned bool
+	Killed    bool
+}
+
+// settle applies the gate's rule to a handler's result (W2 Ruling 7, Review Focus 1). Once enter
+// succeeded, no refusal is ever answered: every error the handler returns (IO_ERROR, STORE_ERROR,
+// JOURNAL_FAILED, any code) is answered OUTCOME_UNKNOWN, exit 4, because something may have changed.
+// Only a normal answer (DeployResponse, RestoreResponse, StatusResponse, including the phases
+// restored, restore_failed and restore_forbidden) passes through. A handler that meets a failure after
+// enter therefore records it in the journal and answers with a phase; it never returns a refusal.
+func settle(g *gate, err error) error {
+	if err == nil || errors.Is(err, errKilled) || g == nil || !g.wasEntered() {
+		return err
+	}
+	return failed(winproto.CodeOutcomeUnknown, "the operation failed after the first change")
+}
+
+// finalAnswer prints a handler's settled result, or nothing for a kill.
+func finalAnswer(w io.Writer, g *gate, out any, err error) Outcome {
+	if errors.Is(err, errKilled) {
+		return Outcome{Exit: ExitKilled, Abandoned: true, Killed: true}
+	}
+	return answer(w, out, settle(g, err))
 }
 
 // ExecuteForced is RunForced with the call's Outcome.
@@ -201,11 +246,11 @@ func Execute(ctx context.Context, h Host, args []string, stdin io.Reader, stdout
 	// The budget ends the call even when a host call ignores its context.
 	select {
 	case r := <-done:
-		return answer(stdout, r.out, r.err)
+		return finalAnswer(stdout, g, r.out, r.err)
 	case <-ctx.Done():
 		select {
 		case r := <-done: // finished as the budget ended
-			return answer(stdout, r.out, r.err)
+			return finalAnswer(stdout, g, r.out, r.err)
 		default:
 		}
 		err := failed(winproto.CodeIOError, "the call took too long")
