@@ -67,3 +67,5 @@ a8c3f77ce09b8cf604e7008f4771db4f7ba75946:web/src/components/acme/AcmeSettings.te
 499d62b3355086c8fdb1875a051fdfba2368e18b:internal/inventory/groundwork_test.go:private-key:97
 # The setup script test's expected $keyBlob line: the fake test key blob "AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk" (base64 of a type name and "emulated"), no key material.
 9a36df07a579f90e9d8fcc76a8d4b844a8c0018b:internal/providers/windows/setup_test.go:generic-api-key:117
+# The DeployInput redaction test's fake PEM ("SECRETKEYMATERIAL" in a PKCS #8 header, not a key), no key material.
+9190fcf4e024ee9675c506acab00cb416a732ff4:internal/providers/windows/winproto/winproto_test.go:private-key:417
