@@ -129,7 +129,7 @@ func TestImageCheckComparesHelperChecksumsOnlyWithTheSameGo(t *testing.T) {
 
 	out, status = runImageCheck(t, "go1.27.2", "go1.27.1", false, false)
 	assert.Equal(t, 0, status, out)
-	assert.Contains(t, out, "skip: binary holds the helper checksums of make helper (host Go go1.27.2, image binary built with go1.27.1;")
+	assert.Contains(t, out, "skip: binary holds the helper checksums of make helper and make winhelper (host Go go1.27.2, image binary built with go1.27.1;")
 	assert.NotContains(t, out, "helper checksum of make helper")
 	assert.Equal(t, 0, strings.Count(out, "FAIL:"), out)
 

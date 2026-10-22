@@ -111,7 +111,7 @@ elif [[ -n "${CI:-}" ]]; then
   echo "FAIL: host Go $host_go differs from the Go that built the image's binary ($bin_go); in CI they must match (deploy/Dockerfile's Go image and go.mod), so the helper checksums cannot be skipped"
   fail=1
 else
-  echo "skip: binary holds the helper checksums of make helper (host Go $host_go, image binary built with $bin_go; the helper build is reproducible only with the same Go version)"
+  echo "skip: binary holds the helper checksums of make helper and make winhelper (host Go $host_go, image binary built with $bin_go; the helper builds are reproducible only with the same Go version)"
 fi
 check "binary does not hold the test license key label" "$(count -acF "$label" "$bin")" "0"
 check "binary does not hold the e2e /test routes" "$(count -acF "$marker" "$bin")" "0"

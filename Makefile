@@ -257,7 +257,7 @@ hardening-check: ## Verify container hardening of the running stack
 
 # The e2e stack is its own compose project: its database, volumes and networks never touch the
 # make up stack (project "alice"), because every Playwright run empties the database.
-E2E_PROJECT := alice-e2e
+E2E_PROJECT ?= alice-e2e
 E2E_FILES   := docker-compose.yml docker-compose.e2e.yml
 COMPOSE_E2E := docker compose -p $(E2E_PROJECT) -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml --env-file deploy/.env
 

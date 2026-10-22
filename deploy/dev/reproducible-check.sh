@@ -22,7 +22,7 @@ trap 'rm -rf "$work_a" "$work_b"' EXIT
 
 files=(alice alice-helper-linux-amd64 alice-helper-linux-arm64 alice-winhelper-windows-amd64.exe alice-winhelper-windows-arm64.exe)
 
-# build_copy DIR extracts HEAD into DIR and builds the three binaries into DIR/bin.
+# build_copy DIR extracts HEAD into DIR and builds the five binaries into DIR/bin (alice, two Linux and two Windows helpers).
 build_copy() {
   local src=$1 amd arm wamd warm
   mkdir -p "$src"

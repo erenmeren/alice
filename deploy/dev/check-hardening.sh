@@ -187,6 +187,26 @@ if "${compose[@]}" config --services | grep -qx fakefleet; then
     check "fakefleet is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$fleet")" "healthy"
   fi
 fi
+# The e2e overlay adds the emulated Windows server (Windows journey, R60): it publishes nothing, sits only on the
+# internal backend network, runs as 65532, is read-only, drops every capability (ports 22 and 443 come from the
+# namespaced unprivileged port start, not from a capability) and is healthy.
+if "${compose[@]}" config --services | grep -qx fakewindows; then
+  win="$("${compose[@]}" ps -q fakewindows)"
+  if [[ -z "$win" ]]; then
+    echo "FAIL: the e2e fake Windows server is not running"; fail=1
+  else
+    check "fakewindows publishes no ports" "$(docker port "$win" | wc -l | tr -d ' ')" "0"
+    check "fakewindows is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $s := .NetworkSettings.Networks}}{{$n}} {{end}}' "$win")" "${project}_backend "
+    check "fakewindows root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$win")" "true"
+    check "fakewindows drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$win")" '["ALL"] null'
+    check "fakewindows has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$win")" '["no-new-privileges:true"]'
+    check "fakewindows runs as user 65532" "$(docker inspect -f '{{.Config.User}}' "$win")" "65532:65532"
+    check "fakewindows has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$win")" "128"
+    check "fakewindows is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$win")" "healthy"
+  fi
+fi
 # The e2e overlay adds the fake directory (directory sign-in journey): the OpenLDAP image, with slapd started directly as
 # a non-root user; it publishes nothing, sits only on the internal backend network, is read-only with its database and
 # TLS material in a tmpfs, drops every capability and is healthy. Its image holds no key or certificate (generated at

@@ -162,9 +162,9 @@ func TestSetupScriptRefusesALineItCannotQuote(t *testing.T) {
 		"restrict ssh-ed25519 AA\x00AA",
 		good + "\x7f",
 		good + " \u00e9",
-		testKey,                         // no restrict
-		"no-pty " + testKey,             // other options
-		"restrict " + testKey,           // no forced command (final review C1)
+		testKey,               // no restrict
+		"no-pty " + testKey,   // other options
+		"restrict " + testKey, // no forced command (final review C1)
 		`restrict,from="192.0.2.10" ` + testKey,
 		"restrict," + testCommand + `,from="a b" ` + testKey, // from outside the address vocabulary
 		"restrict," + testCommand + `,from="" ` + testKey,

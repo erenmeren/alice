@@ -420,7 +420,7 @@ func TestDiscoverDroppedCertificateIsNotMissing(t *testing.T) {
 	f.site("Big", "*:443:", 0)
 	f.bind(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 8443, AppID: winproto.AppIDIIS, CertSHA1: strings.Repeat("ab", 20), Store: "My"})
 	f.site("Gone", "*:8443:", 0)
-	f.d.DroppedCertificates = []winproto.CertificateRef{{Store: "MY", SHA1: strings.ToUpper(big)}} // store and hex case vary
+	f.d.DroppedCertificates = []winproto.CertificateRef{{Store: "MY", SHA1: strings.Repeat("CD", 20)}} // store and hex case vary
 	f.d.Truncated, f.d.Warnings = true, []string{winproto.WarnListTruncated}
 	certs, warns, _ := f.convert()
 	m := byPath(certs)

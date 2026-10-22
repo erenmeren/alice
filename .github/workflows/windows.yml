@@ -12,6 +12,8 @@ on:
       - internal/providers/linuxssh/helperproto/**
       - internal/providers/linuxssh/linuxsshtest/**
       - internal/testutil/pki/**
+      - internal/providers/*.go
+      - internal/platform/**
       - .github/workflows/windows.yml
       - go.mod
       - go.sum
@@ -23,6 +25,8 @@ on:
       - internal/providers/linuxssh/helperproto/**
       - internal/providers/linuxssh/linuxsshtest/**
       - internal/testutil/pki/**
+      - internal/providers/*.go
+      - internal/platform/**
       - .github/workflows/windows.yml
       - go.mod
       - go.sum

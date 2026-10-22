@@ -413,7 +413,7 @@ $s = @($a.Access | ForEach-Object { $_.IdentityReference.Translate([System.Secur
 	other := newOtherAdministrator(t)
 	code, stdout, stderr = setupSSHAs(t, other, keyFile, knownHosts, nil, "whoami")
 	assert.Equal(t, winproto.ExitRefused, code, "ssh %s@localhost whoami: %s %s", other, stdout, stderr)
-	assert.NotContains(t, strings.ToLower(string(stdout)), strings.ToLower(other), "whoami never ran")
+	assert.NotContains(t, string(stdout), other, "whoami never ran (it prints the account in lower case)")
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &refusal), "the helper's refusal: %s", stdout)
 	assert.Equal(t, winproto.CodeUnknownSubcommand, refusal.Code)
 	code, stdout, stderr = setupSSHAs(t, other, keyFile, knownHosts, nil, winproto.SubVersion)

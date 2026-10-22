@@ -82,7 +82,9 @@ The plan's 22 rulings stand as written, except where an entry says "Amended".
 15. **Setup script.** The administrator copies `alice-winhelper-windows-<arch>.exe` as `.\alice-helper.exe` next to
     the script; `$AliceUser` is edited; the helper hash is checked for `AMD64`/`ARM64`; the firewall rule's remote
     address is the key line's `from=`, else `Any` with a notice; the key line is `restrict[,from="..."]` and the key;
-    a `windows` profile without a script is `ErrNoSetupScript`. Amended by the Task 10 rulings below.
+    a `windows` profile without a script is `ErrNoSetupScript`. Amended by the Task 10 rulings below, and by the final
+    review (C1): the key line is `restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"[,from="..."]`
+    and the key.
 16. **Checksums.** `make winhelper` writes `bin/alice-winhelper-windows-{amd64,arm64}.exe` and
     `bin/alice-winhelper.sha256`; linker variables `helperSHA256WindowsAMD64/ARM64`; `make build`, the Dockerfile,
     `reproducible-check.sh` and `make image-check` include them; the release bundle waits for W4.
@@ -307,10 +309,37 @@ One line each: the ruling, then why.
 ### Task 15 (e2e)
 
 - The fake accepts Alice's key for any user name and does not enforce `restrict` or `from=`: that is sshd's job, which
-  the real-runner smoke test proves; the fake models the helper.
+  the real-runner smoke test proves; the fake models the helper. (Final review: `ctl prepare` refuses a key line
+  without the helper's `command=` option, so the e2e proves the line Alice ships carries it.)
 - `alice-fakewindows ctl endpoints` was added: the journey needs the binding endpoints the fake serves.
 - The Makefile's `E2E_PROJECT :=` ignores the environment, so the e2e ran as project `alice-e2e` (the owner's `alice`
-  stack untouched), not `alice-e2e-w1`; the owner may want `?=`.
+  stack untouched), not `alice-e2e-w1`; the owner may want `?=`. (Final review: now `?=`.)
+
+## Final review fixes
+
+- **C1 (security): the key line forces the helper.** `C:\ProgramData\ssh\administrators_authorized_keys` is read by
+  the default `Match Group administrators` block for every member of Administrators, `restrict` does not block exec,
+  and `ForceCommand` applied only under `Match User <account>`: anyone holding Alice's private key could sign in as
+  any other administrator (or a domain account whose `Match User` pattern did not match) and run any command. The
+  line is now `restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"[,from="<from>"] <key>` (OpenSSH
+  un-escapes only `\"` inside a quoted option value, so the path is written as it is; built from
+  `winproto.HelperPath`); sshd applies `command=` whatever the account and still sets `SSH_ORIGINAL_COMMAND`. The
+  `Match User` block stays as a second layer. The setup script takes the key blob from Go (`$keyBlob`): the forced
+  command holds spaces, so splitting the line on spaces no longer finds it. `TestRealSetupScript` creates a second
+  local administrator `alice-w1-other`, signs in as it with Alice's key and requires the helper's
+  `UNKNOWN_SUBCOMMAND` for `whoami` and the helper's answer for `version`, then removes the account.
+- **I1**: the Add-server dialog's Windows script carries the typed account (`$AliceUser = '<typed>'`) when it passes
+  the form's Windows account rule (which excludes quotes), else `alice`.
+- **I2**: a Windows server without IIS (`web_server_not_found`) shows a neutral note, not the stale-scan alert.
+- **M1**: the OpenAPI target `username` is at most 36 characters (15 + `\` + 20).
+- **M2**: an http.sys entry with IIS's application id that no IIS site uses keeps reason `win_foreign_app` with
+  details `application` `iis_unused` ("No IIS site uses this binding"); the UI names known applications (IIS, IIS
+  Express, WinRM, SSTP).
+- **M3**: a certificate the helper dropped for its bounds (chain over 20, DER over 64 KiB) is listed in the dump's
+  `dropped_certificates` (protocol 1 grows, Ruling 2); a binding naming it reads `leaf_unreadable`, not `cert_missing`.
+- **M4 and chores**: the Windows workflow's path filter adds `internal/providers/*.go` and `internal/platform/**`;
+  `E2E_PROJECT ?=`; the hardening check covers the fakewindows service; stale comments fixed; an archtest guard lets
+  only `internal/providers/windows` (and linuxssh itself) call `linuxssh.ForcedCommand`.
 
 ## Deferred to W2
 
@@ -338,6 +367,11 @@ One line each: the ruling, then why.
 - **Confirm** `key_usable_by_system` counting SYSTEM's groups (Administrators, Everyone, Authenticated Users), not
   SYSTEM's SID only.
 - Groundwork ruling 7 (a probe address for the web-server providers later or never) is still open.
+- **M5, a release between W1 and W4**: the Windows server type is visible from W1, but the release bundle and
+  `SHA256SUMS` gain `alice-winhelper-windows-*.exe` only in W4. If a release is cut before W4, either ship the two
+  helper files by hand with the release (the image already embeds their checksums) or hide the type for that release.
+- **Confirm** the key line's `command=` (final review C1) on Server 2019 and with a domain account (the runners prove
+  it on 2022 and 2025 with a second local administrator).
 - Real-runner acceptance (design §13 W1 item 4): met — windows.yml green on windows-2022 and windows-2025, run
   39778045600 (5th run; runs 1-4 fixed PSModulePath in tests, site state via appcmd env, sshd -T, PTY expectation,
   group-membership idempotency): <https://github.com/erenmeren/alice/actions/runs/39778045600>

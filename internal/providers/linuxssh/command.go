@@ -295,8 +295,8 @@ func CmdACMEChallengeRm(token string) (HelperCommand, error) {
 // The vocabulary and limits of a forced command line (R60 Ruling 5). They equal winproto.ValidToken,
 // MaxTokens and MaxLineBytes (the Windows provider's tests compare them: linuxssh does not import the
 // Windows protocol). A token holds no space, no quote and no metacharacter of a shell or of cmd.exe
-// (no '%', '^', '&', '|', '<', '>', '!', backslash, '"' or '\”), so no program on the target can read
-// one token as two, or as anything but a literal word.
+// (no '%', '^', '&', '|', '<', '>', '!', backslash, double quote or single quote), so no program on the
+// target can read one token as two, or as anything but a literal word.
 var forcedTokenRE = regexp.MustCompile(`^[A-Za-z0-9._:@+-]{1,253}$`)
 
 const (

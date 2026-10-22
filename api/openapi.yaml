@@ -7909,7 +7909,7 @@ components:
         type: { type: string, enum: [linux, nginx, apache, haproxy, windows], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
-        username: { type: string, maxLength: 32, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
+        username: { type: string, maxLength: 36, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
     TargetPatch:
       type: object
       additionalProperties: false
