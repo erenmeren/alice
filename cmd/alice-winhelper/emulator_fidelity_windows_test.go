@@ -400,7 +400,10 @@ func appcmdPath() string {
 
 // addSite creates a started IIS site with these https bindings on both. The real site is created with
 // a plain http binding on portSiteHTTP (appcmd's add takes no sslFlags); the helper lists https
-// bindings only, so the model's site has none.
+// bindings only, so the model's site has none. The model's state "Started" is a fixture fact: IIS
+// starts a new site (serverAutoStart defaults to true), the test starts it again and waits until appcmd,
+// run with the test's own environment, reports "Started"; it is never copied from the helper's reading.
+// (No test stops a site; one that did would mirror "Stopped".)
 func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 	tw.t.Helper()
 	require.True(tw.t, strings.HasPrefix(name, "alice-w1-"))
@@ -587,4 +590,56 @@ func TestFidelityTLSProbe(t *testing.T) {
 	chain, _ := got["chain"].([]any)
 	require.Len(t, chain, 2)
 	assert.NotEqual(t, chain[0], chain[1])
+}
+
+// TestRealAppcmdStateByEnvironment is a diagnostic, not a check (it never fails on what it finds):
+// Windows run 2 showed the helper's appcmd (environment SystemRoot only, appcmd_windows.go) reporting
+// state "Unknown" for a site that appcmd run with the test's environment reports as "Started". It
+// logs the state appcmd reports under growing environments, so the run shows which variable the
+// runtime state needs.
+func TestRealAppcmdStateByEnvironment(t *testing.T) {
+	tw := newTwin(t)
+	tw.addSite("alice-w1-env", winproto.SiteBinding{Protocol: "https", Information: fmt.Sprintf("*:%d:", portRemoved)})
+	sys := filepath.Join(os.Getenv("SystemRoot"), "System32")
+	pick := func(names ...string) []string {
+		var env []string
+		for _, n := range names {
+			if v, ok := os.LookupEnv(n); ok {
+				env = append(env, n+"="+v)
+			}
+		}
+		return env
+	}
+	base := []string{"SystemRoot", "windir", "SystemDrive", "ProgramData", "ALLUSERSPROFILE"}
+	user := append(append([]string{}, base...), "COMPUTERNAME", "USERNAME", "USERDOMAIN", "USERPROFILE", "TEMP", "TMP")
+	more := append(append([]string{}, user...), "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles",
+		"PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS", "PATH", "PATHEXT", "ComSpec")
+	for _, c := range []struct {
+		name string
+		env  []string
+	}{
+		{"SystemRoot", pick("SystemRoot")},
+		{"+windir", pick("SystemRoot", "windir")},
+		{"+SystemDrive,ProgramData,ALLUSERSPROFILE", pick(base...)},
+		{"+COMPUTERNAME,USERNAME,USERDOMAIN,USERPROFILE,TEMP,TMP", pick(user...)},
+		{"+ProgramFiles,CommonProgramFiles,PROCESSOR_ARCHITECTURE,NUMBER_OF_PROCESSORS,OS,PATH,PATHEXT,ComSpec", pick(more...)},
+		{"full", os.Environ()},
+	} {
+		cmd := exec.Command(appcmdPath(), "list", "site", "alice-w1-env", "/config", "/xml")
+		cmd.Env, cmd.Dir = c.env, sys
+		out, err := cmd.Output()
+		sites, perr := winhelper.ParseAppcmdSites(out)
+		state := "?"
+		if perr == nil && len(sites) == 1 {
+			state = sites[0].State
+		}
+		t.Logf("appcmd environment %s: state %q (run error %v, parse error %v)", c.name, state, err, perr)
+	}
+	data, err := appcmdSites(context.Background())
+	sites, perr := winhelper.ParseAppcmdSites(data)
+	for _, s := range sites {
+		if s.Name == "alice-w1-env" {
+			t.Logf("the helper's appcmdSites: state %q (run error %v, parse error %v)", s.State, err, perr)
+		}
+	}
 }

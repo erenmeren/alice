@@ -4,6 +4,7 @@ package windows
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,12 +13,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -150,13 +153,34 @@ func setupState(t *testing.T) map[string]string {
 // connection gets the first session's command).
 func setupSSH(t *testing.T, key, knownHosts, line string) (int, []byte, []byte) {
 	t.Helper()
+	return setupSSHWith(t, key, knownHosts, nil, line)
+}
+
+// setupSSHCommand is the client's command line: the options every call shares, then extra, then the
+// account and, unless it is "", the remote line.
+func setupSSHCommand(ctx context.Context, key, knownHosts string, extra []string, line string) *exec.Cmd {
 	client := filepath.Join(os.Getenv("SystemRoot"), "System32", "OpenSSH", "ssh.exe")
-	cmd := exec.Command(client, "-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-		"-o", "UserKnownHostsFile="+knownHosts, "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlgorithms=ssh-ed25519",
-		"-o", "ConnectTimeout=20", setupAccount+"@localhost", line)
+	args := []string{"-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile=" + knownHosts, "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlgorithms=ssh-ed25519",
+		"-o", "ConnectTimeout=20"}
+	args = append(append(args, extra...), setupAccount+"@localhost")
+	if line != "" {
+		args = append(args, line)
+	}
+	return exec.CommandContext(ctx, client, args...) //nolint:gosec // G204: the system's ssh.exe with the test's arguments
+}
+
+// setupSSHWith runs one client (one connection) with extra options and returns its exit code, stdout
+// and stderr; it fails the test when the client runs longer than 30 s.
+func setupSSHWith(t *testing.T, key, knownHosts string, extra []string, line string) (int, []byte, []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := setupSSHCommand(ctx, key, knownHosts, extra, line)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	require.NoError(t, ctx.Err(), "ssh %v %q did not end: %s %s", extra, line, stdout.Bytes(), stderr.Bytes())
 	code := 0
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -165,6 +189,58 @@ func setupSSH(t *testing.T, key, knownHosts, line string) (int, []byte, []byte) 
 		require.NoError(t, err)
 	}
 	return code, stdout.Bytes(), stderr.Bytes()
+}
+
+// freeLoopbackPort is a TCP port nothing listens on at the moment.
+func freeLoopbackPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+	require.NoError(t, ln.Close())
+	return port
+}
+
+// localForwardServesNothing opens a local forward to sshd itself through the account and checks that
+// a connection through it never reaches sshd (AllowTcpForwarding no and the key's restrict refuse the
+// channel): no "SSH-" banner arrives. A client that exits because the forward is refused also passes.
+func localForwardServesNothing(t *testing.T, key, knownHosts string) {
+	t.Helper()
+	port := freeLoopbackPort(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := setupSSHCommand(ctx, key, knownHosts, []string{"-N", "-o", "ExitOnForwardFailure=yes",
+		"-L", "127.0.0.1:" + port + ":127.0.0.1:22"}, "")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start())
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	defer func() {
+		cancel()
+		<-exited
+	}()
+	var conn net.Conn
+	for deadline := time.Now().Add(15 * time.Second); conn == nil && time.Now().Before(deadline); {
+		select {
+		case <-exited:
+			t.Logf("the client ended before forwarding: %s", stderr.Bytes())
+			return
+		default:
+		}
+		c, err := net.DialTimeout("tcp", "127.0.0.1:"+port, time.Second)
+		if err == nil {
+			conn = c
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	require.NotNil(t, conn, "the client's local forward listens")
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	got, _ := io.ReadAll(conn)
+	assert.NotContains(t, string(got), "SSH-", "the forward reached sshd: TCP forwarding is allowed")
 }
 
 func TestRealSetupScript(t *testing.T) {
@@ -206,27 +282,17 @@ func TestRealSetupScript(t *testing.T) {
 	// The helper is the built one.
 	assert.Equal(t, setupFileSHA256(t, amd64), setupFileSHA256(t, winproto.HelperPath))
 
-	// sshd_config holds the Match block for alice, and sshd applies it to the account.
+	// sshd_config holds the Match block for alice and sshd accepts the file; what the block does is
+	// checked below over real connections (Win32-OpenSSH's "sshd -T -C user=alice" cannot resolve the
+	// local account: "ga_init, unable to resolve user", Windows run 2).
 	cfg, err := os.ReadFile(setupSSHDConfig)
 	require.NoError(t, err)
 	cfgText := strings.ReplaceAll(string(cfg), "\r\n", "\n")
 	assert.Contains(t, cfgText, "# BEGIN Alice\n"+strings.ReplaceAll(MatchBlock, "__USER__", setupAccount)+"# END Alice\n")
 	sshd := setupPowershell(t, nil, `$p = "$((Get-CimInstance -ClassName Win32_Service -Filter "Name='sshd'").PathName)".Trim()
 if ($p.StartsWith('"')) { $p.Substring(1, $p.IndexOf('"', 1) - 1) } else { ($p -split ' ')[0] }`)
-	effective, err := exec.Command(sshd, "-T", "-C", "user="+setupAccount+",host=localhost,addr=127.0.0.1").CombinedOutput()
-	require.NoError(t, err, "sshd -T: %s", effective)
-	settings := map[string]string{}
-	for _, l := range strings.Split(strings.ReplaceAll(string(effective), "\r\n", "\n"), "\n") {
-		if k, v, ok := strings.Cut(strings.TrimSpace(l), " "); ok {
-			settings[k] = v // sshd -T prints keywords in lower case
-		}
-	}
-	assert.True(t, strings.EqualFold(`"`+winproto.HelperPath+`" ssh`, settings["forcecommand"]),
-		"sshd -T -C user=alice: forcecommand %q", settings["forcecommand"])
-	assert.Equal(t, "publickey", settings["authenticationmethods"])
-	assert.Equal(t, "no", settings["permittty"])
-	assert.Equal(t, "no", settings["allowtcpforwarding"])
-	assert.Equal(t, "no", settings["x11forwarding"])
+	checked, err := exec.Command(sshd, "-t").CombinedOutput()
+	require.NoError(t, err, "sshd -t: %s", checked)
 
 	// administrators_authorized_keys: Alice's line, readable by Administrators and SYSTEM only.
 	keys, err := os.ReadFile(setupAuthorizedKeys)
@@ -275,6 +341,27 @@ $s = @($a.Access | ForEach-Object { $_.IdentityReference.Translate([System.Secur
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &refusal), string(stdout))
 	assert.Equal(t, setupInvalidArgument, refusal.Code)
 	assert.Equal(t, 1, bytes.Count(bytes.TrimSpace(stdout), []byte("\n"))+1, "one JSON line, nothing from whoami: %s", stdout)
+
+	// PermitTTY no: a forced terminal still gets only the helper's answer, never a shell.
+	code, stdout, stderr = setupSSHWith(t, keyFile, knownHosts, []string{"-tt"}, winproto.SubVersion)
+	require.Equal(t, 0, code, "ssh -tt version: %s %s", stdout, stderr)
+	version = winproto.VersionResponse{}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &version), "only the helper's JSON: %q", stdout)
+	assert.Equal(t, winproto.Protocol, version.Protocol)
+
+	// AllowTcpForwarding no (and the key's restrict): a remote forward is refused, so the client
+	// gives up at once, and a local forward never reaches anything.
+	code, stdout, stderr = setupSSHWith(t, keyFile, knownHosts, []string{"-N", "-o", "ExitOnForwardFailure=yes",
+		"-R", "127.0.0.1:" + freeLoopbackPort(t) + ":127.0.0.1:22"}, "")
+	assert.NotEqual(t, 0, code, "a remote forward is refused: %s %s", stdout, stderr)
+	localForwardServesNothing(t, keyFile, knownHosts)
+
+	// AuthenticationMethods publickey: a password sign-in is not offered.
+	code, stdout, stderr = setupSSHWith(t, keyFile, knownHosts, []string{"-o", "PreferredAuthentications=password",
+		"-o", "PubkeyAuthentication=no"}, winproto.SubVersion)
+	assert.NotEqual(t, 0, code, "a password sign-in fails: %s %s", stdout, stderr)
+	assert.Empty(t, bytes.TrimSpace(stdout), "nothing ran")
+	assert.Contains(t, string(stderr), "Permission denied")
 
 	// A second run changes nothing.
 	before := setupState(t)
