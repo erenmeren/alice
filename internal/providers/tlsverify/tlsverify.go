@@ -402,6 +402,8 @@ func (v verifier) probeOnce(ctx context.Context, ep Endpoint, keyType string, lo
 	if err != nil {
 		return Served{}, false, err
 	}
+	// helperproto.MaxProbeChainCerts equals webserver.MaxChainCerts (pinned by nginx's TestProbeChainBoundsMatchTheProvider
+	// and winproto's bounds test): tlsverify may not import webserver.
 	if !ok || !isHexSHA256(sv.Leaf) || sv.Chain < 1 || sv.Chain > helperproto.MaxProbeChainCerts {
 		return Served{}, false, nil // PROBE_FAILED, or an answer Alice cannot use: not reached
 	}

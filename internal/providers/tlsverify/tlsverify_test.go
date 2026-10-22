@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -656,8 +657,8 @@ func TestProbeFromAlice(t *testing.T) {
 }
 
 // tlsServer serves leaf (TLS minVersion or later) on a local port until the test ends; it answers every handshake and
-// closes. resumed counts handshakes the server resumed from a session ticket.
-func tlsServer(t *testing.T, leaf pki.Leaf, minVersion uint16, resumed *atomic.Int64) int {
+// closes.
+func tlsServer(t *testing.T, leaf pki.Leaf, minVersion uint16) int {
 	t.Helper()
 	pair, err := tls.X509KeyPair(leaf.FullchainPEM, leaf.KeyPEM)
 	require.NoError(t, err)
@@ -671,8 +672,8 @@ func tlsServer(t *testing.T, leaf pki.Leaf, minVersion uint16, resumed *atomic.I
 				return
 			}
 			go func() {
-				if tc, ok := c.(*tls.Conn); ok && tc.Handshake() == nil && resumed != nil && tc.ConnectionState().DidResume {
-					resumed.Add(1)
+				if tc, ok := c.(*tls.Conn); ok {
+					_ = tc.Handshake()
 				}
 				_ = c.Close()
 			}()
@@ -693,21 +694,65 @@ func TestProbeIsAFreshHandshake(t *testing.T) {
 	}
 	ca := pki.NewCA("Probe", pki.ECDSA256, time.Now())
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, time.Now())
-	var resumed atomic.Int64
-	port := tlsServer(t, leaf, tls.VersionTLS12, &resumed)
-	for range 3 {
+	pair, err := tls.X509KeyPair(leaf.FullchainPEM, leaf.KeyPEM)
+	require.NoError(t, err)
+	// A TLS 1.2 server that issues session tickets in the handshake itself (TLS 1.3 sends them afterwards, which a
+	// client reads only with application data); each handshake reports whether it resumed.
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	resumed := make(chan bool, 8)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				tc := c.(*tls.Conn)
+				err := tc.Handshake()
+				resumed <- err == nil && tc.ConnectionState().DidResume
+			}()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+	next := func() bool {
+		t.Helper()
+		select {
+		case r := <-resumed:
+			return r
+		case <-time.After(5 * time.Second):
+			t.Fatal("the server saw no handshake")
+			return false
+		}
+	}
+
+	// The control: the probe's configuration with a session cache resumes on this server, so the server tells a fresh
+	// handshake from a resumed one.
+	cache := tls.NewLRUClientSessionCache(4)
+	for i := range 2 {
+		c := TLSProber{}.config("www.example.test", helperproto.ProbeAny)
+		c.ClientSessionCache, c.SessionTicketsDisabled = cache, false
+		conn, err := tls.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), c)
+		require.NoError(t, err)
+		_ = conn.Close()
+		assert.Equal(t, i == 1, next(), "the control's handshake %d", i+1)
+	}
+
+	// TLSProber's probes against the same server: every one a full handshake.
+	for i := range 3 {
 		got, err := TLSProber{}.Probe(context.Background(), "127.0.0.1", port, "www.example.test", helperproto.ProbeAny)
 		require.NoError(t, err)
 		assert.Equal(t, pki.Fingerprint(leaf.Cert), got.LeafSHA256)
+		assert.False(t, next(), "probe %d resumed a session", i+1)
 	}
-	time.Sleep(20 * time.Millisecond)
-	assert.Zero(t, resumed.Load(), "no handshake resumed a session")
 }
 
 func TestTLSProberAgainstALocalServer(t *testing.T) {
 	ca := pki.NewCA("Probe", pki.ECDSA256, time.Now())
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, time.Now())
-	port := tlsServer(t, leaf, tls.VersionTLS12, nil)
+	port := tlsServer(t, leaf, tls.VersionTLS12)
 	p := TLSProber{}
 	got, err := p.Probe(context.Background(), "127.0.0.1", port, "www.example.test", helperproto.ProbeAny)
 	require.NoError(t, err)
@@ -723,7 +768,7 @@ func TestTLSProberAgainstALocalServer(t *testing.T) {
 	_, err = p.Probe(context.Background(), "127.0.0.1", port, "www.example.test", helperproto.ProbeRSA)
 	assert.ErrorIs(t, err, ErrProbeFailed, "an ECDSA-only server has nothing for an RSA probe")
 
-	only13 := tlsServer(t, leaf, tls.VersionTLS13, nil)
+	only13 := tlsServer(t, leaf, tls.VersionTLS13)
 	got, err = p.Probe(context.Background(), "127.0.0.1", only13, "www.example.test", helperproto.ProbeAny)
 	require.NoError(t, err)
 	assert.Equal(t, pki.Fingerprint(leaf.Cert), got.LeafSHA256)
@@ -801,7 +846,7 @@ func TestTLSProberIsBounded(t *testing.T) {
 func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
 	ca := pki.NewCA("Probe", pki.ECDSA256, time.Now())
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, time.Now())
-	port := tlsServer(t, leaf, tls.VersionTLS12, nil)
+	port := tlsServer(t, leaf, tls.VersionTLS12)
 	var rebound atomic.Bool
 	p := TLSProber{Resolver: netaddrtest.Resolver(func(name string) []netip.Addr {
 		switch {
