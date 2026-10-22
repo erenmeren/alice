@@ -155,8 +155,12 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 			// Certificates belong to web servers and Windows servers only: another target type's result is its SSH half.
 			res.WebServer, res.Certificates = nil, nil
 		}
+		// A Windows server has no SSH key inventory (R60 Ruling 11): its result is the certificate half only, and its
+		// scan's warnings are the facts' warnings (the certificate half's: list_truncated, locations_dropped,
+		// web_server_not_found).
+		sshHalf := IsServer(t.Type) && sshHalfRead(res)
+		ownWarnings := sshHalf || (!IsServer(t.Type) && res.WebServer != nil)
 		if !IsServer(t.Type) {
-			// A Windows server has no SSH key inventory (R60 Ruling 11): its result is the certificate half only.
 			res.SSHKeys, res.ReadFiles, res.Accounts, res.AccountsComplete = nil, nil, nil, false
 		}
 		platformFP := ""
@@ -220,11 +224,14 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 			sum.Missing += int(tag.RowsAffected())
 		}
 		f := t.Facts
-		if sshHalfRead(res) {
+		if sshHalf {
 			sshd := res.SSHD
-			f.SSHD, f.HostKeys, f.Warnings, f.Unreadable = &sshd, res.HostKeys, res.Warnings, res.UnreadableLines
+			f.SSHD, f.HostKeys, f.Unreadable = &sshd, res.HostKeys, res.UnreadableLines
 			f.UID0Users = append([]string(nil), res.UID0Users...)
 			f.KeyFiles = cleanKeyFiles(res.KeyFiles)
+		}
+		if ownWarnings {
+			f.Warnings = res.Warnings
 		}
 		// The certificate half (D19: after the SSH facts, before they are stored). Only a usable
 		// configuration's certificates are stored; any other Nginx result (invalid, untrusted or
@@ -240,7 +247,7 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 				certEvents = events
 				sum.Certificates, sum.Locations, sum.NewLocations = cs.Certificates, cs.Locations, cs.NewLocations
 				sum.MissingLocations, sum.SkippedLocations = cs.MissingLocations, cs.Skipped
-				if cs.Skipped > 0 && sshHalfRead(res) && !slices.ContainsFunc(f.Warnings, func(w providers.Warning) bool {
+				if cs.Skipped > 0 && ownWarnings && !slices.ContainsFunc(f.Warnings, func(w providers.Warning) bool {
 					return w.Code == providers.WarnListTruncated
 				}) {
 					// A reported location that could not be stored: what is shown is incomplete.
@@ -256,11 +263,11 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 		// Only a scan of the SSH half is a discovery for the schedule (last_discovery_at), or a Windows server's
 		// certificate scan: it has no SSH half (R60 Ruling 10; else every connection test would queue a first
 		// discovery again).
-		discovered := sshHalfRead(res) || (t.Type == TypeWindows && res.WebServer != nil)
+		discovered := sshHalf || (t.Type == TypeWindows && res.WebServer != nil)
 		if _, err := tx.Exec(ctx, `UPDATE targets SET facts = $2,
     keys_managed_elsewhere = CASE WHEN $5 THEN $3 ELSE keys_managed_elsewhere END,
     last_discovery_at = CASE WHEN $6 THEN $4 ELSE last_discovery_at END, updated_at = $4
-WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read, discovered); err != nil {
+WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, sshHalf && res.SSHD.Read, discovered); err != nil {
 			return fmt.Errorf("inventory: store discovery facts: %w", err)
 		}
 		// The scan reached the server: an unreachable target is connected again (statusAfterSuccess).

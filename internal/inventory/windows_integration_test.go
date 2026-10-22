@@ -87,6 +87,18 @@ func winEntry(port int, appID, site string, leaf *pki.Leaf) providers.Discovered
 	return d
 }
 
+// warningCodes are the codes of the target's stored facts warnings.
+func (h *harness) warningCodes(target uuid.UUID) []string {
+	h.t.Helper()
+	got, err := h.svc.GetTarget(h.ctx, target)
+	require.NoError(h.t, err)
+	out := []string{}
+	for _, w := range got.Facts.Warnings {
+		out = append(out, w.Code)
+	}
+	return out
+}
+
 func (h *harness) missingLocations(target uuid.UUID) int {
 	return h.count("SELECT count(*) FROM certificate_locations WHERE target_id = $1 AND missing_since IS NOT NULL", target)
 }
@@ -141,7 +153,13 @@ func TestWindowsScanStoresBindingLocations(t *testing.T) {
 	b.Location.Details["cert_sha1"], b.Location.Details["friendly_name"] = "00112233445566778899aabbccddeeff00112233", "www"
 	sum, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{WebServer: iisOK, Certificates: []providers.DiscoveredCertificate{b},
 		SSHKeys: []providers.DiscoveredSSHKey{dk("alice", `C:\ProgramData\ssh\administrators_authorized_keys`, 1,
-			"SHA256:ccc0000000000000000000000000000000000000000", "x")}})
+			"SHA256:ccc0000000000000000000000000000000000000000", "x")},
+		// An SSH half a Windows result never carries (Ruling 11): none of it is stored.
+		SSHD:            providers.SSHDSummary{Read: true, KeysManagedElsewhere: true},
+		HostKeys:        []providers.DiscoveredHostKey{{KeyType: "ssh-ed25519", Fingerprint: "SHA256:ddd0000000000000000000000000000000000000000"}},
+		UnreadableLines: []providers.UnreadableLine{{OSUser: "alice", FilePath: "x", LineNo: 1}},
+		UID0Users:       []string{"root"},
+		KeyFiles:        []providers.UserKeyFiles{{OSUser: "alice", Files: []string{"x"}}}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, sum.Locations)
 	assert.Equal(t, 1, sum.NewLocations)
@@ -180,6 +198,11 @@ func TestWindowsScanStoresBindingLocations(t *testing.T) {
 	assert.Equal(t, h.clock.Now(), got.LastDiscoveryAt.UTC())
 	assert.Nil(t, got.Facts.SSHD, "no SSH facts")
 	assert.Empty(t, got.Facts.HostKeys)
+	assert.Empty(t, got.Facts.Unreadable)
+	assert.Empty(t, got.Facts.UID0Users)
+	assert.Empty(t, got.Facts.KeyFiles)
+	assert.False(t, got.KeysManagedElsewhere)
+	assert.Empty(t, got.Facts.Warnings)
 	require.NotNil(t, got.Facts.WebServer)
 	assert.Equal(t, "iis", got.Facts.WebServer.Software)
 	assert.Zero(t, h.count("SELECT count(*) FROM ssh_key_locations WHERE target_id = $1", tg.ID))
@@ -209,6 +232,7 @@ func TestWindowsScanWithoutIISStoresForeignLocations(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Facts.WebServer)
 	assert.False(t, got.Facts.WebServer.Found, "IIS not installed")
+	assert.Equal(t, []string{providers.WarnWebServerNotFound}, h.warningCodes(tg.ID), "the scan's warning is stored")
 	assert.Equal(t, "iis", got.Facts.WebServer.Software)
 	assert.NotNil(t, got.LastDiscoveryAt)
 	assert.Zero(t, h.count("SELECT count(*) FROM certificate_locations WHERE target_id = $1 AND supported", tg.ID))
@@ -236,9 +260,19 @@ func TestWindowsTruncatedScanMarksNothingMissing(t *testing.T) {
 	scan([]providers.Warning{{Code: providers.WarnListTruncated, Params: map[string]string{}},
 		{Code: providers.WarnLocationsDropped, Params: map[string]string{}}}, 443)
 	assert.Zero(t, h.missingLocations(tg.ID), "a cut dump proves nothing gone")
+	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, h.warningCodes(tg.ID), "the facts say the list is cut")
 	h.clock.Advance(time.Second)
 	scan(nil, 443)
 	assert.Equal(t, 2, h.missingLocations(tg.ID))
+	assert.Empty(t, h.warningCodes(tg.ID), "a full scan clears them")
+	// A location the inventory cannot store (a malformed locator) is skipped: the facts say the list is cut.
+	h.clock.Advance(time.Second)
+	bad := winBinding(10443, "Site", &leaf)
+	bad.Location.Locator = providers.Locator{}
+	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{WebServer: iisOK,
+		Certificates: []providers.DiscoveredCertificate{winBinding(443, "Site", &leaf), bad}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{providers.WarnListTruncated}, h.warningCodes(tg.ID))
 	assert.Len(t, byPath(t, h, tg.ID, false), 1)
 }
 
@@ -318,9 +352,10 @@ func TestRecordConnectionOKStoresWindowsFacts(t *testing.T) {
 	assert.Equal(t, got.Facts.Windows, again.Facts.Windows)
 }
 
-// Ruling 11: a Windows server has no SSH key inventory: the key-files route (internal/api) and internal/sshkeys
-// (deploy.go) ask IsServer, which is false for it; it has no key locations and no key files.
-func TestWindowsTargetHasNoSSHKeyRoutes(t *testing.T) {
+// Ruling 11: a stored Windows server is not IsServer (the predicate the key-files route,
+// internal/api/sshkeys_handlers.go:402, and internal/sshkeys/deploy.go:217 refuse on), is an SSH target with certificate
+// locations, and has no key locations or key files. The routes themselves are not driven here.
+func TestWindowsTargetIsNoKeyServer(t *testing.T) {
 	h := newHarness(t, withWindowsProvider())
 	admin := h.user("ada", rbac.Admin, "")
 	tg := winTarget(t, h, admin, "iis-01")
