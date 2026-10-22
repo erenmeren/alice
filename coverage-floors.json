@@ -27,6 +27,7 @@
   "alice/internal/providers/nginx": 98,
   "alice/internal/providers/nginx/nginxconf": 92,
   "alice/internal/providers/apacheconf": 92,
+  "alice/internal/providers/windows": 95,
   "alice/internal/providers/windows/winproto": 100,
   "alice/internal/providers/windows/winhelper": 95,
   "alice/internal/providers/windows/wintest": 90,

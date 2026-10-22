@@ -626,3 +626,17 @@ func TestKeyListingAbsenceNeedsCompleteCoverage(t *testing.T) {
 		assert.NotEmpty(t, string(s))
 	}
 }
+
+// R60: a Windows server's connection facts travel as snake_case JSON and come back unchanged.
+func TestWindowsFactsRoundTrip(t *testing.T) {
+	in := providers.ConnectionReport{Windows: &providers.WindowsFacts{Build: "10.0.20348.2700", Product: "Windows Server 2022 Datacenter",
+		InstallationType: "Server Core", Elevated: true, IISInstalled: true, IISVersion: "10.0", Stores: []string{"My", "WebHosting"},
+		OpenSSHVersion: "OpenSSH_for_Windows_8.1p1"}}
+	raw, err := json.Marshal(in.Windows)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"build":"10.0.20348.2700","product":"Windows Server 2022 Datacenter","installation_type":"Server Core",
+		"elevated":true,"iis_installed":true,"iis_version":"10.0","stores":["My","WebHosting"],"openssh_version":"OpenSSH_for_Windows_8.1p1"}`, string(raw))
+	var out providers.WindowsFacts
+	require.NoError(t, json.Unmarshal(raw, &out))
+	assert.Equal(t, *in.Windows, out)
+}

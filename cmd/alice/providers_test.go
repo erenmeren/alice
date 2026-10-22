@@ -35,12 +35,12 @@ func TestRegisterProvidersShipsEveryProvider(t *testing.T) {
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 
 	list := reg.List()
-	require.Len(t, list, 5)
+	require.Len(t, list, 6)
 	byKind := map[providers.Kind]providers.Descriptor{}
 	for _, d := range list {
 		byKind[d.Kind] = d
 	}
-	require.Len(t, byKind, 5)
+	require.Len(t, byKind, 6)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapKeyLogin, providers.CapTestConnection},
 		byKind[providers.KindLinuxSSH].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
@@ -51,6 +51,8 @@ func TestRegisterProvidersShipsEveryProvider(t *testing.T) {
 		providers.CapDiscoverCerts, providers.CapKeyLogin}, byKind[providers.KindHAProxy].Capabilities, "discovery only")
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDiscoverKVKeys,
 		providers.CapDiscoverKVSecrets, providers.CapReadCertificateSecret, providers.CapImportCertificate}, byKind[providers.KindAzureKV].Capabilities)
+	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts}, byKind[providers.KindWindows].Capabilities,
+		"R60 W1: a Windows server is discovered, not deployed to")
 
 	p, ok := reg.Get(providers.KindLinuxSSH)
 	require.True(t, ok)
@@ -76,6 +78,11 @@ func TestRegisterProvidersShipsEveryProvider(t *testing.T) {
 	require.True(t, ok)
 	_, isCache = a.(providers.ConnectionCache)
 	assert.True(t, isCache, "deleting a vault releases its limiter")
+	w, ok := reg.Get(providers.KindWindows)
+	require.True(t, ok)
+	providertest.CheckProvider(t, w)
+	_, isCache = w.(providers.ConnectionCache)
+	assert.True(t, isCache, "deleting a Windows server forgets it in the shared pool")
 
 	assert.Panics(t, func() { reg.Register(linuxssh.New(linuxssh.Options{Pool: pool})) }, "the registry is frozen")
 }
@@ -143,6 +150,7 @@ func TestOnlyADevelopmentBuildSkipsTheHelperCheck(t *testing.T) {
 	assert.Empty(t, script(), "a release build without the checksums has no setup script")
 	assert.Contains(t, logs.String(), "level=WARN")
 	assert.Contains(t, logs.String(), "this build has no alice-helper checksums")
+	assert.Contains(t, logs.String(), "this build has no alice-helper.exe checksums")
 }
 
 // Every web-server type of the one list maps to a kind this build registers (Phase A carry).

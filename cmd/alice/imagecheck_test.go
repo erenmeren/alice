@@ -26,10 +26,11 @@ func runImageCheck(t *testing.T, hostGo, binGo string, withSums, ci bool) (strin
 	}
 	dir := t.TempDir()
 	const sumAMD, sumARM = "aaaa1111amd64sum", "bbbb2222arm64sum"
+	const winAMD, winARM = "cccc3333winamd64sum", "dddd4444winarm64sum"
 
 	binary := "\x7fELF fake alice"
 	if withSums {
-		binary += " " + sumAMD + " " + sumARM
+		binary += " " + sumAMD + " " + sumARM + " " + winAMD + " " + winARM
 	}
 	var rootfs bytes.Buffer
 	tw := tar.NewWriter(&rootfs)
@@ -94,6 +95,7 @@ esac
 		"FAKE_DIR="+dir, "FAKE_HOST_GO="+hostGo, "FAKE_BIN_GO="+binGo,
 		"TEST_LICENSE_LABEL=test-license-label", "TEST_ROUTE_MARKER=/test/clock", "E2E_AZURE_MARKER=/run/alice-e2e-azure", "E2E_ACME_MARKER=/run/alice-e2e-acme",
 		"HELPER_SHA256_AMD64="+sumAMD, "HELPER_SHA256_ARM64="+sumARM,
+		"WINHELPER_SHA256_AMD64="+winAMD, "WINHELPER_SHA256_ARM64="+winARM,
 	)
 	out, err := cmd.CombinedOutput()
 	status := 0
@@ -112,12 +114,18 @@ func TestImageCheckComparesHelperChecksumsOnlyWithTheSameGo(t *testing.T) {
 	assert.Equal(t, 0, status, out)
 	assert.Contains(t, out, "ok:   binary holds the amd64 helper checksum of make helper")
 	assert.Contains(t, out, "ok:   binary holds the arm64 helper checksum of make helper")
+	assert.Contains(t, out, "ok:   binary holds the Windows amd64 helper checksum of make winhelper")
+	assert.Contains(t, out, "ok:   binary holds the Windows arm64 helper checksum of make winhelper")
 	assert.NotContains(t, out, "skip:")
 	assert.Contains(t, out, "image-check: ok (alice:ci)")
 
+	// cmd/alice links the Windows provider (R60): its checksums are always checked, never skipped.
 	out, status = runImageCheck(t, "go1.27.1", "go1.27.1", false, false)
 	assert.Equal(t, 1, status, out)
 	assert.Contains(t, out, "FAIL: binary holds the amd64 helper checksum of make helper")
+	assert.Contains(t, out, "FAIL: binary holds the Windows amd64 helper checksum of make winhelper")
+	assert.Contains(t, out, "FAIL: binary holds the Windows arm64 helper checksum of make winhelper")
+	assert.NotContains(t, out, "skip:")
 
 	out, status = runImageCheck(t, "go1.27.2", "go1.27.1", false, false)
 	assert.Equal(t, 0, status, out)

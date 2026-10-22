@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,8 @@ import (
 
 // HelperCommand is one remote command line. Its fields are unexported, so a command can only be
 // built by the constructors below: every argument passed helperproto's vocabulary check and
-// quoteArg (spec §6.6, SEC-063). There is no way to send a free-form shell string.
+// quoteArg (spec §6.6, SEC-063), or, for a forced-command target, ForcedCommand's token check
+// (R60 Ruling 5). There is no way to send a free-form shell string.
 type HelperCommand struct {
 	sub    string
 	tokens []string // rendered arguments: constant flag names or quoteArg output
@@ -26,8 +28,11 @@ type HelperCommand struct {
 	// level prints as an address for %v; for any other verb fmt's bad-verb path expands it once
 	// (&{...}), and the second pointer inside is then printed as an address again, never as the
 	// key bytes. Copies of a command share the input.
-	stdin     *stdinBuf
-	sudo      bool
+	stdin *stdinBuf
+	sudo  bool
+	// bare: the line is sub and tokens only (ForcedCommand). sshd runs one program for every session
+	// and hands it the line verbatim, so there is neither sudo nor a helper path to name.
+	bare      bool
 	fixed     string // the one fixed non-helper command (cat /etc/os-release); set only in dial.go
 	timeout   time.Duration
 	maxOutput int64
@@ -287,6 +292,48 @@ func CmdACMEChallengeRm(token string) (HelperCommand, error) {
 	return privileged(helperproto.SubACMEChallengeRm, DefaultCommandTimeout, smallOutput, "--token", q), nil
 }
 
+// The vocabulary and limits of a forced command line (R60 Ruling 5). They equal winproto.ValidToken,
+// MaxTokens and MaxLineBytes (the Windows provider's tests compare them: linuxssh does not import the
+// Windows protocol). A token holds no space, no quote and no metacharacter of a shell or of cmd.exe
+// (no '%', '^', '&', '|', '<', '>', '!', backslash, '"' or '\”), so no program on the target can read
+// one token as two, or as anything but a literal word.
+var forcedTokenRE = regexp.MustCompile(`^[A-Za-z0-9._:@+-]{1,253}$`)
+
+const (
+	maxForcedTokens = 16
+	maxForcedLine   = 4096
+)
+
+// ForcedCommand is the one audited constructor for a target whose sshd forces every session to one
+// program (a Windows server's alice-helper.exe, R60 Ruling 5): the line is the subcommand and its
+// arguments joined by one ASCII space, nothing else: no sudo, no helper path, no quoting. sshd hands
+// the line verbatim to the forced program in SSH_ORIGINAL_COMMAND and the program splits it itself
+// (winproto.SplitCommandLine); no shell or cmd.exe parses it. Every token must match
+// ^[A-Za-z0-9._:@+-]{1,253}$, there are 1 to 16 of them, the line is at most 4096 bytes, and the
+// command needs a positive time budget and output bound; anything else is ErrInvalidArgument and
+// builds no command. stdin (nil for none) is copied: the command owns its input, prints only its line
+// (Format, LogValue) and is wiped with WipeInput, as the Linux commands are.
+func ForcedCommand(tokens []string, stdin []byte, timeout time.Duration, maxOutput int64) (HelperCommand, error) {
+	if len(tokens) == 0 || len(tokens) > maxForcedTokens || timeout <= 0 || maxOutput <= 0 {
+		return HelperCommand{}, ErrInvalidArgument
+	}
+	n := len(tokens) - 1 // the separating spaces
+	for _, t := range tokens {
+		if !forcedTokenRE.MatchString(t) {
+			return HelperCommand{}, ErrInvalidArgument
+		}
+		n += len(t)
+	}
+	if n > maxForcedLine {
+		return HelperCommand{}, ErrInvalidArgument
+	}
+	c := HelperCommand{sub: tokens[0], tokens: append([]string(nil), tokens[1:]...), bare: true, timeout: timeout, maxOutput: maxOutput}
+	if stdin != nil {
+		c.stdin = owned(stdin)
+	}
+	return c, nil
+}
+
 func quoteAll(values ...string) ([]string, error) {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
@@ -339,6 +386,14 @@ func (c HelperCommand) Line() string {
 		return ""
 	}
 	var b strings.Builder
+	if c.bare {
+		b.WriteString(c.sub)
+		for _, t := range c.tokens {
+			b.WriteByte(' ')
+			b.WriteString(t)
+		}
+		return b.String()
+	}
 	if c.sudo {
 		b.WriteString("sudo -n ")
 	}

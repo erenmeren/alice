@@ -254,7 +254,9 @@ func TestCheckWiringRefusesARegistryWithoutAzureKV(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider azurekv is not registered")
 	assert.NotContains(t, err.Error(), "provider nginx is not registered")
+	assert.Contains(t, err.Error(), "provider windows is not registered")
 	assert.Contains(t, shippedProviders, providers.KindAzureKV)
+	assert.Contains(t, shippedProviders, providers.KindWindows)
 }
 
 // A runner without the SSH key handlers and a scheduler without the rotation tasks are refused, and

@@ -2,14 +2,16 @@
 # Checks a built release image of Alice without a database or a network (make image-check, audit
 # AUD-23): how it runs (user, entrypoint, healthcheck), what its file system holds (no shell, no
 # test artefacts, only the alice binary is executable, the keys, state and backups directories), and what
-# the binary is (a release build: no build tags, no test license key, no /test routes, both
-# alice-helper checksums, a plain version). Usage: check-image.sh <tag> checks alice:<tag>.
+# the binary is (a release build: no build tags, no test license key, no /test routes, the two
+# alice-helper and the two alice-helper.exe checksums, a plain version). Usage: check-image.sh <tag>
+# checks alice:<tag>.
 #
 # TEST_LICENSE_LABEL, TEST_ROUTE_MARKER, E2E_AZURE_MARKER and E2E_ACME_MARKER come from the Makefile, whose
 # release-symcheck proves that an e2e build contains all three (so their absence here means something). HELPER_SHA256_AMD64 and
-# HELPER_SHA256_ARM64 (and WINHELPER_SHA256_AMD64/ARM64, of make winhelper) are the checksums of make helper: the helper build is reproducible, so the
-# image's binary must hold exactly the checksums of the helper built from the same source with the
-# same Go version (the two checks are skipped, with a skip: line, when the host's Go differs).
+# HELPER_SHA256_ARM64 are the checksums of make helper, WINHELPER_SHA256_AMD64 and WINHELPER_SHA256_ARM64
+# those of make winhelper: both helper builds are reproducible, so the image's binary must hold exactly
+# the checksums of the helpers built from the same source with the same Go version (the four checks
+# are skipped, with a skip: line, when the host's Go differs).
 #
 # Docker: one stopped container (docker create, for docker export and docker cp) and short-lived
 # docker run --rm containers of alice:<tag> only, with no network, a read-only root file system and
@@ -93,9 +95,9 @@ info="$(go version -m "$bin")"
 check "binary was built without build tags" "$(count -Ec '^\s+build\s+-tags=' <<<"$info")" "0"
 check "binary is static (CGO_ENABLED=0)" "$(count -Ec '^\s+build\s+CGO_ENABLED=0$' <<<"$info")" "1"
 check "binary links no testify or testcontainers" "$(count -Ec '\s(github.com/stretchr/testify|github.com/testcontainers)' <<<"$info")" "0"
-# The setup script checks the helper an administrator installs against these checksums. The helper
-# build is reproducible only with the same Go version: when the host's Go (which built the checksums
-# of make helper) differs from the Go that built the image's binary, the two checks are skipped with
+# The setup scripts check the helper an administrator installs against these checksums. The helper
+# builds are reproducible only with the same Go version: when the host's Go (which built the checksums
+# of make helper and make winhelper) differs from the Go that built the image's binary, the four checks are skipped with
 # a message instead of failing, except in CI (CI set), where both Go versions must match and a
 # difference fails.
 host_go="$(go env GOVERSION)"
@@ -103,14 +105,8 @@ bin_go="$(awk 'NR == 1 { print $2 }' <<<"$info")"
 if [[ "$host_go" == "$bin_go" ]]; then
   check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
   check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
-  # The linker drops the -X variables of a package nothing in cmd/alice imports yet; the function
-  # names of a linked package stay in the binary's symbol table even stripped.
-  if [[ "$(count -acF 'alice/internal/providers/windows.' "$bin")" != 0 ]]; then
-    check "binary holds the Windows amd64 helper checksum of make winhelper" "$(count -acF "$wsum_amd64" "$bin")" "1"
-    check "binary holds the Windows arm64 helper checksum of make winhelper" "$(count -acF "$wsum_arm64" "$bin")" "1"
-  else
-    echo "skip: binary holds the Windows helper checksums (the Windows provider is not linked into alice yet)"
-  fi
+  check "binary holds the Windows amd64 helper checksum of make winhelper" "$(count -acF "$wsum_amd64" "$bin")" "1"
+  check "binary holds the Windows arm64 helper checksum of make winhelper" "$(count -acF "$wsum_arm64" "$bin")" "1"
 elif [[ -n "${CI:-}" ]]; then
   echo "FAIL: host Go $host_go differs from the Go that built the image's binary ($bin_go); in CI they must match (deploy/Dockerfile's Go image and go.mod), so the helper checksums cannot be skipped"
   fail=1

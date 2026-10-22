@@ -337,3 +337,84 @@ func TestTLSProbeOutputHoldsTheChain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Less(t, int64(len(b)), c.maxOutput)
 }
+
+// R60 Ruling 5: a forced-command line is the subcommand and its arguments joined by one space, with
+// no sudo, no helper path and no quoting; a token outside the vocabulary never builds a command.
+func TestForcedCommandLine(t *testing.T) {
+	dump, err := ForcedCommand([]string{"iis-dump"}, nil, LongCommandTimeout, DefaultMaxOutput)
+	require.NoError(t, err)
+	assert.Equal(t, "iis-dump", dump.Line())
+	assert.Equal(t, "iis-dump", dump.Subcommand())
+	assert.Nil(t, dump.input())
+	assert.Equal(t, LongCommandTimeout, dump.timeout)
+	assert.Equal(t, int64(DefaultMaxOutput), dump.maxOutput)
+	assert.False(t, dump.sudo)
+
+	probe := []string{"tls-probe", "--addr", "10.0.0.5", "--port", "443", "--sni", "www.example.com", "--key-type", "any"}
+	pc, err := ForcedCommand(probe, nil, DefaultCommandTimeout, probeOutput)
+	require.NoError(t, err)
+	assert.Equal(t, "tls-probe --addr 10.0.0.5 --port 443 --sni www.example.com --key-type any", pc.Line())
+	assert.Equal(t, "tls-probe", pc.Subcommand())
+	probe[2] = "10.0.0.6"
+	assert.Contains(t, pc.Line(), "10.0.0.5", "the command keeps its own tokens")
+
+	most := make([]string, 16)
+	for i := range most {
+		most[i] = strings.Repeat("a", 253)
+	}
+	long, err := ForcedCommand(most, nil, DefaultCommandTimeout, smallOutput)
+	require.NoError(t, err)
+	assert.Len(t, long.Line(), 16*253+15)
+
+	for name, bad := range map[string][]string{
+		"no tokens":          nil,
+		"empty token":        {"version", ""},
+		"space":              {"version", "a b"},
+		"single quote":       {"version", "a'b"},
+		"double quote":       {"version", `a"b`},
+		"ampersand":          {"version", "a&b"},
+		"percent":            {"version", "%PATH%"},
+		"caret":              {"version", "a^b"},
+		"pipe":               {"version", "a|b"},
+		"redirect":           {"version", "a>b"},
+		"backslash":          {"version", `C:\x`},
+		"newline":            {"version\nwhoami"},
+		"non-ASCII":          {"versión"},
+		"token too long":     {"version", strings.Repeat("a", 254)},
+		"seventeen tokens":   append(append([]string{}, most...), "x"),
+		"empty first":        {"", "version"},
+		"shell substitution": {"$(id)"},
+	} {
+		_, err := ForcedCommand(bad, nil, DefaultCommandTimeout, smallOutput)
+		assert.ErrorIs(t, err, ErrInvalidArgument, name)
+	}
+	_, err = ForcedCommand([]string{"version"}, nil, 0, smallOutput)
+	assert.ErrorIs(t, err, ErrInvalidArgument, "a command needs a time budget")
+	_, err = ForcedCommand([]string{"version"}, nil, DefaultCommandTimeout, 0)
+	assert.ErrorIs(t, err, ErrInvalidArgument, "a command needs an output bound")
+}
+
+// A forced command owns its input and prints its line only, never the input (as the Linux commands).
+func TestForcedCommandNeverPrintsItsStdin(t *testing.T) {
+	marker := "FORCEDKEYMARKER"
+	in := []byte("-----BEGIN " + "PRIVATE KEY-----" + marker)
+	c, err := ForcedCommand([]string{"iis-deploy", "--op", testOp.String()}, in, DeployCommandTimeout, smallOutput)
+	require.NoError(t, err)
+	in[0] = 'X'
+	assert.Equal(t, byte('-'), c.input()[0], "stdin is copied")
+	assert.NotContains(t, c.Line(), marker)
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("run", "cmd", c, "ptr", &c)
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("run", slog.Any("cmd", c), slog.Any("ptr", &c))
+	text := buf.String()
+	for _, v := range []any{c, &c} {
+		text += fmt.Sprintf("%v %+v %#v %s %d %x %X %q", v, v, v, v, v, v, v, v)
+	}
+	decimal := strings.Trim(fmt.Sprintf("%d", []byte(marker)), "[]")
+	for _, needle := range []string{marker, "PRIVATE KEY", hex.EncodeToString([]byte(marker)), decimal, base64.StdEncoding.EncodeToString([]byte(marker))} {
+		assert.NotContains(t, text, needle)
+	}
+	assert.Contains(t, fmt.Sprintf("%s", c), "iis-deploy --op "+testOp.String())
+	c.WipeInput()
+	assert.Equal(t, make([]byte, len(in)), c.input())
+}

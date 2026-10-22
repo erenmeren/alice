@@ -23,6 +23,20 @@ type ConnectionReport struct {
 	Warnings       []Warning
 	WebServer      *WebServerFacts // what a web-server provider found on the server; nil for linuxssh
 	Azure          *AzureFacts     // the vault's access check; nil for other providers
+	Windows        *WindowsFacts   // what win-facts found on a Windows server; nil for other providers
+}
+
+// WindowsFacts is what Alice shows about a Windows server (R60 Ruling 19: OS also carries the build
+// and product, so the existing OS fact shows). Every string is cleaned remote text.
+type WindowsFacts struct {
+	Build            string   `json:"build"`             // "10.0.20348.2700"
+	Product          string   `json:"product"`           // "Windows Server 2022 Datacenter"
+	InstallationType string   `json:"installation_type"` // "Server" or "Server Core"
+	Elevated         bool     `json:"elevated"`          // the helper's token is elevated
+	IISInstalled     bool     `json:"iis_installed"`
+	IISVersion       string   `json:"iis_version"`
+	Stores           []string `json:"stores"` // machine certificate store names, at most 16
+	OpenSSHVersion   string   `json:"openssh_version"`
 }
 
 // DiscoverRequest selects what Discover reads. SSHKeys and Certificates are Phase 3/4's; for a
@@ -246,8 +260,8 @@ type Descriptor struct {
 
 // WebServerFacts is what Alice shows about the web server software on a server.
 type WebServerFacts struct {
-	// Software is the web server software ("nginx", "apache" or "haproxy"); it equals the
-	// provider kind and the target type.
+	// Software is the web server software ("nginx", "apache" or "haproxy"; it equals the
+	// provider kind and the target type), or "iis" on a Windows server.
 	Software    string `json:"software"`
 	Version     string `json:"version"`
 	ConfPath    string `json:"conf_path"`
