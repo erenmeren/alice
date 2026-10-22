@@ -25,15 +25,17 @@ import (
 	"alice/internal/providers/windows/winproto"
 )
 
-// host is the real Windows machine behind winhelper.Host: it only reads, and every reading is a fixed
-// registry value, file, API call or program (design 2026-10-21 §7). Errors carry no OS text into the
-// answer: winhelper replaces them with fixed messages.
+// host is the real Windows machine behind winhelper.WriteHost. Every reading is a fixed registry value,
+// file, API call or program (design 2026-10-21 §7); every change is an http.sys update, a certificate
+// store add, a state file under dataDir, the helper lock or an Application event (W2). Errors carry no
+// OS text into the answer: winhelper replaces them with fixed messages.
 type host struct {
-	now func() time.Time
+	now     func() time.Time
+	dataDir string // winproto.DataDir; tests use a private one
 }
 
-func newHost() winhelper.Host {
-	return host{now: time.Now} //nolint:forbidigo // the helper is a separate binary; its clock is injected through host.now
+func newHost(dataDir string) host {
+	return host{now: time.Now, dataDir: dataDir} //nolint:forbidigo // the helper is a separate binary; its clock is injected through host.now
 }
 
 var errBadValue = errors.New("alice-winhelper: a value has an unexpected type or size")

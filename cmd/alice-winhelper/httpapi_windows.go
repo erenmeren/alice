@@ -3,7 +3,8 @@
 package main
 
 // A hand-written binding of the HTTP Server API configuration reads (httpapi.dll), design 2026-10-21 §7:
-// HttpInitialize, HttpQueryServiceConfiguration and HttpTerminate (the set and update calls come in W2).
+// HttpInitialize, HttpQueryServiceConfiguration and HttpTerminate (the record reads by key, the extended
+// parameters and the update are in httpapi_update_windows.go).
 // The layouts are the C structs of http.h on 64-bit Windows (amd64 and arm64), with every pointer field
 // as a uintptr so that no Go pointer is ever made from what the kernel wrote; W0 (design §14 F2)
 // measured their sizes on Windows Server 2022 and 2025 (httpapi_windows_test.go asserts them):
@@ -134,39 +135,50 @@ func ulongResult(r uintptr) error {
 
 // sslBindings lists every http.sys SSL record: the ipport, hostnameport (SNI) and ccs tables, each
 // read with HttpServiceConfigQueryNext and dwToken 0, 1, 2, ... until ERROR_NO_MORE_ITEMS, at most
-// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated). A
-// record that cannot be decoded is returned without a type, so winhelper drops it and marks the
-// dump truncated rather than reporting the binding as gone.
+// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated), and
+// the extended parameters of every ipport and hostnameport record (F9). A record that cannot be
+// decoded, or whose extended parameters cannot be read back, is returned without a type, so winhelper
+// drops it and marks the dump truncated rather than reporting the binding as gone.
 func sslBindings() ([]winproto.SSLBinding, error) {
-	for _, p := range []*windows.LazyProc{procHttpInitialize, procHttpTerminate, procHttpQueryServiceConfiguration} {
-		if err := p.Find(); err != nil {
-			return nil, errHTTPAPI
-		}
-	}
-	r, _, _ := procHttpInitialize.Call(httpapiVersion2, httpInitializeConfig, 0)
-	if err := ulongResult(r); err != nil {
-		return nil, err
-	}
-	defer func() { _, _, _ = procHttpTerminate.Call(httpInitializeConfig, 0) }()
-
 	out := []winproto.SSLBinding{}
-	for _, id := range []uint32{configSSLCertInfo, configSSLSniCertInfo, configSSLCcsCertInfo} {
-		for token := uint32(0); token <= winproto.MaxBindings; token++ {
-			rec, err := queryRecord(id, token)
-			if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
-				break
+	err := withHTTP(func() error {
+		for _, id := range []uint32{configSSLCertInfo, configSSLSniCertInfo, configSSLCcsCertInfo} {
+			for token := uint32(0); token <= winproto.MaxBindings; token++ {
+				rec, err := queryRecord(id, token)
+				if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				out = append(out, withExtended(decodeRecord(id, rec)))
 			}
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, decodeRecord(id, rec))
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-// queryRecord reads record token of table id into a buffer sized by a first call without one. The
-// buffer is a []uint64, so the structure at its start is 8-byte aligned; it holds no Go pointer.
+// withExtended adds the extended parameters to a decoded ipport or hostnameport record (inside
+// withHTTP); a record whose parameters cannot be read is returned without a type.
+func withExtended(b winproto.SSLBinding) winproto.SSLBinding {
+	if b.Type != winproto.BindingIPPort && b.Type != winproto.BindingHostnamePort {
+		return b
+	}
+	k, err := keyOf(b.Type, b.IP, b.Host, b.Port)
+	if err != nil {
+		return winproto.SSLBinding{}
+	}
+	if b.Extended, err = readExtended(k); err != nil {
+		return winproto.SSLBinding{}
+	}
+	return b
+}
+
+// queryRecord reads record token of table id (QueryNext).
 func queryRecord(id, token uint32) ([]byte, error) {
 	// The query structures differ only in their key, which QueryNext does not read.
 	var in unsafe.Pointer
@@ -182,6 +194,13 @@ func queryRecord(id, token uint32) ([]byte, error) {
 		q := &sslCcsQuery{QueryDesc: queryNext, Token: token}
 		in, inLen = unsafe.Pointer(q), unsafe.Sizeof(*q)
 	}
+	return queryConfig(id, in, inLen)
+}
+
+// queryConfig runs one HttpQueryServiceConfiguration of table id with the query structure in, into a
+// buffer sized by a first call without one. The buffer is a []uint64, so the structure at its start is
+// 8-byte aligned; it holds no Go pointer.
+func queryConfig(id uint32, in unsafe.Pointer, inLen uintptr) ([]byte, error) {
 	var need uint32
 	// unsafe: in and &need are passed for the duration of the call (LazyProc.Call keeps them alive).
 	r, _, _ := procHttpQueryServiceConfiguration.Call(0, uintptr(id), uintptr(in), inLen, 0, 0,

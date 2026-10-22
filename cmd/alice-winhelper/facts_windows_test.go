@@ -79,14 +79,14 @@ func powershell(t *testing.T, script string) []byte {
 
 func TestRealHostIsElevated(t *testing.T) {
 	requireReal(t)
-	el, err := newHost().Elevated()
+	el, err := newHost(winproto.DataDir).Elevated()
 	require.NoError(t, err)
 	assert.True(t, el, "the runner's administrator token is elevated")
 }
 
 func TestRealOSFactsMatchTheRegistryReadIndependently(t *testing.T) {
 	requireReal(t)
-	f, err := newHost().OSFacts(context.Background())
+	f, err := newHost(winproto.DataDir).OSFacts(context.Background())
 	require.NoError(t, err)
 	var cim struct{ Version, BuildNumber, Caption string }
 	require.NoError(t, json.Unmarshal(powershell(t,
@@ -106,7 +106,7 @@ func TestRealOSFactsMatchTheRegistryReadIndependently(t *testing.T) {
 
 func TestRealIISFacts(t *testing.T) {
 	requireReal(t)
-	f, err := newHost().IISFacts(context.Background())
+	f, err := newHost(winproto.DataDir).IISFacts(context.Background())
 	require.NoError(t, err, "the workflow installs IIS (Web-Server) before the tests")
 	assert.True(t, f.Installed)
 	assert.Equal(t, "10.0", f.Version)
@@ -152,14 +152,14 @@ func TestUnreadableFactFilesAreUnknown(t *testing.T) {
 func TestRealWinFactsWithUnreadableFactFiles(t *testing.T) {
 	requireReal(t)
 	denyFactFiles(t)
-	f, err := newHost().IISFacts(context.Background())
+	f, err := newHost(winproto.DataDir).IISFacts(context.Background())
 	require.NoError(t, err)
 	assert.True(t, f.Installed)
 	assert.False(t, f.SharedConfig)
 	assert.False(t, f.AutoCertRebind)
 
 	var out bytes.Buffer
-	code := winhelper.Run(context.Background(), newHost(), []string{winproto.SubWinFacts}, nil, &out)
+	code := winhelper.Run(context.Background(), newHost(winproto.DataDir), []string{winproto.SubWinFacts}, nil, &out)
 	require.Equal(t, winproto.ExitOK, code, out.String())
 	var answer winproto.WinFactsResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &answer))
@@ -169,7 +169,7 @@ func TestRealWinFactsWithUnreadableFactFiles(t *testing.T) {
 
 func TestRealStoresListTheMachineStores(t *testing.T) {
 	requireReal(t)
-	stores, err := newHost().Stores(context.Background())
+	stores, err := newHost(winproto.DataDir).Stores(context.Background())
 	require.NoError(t, err)
 	for _, s := range []string{"My", "CA", "Root"} {
 		assert.Contains(t, stores, s)

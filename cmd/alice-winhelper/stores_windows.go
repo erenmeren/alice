@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"runtime"
 	"syscall"
 	"time"
@@ -28,6 +29,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 )
 
@@ -113,15 +115,20 @@ func openExistingStore(name string) (h windows.Handle, found bool, err error) {
 
 // certificate reads the certificate with this SHA-1 from the machine store: its DER and SHA-256, the
 // friendly name, the expiry, the chain the machine builds for it and the facts of its private key.
-// found is false when the store or the certificate does not exist.
+// found is false when the store or the certificate does not exist; a store that cannot be opened is
+// an error wrapping winhelper.ErrStore (it fails the dump, W2 Ruling 19), any other failure drops the
+// certificate.
 func certificate(store, sha1Hex string, now time.Time) (winproto.StoreCertificate, bool, error) {
 	hash, err := hex.DecodeString(sha1Hex)
 	if err != nil || len(hash) != sha1.Size {
 		return winproto.StoreCertificate{}, false, errBadValue
 	}
 	h, found, err := openExistingStore(store)
-	if err != nil || !found {
-		return winproto.StoreCertificate{}, false, err
+	if err != nil {
+		return winproto.StoreCertificate{}, false, fmt.Errorf("%w: %w", winhelper.ErrStore, err)
+	}
+	if !found {
+		return winproto.StoreCertificate{}, false, nil
 	}
 	defer func() { _ = windows.CertCloseStore(h, 0) }()
 	blob := windows.CryptHashBlob{Size: sha1.Size, Data: &hash[0]}

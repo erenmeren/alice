@@ -94,7 +94,7 @@ type twin struct {
 func newTwin(t *testing.T) *twin {
 	t.Helper()
 	requireReal(t)
-	tw := &twin{t: t, real: newHost(), model: wintest.NewModel(), ports: map[int]bool{}, sites: map[string]bool{},
+	tw := &twin{t: t, real: newHost(winproto.DataDir), model: wintest.NewModel(), ports: map[int]bool{}, sites: map[string]bool{},
 		siteID: firstSiteID}
 	t.Cleanup(func() {
 		for i := len(tw.cleanup) - 1; i >= 0; i-- {
