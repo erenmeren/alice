@@ -566,7 +566,8 @@ func TestRollbackDialFailureChangesNothing(t *testing.T) {
 	out, err := s.RollbackDeployment(context.Background(), w.rollbackReq(op), nil)
 	require.NoError(t, providers.CheckRollbackReturn(out, err))
 	assert.Equal(t, providers.DeployNoChange, out.Result)
-	assert.NotEmpty(t, providerErr(t, err).Code)
+	assert.Equal(t, "ssh.auth_failed", providerErr(t, err).Code)
+	assert.Empty(t, out.Phase)
 	assert.Equal(t, []string{"version"}, w.srv.Commands())
 }
 
@@ -653,4 +654,34 @@ func TestRunWriteRefusesAnInvalidCommand(t *testing.T) {
 	pe := asProviderError(assert.AnError)
 	assert.Equal(t, "internal.unexpected", pe.Code)
 	assert.ErrorIs(t, pe, assert.AnError)
+}
+
+// A Windows deployment's rollback-failure params come from the backup recorded before the change (the
+// RollbackRequest's Backup), never from details a later discovery updated (Task 7 review, Important 1).
+func TestRollbackNamesTheRecordedBackup(t *testing.T) {
+	w := newWEnv(t)
+	op := uuid.New()
+	nl := w.commit(t, op)
+	w.model.StaleTLS(true)
+	r := w.rollbackReq(op)
+	r.Backup = w.oldBackup(op)
+	r.Location.Details = map[string]any{"store": "My", "cert_sha1": sha1Hex(nl.Cert.Raw)} // a discovery after the bind
+	out, err := w.session(t).RollbackDeployment(context.Background(), r, nil)
+	require.NoError(t, providers.CheckRollbackReturn(out, err))
+	assert.Equal(t, providers.DeployRollbackFailed, out.Result)
+	assert.Equal(t, map[string]string{"store": "My", "previous_sha1": w.oldSHA1}, out.Params)
+
+	for name, tc := range map[string]struct {
+		b    providers.BackupRef
+		det  map[string]any
+		want map[string]string
+	}{
+		"zero backup: the details":           {providers.BackupRef{OperationID: op}, map[string]any{"store": "WebHosting", "cert_sha1": w.oldSHA1}, map[string]string{"store": "WebHosting", "previous_sha1": w.oldSHA1}},
+		"a thumbprint that is no thumbprint": {providers.BackupRef{}, map[string]any{"store": "My", "cert_sha1": "zz\x1b"}, map[string]string{"store": "My"}},
+		"a store outside the vocabulary":     {providers.BackupRef{Store: "My\\..", PreviousSHA1: w.oldSHA1}, nil, map[string]string{"previous_sha1": w.oldSHA1}},
+		"the backup wins over the details":   {providers.BackupRef{PreviousSHA256: strings.Repeat("a", 64)}, map[string]any{"store": "My"}, map[string]string{}},
+		"details of the wrong type":          {providers.BackupRef{}, map[string]any{"store": 7, "cert_sha1": true}, map[string]string{}},
+	} {
+		assert.Equal(t, tc.want, backupParams(tc.b, providers.CertLocation{Details: tc.det}), name)
+	}
 }

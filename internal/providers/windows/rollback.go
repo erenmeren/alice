@@ -165,7 +165,7 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 		return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: providers.StepNameRestore,
 			CauseStep: r.causeStep, Error: providers.DeployErrForbidden, Steps: r.steps, Reason: providers.ReasonRollbackForbidden, Params: map[string]string{}}, nil
 	}
-	backup := backupParams(providers.BackupRef{}, req.Location)
+	backup := backupParams(req.Backup, req.Location)
 	if r.refusal != nil {
 		if r.code == winproto.CodeBackupMissing {
 			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: providers.StepNameRestore,

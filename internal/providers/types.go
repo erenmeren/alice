@@ -665,6 +665,10 @@ type RollbackRequest struct {
 	Verify         VerifyOptions
 	// Guard is the rollback guard as the engine read it right before this rollback (R48).
 	Guard RollbackGuard
+	// Backup is the rollback_info the start record wrote before the deployment's first change; zero for providers
+	// that do not use it. The Windows provider names the previous certificate of a failed rollback from it (store,
+	// previous_sha1: W2 Ruling 17), never from the location's details, which a later discovery may have updated.
+	Backup BackupRef
 	// Backups is where a BackupHeldByAlice provider reads the backup it restores (R59 G5); see DeployRequest.Backups.
 	Backups HeldBackups `json:"-"`
 }
