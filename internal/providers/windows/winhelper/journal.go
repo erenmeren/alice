@@ -238,10 +238,11 @@ func writeJournal(h WriteHost, j journal) error {
 // changing the binding (Op "" when none). iis-restore rolls back only that operation; a record outlives
 // every journal it makes unrestorable.
 //
-// Chain is what schannel serves for the binding as far as Alice knows (fix round 3): the DER SHA-256s
-// of the leaf and the intermediates of the last bind Alice committed, written with committed. It is
-// cleared before any bind (the record may change from then on: a write, a kill, a restore), so it is
-// set only while the record is exactly what that committed bind left. iis-deploy answers unchanged
+// Chain is what schannel serves for the binding as far as Alice knows (fix rounds 3 and 4): the DER
+// SHA-256s of the leaf and the intermediates of the last bind Alice committed, written with committed.
+// It is cleared when a deployment takes the record (prepared, before any import or bind) and before
+// every restore write, and put back only by a deployment that ends unchanged (it wrote nothing), so it
+// is set only while the record is exactly what that committed bind left. iis-deploy answers unchanged
 // only when it equals the deployment's chain (schannel serves the chain it built at the last write,
 // W0 F5); otherwise a same-hash write rebuilds it. No key material: hashes of public certificates.
 type bindingRecord struct {
@@ -293,6 +294,16 @@ func (r bindingRecord) valid(canonical string) bool {
 // writeBindingRecord records op for the binding (op "" clears it) with no served chain, durably.
 func writeBindingRecord(h WriteHost, canonical, op string) error {
 	return writeBindingState(h, bindingRecord{Binding: canonical, Op: op})
+}
+
+// clearChain drops the binding record's chain, keeping its operation (nothing when it has none).
+func clearChain(h WriteHost, canonical string) error {
+	r, err := readBindingState(h, canonical)
+	if err != nil || r.Chain == nil {
+		return err
+	}
+	r.Chain = nil
+	return writeBindingState(h, r)
 }
 
 // writeBindingState replaces the binding's whole record, durably. A record readBindingState would
@@ -367,8 +378,8 @@ func handBack(h WriteHost, j journal) error {
 	if rec.Op != j.Op {
 		return nil
 	}
-	// The served chain is kept: an operation that changed nothing never reached its bind (the chain is
-	// cleared before the writing journal), so the chain still describes what the record serves.
+	// The record is handed back as it is: a prepared operation took it without a chain (fix round 4),
+	// so the next deployment makes one same-hash write; an unchanged one put back the chain it read.
 	rec.Op = j.PrevRecord
 	return writeBindingState(h, rec)
 }

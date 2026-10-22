@@ -105,6 +105,10 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 		}
 		return j, nil
 	}
+	// A restore write changes what is served: the binding record keeps no chain from then on.
+	if err := clearChain(h, j.Binding); err != nil {
+		return j, err
+	}
 	j.Phase = winproto.PhaseRestoring
 	if err := writeJournal(h, j); err != nil {
 		return j, err

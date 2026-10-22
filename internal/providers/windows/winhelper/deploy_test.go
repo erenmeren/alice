@@ -586,7 +586,7 @@ func TestDeployUnchanged(t *testing.T) {
 		if rec, _ := readBindingState(f.h, canon443); rec.Op != op2 || !reflect.DeepEqual(rec.Chain, f.chain()) {
 			t.Fatalf("%+v", rec)
 		}
-		// Fencing nothing and handing the record back keeps the chain: a third deploy is unchanged too.
+		// An unchanged deployment puts back the chain it read: a third deploy is unchanged too.
 		f.reset()
 		if _, r, out := f.deploy(op3, f.input()); r.Phase != winproto.PhaseUnchanged {
 			t.Fatalf("%s", out)
@@ -638,28 +638,85 @@ func TestDeployUnchanged(t *testing.T) {
 			t.Fatal(served(t, f))
 		}
 	})
-	t.Run("a fence of a prepared operation keeps the served chain", func(t *testing.T) {
-		f := setup(t, true)
-		_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Op: op3, Chain: f.chain()})
-		mustWrite(t, f.h, func() journal {
-			j := sampleJournal(op3)
-			j.Phase = winproto.PhaseCommitted
-			return j
-		}())
-		f.h.pointErr = func(n string) error {
-			if n == "deploy.prepared" {
-				return errors.New("kill")
+	// Fix round 4: the chain goes with the prepared write, so a kill at any point of a deployment,
+	// even before its bind, leaves the next deployment a same-hash write.
+	for _, point := range []string{"deploy.prepared", "deploy.import_chain", "deploy.import_certificate"} {
+		t.Run("killed at "+point+", fenced: the next deploy writes", func(t *testing.T) {
+			f := setup(t, true)
+			_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Op: op3, Chain: f.chain()})
+			mustWrite(t, f.h, func() journal {
+				j := sampleJournal(op3)
+				j.Phase = winproto.PhaseCommitted
+				return j
+			}())
+			f.h.pointErr = func(n string) error {
+				if n == point {
+					return errors.New("kill")
+				}
+				return nil
+			}
+			f.killedDeploy(op1, f.input())
+			f.h.pointErr = nil
+			if rec, _ := readBindingState(f.h, canon443); rec.Op != op1 || rec.Chain != nil {
+				t.Fatalf("taken with its chain: %+v", rec)
+			}
+			if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseFenced {
+				t.Fatalf("%s", out)
+			}
+			if rec, _ := readBindingState(f.h, canon443); rec.Op != op3 || rec.Chain != nil {
+				t.Fatalf("handed back: %+v", rec)
+			}
+			f.reset()
+			if _, r, out := f.deploy(op2, f.input()); r.Phase != winproto.PhaseCommitted || len(f.h.updates) != 1 {
+				t.Fatalf("%s", out)
+			}
+		})
+	}
+	t.Run("a restore clears the chain", func(t *testing.T) {
+		f := newFixture(t)
+		f.committed(op1)
+		if r, _ := readBindingState(f.h, canon443); !reflect.DeepEqual(r.Chain, f.chain()) {
+			t.Fatal(r)
+		}
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		if r, _ := readBindingState(f.h, canon443); r.Op != op1 || r.Chain != nil {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("the chain cannot be cleared before a restore write: OUTCOME_UNKNOWN, nothing restored", func(t *testing.T) {
+		f := newFixture(t)
+		f.committed(op1)
+		f.h.writeStateErr = func(n string) error {
+			if n == bindingRecordName(canon443) {
+				return errors.New("disk")
 			}
 			return nil
 		}
-		f.killedDeploy(op1, f.input())
-		f.h.pointErr = nil
-		if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseFenced {
-			t.Fatalf("%s", out)
+		o, _, out := f.restore(op1, []string{}, []string{})
+		wantError(t, o.Exit, out, 4, winproto.CodeOutcomeUnknown)
+		if len(f.h.updates) != 1 || f.journal(op1).Phase != winproto.PhaseCommitted {
+			t.Fatal("restored or journalled")
 		}
-		if rec, _ := readBindingState(f.h, canon443); rec.Op != op3 || !reflect.DeepEqual(rec.Chain, f.chain()) {
-			t.Fatalf("%+v", rec)
+	})
+	t.Run("the binding record cannot be read before a restore write: OUTCOME_UNKNOWN", func(t *testing.T) {
+		f := newFixture(t)
+		f.committed(op1)
+		n := 0
+		f.h.afterUpdate = func(b winproto.SSLBinding) winproto.SSLBinding {
+			if n++; n == 1 {
+				f.h.state[bindingRecordName(canon443)] = []byte("{") // read back fails, then the record is unreadable
+				b.Flags = 0
+			}
+			return b
 		}
+		// A second deployment whose bind reads back wrong: its self-restore cannot clear the chain.
+		third := f.ca.Issue(leafOpts, testNow)
+		o, _, out := f.deploy(op2, f.input(func(in *winproto.DeployInput) {
+			in.ExpectSHA256, in.ChainPEM, in.KeyPEM = f.newSHA256, string(third.FullchainPEM), string(third.KeyPEM)
+		}))
+		wantError(t, o.Exit, out, 4, winproto.CodeOutcomeUnknown)
 	})
 }
 

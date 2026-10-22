@@ -299,8 +299,9 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	}
 	// The binding record names this operation from the prepared journal on (a prepared operation
 	// changed nothing; latestOp walks through it to prev_record).
-	// The served chain stays: nothing is written to the record before the writing journal.
-	if err := writeBindingState(h, bindingRecord{Binding: j.Binding, Op: j.Op, Chain: t.served}); err != nil {
+	// The served chain is cleared with it (fix round 4): from here on an interruption leaves the
+	// next deployment a same-hash write (an intermediate may have been added, or removed by someone).
+	if err := writeBindingRecord(h, j.Binding, j.Op); err != nil {
 		return nil, err
 	}
 	if err := point(h, "deploy.prepared"); err != nil {
@@ -363,6 +364,11 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	// same-hash write makes schannel build the chain again (its cache, §6.4): after an interrupted
 	// deployment that added an intermediate, a binding Alice never wrote, or another chain.
 	if j.Previous.CertSHA1 == j.NewSHA1 && len(j.Intermediates) == 0 && slices.Equal(t.served, t.chain) {
+		// Nothing was written to the record: the chain it serves is still the one read, so it goes back
+		// (before the journal: a kill between leaves a prepared journal whose record keeps it, safe).
+		if err := writeBindingState(h, bindingRecord{Binding: j.Binding, Op: j.Op, Chain: t.served}); err != nil {
+			return nil, err
+		}
 		j.Phase = winproto.PhaseUnchanged
 		if err := writeJournal(h, *j); err != nil {
 			return nil, err
@@ -370,12 +376,6 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 		return t.answer(), nil
 	}
 
-	// From the bind on, what is served may change (a write, a kill, a restore): the chain goes first.
-	if len(t.served) > 0 {
-		if err := writeBindingRecord(h, j.Binding, j.Op); err != nil {
-			return nil, err
-		}
-	}
 	j.Phase = winproto.PhaseWriting
 	if err := t.write("deploy.writing"); err != nil {
 		return nil, err
