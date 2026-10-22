@@ -1,0 +1,107 @@
+name: windows
+
+# The Windows helper on real Windows Server (R60 Ruling 17, design 2026-10-21 §13): the real-host tests
+# of cmd/alice-winhelper, the fidelity test against the emulator and the setup script smoke test, on
+# windows-2022 and windows-2025. Not a required check yet (W4 makes it one).
+on:
+  push:
+    paths:
+      - cmd/alice-winhelper/**
+      - internal/providers/windows/**
+      - internal/providers/linuxssh/**
+      - internal/providers/linuxssh/helperproto/**
+      - internal/providers/linuxssh/linuxsshtest/**
+      - internal/testutil/pki/**
+      - .github/workflows/windows.yml
+      - go.mod
+      - go.sum
+  pull_request:
+    paths:
+      - cmd/alice-winhelper/**
+      - internal/providers/windows/**
+      - internal/providers/linuxssh/**
+      - internal/providers/linuxssh/helperproto/**
+      - internal/providers/linuxssh/linuxsshtest/**
+      - internal/testutil/pki/**
+      - .github/workflows/windows.yml
+      - go.mod
+      - go.sum
+  schedule:
+    - cron: '41 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch (or pull request) cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  helper:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # The images check files out with CRLF line endings; tests compare committed text (the
+      # preparation guide's Match block, appcmd fixtures) byte for byte.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+
+      # W0 F6: Web-Server alone brings appcmd.exe.
+      - name: Install IIS
+        run: |
+          $r = Install-WindowsFeature Web-Server
+          if (-not $r.Success) { throw "Install-WindowsFeature Web-Server failed (exit code $($r.ExitCode))" }
+          if (-not (Test-Path "$env:windir\system32\inetsrv\appcmd.exe")) { throw 'appcmd.exe is missing after the install' }
+
+      # As make winhelper builds them; TestRealSetupScript embeds their checksums.
+      - name: Build alice-helper.exe for amd64 and arm64
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+        run: |
+          foreach ($arch in 'amd64', 'arm64') {
+            $env:GOARCH = $arch
+            go build -trimpath -buildvcs=false -ldflags "-s -w" -o "bin/alice-winhelper-windows-$arch.exe" ./cmd/alice-winhelper
+            if ($LASTEXITCODE -ne 0) { throw "go build for $arch failed" }
+          }
+          Get-FileHash bin/alice-winhelper-windows-*.exe -Algorithm SHA256 | Format-Table -AutoSize Hash, Path
+
+      # A skipped real test is a failure: every test below must print its PASS line (the rule of
+      # SSH_MATRIX_PASSED in the Makefile).
+      - name: Test on real Windows
+        env:
+          ALICE_WIN_REAL: "1"
+          ALICE_WIN_SETUP: "1"
+          ALICE_WIN_HELPER_DIR: ${{ github.workspace }}\bin
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'go-test.log'
+          go test -count=1 -v ./cmd/alice-winhelper/... ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
+          $status = $LASTEXITCODE
+          $required = @(
+            'TestRealHostIsElevated',
+            'TestRealBindingsListAnSNIAndAnIPBinding',
+            'TestFidelityVersionAndRefusals',
+            'TestFidelityWinFacts',
+            'TestFidelityDumpSNIAndIPBindings',
+            'TestFidelityDumpCertificateRemoved',
+            'TestFidelityDumpKeyMissing',
+            'TestFidelityTLSProbe',
+            'TestRealSetupScript'
+          )
+          $text = Get-Content -LiteralPath $log -Raw
+          $missing = @($required | Where-Object { $text -notmatch ('(?m)^--- PASS: ' + [regex]::Escape($_) + ' \(') })
+          if ($missing.Count -gt 0) { Write-Host "::error::These tests did not pass (skipped, failed or not run): $($missing -join ', ')" }
+          if ($status -ne 0) { Write-Host "::error::go test failed (exit code $status)" }
+          if ($status -ne 0 -or $missing.Count -gt 0) { exit 1 }
