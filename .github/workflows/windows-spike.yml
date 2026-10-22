@@ -33,8 +33,11 @@ jobs:
           "step,seconds" | Set-Content "$env:R\timings.csv"
           $PSVersionTable | Out-String | Set-Content "$env:R\psversion.txt"
 
-      # internal/api/nul.go is a reserved device name on Windows and fails a full checkout: fetch only what the
-      # spike builds from (cone mode also brings go.mod and go.sum).
+      # internal/api/nul.go is a reserved device name on Windows: git's core.protectNTFS refuses it in the index
+      # even in a sparse checkout. Turn the check off and fetch only what the spike builds from (cone mode also
+      # brings go.mod and go.sum), so the file is never written.
+      - name: Allow the reserved name in the index
+        run: git config --system core.protectNTFS false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: tools/winspike
