@@ -487,22 +487,30 @@ func TestArenaIsOnTheHeap(t *testing.T) {
 	}
 }
 
-// machineKeysSince lists the software KSP's machine key files (C:\ProgramData\Microsoft\Crypto\Keys)
-// created after since: only the test's own window counts, so a key another process kept from before
-// (or a count changed by a deletion elsewhere) does not move it.
+// machineKeyDirs are where machine keys live: the software KSP's (CNG) and the legacy CSPs' (an
+// Import-PfxCertificate of an RSA key may land there).
+var machineKeyDirs = []string{`C:\ProgramData\Microsoft\Crypto\Keys`, `C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys`}
+
+// machineKeysSince lists the machine key files (machineKeyDirs) created after since: only the test's
+// own window counts, so a key another process kept from before (or a count changed by a deletion
+// elsewhere) does not move it. A directory this image lacks holds none.
 func machineKeysSince(t *testing.T, since time.Time) []string {
 	t.Helper()
-	dir := `C:\ProgramData\Microsoft\Crypto\Keys`
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
 	var out []string
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			continue // deleted meanwhile
+	for _, dir := range machineKeyDirs {
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		if d, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && time.Unix(0, d.CreationTime.Nanoseconds()).After(since) {
-			out = append(out, e.Name())
+		require.NoError(t, err)
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue // deleted meanwhile
+			}
+			if d, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && time.Unix(0, d.CreationTime.Nanoseconds()).After(since) {
+				out = append(out, filepath.Join(dir, e.Name()))
+			}
 		}
 	}
 	return out

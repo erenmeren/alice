@@ -657,9 +657,9 @@ func TestFidelityStatusAndFence(t *testing.T) {
 	assertPhase(t, tw.fence(op1), winproto.PhaseRestored) // a finished operation: its status, nothing changed
 	status(op1, winproto.PhaseRestored, oldSum)
 
-	// The bound certificate with its key, the store's copy used as it is: Alice's last committed bind
-	// here left another chain served (op1's), so a same-hash write first; the same deployment again is
-	// then unchanged.
+	// The bound certificate with its key, the store's copy used as it is: the binding record holds no
+	// chain of this certificate from a committed bind of Alice's (op1 bound another one, and its restore
+	// wrote the record back), so a same-hash write first; the same deployment again is then unchanged.
 	got := tw.deploy(op2, loc, old, old.CertPEM, oldSum)
 	assertPhase(t, got, winproto.PhaseCommitted)
 	assert.Equal(t, false, got["alice_imported"])
