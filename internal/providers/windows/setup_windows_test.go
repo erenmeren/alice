@@ -342,12 +342,24 @@ $s = @($a.Access | ForEach-Object { $_.IdentityReference.Translate([System.Secur
 	assert.Equal(t, setupInvalidArgument, refusal.Code)
 	assert.Equal(t, 1, bytes.Count(bytes.TrimSpace(stdout), []byte("\n"))+1, "one JSON line, nothing from whoami: %s", stdout)
 
-	// PermitTTY no: a forced terminal still gets only the helper's answer, never a shell.
+	// PermitTTY no: a forced terminal never gets a shell. sshd refuses the PTY; Win32-OpenSSH's client
+	// then ends the session with 255 (Windows run 3), or a client that carries on gets only the
+	// helper's answer. Either way stdout holds nothing but, at most, the helper's one JSON line.
 	code, stdout, stderr = setupSSHWith(t, keyFile, knownHosts, []string{"-tt"}, winproto.SubVersion)
-	require.Equal(t, 0, code, "ssh -tt version: %s %s", stdout, stderr)
-	version = winproto.VersionResponse{}
-	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &version), "only the helper's JSON: %q", stdout)
-	assert.Equal(t, winproto.Protocol, version.Protocol)
+	ttyOut := bytes.TrimSpace(stdout)
+	helperJSON := func() bool {
+		var v winproto.VersionResponse
+		return bytes.Count(ttyOut, []byte("\n")) == 0 && json.Unmarshal(ttyOut, &v) == nil && v.Protocol == winproto.Protocol
+	}
+	switch code {
+	case 255:
+		assert.Contains(t, string(stderr), "PTY allocation request failed", "ssh -tt: the PTY is refused")
+		assert.True(t, len(ttyOut) == 0 || helperJSON(), "ssh -tt: no shell output: %q", stdout)
+	case 0:
+		assert.True(t, helperJSON(), "ssh -tt: exactly the helper's JSON: %q", stdout)
+	default:
+		t.Errorf("ssh -tt version: exit %d: %s %s", code, stdout, stderr)
+	}
 
 	// AllowTcpForwarding no (and the key's restrict): a remote forward is refused, so the client
 	// gives up at once, and a local forward never reaches anything.
