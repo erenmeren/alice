@@ -239,9 +239,9 @@ func TestBuildDumpKeepsAndNormalisesGoodBindings(t *testing.T) {
 	h := dumpHost()
 	h.bindings = []winproto.SSLBinding{
 		// the spike's ccs entry: ip 0.0.0.0, empty hash, empty store
-		{Type: winproto.BindingCCS, IP: "0.0.0.0", Port: 443, AppID: strings.ToUpper(app1), CertSHA1: "", Store: ""},
+		{Type: winproto.BindingCCS, IP: "0.0.0.0", Port: 443, AppID: strings.ToUpper(app1), CertSHA1: "", Store: ""}, //nolint:forbidigo // ASCII hex
 		// http.sys reports the store in upper case; an upper case hash from a host is folded
-		{Type: winproto.BindingHostnamePort, Host: "WWW.Example.Test\x1b", Port: 443, AppID: app1, CertSHA1: strings.ToUpper(h1), Store: "MY",
+		{Type: winproto.BindingHostnamePort, Host: "WWW.Example.Test\x1b", Port: 443, AppID: app1, CertSHA1: strings.ToUpper(h1), Store: "MY", //nolint:forbidigo // ASCII hex
 			CTLIdentifier: "ctl\x07", CTLStore: "Root", Flags: 2},
 		{Type: winproto.BindingIPPort, IP: "::", Port: 443, AppID: app1, CertSHA1: h2, Store: "WebHosting"},
 	}

@@ -203,7 +203,7 @@ func cleanBinding(b winproto.SSLBinding) (winproto.SSLBinding, bool) {
 		// Whatever hash and store a ccs entry carries, it has no certificate of its own to read.
 		return out, true
 	}
-	sha := strings.ToLower(b.CertSHA1)
+	sha := strings.ToLower(b.CertSHA1) //nolint:forbidigo // hex digits, ASCII only
 	if !winproto.ValidSHA1(sha) || !winproto.ValidStore(b.Store) {
 		return b, false
 	}

@@ -28,13 +28,21 @@ RUN for arch in amd64 arm64; do \
         -o /out/helper/alice-helper-linux-$arch ./cmd/alice-helper || exit 1; \
     done \
  && cd /out/helper && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
+# The Windows helper is built the same way (make winhelper) for its checksums, which the Windows
+# setup script checks (R60 Ruling 16).
+RUN for arch in amd64 arm64; do \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch GOAMD64=v1 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" \
+        -o /out/helper/alice-winhelper-windows-$arch.exe ./cmd/alice-winhelper || exit 1; \
+    done \
+ && cd /out/helper && sha256sum alice-winhelper-windows-amd64.exe alice-winhelper-windows-arm64.exe > alice-winhelper.sha256
 # No image is built without both checksums, each 64 lower-case hex digits as the Makefile's build
 # target checks: the setup script would otherwise refuse to exist (R37 item 2).
 RUN sum() { awk -v f="alice-helper-linux-$1" '$2 == f { print $1 }' /out/helper/alice-helper.sha256; } \
- && a=$(sum amd64) && b=$(sum arm64) \
- && for s in "$a" "$b"; do echo "$s" | grep -Eqx '[0-9a-f]{64}' || { echo "missing alice-helper checksums" >&2; exit 1; }; done \
+ && wsum() { awk -v f="alice-winhelper-windows-$1.exe" '$2 == f { print $1 }' /out/helper/alice-winhelper.sha256; } \
+ && a=$(sum amd64) && b=$(sum arm64) && wa=$(wsum amd64) && wb=$(wsum arm64) \
+ && for s in "$a" "$b" "$wa" "$wb"; do echo "$s" | grep -Eqx '[0-9a-f]{64}' || { echo "missing alice-helper checksums" >&2; exit 1; }; done \
  && CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
-    -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME} -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$a -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$b" \
+    -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME} -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$a -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$b -X alice/internal/providers/windows.helperSHA256WindowsAMD64=$wa -X alice/internal/providers/windows.helperSHA256WindowsARM64=$wb" \
     -o /out/alice ./cmd/alice \
  && mkdir -p /out/keys /out/opt-alice/state /out/opt-alice/backups && chmod 0700 /out/keys /out/opt-alice/state /out/opt-alice/backups
 

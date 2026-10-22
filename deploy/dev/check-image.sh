@@ -7,7 +7,7 @@
 #
 # TEST_LICENSE_LABEL, TEST_ROUTE_MARKER, E2E_AZURE_MARKER and E2E_ACME_MARKER come from the Makefile, whose
 # release-symcheck proves that an e2e build contains all three (so their absence here means something). HELPER_SHA256_AMD64 and
-# HELPER_SHA256_ARM64 are the checksums of make helper: the helper build is reproducible, so the
+# HELPER_SHA256_ARM64 (and WINHELPER_SHA256_AMD64/ARM64, of make winhelper) are the checksums of make helper: the helper build is reproducible, so the
 # image's binary must hold exactly the checksums of the helper built from the same source with the
 # same Go version (the two checks are skipped, with a skip: line, when the host's Go differs).
 #
@@ -27,6 +27,8 @@ azure_marker="${E2E_AZURE_MARKER:?set E2E_AZURE_MARKER (make image-check does)}"
 acme_marker="${E2E_ACME_MARKER:?set E2E_ACME_MARKER (make image-check does)}"
 sum_amd64="${HELPER_SHA256_AMD64:?set HELPER_SHA256_AMD64 (make image-check does)}"
 sum_arm64="${HELPER_SHA256_ARM64:?set HELPER_SHA256_ARM64 (make image-check does)}"
+wsum_amd64="${WINHELPER_SHA256_AMD64:?set WINHELPER_SHA256_AMD64 (make image-check does)}"
+wsum_arm64="${WINHELPER_SHA256_ARM64:?set WINHELPER_SHA256_ARM64 (make image-check does)}"
 
 work="$(mktemp -d)"
 id=""
@@ -101,6 +103,8 @@ bin_go="$(awk 'NR == 1 { print $2 }' <<<"$info")"
 if [[ "$host_go" == "$bin_go" ]]; then
   check "binary holds the amd64 helper checksum of make helper" "$(count -acF "$sum_amd64" "$bin")" "1"
   check "binary holds the arm64 helper checksum of make helper" "$(count -acF "$sum_arm64" "$bin")" "1"
+  check "binary holds the Windows amd64 helper checksum of make winhelper" "$(count -acF "$wsum_amd64" "$bin")" "1"
+  check "binary holds the Windows arm64 helper checksum of make winhelper" "$(count -acF "$wsum_arm64" "$bin")" "1"
 elif [[ -n "${CI:-}" ]]; then
   echo "FAIL: host Go $host_go differs from the Go that built the image's binary ($bin_go); in CI they must match (deploy/Dockerfile's Go image and go.mod), so the helper checksums cannot be skipped"
   fail=1

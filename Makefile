@@ -106,12 +106,20 @@ web-lint: ## Lint the web UI
 HELPER_SUM = $(shell awk '$$2 == "alice-helper-linux-$(1)" { print $$1 }' bin/alice-helper.sha256 2>/dev/null)
 HELPER_LDFLAGS = -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$(call HELPER_SUM,amd64) -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$(call HELPER_SUM,arm64)
 
+# The Windows setup script checks alice-helper.exe against these (R60 Ruling 16), from
+# bin/alice-winhelper.sha256 that make winhelper writes.
+WINHELPER_SUM = $(shell awk '$$2 == "alice-winhelper-windows-$(1).exe" { print $$1 }' bin/alice-winhelper.sha256 2>/dev/null)
+WINHELPER_LDFLAGS = -X alice/internal/providers/windows.helperSHA256WindowsAMD64=$(call WINHELPER_SUM,amd64) -X alice/internal/providers/windows.helperSHA256WindowsARM64=$(call WINHELPER_SUM,arm64)
+
 .PHONY: build
-build: web helper ## Build the alice binary with the embedded UI (and the helper checksums) into bin/
+build: web helper winhelper ## Build the alice binary with the embedded UI (and the helper checksums) into bin/
 	@for sum in '$(call HELPER_SUM,amd64)' '$(call HELPER_SUM,arm64)'; do \
 	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-helper.sha256 lacks a helper checksum; run make helper"; exit 1; }; \
 	done
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) $(HELPER_LDFLAGS)" -o bin/alice ./cmd/alice
+	@for sum in '$(call WINHELPER_SUM,amd64)' '$(call WINHELPER_SUM,arm64)'; do \
+	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-winhelper.sha256 lacks a helper checksum; run make winhelper"; exit 1; }; \
+	done
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) $(HELPER_LDFLAGS) $(WINHELPER_LDFLAGS)" -o bin/alice ./cmd/alice
 	@! go version -m bin/alice | grep -q stretchr/testify || { echo "testify is linked into bin/alice"; exit 1; }
 
 # Release symbol guard: the release build (no tags) links no e2e-only code. The e2e build is the
@@ -193,6 +201,12 @@ helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ wit
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-arm64 ./cmd/alice-helper
 	cd bin && sha256sum alice-helper-linux-amd64 alice-helper-linux-arm64 > alice-helper.sha256
 
+.PHONY: winhelper
+winhelper: ## Build alice-helper.exe for Windows amd64 and arm64 into bin/ with SHA-256 checksums (reproducible: no VCS stamp)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-winhelper-windows-amd64.exe ./cmd/alice-winhelper
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-winhelper-windows-arm64.exe ./cmd/alice-winhelper
+	cd bin && sha256sum alice-winhelper-windows-amd64.exe alice-winhelper-windows-arm64.exe > alice-winhelper.sha256
+
 # The make up stack also reads deploy/docker-compose.override.yml when it exists, as docker compose
 # does by itself in deploy/ (AUD-24): docs/operator-guide.md mounts the SMTP password and CA file
 # with it. The file is the operator's and ignored by git. COMPOSE_E2E never reads it: the e2e
@@ -213,9 +227,10 @@ image: ## Build the alice container image as alice:$(IMAGE_TAG) (default alice:c
 # deploy/dev/check-image.sh lists what it checks. It needs Docker and Go, no database, no network.
 # The helper build is reproducible, so the image must hold the checksums make helper writes.
 .PHONY: image-check
-image-check: image helper ## Check the release image: non-root, no shell or test artefacts, a release binary without build tags, test key or /test routes (AUD-23)
+image-check: image helper winhelper ## Check the release image: non-root, no shell or test artefacts, a release binary without build tags, test key or /test routes (AUD-23)
 	TEST_LICENSE_LABEL='$(TEST_LICENSE_LABEL)' TEST_ROUTE_MARKER='$(TEST_ROUTE_MARKER)' E2E_AZURE_MARKER='$(E2E_AZURE_MARKER)' E2E_ACME_MARKER='$(E2E_ACME_MARKER)' \
 	  HELPER_SHA256_AMD64='$(call HELPER_SUM,amd64)' HELPER_SHA256_ARM64='$(call HELPER_SUM,arm64)' \
+	  WINHELPER_SHA256_AMD64='$(call WINHELPER_SUM,amd64)' WINHELPER_SHA256_ARM64='$(call WINHELPER_SUM,arm64)' \
 	  ./deploy/dev/check-image.sh $(IMAGE_TAG)
 
 .PHONY: up
@@ -301,6 +316,7 @@ lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e bu
 	go run ./tools/pincheck
 	$(MAKE) shellcheck lockcheck docs-check matrix-check actionlint MATRIXCHECK_FLAGS=-strict
 	golangci-lint run ./...
+	GOOS=windows golangci-lint run ./cmd/alice-winhelper/... ./internal/providers/windows/...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,e2e,testlicense ./cmd/...

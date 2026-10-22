@@ -269,7 +269,7 @@ func ValidAppID(s string) bool { return appIDRE.MatchString(s) }
 // CanonicalAppID accepts a GUID in upper or lower case, with or without braces, and returns the
 // lower-case braced form.
 func CanonicalAppID(s string) (string, bool) {
-	s = strings.ToLower(s)
+	s = strings.ToLower(s) //nolint:forbidigo // a GUID is ASCII
 	if !strings.HasPrefix(s, "{") {
 		s = "{" + s + "}"
 	}

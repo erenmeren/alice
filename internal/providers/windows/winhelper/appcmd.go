@@ -53,7 +53,7 @@ func parseSites(data []byte) ([]winproto.Site, bool, error) {
 	truncated, rootSeen, bindingsSeen := false, false, 0
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

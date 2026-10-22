@@ -214,7 +214,7 @@ func TestDumpJSONShape(t *testing.T) {
 	if !strings.Contains(string(bare), `"key_usable_by_system":null`) || strings.Contains(string(bare), "key_problem") {
 		t.Errorf("bare certificate: %s", bare)
 	}
-	var tp winproto.TLSProbeResponse = helperproto.TLSProbeResponse{OK: true}
+	var tp winproto.TLSProbeResponse = helperproto.TLSProbeResponse{OK: true} //nolint:staticcheck // the explicit type is the point: it proves the alias assigns
 	if !tp.OK {
 		t.Error("alias")
 	}
