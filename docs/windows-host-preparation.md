@@ -114,7 +114,18 @@ terminal and every kind of forwarding. The block must stay the last `Match` bloc
 
 The default `sshd_config` has a `Match Group administrators` block that makes sshd read the keys of every
 administrator from `C:\ProgramData\ssh\administrators_authorized_keys`; Alice's key goes there. The script warns if
-the file no longer names it.
+the file no longer names it. Because sshd reads that file for **every** member of Administrators, not only for
+Alice's account, the key line forces the helper itself:
+
+```
+restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh" ssh-ed25519 AAAA... alice-platform
+```
+
+sshd applies `command=` whatever account signs in with the key, and still passes Alice's request in
+`SSH_ORIGINAL_COMMAND` (inside the quoted value only `\"` is an escape; the other backslashes are the path's own).
+So Alice's key reaches only `alice-helper.exe`, on every administrator account: someone who stole the key and
+signs in as `Administrator` gets the helper's refusal, never a shell. The `Match User` block above is a second layer
+for Alice's own account. Never remove the `command=` option from the line.
 
 ## What the script changes
 
@@ -134,7 +145,8 @@ The script stops at the first error. It changes nothing before it has checked th
    setting; set them in the policy for the domain setup.
 4. Writes Alice's key line into `C:\ProgramData\ssh\administrators_authorized_keys`, exactly once: a line with the
    same key (an earlier `from=` value) is replaced, every other line is kept. The line is `restrict` (no
-   forwarding, no terminal), with `from="<address>"` when the script was asked for with Alice's address, then the key.
+   forwarding, no terminal) and `command=` with the helper (above), with `from="<address>"` when the script was asked
+   for with Alice's address, then the key.
    The file's owner becomes Administrators and its access Administrators and SYSTEM only, as sshd requires.
 5. Adds the block above to `sshd_config`. The new file is checked with `sshd -t` first; when sshd refuses it, the
    previous file is put back and the script stops. Then `sshd` is restarted.
@@ -159,8 +171,10 @@ The script never changes User Account Control and never sets `LocalAccountTokenF
 
 ### ALC-WIN-0001: the helper is not set up
 
-Alice signed in, but what answered was not `alice-helper.exe`: sshd ran a shell instead (the `Match` block is
-missing or does not name the account) or the helper is not at `C:\Program Files\Alice\alice-helper.exe`. Run the
+Alice signed in, but what answered was not `alice-helper.exe`: the helper is not at
+`C:\Program Files\Alice\alice-helper.exe`, or sshd ran a shell instead (Alice's line in
+`administrators_authorized_keys` lost its `command=` option and the `Match` block is missing or does not name the
+account). Run the
 setup script again in an elevated PowerShell, with `$AliceUser` set to the account you entered in Alice. Check that
 `C:\ProgramData\ssh\sshd_config` ends with the `# BEGIN Alice` block and that sshd was restarted
 (`Restart-Service sshd`). For a domain account, check that the name in the block is the account's name in lower case.

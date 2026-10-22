@@ -159,7 +159,7 @@ unchanged; these rows are what Windows adds.
 
 | ID | STRIDE | Threat | Mitigation | Residual |
 |----|--------|--------|------------|----------|
-| WN-1 | E | Alice compromised runs arbitrary code on Windows servers | sshd's `ForceCommand` runs only `alice-helper.exe ssh` for the account; the helper accepts only its fixed subcommands with validated tokens; no shell, no TTY, no forwarding (`Match` block, `restrict` key line); in W1 every subcommand only reads | Low (W2: equals Nginx's, any certificate to any binding) |
+| WN-1 | E | Alice compromised (or its private key stolen) runs arbitrary code on Windows servers | The key line itself forces `alice-helper.exe ssh` (`command=` option): sshd reads `administrators_authorized_keys` for every member of Administrators, so the key reaches only the helper on every administrator account, not only Alice's (final review C1); the `Match User` block's `ForceCommand` is a second layer for the account; the helper accepts only its fixed subcommands with validated tokens; no shell, no TTY, no forwarding (`restrict`, `Match` block); in W1 every subcommand only reads | Low (W2: equals Nginx's, any certificate to any binding) |
 | WN-2 | I | Password theft | No password exists in Alice; the local account's password is random, never shown or stored; sshd refuses password sign-in for the account (`AuthenticationMethods publickey`) | Low |
 | WN-3 | S | Man in the middle on first contact | SSH host key confirmed by an Administrator (SEC-080); the setup script prints the host key fingerprints to compare; a changed key blocks the server (`host_key_changed`) | Med (as SC-1) |
 | WN-4 | I | Private key exposure on the server | W1 never sends or reads a private key (the dump carries key facts only: provider, exportable, usable by SYSTEM). W2: the key travels on the helper's standard input, imported non-exportable into the machine CNG store, never written as a file or PFX | Low (W2 re-reviews) |
@@ -167,7 +167,7 @@ unchanged; these rows are what Windows adds.
 | WN-6 | T | Helper binary replaced on the server | `C:\Program Files\Alice` writable by Administrators and SYSTEM only (the account may read and execute); the setup script checks the embedded SHA-256 before and after staging; the data directory refuses reparse points and foreign owners; an administrator of the server can still replace it (as on Linux); Authenticode is design Q2 | Med |
 | WN-7 | E | UAC remote restrictions silently filter the token | The helper reads its token's elevation; `iis-dump` refuses with `NOT_ELEVATED`, and the connection test fails with `windows.not_elevated` (ALC-WIN-0003): it never half-works | Low |
 | WN-8 | T | Shared IIS configuration across a farm | Alice never writes `applicationHost.config`; sites are read through appcmd, which resolves the shared configuration; each server's http.sys binding is its own location; the `win_shared_config` warning names it | Low |
-| WN-9 | E | A shell without the forced command (setup half done: the key works, `ForceCommand` missing) | Alice sends only bare validated tokens (`linuxssh.ForcedCommand`: no quoting, no metacharacters), so a login shell can run nothing Alice did not mean; the answer is not the helper's, so `version` reports `windows.helper_missing` and nothing else is sent | Low |
+| WN-9 | E | A shell without the forced command (the key line's `command=` removed by hand and `ForceCommand` missing, or a host prepared another way) | Alice sends only bare validated tokens (`linuxssh.ForcedCommand`: no quoting, no metacharacters), so a login shell can run nothing Alice did not mean; the answer is not the helper's, so `version` reports `windows.helper_missing` and nothing else is sent | Low |
 
 #### License module
 
@@ -438,11 +438,15 @@ its name against those roots only. TLS 1.2 or later; no request is sent before t
 (`internal/providers/tlspin`). The STRIDE rows and target-access requirements of each connector come with its phase.
 
 (Amendment, R60.) Target access on a Windows server: the platform key's line in
-`C:\ProgramData\ssh\administrators_authorized_keys` is `restrict` (no forwarding, no pty, no `rc`) plus
-`from="<alice-ip>"` when the guide was asked with an address (the firewall rule for the SSH port then admits only
-those addresses; else `Any`, with a notice), and the file's ACL is Administrators and SYSTEM only. `sshd_config` ends
-with the Alice `Match User` block (the account in lower case): `ForceCommand` to the helper, public key only, no TTY,
-no TCP, stream-local or X11 forwarding, no tunnel. The account is a local administrator (needed for the machine stores
+`C:\ProgramData\ssh\administrators_authorized_keys` is `restrict` (no forwarding, no pty, no `rc`) and
+`command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"` plus `from="<alice-ip>"` when the guide was asked with an
+address (the firewall rule for the SSH port then admits only those addresses; else `Any`, with a notice), and the
+file's ACL is Administrators and SYSTEM only. sshd reads that file for every member of Administrators (the default
+`Match Group administrators` block), so the line's own `command=` is what confines the platform key to the helper on
+every administrator account, whatever user name a holder of the key signs in with (final review C1; the real-runner
+test signs in as a second administrator and gets the helper's refusal). `sshd_config` ends with the Alice
+`Match User` block (the account in lower case) as a second layer: `ForceCommand` to the helper, public key only, no
+TTY, no TCP, stream-local or X11 forwarding, no tunnel. The account is a local administrator (needed for the machine stores
 and http.sys) denied local and Remote Desktop logon, or a domain account a GPO makes a local administrator; Alice sends
 one helper line per fresh SSH connection. The setup script installs the helper only after its SHA-256 matched the value
 embedded in the script for the server's architecture (the hash of the release build, `make winhelper`), hashed again

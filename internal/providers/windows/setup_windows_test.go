@@ -158,12 +158,12 @@ func setupSSH(t *testing.T, key, knownHosts, line string) (int, []byte, []byte) 
 
 // setupSSHCommand is the client's command line: the options every call shares, then extra, then the
 // account and, unless it is "", the remote line.
-func setupSSHCommand(ctx context.Context, key, knownHosts string, extra []string, line string) *exec.Cmd {
+func setupSSHCommand(ctx context.Context, account, key, knownHosts string, extra []string, line string) *exec.Cmd {
 	client := filepath.Join(os.Getenv("SystemRoot"), "System32", "OpenSSH", "ssh.exe")
 	args := []string{"-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
 		"-o", "UserKnownHostsFile=" + knownHosts, "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlgorithms=ssh-ed25519",
 		"-o", "ConnectTimeout=20"}
-	args = append(append(args, extra...), setupAccount+"@localhost")
+	args = append(append(args, extra...), account+"@localhost")
 	if line != "" {
 		args = append(args, line)
 	}
@@ -174,9 +174,15 @@ func setupSSHCommand(ctx context.Context, key, knownHosts string, extra []string
 // and stderr; it fails the test when the client runs longer than 30 s.
 func setupSSHWith(t *testing.T, key, knownHosts string, extra []string, line string) (int, []byte, []byte) {
 	t.Helper()
+	return setupSSHAs(t, setupAccount, key, knownHosts, extra, line)
+}
+
+// setupSSHAs is setupSSHWith as another account.
+func setupSSHAs(t *testing.T, account, key, knownHosts string, extra []string, line string) (int, []byte, []byte) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := setupSSHCommand(ctx, key, knownHosts, extra, line)
+	cmd := setupSSHCommand(ctx, account, key, knownHosts, extra, line)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -210,7 +216,7 @@ func localForwardServesNothing(t *testing.T, key, knownHosts string) {
 	port := freeLoopbackPort(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := setupSSHCommand(ctx, key, knownHosts, []string{"-N", "-o", "ExitOnForwardFailure=yes",
+	cmd := setupSSHCommand(ctx, setupAccount, key, knownHosts, []string{"-N", "-o", "ExitOnForwardFailure=yes",
 		"-L", "127.0.0.1:" + port + ":127.0.0.1:22"}, "")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -241,6 +247,31 @@ func localForwardServesNothing(t *testing.T, key, knownHosts string) {
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	got, _ := io.ReadAll(conn)
 	assert.NotContains(t, string(got), "SSH-", "the forward reached sshd: TCP forwarding is allowed")
+}
+
+// otherAdministrator is the second local administrator TestRealSetupScript signs in as with Alice's key.
+const otherAdministrator = "alice-w1-other"
+
+// newOtherAdministrator creates the local account otherAdministrator (a random password nobody sees) in
+// Administrators (by SID) and removes it, with its profile, when the test ends.
+func newOtherAdministrator(t *testing.T) string {
+	t.Helper()
+	pw := make([]byte, 18)
+	_, err := rand.Read(pw)
+	require.NoError(t, err)
+	env := map[string]string{"ALICE_W1_USER": otherAdministrator, "ALICE_W1_PW": "Aa1!" + hex.EncodeToString(pw),
+		"ALICE_W1_ADMINS": setupAdministrators}
+	remove := `$u = Get-LocalUser -Name $env:ALICE_W1_USER -ErrorAction SilentlyContinue
+if ($u) {
+    Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.SID -eq $u.SID.Value } | Remove-CimInstance -ErrorAction SilentlyContinue
+    Remove-LocalUser -Name $env:ALICE_W1_USER
+}`
+	setupPowershell(t, env, remove)
+	t.Cleanup(func() { setupPowershell(t, env, remove) })
+	setupPowershell(t, env, `$pw = ConvertTo-SecureString -String $env:ALICE_W1_PW -AsPlainText -Force
+New-LocalUser -Name $env:ALICE_W1_USER -Password $pw -AccountNeverExpires -Description 'Alice W1 test (removed by the test)' | Out-Null
+Add-LocalGroupMember -SID $env:ALICE_W1_ADMINS -Member $env:ALICE_W1_USER`)
+	return otherAdministrator
 }
 
 func TestRealSetupScript(t *testing.T) {
@@ -374,6 +405,21 @@ $s = @($a.Access | ForEach-Object { $_.IdentityReference.Translate([System.Secur
 	assert.NotEqual(t, 0, code, "a password sign-in fails: %s %s", stdout, stderr)
 	assert.Empty(t, bytes.TrimSpace(stdout), "nothing ran")
 	assert.Contains(t, string(stderr), "Permission denied")
+
+	// Final review C1: sshd reads administrators_authorized_keys for every member of Administrators, and the
+	// Match User block covers only alice. The key line's own command= confines Alice's key to the helper on
+	// every other administrator account too: a shell line reaches the helper as SSH_ORIGINAL_COMMAND and is
+	// refused, version still answers.
+	other := newOtherAdministrator(t)
+	code, stdout, stderr = setupSSHAs(t, other, keyFile, knownHosts, nil, "whoami")
+	assert.Equal(t, winproto.ExitRefused, code, "ssh %s@localhost whoami: %s %s", other, stdout, stderr)
+	assert.NotContains(t, strings.ToLower(string(stdout)), strings.ToLower(other), "whoami never ran")
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &refusal), "the helper's refusal: %s", stdout)
+	assert.Equal(t, winproto.CodeUnknownSubcommand, refusal.Code)
+	code, stdout, stderr = setupSSHAs(t, other, keyFile, knownHosts, nil, winproto.SubVersion)
+	require.Equal(t, 0, code, "ssh %s@localhost version: %s %s", other, stdout, stderr)
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(stdout), &version), string(stdout))
+	assert.Equal(t, winproto.Protocol, version.Protocol)
 
 	// A second run changes nothing.
 	before := setupState(t)

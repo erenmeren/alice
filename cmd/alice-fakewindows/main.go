@@ -46,6 +46,7 @@ import (
 
 	"alice/internal/platform/clock"
 	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/wintest"
 )
 
@@ -267,6 +268,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // (internal/providers/windows/setup.go).
 const keyLinePrefix = "$AuthorizedKey ="
 
+// forcedCommandOption is the command= option the key line must carry: the installed helper's forced-command entry.
+const forcedCommandOption = `command="\"` + winproto.HelperPath + `\" ssh"`
+
 // authorizedKeyOf finds the one $AuthorizedKey = '<line>' assignment of a setup script and parses its line as
 // administrators_authorized_keys does (options, then the key). Any other count of such lines is refused.
 func authorizedKeyOf(script []byte) (ssh.PublicKey, error) {
@@ -284,9 +288,14 @@ func authorizedKeyOf(script []byte) (ssh.PublicKey, error) {
 	if len(value) < 2 || value[0] != '\'' || value[len(value)-1] != '\'' {
 		return nil, fmt.Errorf("the line %s is not a single-quoted string", keyLinePrefix)
 	}
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(value[1 : len(value)-1]))
+	key, _, opts, _, err := ssh.ParseAuthorizedKey([]byte(value[1 : len(value)-1]))
 	if err != nil {
 		return nil, fmt.Errorf("the line %s holds no public key: %w", keyLinePrefix, err)
+	}
+	// The line must confine the key to the helper itself (final review C1): administrators_authorized_keys is read
+	// for every administrator account, so a line without the forced command would open a shell on all of them.
+	if !slices.Contains(opts, forcedCommandOption) {
+		return nil, fmt.Errorf("the line %s does not force %s", keyLinePrefix, forcedCommandOption)
 	}
 	return key, nil
 }

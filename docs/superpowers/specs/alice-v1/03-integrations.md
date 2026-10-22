@@ -502,8 +502,11 @@ its other http.sys bindings are listed, unsupported.
   local Administrators group: a local account the setup script creates (random 32-character password, never shown,
   "Deny log on locally" and "Deny log on through Remote Desktop Services"), or a domain account a GPO makes a local
   administrator (for a hardened baseline that denies network logon to local administrators, S-1-5-114).
-- `C:\ProgramData\ssh\administrators_authorized_keys` holds the key line `restrict[,from="<addresses>"] <key>` (ACL
-  Administrators and SYSTEM only). `sshd_config` ends with the Alice block:
+- `C:\ProgramData\ssh\administrators_authorized_keys` holds the key line
+  `restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"[,from="<addresses>"] <key>` (ACL Administrators
+  and SYSTEM only). sshd reads that file for every member of Administrators, so the line's `command=` confines the key
+  to the helper on every administrator account (sshd still sets `SSH_ORIGINAL_COMMAND`; OpenSSH un-escapes only `\"`
+  inside the quoted value). `sshd_config` ends with the Alice block, a second layer for the account:
 
   ```
   # BEGIN Alice

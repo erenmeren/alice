@@ -116,7 +116,10 @@ the customer in the setup guide:
   domain account that a GPO adds to the local `Administrators` of the managed servers, with the same deny rights.
 
 Either way the key line goes into `C:\ProgramData\ssh\administrators_authorized_keys` (the file Windows OpenSSH reads
-for administrators) with `restrict`, and `sshd_config` gets:
+for administrators) with `restrict` and the forced command
+`command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"` (amended by the W1 final review: sshd reads that file for
+every member of Administrators, so only the key line's own `command=` confines the key to the helper on every
+administrator account; the `Match User` block is a second layer), and `sshd_config` gets:
 
 ```
 Match User alice

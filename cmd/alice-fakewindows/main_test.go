@@ -100,6 +100,9 @@ func TestAuthorizedKeyOf(t *testing.T) {
 		"two key lines":     strings.ReplaceAll(script, keyLine, keyLine+"\n"+keyLine),
 		"unquoted":          strings.ReplaceAll(script, keyLine, "$AuthorizedKey = "+line),
 		"not a key":         strings.ReplaceAll(script, keyLine, "$AuthorizedKey = 'restrict ssh-ed25519 notbase64!'"),
+		"no forced command": strings.ReplaceAll(script, keyLine, "$AuthorizedKey = 'restrict "+pubText(key)+"'"),
+		"another command": strings.ReplaceAll(script, keyLine,
+			`$AuthorizedKey = 'restrict,command="\"C:\Windows\System32\cmd.exe\" ssh" `+pubText(key)+"'"),
 		"empty":             "",
 		"only another name": "$AuthorizedKeysFile = 'C:\\ProgramData\\ssh\\administrators_authorized_keys'\n",
 	} {
@@ -164,8 +167,12 @@ func clientKey(t *testing.T) ssh.Signer {
 	return s
 }
 
+func pubText(key ssh.Signer) string {
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key.PublicKey())))
+}
+
 func keyLineFor(key ssh.Signer) string {
-	return windows.AuthorizedKeysLine(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key.PublicKey()))), "")
+	return windows.AuthorizedKeysLine(pubText(key), "")
 }
 
 // setupScriptFor is the Windows setup script Alice shows for key (a development build: no helper checksums here).

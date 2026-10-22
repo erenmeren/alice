@@ -23,23 +23,36 @@ const MatchBlock = "Match User __USER__\n" +
 	"    X11Forwarding no\n" +
 	"    PermitTunnel no\n"
 
-// AuthorizedKeysLine is the line of administrators_authorized_keys that authorizes Alice's key (design §4.3):
-// "restrict" (no forwarding, no pty, no ~/.ssh/rc; sshd 8.1p1 and 9.5p2 accept it, W0 F3) and, when from is given,
-// the source addresses. An invalid from (linuxssh.ValidateFrom) gives "": the caller asked for a restriction, so a
-// line without it is never produced (SetupScript refuses the empty line).
+// ForcedKeyCommand is the command the key line forces: the installed helper with its forced-command entry "ssh".
+const ForcedKeyCommand = `"` + winproto.HelperPath + `" ssh`
+
+// keyOptions are the options of the key line before from=: "restrict" (no forwarding, no pty, no ~/.ssh/rc; sshd
+// 8.1p1 and 9.5p2 accept it, W0 F3) and command= with ForcedKeyCommand. OpenSSH's option parser un-escapes only \"
+// inside a quoted value, so the Windows path is written as it is and only its double quotes are escaped.
+const keyOptions = `restrict,command="` + `\"` + winproto.HelperPath + `\" ssh"`
+
+// AuthorizedKeysLine is the line of administrators_authorized_keys that authorizes Alice's key (design §4.3). sshd
+// reads that file for every member of Administrators (the default Match Group administrators block), so the line
+// itself forces the helper (command=, which sshd applies whatever the account and which keeps SSH_ORIGINAL_COMMAND):
+// Alice's key reaches only alice-helper.exe on every administrator account (final review C1; MatchBlock's
+// ForceCommand is a second layer for the account). When from is given the line also names the source addresses. An
+// invalid from (linuxssh.ValidateFrom) gives "": the caller asked for a restriction, so a line without it is never
+// produced (SetupScript refuses the empty line).
 func AuthorizedKeysLine(publicKey, from string) string {
 	if linuxssh.ValidateFrom(from) != nil {
 		return ""
 	}
 	if from == "" {
-		return "restrict " + publicKey
+		return keyOptions + " " + publicKey
 	}
-	return `restrict,from="` + from + `" ` + publicKey
+	return keyOptions + `,from="` + from + `" ` + publicKey
 }
 
 // keyLineRE is the only shape SetupScript embeds: AuthorizedKeysLine's options, then an OpenSSH public key (type,
 // base64 blob, optional comment), printable ASCII only. A ' is refused separately (the line sits in single quotes).
-var keyLineRE = regexp.MustCompile(`^restrict(?:,from="([^"]*)")? [a-z0-9@.-]{1,64} [A-Za-z0-9+/]{16,}={0,2}(?: [ -~]*)?$`)
+// Group 1 is the from= value, group 2 the key blob.
+var keyLineRE = regexp.MustCompile(`^` + regexp.QuoteMeta(keyOptions) +
+	`(?:,from="([^"]*)")? [a-z0-9@.-]{1,64} ([A-Za-z0-9+/]{16,}={0,2})(?: [ -~]*)?$`)
 
 var errBadKeyLine = errors.New("windows: the administrators_authorized_keys line cannot be embedded in the setup script")
 
@@ -102,12 +115,19 @@ func SetupScript(authorizedKeysLine string, allowUnverified bool) (string, error
 	if !allowUnverified && !HelperChecksumsKnown() {
 		return "", ErrHelperUnverified
 	}
-	m := keyLineRE.FindStringSubmatch(authorizedKeysLine)
-	if m == nil || strings.ContainsRune(authorizedKeysLine, '\'') || linuxssh.ValidateFrom(m[1]) != nil ||
-		(strings.HasPrefix(authorizedKeysLine, "restrict,") && m[1] == "") {
+	idx := keyLineRE.FindStringSubmatchIndex(authorizedKeysLine)
+	if idx == nil || strings.ContainsRune(authorizedKeysLine, '\'') {
 		return "", errBadKeyLine
 	}
-	address, restricted := firewallAddress(m[1])
+	from, blob := "", authorizedKeysLine[idx[4]:idx[5]]
+	if idx[2] >= 0 {
+		// from= is present: it must name addresses (an empty from="" would mean none).
+		from = authorizedKeysLine[idx[2]:idx[3]]
+		if from == "" || linuxssh.ValidateFrom(from) != nil {
+			return "", errBadKeyLine
+		}
+	}
+	address, restricted := firewallAddress(from)
 	notice := addressNotice
 	if restricted {
 		notice = ""
@@ -116,6 +136,7 @@ func SetupScript(authorizedKeysLine string, allowUnverified bool) (string, error
 		"__ADDRESS__", address,
 		"__ADDRESS_NOTICE__", notice,
 		"__LINE__", authorizedKeysLine,
+		"__KEY_BLOB__", blob,
 		"__HELPER_CHECK__", helperCheck(helperSHA256WindowsAMD64, helperSHA256WindowsARM64),
 		"__USER_RE__", userRE.String(),
 		"__MATCH_BLOCK__", strings.ReplaceAll(MatchBlock, "__USER__", "$MatchUser"),
@@ -389,7 +410,7 @@ try {
 }
 
 # 5. Alice's key, once: every other line with the same key (an earlier from= value) is replaced.
-$keyBlob = ($AuthorizedKey -split ' ')[2]
+$keyBlob = '__KEY_BLOB__'
 $existing = @()
 if (Test-Path -LiteralPath $AuthorizedKeysFile) { $existing = @([System.IO.File]::ReadAllLines($AuthorizedKeysFile)) }
 $others = @($existing | Where-Object { @($_ -split '\s+') -cnotcontains $keyBlob })

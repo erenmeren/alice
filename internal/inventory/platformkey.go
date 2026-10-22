@@ -172,12 +172,16 @@ func authorizedKeysLine(publicKey, from string) string {
 
 // windowsAuthorizedKeysLine is the line the Windows setup script puts into administrators_authorized_keys (R60
 // Task 10). It must equal windows.AuthorizedKeysLine for the same input (TestWindowsKeyLineEqualsTheProvidersLine).
+// The line forces the helper itself (command=), since sshd reads that file for every member of Administrators.
 func windowsAuthorizedKeysLine(publicKey, from string) string {
 	if from == "" {
-		return "restrict " + publicKey
+		return windowsKeyOptions + " " + publicKey
 	}
-	return `restrict,from="` + from + `" ` + publicKey
+	return windowsKeyOptions + `,from="` + from + `" ` + publicKey
 }
+
+// windowsKeyOptions are windows.keyOptions: restrict and the forced command of the installed helper.
+const windowsKeyOptions = `restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"`
 
 // SetupGuide returns the platform key and the setup snippets of every sudoers profile and, when the Windows
 // provider is registered, its "windows" profile (a PowerShell script with the Windows key line). from is an

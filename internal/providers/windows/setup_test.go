@@ -1,12 +1,15 @@
 package windows
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"alice/internal/providers"
 	"alice/internal/providers/windows/winproto"
@@ -22,12 +25,40 @@ func withChecksums(t *testing.T, amd, arm string) {
 	helperSHA256WindowsAMD64, helperSHA256WindowsARM64 = amd, arm
 }
 
+// The forced command is in the key line itself (final review C1): administrators_authorized_keys is read for every
+// member of Administrators, so the line, not the Match User block, confines Alice's key to the helper.
+const testCommand = `command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"`
+
 func TestAuthorizedKeysLine(t *testing.T) {
-	assert.Equal(t, "restrict "+testKey, AuthorizedKeysLine(testKey, ""))
-	assert.Equal(t, `restrict,from="192.0.2.10" `+testKey, AuthorizedKeysLine(testKey, "192.0.2.10"))
-	assert.Equal(t, `restrict,from="2001:db8::5" `+testKey, AuthorizedKeysLine(testKey, "2001:db8::5"))
+	assert.Equal(t, `C:\Program Files\Alice\alice-helper.exe`, winproto.HelperPath)
+	assert.Equal(t, "restrict,"+testCommand+" "+testKey, AuthorizedKeysLine(testKey, ""))
+	assert.Equal(t, "restrict,"+testCommand+`,from="192.0.2.10" `+testKey, AuthorizedKeysLine(testKey, "192.0.2.10"))
+	assert.Equal(t, "restrict,"+testCommand+`,from="2001:db8::5" `+testKey, AuthorizedKeysLine(testKey, "2001:db8::5"))
 	for _, bad := range []string{`192.0.2.10"`, `192.0.2.10",command="x`, "web-01", "10.0.0.1 "} {
 		assert.Empty(t, AuthorizedKeysLine(testKey, bad), "from %q", bad)
+	}
+}
+
+// OpenSSH's option parser un-escapes only \" inside a quoted option value: the command sshd runs is the helper path
+// in double quotes, then ssh. The Go parser (what the e2e fake uses) reads the same options.
+func TestAuthorizedKeysLineParsesAsTheForcedCommand(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	sp, err := ssh.NewPublicKey(pub)
+	require.NoError(t, err)
+	key := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp)))
+	for _, from := range []string{"", "192.0.2.10"} {
+		line := AuthorizedKeysLine(key, from)
+		_, _, opts, _, err := ssh.ParseAuthorizedKey([]byte(line))
+		require.NoError(t, err)
+		want := []string{"restrict", testCommand}
+		if from != "" {
+			want = append(want, `from="`+from+`"`)
+		}
+		assert.Equal(t, want, opts)
+		v := strings.TrimSuffix(strings.TrimPrefix(opts[1], `command="`), `"`)
+		assert.Equal(t, `"`+winproto.HelperPath+`" ssh`, strings.ReplaceAll(v, `\"`, `"`), "the command sshd runs")
+		assert.Equal(t, ForcedKeyCommand, `"`+winproto.HelperPath+`" ssh`)
 	}
 }
 
@@ -83,6 +114,9 @@ func TestSetupScriptEmbedsTheHelperChecksums(t *testing.T) {
 	assert.Contains(t, s, "foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) { New-AdminOnlyDirectory $d }\n")
 	assert.Contains(t, s, "Remove-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue\n")
 	assert.Contains(t, s, "-cnotcontains $keyBlob", "key blobs are compared with case")
+	assert.Contains(t, s, "$keyBlob = 'AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk'\n",
+		"the blob comes from Go: the forced command holds spaces, so splitting the line on spaces would not find it")
+	assert.NotContains(t, s, "-split ' ')[2]")
 	assert.Regexp(t, `(?s)Test-Helper \$staging\n\} catch \{\n\s+Remove-Item -LiteralPath \$staging`, s, "a staged copy that fails the check is removed")
 
 	// Real-Windows smoke test, second run: IsMember did not recognise the member Add had added.
@@ -128,11 +162,18 @@ func TestSetupScriptRefusesALineItCannotQuote(t *testing.T) {
 		"restrict ssh-ed25519 AA\x00AA",
 		good + "\x7f",
 		good + " \u00e9",
-		testKey,                          // no restrict
-		"no-pty " + testKey,              // other options
-		`restrict,from="a b" ` + testKey, // from outside the address vocabulary
-		`restrict,from="192.0.2.10"` + testKey,
+		testKey,                         // no restrict
+		"no-pty " + testKey,             // other options
+		"restrict " + testKey,           // no forced command (final review C1)
+		`restrict,from="192.0.2.10" ` + testKey,
+		"restrict," + testCommand + `,from="a b" ` + testKey, // from outside the address vocabulary
+		"restrict," + testCommand + `,from="" ` + testKey,
+		"restrict," + testCommand + `,from="192.0.2.10"` + testKey,
 		`restrict,command="x" ` + testKey,
+		`restrict,command="\"C:\Windows\System32\cmd.exe\" ssh" ` + testKey,
+		"restrict," + testCommand + ",no-pty " + testKey,
+		`restrict,from="192.0.2.10",` + testCommand + " " + testKey, // options out of order
+		"restrict," + testCommand,
 		"restrict ",
 	} {
 		_, err := SetupScript(bad, true)
