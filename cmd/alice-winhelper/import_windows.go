@@ -40,6 +40,9 @@ const importFlags = windows.CRYPT_MACHINE_KEYSET | windows.PKCS12_ALWAYS_CNG_KSP
 
 const codeCryptExists = uint32(windows.CRYPT_E_EXISTS)
 
+// ncryptSilentFlag is NCRYPT_SILENT_FLAG: the helper runs without a desktop, no provider may prompt.
+const ncryptSilentFlag = 0x40
+
 var errImport = errors.New("the certificate could not be imported")
 
 // openWritableStore opens an existing local machine system store for writing; a failure wraps
@@ -122,6 +125,11 @@ func (host) ImportPFX(ctx context.Context, store string, pfx, password []byte, f
 	}
 	defer func() { _ = windows.CertFreeCertificateContext(leaf) }()
 	// From here the import has persisted a key: it is deleted again unless a stored copy uses it.
+	// Deleting it is safe only because the key is this import's own: BuildPFX writes no friendlyName
+	// or container attribute on the key bag, so PFXImportCertStore makes a fresh GUID container and
+	// leaf (from the memory store) names only that container, never the key of a copy already in
+	// the store. A PFX that named a container could make this delete someone else's key: keep
+	// BuildPFX so (winhelper/pfx.go).
 	keep := false
 	defer func() {
 		if !keep {
@@ -254,7 +262,7 @@ func deleteKey(c *windows.CertContext) {
 		_, _, _ = procNCryptFreeObject.Call(uintptr(key))
 		return
 	}
-	if r, _, _ := procNCryptDeleteKey.Call(uintptr(key), 0); r != 0 {
+	if r, _, _ := procNCryptDeleteKey.Call(uintptr(key), ncryptSilentFlag); r != 0 {
 		_, _, _ = procNCryptFreeObject.Call(uintptr(key))
 	}
 }

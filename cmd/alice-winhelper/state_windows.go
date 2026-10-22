@@ -85,7 +85,10 @@ func (h host) ReadState(name string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, errState
 	}
-	fh, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING,
+	// Every share mode: a reader (iis-status runs without the lock) must never make a writer's
+	// replace-rename fail.
+	fh, err := windows.CreateFile(p, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
 		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
 		return nil, false, nil
@@ -135,11 +138,34 @@ func (h host) WriteState(name string, data []byte) error {
 	if err != nil {
 		return errState
 	}
-	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
+	if err := replaceFile(from, to); err != nil {
 		_ = os.Remove(tmp)
 		return errState
 	}
 	return nil
+}
+
+// Retries of the replace-rename while another process (a scanner, a backup agent) has the file open
+// without FILE_SHARE_DELETE.
+const (
+	moveTries = 5
+	moveWait  = 50 * time.Millisecond
+)
+
+// replaceFile renames from over to, write through, retrying a sharing violation or access denial a
+// few times.
+func replaceFile(from, to *uint16) error {
+	var err error
+	for i := range moveTries {
+		err = windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+		if err == nil || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) && !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return err
+		}
+		if i < moveTries-1 {
+			time.Sleep(moveWait)
+		}
+	}
+	return err
 }
 
 // writeFlushed creates path (it must not exist) and writes data with FlushFileBuffers before closing.
@@ -176,9 +202,18 @@ func (h host) DataDirSafe() error {
 	}
 	for _, d := range stateDirs {
 		dir := filepath.Join(h.dataDir, d)
-		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		err := os.Mkdir(dir, 0o700)
+		switch {
+		case err == nil:
+			// The new directory's owner is the token's default owner, Administrators for an elevated
+			// token by the Server default; set it explicitly so another policy does not refuse it below.
+			if err := ownByAdministrators(dir); err != nil {
+				return winhelper.ErrJournal
+			}
+		case !errors.Is(err, os.ErrExist):
 			return winhelper.ErrJournal
 		}
+		// Made now or before: re-checked (owner Administrators or SYSTEM, no reparse point).
 		if err := trustedDir(dir); err != nil {
 			return err
 		}
@@ -195,6 +230,15 @@ func (h host) DataDirSafe() error {
 	}
 	_ = windows.CloseHandle(fh)
 	return nil
+}
+
+// ownByAdministrators makes BUILTIN\Administrators the owner of a directory the helper made.
+func ownByAdministrators(dir string) error {
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, admins, nil, nil, nil)
 }
 
 // trustedDir checks one directory: a directory, no reparse point, owned by Administrators or SYSTEM.

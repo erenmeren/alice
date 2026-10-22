@@ -137,6 +137,12 @@ type arena struct {
 	n   int
 }
 
+// newArena allocates the arena on the heap. It must never be inlined: inlined, a small arena that does
+// not escape lives on the goroutine stack (Go puts a make of at most 32 bytes there), and a uintptr
+// into it handed to http.sys goes stale when the stack moves between computing it and the call. A heap
+// object never moves, and runtime.KeepAlive after the call keeps it alive.
+//
+//go:noinline
 func newArena(size int) *arena {
 	buf := make([]uint64, (size+7)/8+1)
 	// unsafe: a byte view of buf's own memory.
@@ -244,7 +250,10 @@ func withHTTP(f func() error) error {
 }
 
 // lookupBinding reads the record a locator names, base and extended parameters; found is false when
-// http.sys holds none.
+// http.sys holds none. An extended parameter that cannot be read or written back (errExUnsupported,
+// errBadValue, any other query error) fails the whole read with that error: the deploy path's Binding
+// then fails before winhelper's gate, so iis-deploy answers IO_ERROR and nothing is changed; only the
+// dump drops such a record (list_truncated).
 func lookupBinding(l winproto.Locator) (winproto.SSLBinding, bool, error) {
 	k, err := keyOf(l.Type, l.IP, l.Host, l.Port)
 	if err != nil {

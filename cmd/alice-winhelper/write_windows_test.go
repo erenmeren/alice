@@ -311,6 +311,15 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 				return err
 			}))
 			t.Logf("F9: Ex query answers per type: %+v", detail)
+			// Diagnostic only (never written): do these images know Ex types past the six the helper
+			// reads? A type that is set there would be lost if a base update resets Ex parameters.
+			require.NoError(t, withHTTP(func() error {
+				for typ := uint32(exTypeCount); typ < exTypeCount+4; typ++ {
+					_, err := readEx(k, typ)
+					t.Logf("F9: Ex type %d beyond the six: %v", typ, err)
+				}
+				return nil
+			}))
 
 			before, found, err := h.Binding(ctx, loc)
 			require.NoError(t, err)
@@ -360,6 +369,25 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 }
 
 var procNCryptExportKey = modncrypt.NewProc("NCryptExportKey")
+
+var arenaSink uintptr
+
+// The arena is a heap object whatever its size (a uintptr into a stack arena goes stale when the stack
+// moves before the kernel reads it): newArena allocates every time.
+func TestArenaIsOnTheHeap(t *testing.T) {
+	for _, size := range []int{0, 8, 24, 32, 4096} {
+		allocs := testing.AllocsPerRun(20, func() { arenaSink = newArena(size).addr(0) })
+		assert.GreaterOrEqual(t, allocs, 2.0, "arena of %d bytes: the struct and its buffer on the heap", size)
+	}
+}
+
+// machineKeys counts the software KSP's machine key files (C:\ProgramData\Microsoft\Crypto\Keys).
+func machineKeys(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir(`C:\ProgramData\Microsoft\Crypto\Keys`)
+	require.NoError(t, err)
+	return len(entries)
+}
 
 // exportRefused reports whether a plaintext PKCS #8 export of the certificate's key is refused.
 func exportRefused(t *testing.T, store, thumb string) bool {
@@ -448,7 +476,9 @@ func TestRealImportPFX(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, thumb, back.CertSHA1)
 
-	// A second import of the same certificate reports the existing copy and leaves it as it was.
+	// A second import of the same certificate reports the existing copy and leaves it as it was; it,
+	// a cut PFX and an unknown store leave no key behind (Ruling 22).
+	keysBefore := machineKeys(t)
 	password2 := winhelper.NewPFXPassword()
 	pfx2, err := winhelper.BuildPFX(leaf.Cert.Raw, pkcs8, password2)
 	require.NoError(t, err)
@@ -465,6 +495,7 @@ func TestRealImportPFX(t *testing.T) {
 	assert.Error(t, err, "a cut PFX")
 	_, err = h.ImportPFX(ctx, "alice-w2-no-such-store", pfx2, password2, "x")
 	assert.ErrorIs(t, err, winhelper.ErrStore)
+	assert.Equal(t, keysBefore, machineKeys(t), "no machine key left by the repeat, cut-PFX and unknown-store imports")
 }
 
 const lockDirEnv = "ALICE_W2_LOCK_DIR"
