@@ -38,8 +38,21 @@ type Provider struct {
 var (
 	_ providers.Provider        = (*Provider)(nil)
 	_ providers.ConnectionCache = (*Provider)(nil)
+	_ providers.RollbackModel   = (*Provider)(nil)
 	_ providers.Session         = (*session)(nil)
 )
+
+// guardsRollback: every helper Alice writes to checks the rollback guard itself on every restore path
+// (W2 Ruling 11: the self-restore after a failed bind, iis-restore, a re-sent restore), from winproto 1
+// on; a helper that could not is below WriteMinVersion and gets no write subcommand (writeReady).
+const guardsRollback = true
+
+// RollbackTraits implements providers.RollbackModel: the previous certificate stays in its store on the
+// server (BackupOnTarget) and the helper may restore it by itself after a failed bind (SelfRestores);
+// with guardsRollback a Required guard is satisfied (RollbackGuard.SatisfiedBy).
+func (p *Provider) RollbackTraits() providers.RollbackTraits {
+	return providers.RollbackTraits{Backup: providers.BackupOnTarget, SelfRestores: true}
+}
 
 // New returns the provider. W1 advertises the connection test and certificate discovery only
 // (Ruling 14); W2 adds deployment and verification.
@@ -118,6 +131,19 @@ type session struct {
 	caps    providers.CapabilitySet
 	version winproto.VersionResponse
 	closed  atomic.Bool
+	// verify, when set, replaces VerifyDeployment for the verification of the previous certificate
+	// after a restore (a test seam; nil in production).
+	verify func(context.Context, providers.VerifyRequest) (providers.VerifyResult, error)
+}
+
+// writeReady refuses a helper older than winproto.WriteMinVersion before any write subcommand is sent
+// (W2 Ruling 3): the version Open read, compared as dotted decimal; an unparsable version is below.
+func (s *session) writeReady() error {
+	if winproto.VersionAtLeast(s.version.Helper, winproto.WriteMinVersion) {
+		return nil
+	}
+	return providers.NewError(ReasonHelperOutdated, false, nil, map[string]string{
+		"helper_version": s.version.Helper, "required_version": winproto.WriteMinVersion})
 }
 
 var errSessionClosed = errors.New("windows: session closed")
@@ -141,7 +167,7 @@ func (s *session) open() error {
 // host key the connection was opened with. Errors pass through mapHelper.
 func call[T any](ctx context.Context, s *session, sub string, args ...string) (T, providers.HostKey, error) {
 	var zero T
-	c, err := cmd(sub, args...)
+	c, err := cmd(sub, nil, args...)
 	if err != nil {
 		return zero, providers.HostKey{}, providers.NewError("internal.unexpected", false, err, map[string]string{"subcommand": sub})
 	}

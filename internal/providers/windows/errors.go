@@ -10,32 +10,100 @@ import (
 	"alice/internal/providers/windows/winproto"
 )
 
-// The three reasons of the Windows provider (ALC-WIN-0001..0003). Every other helper refusal stays
-// ssh.helper_refused with its helper_code parameter, as on Linux (Ruling 13).
+// The reasons of the Windows provider: W1's three (ALC-WIN-0001..0003) and W2's (ALC-WIN-0004..0012, R61
+// Ruling 6). Every helper code has a reason of its own (mapHelper); nothing of the Windows provider is
+// ssh.helper_refused any more.
 const (
 	ReasonHelperMissing  = "windows.helper_missing"
 	ReasonHelperOutdated = "windows.helper_outdated"
 	ReasonNotElevated    = "windows.not_elevated"
+
+	ReasonBindingChanged      = "windows.binding_changed"      // HASH_MISMATCH: the record names another certificate than expected (retryable: rediscover)
+	ReasonBindingNotFound     = "windows.binding_not_found"    // BINDING_NOT_FOUND: http.sys holds no record for the locator
+	ReasonBusy                = "windows.busy"                 // BUSY: another helper process held helper.lock (retryable)
+	ReasonIOError             = "windows.io_error"             // IO_ERROR, JOURNAL_FAILED (retryable)
+	ReasonStoreError          = "windows.store_error"          // STORE_ERROR: a certificate store could not be opened
+	ReasonKeyUnusable         = "windows.key_unusable"         // KEY_UNUSABLE, and http.sys's 1312 at the bind
+	ReasonBackupMissing       = "windows.backup_missing"       // BACKUP_MISSING: the previous certificate is not in its store with a usable key
+	ReasonLocationUnsupported = "windows.location_unsupported" // a locator Alice does not deploy to (W2 Ruling 5)
+	ReasonHelperRefused       = "windows.helper_refused"       // every other helper code; param helper_code
 )
 
+// The engine's own reasons the helper's codes map to (Ruling 6), so its recovery paths work unchanged.
+const (
+	reasonRecoveryPending  = "deployment.recovery_pending" // param operation_id
+	reasonInterrupted      = "deployment.interrupted"
+	reasonSuperseded       = "deployment.superseded"
+	reasonUnknownOperation = "deployment.unknown_operation"
+	reasonUnexpected       = "internal.unexpected"
+)
+
+// helperReasons names the reason of each helper code with its retryability (W2 Ruling 6).
+var helperReasons = map[string]struct {
+	reason    string
+	retryable bool
+}{
+	winproto.CodeUnknownSubcommand: {ReasonHelperOutdated, false},
+	winproto.CodeNotElevated:       {ReasonNotElevated, false},
+	winproto.CodeHashMismatch:      {ReasonBindingChanged, true},
+	winproto.CodeBindingNotFound:   {ReasonBindingNotFound, false},
+	winproto.CodeBusy:              {ReasonBusy, true},
+	winproto.CodeIOError:           {ReasonIOError, true},
+	winproto.CodeJournalFailed:     {ReasonIOError, true},
+	winproto.CodeStoreError:        {ReasonStoreError, false},
+	winproto.CodeKeyUnusable:       {ReasonKeyUnusable, false},
+	winproto.CodeBackupMissing:     {ReasonBackupMissing, false},
+	winproto.CodeRecoveryPending:   {reasonRecoveryPending, false},
+	winproto.CodeFenced:            {reasonInterrupted, false},
+	winproto.CodeSuperseded:        {reasonSuperseded, false},
+	winproto.CodeUnknownOp:         {reasonUnknownOperation, false},
+}
+
 // mapHelper names the Windows conditions in an error of the shared SSH layer: an exit that is no
-// helper exit (cmd.exe's "not recognized", or sshd without the forced command) is helper_missing, a
-// helper that does not know the subcommand is helper_outdated, a refusal for want of an elevated token
-// is not_elevated. The shared error stays the cause; anything else is returned unchanged.
+// helper exit (cmd.exe's "not recognized", or sshd without the forced command) is helper_missing; a
+// helper refusal (DecodeHelper's ssh.helper_refused, or ssh.file_changed for HASH_MISMATCH) gets the
+// reason of its code (helperReasons, W2 Ruling 6), every other code windows.helper_refused with
+// helper_code. The params are the shared error's (subcommand, helper_code), except RECOVERY_PENDING's:
+// operation_id only, as the engine's pending-operation path reads it. The shared error stays the
+// cause; anything else (the transport's ssh.* codes, a plain error) is returned unchanged.
 func mapHelper(err error) error {
 	var pe *providers.Error
 	if !errors.As(err, &pe) {
 		return err
 	}
+	code := pe.Params["helper_code"]
 	switch {
 	case pe.Code == "ssh.helper_missing":
 		return providers.NewError(ReasonHelperMissing, false, err, maps.Clone(pe.Params))
-	case pe.Code == "ssh.helper_refused" && pe.Params["helper_code"] == winproto.CodeUnknownSubcommand:
-		return providers.NewError(ReasonHelperOutdated, false, err, maps.Clone(pe.Params))
-	case pe.Code == "ssh.helper_refused" && pe.Params["helper_code"] == winproto.CodeNotElevated:
-		return providers.NewError(ReasonNotElevated, false, err, maps.Clone(pe.Params))
+	case (pe.Code != "ssh.helper_refused" && pe.Code != "ssh.file_changed") || code == "":
+		return err
+	case code == winproto.CodeRecoveryPending:
+		var params map[string]string
+		if op := pe.Params["operation_id"]; op != "" {
+			params = map[string]string{"operation_id": op}
+		}
+		return providers.NewError(reasonRecoveryPending, false, err, params)
 	}
-	return err
+	r, ok := helperReasons[code]
+	if !ok {
+		r.reason = ReasonHelperRefused
+	}
+	return providers.NewError(r.reason, r.retryable, err, maps.Clone(pe.Params))
+}
+
+// asProviderError returns err as a *providers.Error (every error this package maps is one).
+func asProviderError(err error) *providers.Error {
+	var pe *providers.Error
+	if errors.As(err, &pe) {
+		return pe
+	}
+	return providers.NewError(reasonUnexpected, false, err, nil)
+}
+
+// protocolError is the error of an answer that breaks the helper's contract: uncertain for a write, an
+// error (never a state) for a status.
+func protocolError(sub, why string) *providers.Error {
+	return providers.NewError("ssh.protocol_error", false, errors.New("windows: "+why), map[string]string{"subcommand": sub})
 }
 
 // budget is a command's time budget and output bound.
@@ -44,23 +112,30 @@ type budget struct {
 	maxOutput int64
 }
 
-// budgets of the W1 subcommands. iis-dump's helper gives up after winproto.HelperBudget (50 s), before
-// Alice's 60 s cut the connection.
+// budgets of the subcommands. iis-dump's helper gives up after winproto.HelperBudget (50 s), before
+// Alice's 60 s cut the connection; iis-deploy and iis-restore wait up to winproto.LockWait for the lock
+// and finish under winproto.WriteGrace within the long budget too; iis-status takes no lock and
+// iis-fence waits at most LockWait, inside the default budget.
 var budgets = map[string]budget{
-	winproto.SubVersion:  {linuxssh.DefaultCommandTimeout, 64 << 10},
-	winproto.SubWinFacts: {linuxssh.DefaultCommandTimeout, 64 << 10},
-	winproto.SubIISDump:  {linuxssh.LongCommandTimeout, winproto.DumpOutput},
-	winproto.SubTLSProbe: {linuxssh.DefaultCommandTimeout, 128 << 10},
+	winproto.SubVersion:    {linuxssh.DefaultCommandTimeout, 64 << 10},
+	winproto.SubWinFacts:   {linuxssh.DefaultCommandTimeout, 64 << 10},
+	winproto.SubIISDump:    {linuxssh.LongCommandTimeout, winproto.DumpOutput},
+	winproto.SubTLSProbe:   {linuxssh.DefaultCommandTimeout, 128 << 10},
+	winproto.SubIISDeploy:  {linuxssh.LongCommandTimeout, 64 << 10},
+	winproto.SubIISRestore: {linuxssh.LongCommandTimeout, 64 << 10},
+	winproto.SubIISStatus:  {linuxssh.DefaultCommandTimeout, 64 << 10},
+	winproto.SubIISFence:   {linuxssh.DefaultCommandTimeout, 64 << 10},
 }
 
-// cmd builds the forced command line of a W1 subcommand: the protocol's own line check
-// (winproto.JoinCommandLine), then linuxssh's one audited constructor. A subcommand without a budget
-// or a token outside the vocabulary is linuxssh.ErrInvalidArgument.
-func cmd(sub string, args ...string) (linuxssh.HelperCommand, error) {
+// cmd builds the forced command line of a subcommand with its standard input (nil for none): the
+// protocol's own line check (winproto.JoinCommandLine), then linuxssh's one audited constructor, which
+// copies stdin into the command (the caller clears its own buffer; WipeInput clears the copy). A
+// subcommand without a budget or a token outside the vocabulary is linuxssh.ErrInvalidArgument.
+func cmd(sub string, stdin []byte, args ...string) (linuxssh.HelperCommand, error) {
 	b, ok := budgets[sub]
 	tokens := append([]string{sub}, args...)
 	if _, valid := winproto.JoinCommandLine(tokens); !ok || !valid {
 		return linuxssh.HelperCommand{}, linuxssh.ErrInvalidArgument
 	}
-	return linuxssh.ForcedCommand(tokens, nil, b.timeout, b.maxOutput)
+	return linuxssh.ForcedCommand(tokens, stdin, b.timeout, b.maxOutput)
 }

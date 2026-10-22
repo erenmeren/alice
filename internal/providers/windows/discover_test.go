@@ -134,13 +134,13 @@ func TestDiscoverNotElevated(t *testing.T) {
 	assert.False(t, pe.Retryable)
 }
 
-// Ruling 12: appcmd failing fails the dump; the refusal stays the shared one, retryable.
+// Ruling 12: appcmd failing fails the dump; the refusal is windows.io_error (W2 Ruling 6), retryable.
 func TestDiscoverAppcmdFailure(t *testing.T) {
 	e := newEnv(t)
 	e.model.FailAppcmd(true)
 	_, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 	pe := providerErr(t, err)
-	assert.Equal(t, "ssh.helper_refused", pe.Code)
+	assert.Equal(t, "windows.io_error", pe.Code)
 	assert.Equal(t, winproto.CodeIOError, pe.Params["helper_code"])
 	assert.True(t, pe.Retryable)
 }

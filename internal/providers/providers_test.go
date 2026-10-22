@@ -353,6 +353,20 @@ func TestBackupRefJSON(t *testing.T) {
 	b, err := json.Marshal(providers.BackupRef{OperationID: id, Dir: "/var/lib/alice-helper/backups/" + id.String()})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"operation_id":"0190f5a0-0000-7000-8000-0000000000aa","dir":"/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-0000000000aa"}`, string(b))
+	// The Nginx rollback_info bytes are exactly as before W2: the Windows fields are omitted when empty.
+	assert.Equal(t, `{"operation_id":"0190f5a0-0000-7000-8000-0000000000aa","dir":"/var/lib/alice-helper/backups/0190f5a0-0000-7000-8000-0000000000aa"}`, string(b))
+
+	// A Windows backup (W2 Ruling 17): the previous certificate in its store, no directory.
+	b, err = json.Marshal(providers.BackupRef{OperationID: id, Store: "WebHosting", PreviousSHA1: strings.Repeat("a", 40), PreviousSHA256: strings.Repeat("b", 64)})
+	require.NoError(t, err)
+	assert.Equal(t, `{"operation_id":"0190f5a0-0000-7000-8000-0000000000aa","store":"WebHosting","previous_sha1":"`+strings.Repeat("a", 40)+
+		`","previous_sha256":"`+strings.Repeat("b", 64)+`"}`, string(b))
+	var back providers.BackupRef
+	require.NoError(t, json.Unmarshal(b, &back))
+	assert.Equal(t, providers.BackupRef{OperationID: id, Store: "WebHosting", PreviousSHA1: strings.Repeat("a", 40), PreviousSHA256: strings.Repeat("b", 64)}, back)
+	b, err = json.Marshal(providers.BackupRef{OperationID: id})
+	require.NoError(t, err)
+	assert.Equal(t, `{"operation_id":"0190f5a0-0000-7000-8000-0000000000aa"}`, string(b))
 }
 
 // The framework mirrors the helper's vocabulary as strings (the package may not import

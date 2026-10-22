@@ -251,8 +251,10 @@ func TestMapHelper(t *testing.T) {
 	assert.Same(t, plain, mapHelper(plain))
 	timeout := providers.NewError("ssh.timeout", true, nil, map[string]string{"subcommand": "iis-dump"})
 	assert.Same(t, timeout, mapHelper(timeout))
-	busy := providers.NewError("ssh.helper_refused", true, nil, map[string]string{"subcommand": "iis-dump", "helper_code": "IO_ERROR"})
-	assert.Same(t, busy, mapHelper(busy))
+	tooLarge := providers.NewError("ssh.output_too_large", false, nil, map[string]string{"subcommand": "iis-dump", "helper_code": "OUTPUT_TOO_LARGE"})
+	assert.Same(t, tooLarge, mapHelper(tooLarge), "not a refusal code of the helper's: kept")
+	noCode := providers.NewError("ssh.helper_refused", false, nil, map[string]string{"subcommand": "iis-dump"})
+	assert.Same(t, noCode, mapHelper(noCode))
 	missing := providers.NewError("ssh.helper_missing", false, nil, map[string]string{"subcommand": "version", "exit_code": "127"})
 	pe := providerErr(t, mapHelper(missing))
 	assert.Equal(t, "windows.helper_missing", pe.Code)
@@ -267,6 +269,77 @@ func TestMapHelper(t *testing.T) {
 		assert.Equal(t, map[string]string{"subcommand": "iis-dump", "helper_code": code}, pe.Params)
 		assert.False(t, pe.Retryable)
 	}
+
+	// W2 Ruling 6: every Windows helper code has a reason of its own; none stays ssh.helper_refused.
+	for _, tc := range []struct {
+		code, exit, want string
+		retryable        bool
+	}{
+		{winproto.CodeHashMismatch, "3", ReasonBindingChanged, true},
+		{winproto.CodeBindingNotFound, "3", ReasonBindingNotFound, false},
+		{winproto.CodeBusy, "4", ReasonBusy, true},
+		{winproto.CodeIOError, "4", ReasonIOError, true},
+		{winproto.CodeJournalFailed, "4", ReasonIOError, true},
+		{winproto.CodeStoreError, "4", ReasonStoreError, false},
+		{winproto.CodeKeyUnusable, "3", ReasonKeyUnusable, false},
+		{winproto.CodeBackupMissing, "3", ReasonBackupMissing, false},
+		{winproto.CodeRecoveryPending, "3", "deployment.recovery_pending", false},
+		{winproto.CodeFenced, "3", "deployment.interrupted", false},
+		{winproto.CodeSuperseded, "3", "deployment.superseded", false},
+		{winproto.CodeUnknownOp, "3", "deployment.unknown_operation", false},
+		{winproto.CodeUnknownSubcommand, "2", ReasonHelperOutdated, false},
+		{winproto.CodeNotElevated, "2", ReasonNotElevated, false},
+		{winproto.CodeOperationExists, "3", ReasonHelperRefused, false},
+		{winproto.CodeOutcomeUnknown, "4", ReasonHelperRefused, false},
+		{winproto.CodeBadContent, "2", ReasonHelperRefused, false},
+		{winproto.CodeInvalidArgument, "2", ReasonHelperRefused, false},
+		{winproto.CodeTooLarge, "2", ReasonHelperRefused, false},
+		{winproto.CodeUsage, "2", ReasonHelperRefused, false},
+		{winproto.CodeProbeFailed, "4", ReasonHelperRefused, false},
+		{winproto.CodeIISNotFound, "3", ReasonHelperRefused, false},
+		{"SOMETHING_NEW", "3", ReasonHelperRefused, false},
+	} {
+		// DecodeHelper names HASH_MISMATCH at exit 3 ssh.file_changed, everything else ssh.helper_refused.
+		shared := "ssh.helper_refused"
+		if tc.code == winproto.CodeHashMismatch {
+			shared = "ssh.file_changed"
+		}
+		params := map[string]string{"subcommand": "iis-deploy", "helper_code": tc.code}
+		in := providers.NewError(shared, tc.code == winproto.CodeBusy || tc.code == winproto.CodeIOError, nil, params)
+		pe := providerErr(t, mapHelper(in))
+		assert.Equal(t, tc.want, pe.Code, tc.code)
+		assert.Equal(t, tc.retryable, pe.Retryable, tc.code)
+		assert.ErrorIs(t, pe, in, "the shared error stays the cause")
+		assert.NotEqual(t, "ssh.helper_refused", pe.Code)
+		if tc.want == ReasonHelperRefused || tc.want == ReasonHelperOutdated || tc.want == ReasonNotElevated {
+			assert.Equal(t, tc.code, pe.Params["helper_code"], "%s names the helper's code", tc.code)
+		}
+		if tc.code == winproto.CodeHashMismatch {
+			in = providers.NewError("ssh.helper_refused", false, nil, params) // the same code at another exit status
+			assert.Equal(t, ReasonBindingChanged, providerErr(t, mapHelper(in)).Code)
+		}
+	}
+	pending := providers.NewError("ssh.helper_refused", false, nil, map[string]string{"subcommand": "iis-deploy",
+		"helper_code": winproto.CodeRecoveryPending, "operation_id": "0190f5a0-0000-7000-8000-0000000000aa"})
+	pe = providerErr(t, mapHelper(pending))
+	assert.Equal(t, map[string]string{"operation_id": "0190f5a0-0000-7000-8000-0000000000aa"}, pe.Params,
+		"the engine's pending-operation path reads operation_id")
+	pending = providers.NewError("ssh.helper_refused", false, nil, map[string]string{"subcommand": "iis-deploy", "helper_code": winproto.CodeRecoveryPending})
+	assert.Empty(t, providerErr(t, mapHelper(pending)).Params)
+	for _, c := range []string{"ssh.unreachable", "ssh.timeout", "target.host_key_changed", "ssh.protocol_error"} {
+		in := providers.NewError(c, true, nil, map[string]string{"subcommand": "iis-restore", "helper_code": winproto.CodeBusy})
+		assert.Same(t, in, mapHelper(in), "the transport's codes stay: %s", c)
+	}
+}
+
+// Every reason of the Windows provider is a windows.* name (or the shared deployment.* ones of Ruling 6).
+func TestWindowsReasons(t *testing.T) {
+	for _, r := range []string{ReasonHelperMissing, ReasonHelperOutdated, ReasonNotElevated, ReasonBindingChanged, ReasonBindingNotFound, ReasonBusy,
+		ReasonIOError, ReasonStoreError, ReasonKeyUnusable, ReasonBackupMissing, ReasonLocationUnsupported, ReasonHelperRefused} {
+		assert.True(t, strings.HasPrefix(r, "windows."), r)
+	}
+	assert.Equal(t, "windows.location_unsupported", ReasonLocationUnsupported)
+	assert.Equal(t, "windows.helper_refused", ReasonHelperRefused)
 }
 
 func TestCommandsAreForcedLines(t *testing.T) {
@@ -282,7 +355,7 @@ func TestCommandsAreForcedLines(t *testing.T) {
 		{winproto.SubTLSProbe, []string{"--addr", "10.0.0.5", "--port", "443", "--sni", "-", "--key-type", "any"}, false,
 			"tls-probe --addr 10.0.0.5 --port 443 --sni - --key-type any"},
 	} {
-		c, err := cmd(tc.sub, tc.args...)
+		c, err := cmd(tc.sub, nil, tc.args...)
 		require.NoError(t, err, tc.sub)
 		assert.Equal(t, tc.line, c.Line())
 		assert.Equal(t, tc.sub, c.Subcommand())
@@ -292,8 +365,8 @@ func TestCommandsAreForcedLines(t *testing.T) {
 	assert.Equal(t, budget{linuxssh.LongCommandTimeout, winproto.DumpOutput}, budgets[winproto.SubIISDump])
 	assert.Equal(t, budget{linuxssh.DefaultCommandTimeout, 128 << 10}, budgets[winproto.SubTLSProbe])
 	assert.Less(t, winproto.HelperBudget, linuxssh.LongCommandTimeout, "the helper gives up before Alice cuts the connection")
-	for _, bad := range [][]string{{"iis-deploy"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
-		_, err := cmd(bad[0], bad[1:]...)
+	for _, bad := range [][]string{{"iis-cleanup"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
+		_, err := cmd(bad[0], nil, bad[1:]...)
 		assert.ErrorIs(t, err, linuxssh.ErrInvalidArgument, "%q", bad)
 	}
 }

@@ -642,10 +642,16 @@ type DeployOutcome struct {
 	Trust Trust
 }
 
-// BackupRef is persisted in deployments.rollback_info before the first change (spec §6.3 item 3).
+// BackupRef is persisted in deployments.rollback_info before the first change (spec §6.3 item 3). Dir is the Linux
+// helper's backup directory; a Windows backup (R61, W2 Ruling 17) is the previous certificate in its store instead:
+// Store, PreviousSHA1 (its thumbprint) and PreviousSHA256 (its DER's SHA-256), with no Dir. Every field but the
+// operation is omitted when empty, so a Linux record's bytes are as before.
 type BackupRef struct {
-	OperationID uuid.UUID `json:"operation_id"`
-	Dir         string    `json:"dir,omitempty"`
+	OperationID    uuid.UUID `json:"operation_id"`
+	Dir            string    `json:"dir,omitempty"`
+	Store          string    `json:"store,omitempty"`
+	PreviousSHA1   string    `json:"previous_sha1,omitempty"`
+	PreviousSHA256 string    `json:"previous_sha256,omitempty"`
 }
 
 // RollbackRequest restores the files an operation replaced and checks the old certificate.
