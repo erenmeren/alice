@@ -2273,7 +2273,7 @@
    "internal/providers/windows:TestDeployOutcomeTable",
    "internal/providers/windows:TestLocatorOfTheStoredLocator",
    "internal/inventory:TestTheTokenAfterADeploymentIsTheProvidersForm",
-   "web/e2e/windows.spec.ts:deploy and roll back"
+   "web/e2e/windows.spec.ts:see its http.sys bindings and IIS sites, deploy and roll back"
   ]
  },
  {
@@ -2318,7 +2318,7 @@
   "status": "test",
   "tests": [
    "internal/jobs/deployjobs:TestWindowsFailedVerificationRollsBack",
-   "web/e2e/windows.spec.ts:stale-tls-on"
+   "web/e2e/windows.spec.ts:see its http.sys bindings and IIS sites, deploy and roll back"
   ]
  },
  {

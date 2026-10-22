@@ -634,9 +634,9 @@ recovery); `internal/jobs/deployjobs` has no Windows branch. The provider refuse
 (`windows.location_unsupported`: IDN U-labels, CCS). The command line is `iis-deploy --op <uuid>`; everything else is
 JSON on standard input (the key never on a command line). The helper:
 
-1. Validates the input (`BAD_CONTENT`, `INVALID_ARGUMENT`), refuses an operation id it knows (`OPERATION_EXISTS`) or
-   has fenced (`FENCED`), takes `helper.lock` (20 s, then `BUSY`), checks the data directory (no reparse point,
-   Administrators or SYSTEM as owner, writable; else `JOURNAL_FAILED`).
+1. Validates the input (`BAD_CONTENT`, `INVALID_ARGUMENT`), checks the data directory (no reparse point,
+   Administrators or SYSTEM as owner, writable; else `JOURNAL_FAILED`), takes `helper.lock` (20 s, then `BUSY`), and
+   under the lock refuses an operation id it knows (`OPERATION_EXISTS`) or has fenced (`FENCED`).
 2. Reads the binding (base record and the Ex records' extended parameters, types 0-5) and refuses with
    `HASH_MISMATCH` (nothing changed) when its certificate's DER SHA-256 is not the expected one, `BINDING_NOT_FOUND`
    when it is gone, `RECOVERY_PENDING` (with the operation) when the binding's latest operation is `writing` or
@@ -657,15 +657,17 @@ JSON on standard input (the key never on a command line). The helper:
    a write follows, a same-hash write when only the chain differs (schannel serves the chain of the last write).
 7. Journal `writing`; `bind`: one `HttpUpdateServiceConfiguration` with the record as read, only hash and store
    changed (a NULL store written back NULL), then the base and Ex records read back; Ex parameters a base update
-   changed are rewritten (none on 2022 and 2025, design §14 F9). A read-back that differs, or http.sys's 1312 (no
-   usable key), makes the helper restore the previous record itself under the guard and answer `restored` with
-   `failed_step bind` (`read_back`, `key_unusable`).
+   changed are rewritten (none on 2022 and 2025, design §14 F9). A read-back that differs makes the helper restore the
+   previous record itself under the guard and answer `restored` with `failed_step bind`, `read_back`. http.sys's
+   1312 (no usable key) writes nothing: the record is unchanged and the answer is `restored`, `failed_step bind`,
+   `key_unusable`, with no restore needed.
 8. Journal `committed`, the binding record's chain, event 1001 in the Application log (source `Alice Helper`:
    operation, binding, old and new SHA-256). The answer carries `built_chain_length` (schannel's chain after the
    imports, root excluded).
 
-The 50 s budget: until the `prepared` journal is written its end is `IO_ERROR`; after it every failure is
-`OUTCOME_UNKNOWN` (uncertain; the journal decides at the next `iis-status`), and the helper finishes its step or
+The 50 s budget: until the `prepared` journal is written its end is `IO_ERROR`; after it every error the
+handler returns is `OUTCOME_UNKNOWN` (uncertain; the journal decides at the next `iis-status`), while a failure the
+helper handles is answered with its phase (`restored` with the step and class), and the helper finishes its step or
 self-restore within 8 s. A killed helper answers nothing; the engine recovers. Steps shown: `import_chain`,
 `import_certificate`, `bind`, `verify`.
 
