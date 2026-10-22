@@ -91,10 +91,10 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, guard providers.Rol
 
 // backupParams are a rollback failure's params (W2 Ruling 17): where the previous certificate is, each
 // only when known and well-formed (a store name of the protocol's vocabulary, a 40-hex thumbprint).
-// They come from the backup the deployment's start record wrote before the first change (b); only a
-// zero b (no Windows field: a caller that has none) falls back to the location's details as discovery
-// read them (store, cert_sha1), which may already show the new certificate. Alice's own values, never
-// text from this call's answer.
+// They come from the backup b: the start record's (written before the first change), or in the deploy
+// path the deploy answer's previous certificate after identity validated it (its SHA-256 equals the
+// token). Only a zero b (no Windows field: a caller that has none) falls back to the location's details
+// as discovery read them (store, cert_sha1), which may already show the new certificate.
 func backupParams(b providers.BackupRef, loc providers.CertLocation) map[string]string {
 	store, sha1 := b.Store, b.PreviousSHA1
 	if store == "" && sha1 == "" && b.PreviousSHA256 == "" {

@@ -202,6 +202,9 @@ func CheckLocationTarget(t testing.TB, h LocationTargetHarness) {
 			t.Errorf("guarded rollback: answered %q (error %q, reason %q), want rollback_failed, forbidden, %s", rb.Result, rb.Error, rb.Reason,
 				providers.ReasonRollbackForbidden)
 		}
+		if st := state("guarded rollback: DeploymentStatus", s.DeploymentStatus, op); st.Phase == providers.PhaseRestored {
+			t.Errorf("guarded rollback: the status says restored: a forbidden backup was put back")
+		}
 		_ = s.Close()
 	}
 

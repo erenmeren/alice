@@ -240,6 +240,20 @@ func TestDeployOutcomeTable(t *testing.T) {
 				reason: "deployment.rollback_failed", params: backup(w), steps: []string{"bind:failed", "restore:failed"}, answered: true}
 		}},
 
+		{"io_error: the update failed, the helper restored the record", func(_ *testing.T, w *wenv, nl pki.Leaf, _ *providers.DeployRequest) {
+			w.script(winproto.SubIISDeploy, func([]byte) linuxsshtest.Response {
+				return deployResponse(winproto.DeployResponse{Phase: "restored", FailedStep: "bind", CauseStep: "bind", Error: "io_error",
+					Steps: []winproto.Step{{Name: "import_chain", Status: "ok"}, {Name: "import_certificate", Status: "ok"},
+						{Name: "bind", Status: "failed", Error: "io_error"}, {Name: "restore", Status: "ok"}},
+					NewSHA1: sha1Hex(nl.Cert.Raw), NewSHA256: derSHA256(nl.Cert.Raw), PreviousSHA1: w.oldSHA1, PreviousSHA256: derSHA256(w.old.Cert.Raw),
+					Store: "My", BuiltChainLength: 2})
+			})
+		}, nil, func(*wenv) wantDeploy {
+			return wantDeploy{result: providers.DeployRolledBack, phase: "restored", failed: "bind", cause: "bind", cls: "io_error",
+				reason: "windows.io_error", verified: "remote",
+				steps: []string{"import_chain:ok", "import_certificate:ok", "bind:failed", "restore:ok", "verify_old:ok"}, serves: "old", answered: true}
+		}},
+
 		// A failed verification of a committed deployment: the inline rollback.
 		{"verification fails (StaleTLS): rolled back, the previous leaf served", func(_ *testing.T, w *wenv, _ pki.Leaf, _ *providers.DeployRequest) {
 			w.model.StaleTLS(true)
@@ -317,7 +331,7 @@ func TestDeployOutcomeTable(t *testing.T) {
 		{"the context ends during the verification: interrupted, uncertain", func(_ *testing.T, w *wenv, _ pki.Leaf, _ *providers.DeployRequest) {
 			w.probe.block = true
 		}, func(t *testing.T) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			t.Cleanup(cancel)
 			return ctx
 		}, func(*wenv) wantDeploy {
