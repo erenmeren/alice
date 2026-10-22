@@ -1,0 +1,336 @@
+name: windows-spike
+
+# Phase W0 of docs/superpowers/specs/2026-10-21-windows-iis-target-design.md: checks the facts of §14 on real
+# Windows Server images with the throwaway program tools/winspike. Lives only on the windows-w0-spike branch.
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-w0-spike]
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      R: C:\winspike\results
+      SPIKE: C:\winspike\winspike.exe
+      SPIKE_PF: C:\Program Files\AliceSpike\winspike.exe
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Start clock
+        run: |
+          New-Item -ItemType Directory -Force $env:R | Out-Null
+          (Get-Date).ToUniversalTime().ToString('o') | Set-Content "$env:R\job-start.txt"
+          "step,seconds" | Set-Content "$env:R\timings.csv"
+          $PSVersionTable | Out-String | Set-Content "$env:R\psversion.txt"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+
+      - name: Build the spike
+        env: { CGO_ENABLED: "0" }
+        run: |
+          go version | Set-Content "$env:R\go-version.txt"
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          go build -o $env:SPIKE ./tools/winspike
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force (Split-Path $env:SPIKE_PF) | Out-Null
+          Copy-Item $env:SPIKE $env:SPIKE_PF
+          "build,$($sw.Elapsed.TotalSeconds)" | Add-Content "$env:R\timings.csv"
+
+      - name: go test natively
+        continue-on-error: true
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          go test -v -count=1 ./tools/winspike/ 2>&1 | Tee-Object "$env:R\go-test.txt"
+          "go_test,$($sw.Elapsed.TotalSeconds)" | Add-Content "$env:R\timings.csv"
+
+      - name: OS facts
+        continue-on-error: true
+        run: |
+          & $env:SPIKE osinfo | Tee-Object "$env:R\osinfo.json"
+          [Environment]::OSVersion | ConvertTo-Json | Set-Content "$env:R\osversion.json"
+          try { Get-MpComputerStatus | Select-Object AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled,AMProductVersion | ConvertTo-Json | Set-Content "$env:R\defender.json" } catch { "$_" | Set-Content "$env:R\defender.json" }
+          Get-WindowsFeature | Where-Object Installed | Select-Object Name | ConvertTo-Json | Set-Content "$env:R\features-before.json"
+
+      - name: F6/F1 install IIS (Web-Server only, no management tools)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $r = Install-WindowsFeature Web-Server
+          $secs = $sw.Elapsed.TotalSeconds
+          "iis_install,$secs" | Add-Content "$env:R\timings.csv"
+          $web = Get-WindowsFeature Web-* | Select-Object Name,Installed
+          @{ success = $r.Success; restart_needed = "$($r.RestartNeeded)"; exit_code = "$($r.ExitCode)"; seconds = $secs
+             features = $web
+             appcmd_exists = Test-Path "$env:windir\system32\inetsrv\appcmd.exe"
+             mwa_dll_exists = Test-Path "$env:windir\system32\inetsrv\Microsoft.Web.Administration.dll" } |
+            ConvertTo-Json -Depth 4 | Set-Content "$env:R\f6-iis-install.json"
+
+      - name: Create the IIS site and two certificates
+        continue-on-error: true
+        run: |
+          $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
+          New-Item -ItemType Directory -Force C:\inetpub\spike | Out-Null
+          Set-Content C:\inetpub\spike\index.html "spike"
+          & $appcmd add site /name:spike /id:9001 /physicalPath:C:\inetpub\spike "/bindings:https/*:8443:" 2>&1 | Tee-Object "$env:R\site.txt"
+          & $appcmd set site /site.name:spike "/+bindings.[protocol='https',bindingInformation='*:8444:sni.spike.test',sslFlags='1']" 2>&1 | Tee-Object -Append "$env:R\site.txt"
+          & $appcmd list site 2>&1 | Tee-Object -Append "$env:R\site.txt"
+          $a = New-SelfSignedCertificate -DnsName ip.spike.test,sni.spike.test -CertStoreLocation Cert:\LocalMachine\My -FriendlyName spikeA
+          $b = New-SelfSignedCertificate -DnsName ip.spike.test,sni.spike.test -CertStoreLocation Cert:\LocalMachine\My -FriendlyName spikeB
+          "CERT_A=$($a.Thumbprint)" | Add-Content $env:GITHUB_ENV
+          "CERT_B=$($b.Thumbprint)" | Add-Content $env:GITHUB_ENV
+          Copy-Item "$env:windir\system32\inetsrv\config\applicationHost.config" "$env:R\applicationHost-after-site.config"
+
+      - name: F1 re-point through http.sys only
+        continue-on-error: true
+        run: |
+          & $env:SPIKE f1 $env:CERT_A $env:CERT_B | Set-Content "$env:R\f1.json"
+          Get-Content "$env:R\f1.json" -TotalCount 60
+
+      - name: F1b binding created the IIS Manager way (Microsoft.Web.Administration)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $res = @{}
+          [void][Reflection.Assembly]::LoadFrom("$env:windir\system32\inetsrv\Microsoft.Web.Administration.dll")
+          $sm = New-Object Microsoft.Web.Administration.ServerManager
+          $site = $sm.Sites["spike"]
+          $hashA = [byte[]]($env:CERT_A -split '(..)' -ne '' | ForEach-Object { [Convert]::ToByte($_, 16) })
+          [void]$site.Bindings.Add("*:8446:", $hashA, "My")
+          [void]$site.Bindings.Add("*:8447:mwa.spike.test", $hashA, "My", [Microsoft.Web.Administration.SslFlags]::Sni)
+          $sm.CommitChanges()
+          Start-Sleep 2
+          $cfg = "$env:windir\system32\inetsrv\config\applicationHost.config"
+          $res.config_lines_after_add = @(Select-String -Path $cfg -Pattern '8446|8447' | ForEach-Object { $_.Line.Trim() })
+          $res.sslenum_after_add = (& $env:SPIKE sslenum | Out-String)
+          $res.repoint_ip = (& $env:SPIKE repoint "ipport=0.0.0.0:8446" $env:CERT_B | Out-String)
+          $res.repoint_sni = (& $env:SPIKE repoint "hostnameport=mwa.spike.test:8447" $env:CERT_B | Out-String)
+          $res.config_lines_after_repoint = @(Select-String -Path $cfg -Pattern '8446|8447' | ForEach-Object { $_.Line.Trim() })
+          $sm2 = New-Object Microsoft.Web.Administration.ServerManager
+          $res.mwa_reads_hash = @($sm2.Sites["spike"].Bindings | ForEach-Object { "$($_.BindingInformation) " + (($_.CertificateHash | ForEach-Object { $_.ToString('x2') }) -join '') })
+          iisreset /restart | Out-Null
+          Start-Sleep 3
+          $res.probe_ip_after_iisreset = (& $env:SPIKE probe 127.0.0.1:8446 ip.spike.test | Out-String)
+          $res.probe_sni_after_iisreset = (& $env:SPIKE probe 127.0.0.1:8447 mwa.spike.test | Out-String)
+          $res.cert_b = $env:CERT_B
+          $res | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 "$env:R\f1b.json"
+          Get-Content "$env:R\f1b.json"
+
+      - name: F2 update in one call, field preservation, record shapes
+        continue-on-error: true
+        run: |
+          & $env:SPIKE f2 $env:CERT_A $env:CERT_B | Set-Content "$env:R\f2.json"
+          Get-Content "$env:R\f2.json" -TotalCount 80
+
+      - name: F4 import non-exportable into the software KSP and serve it
+        continue-on-error: true
+        run: |
+          $p = -join ((48..57) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+          $c = New-SelfSignedCertificate -DnsName f4x.spike.test -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -KeyAlgorithm RSA -KeyLength 2048
+          $sec = ConvertTo-SecureString -String $p -Force -AsPlainText
+          Export-PfxCertificate -Cert $c -FilePath C:\winspike\export.pfx -Password $sec | Out-Null
+          Remove-Item "Cert:\CurrentUser\My\$($c.Thumbprint)" -DeleteKey
+          & $env:SPIKE f4 C:\winspike\export.pfx $p $env:CERT_B | Set-Content "$env:R\f4.json"
+          Get-Content "$env:R\f4.json" -TotalCount 80
+
+      - name: F5 served chain
+        continue-on-error: true
+        run: |
+          & $env:SPIKE f5 $env:CERT_B | Set-Content "$env:R\f5.json"
+          Get-Content "$env:R\f5.json"
+
+      - name: F6 appcmd output and shared configuration
+        continue-on-error: true
+        run: |
+          $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
+          $cfg = "$env:windir\system32\inetsrv\config"
+          & $env:SPIKE f6 | Set-Content "$env:R\f6.json"
+          & $appcmd list site /config /xml | Set-Content "$env:R\f6-appcmd-raw.xml"
+          New-Item -ItemType Directory -Force C:\sharedcfg | Out-Null
+          Copy-Item "$cfg\applicationHost.config", "$cfg\administration.config" C:\sharedcfg\
+          & $appcmd add site /name:localonly /id:9002 /physicalPath:C:\inetpub\spike "/bindings:http/*:8090:"
+          $orig = Get-Content "$cfg\redirection.config" -Raw
+          Set-Content "$env:R\f6-redirection-original.config" $orig
+          if ($orig -match '<configurationRedirection\s*/>') {
+            $new = $orig -replace '<configurationRedirection\s*/>', '<configurationRedirection enabled="true" path="C:\sharedcfg" />'
+          } else {
+            $new = $orig -replace '</configuration>', '<configurationRedirection enabled="true" path="C:\sharedcfg" /></configuration>'
+          }
+          Set-Content "$cfg\redirection.config" $new
+          & $env:SPIKE f6 | Set-Content "$env:R\f6-redirected.json"
+          & $appcmd add site /name:sharedonly /id:9003 /physicalPath:C:\inetpub\spike "/bindings:http/*:8091:" 2>&1 | Set-Content "$env:R\f6-add-redirected.txt"
+          $res = @{
+            localonly_listed_when_redirected = [bool](Select-String -Path "$env:R\f6-redirected.json" -Pattern '"localonly"' -Quiet)
+            sharedonly_in_shared_file = [bool](Select-String -Path C:\sharedcfg\applicationHost.config -Pattern 'sharedonly' -Quiet)
+            sharedonly_in_local_file = [bool](Select-String -Path "$cfg\applicationHost.config" -Pattern 'sharedonly' -Quiet)
+          }
+          Set-Content "$cfg\redirection.config" $orig
+          & $appcmd delete site localonly | Out-Null
+          $res | ConvertTo-Json | Set-Content "$env:R\f6-shared.json"
+          Get-Content "$env:R\f6-shared.json"
+
+      - name: F7 install OpenSSH Server
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: powershell
+        run: |
+          $res = @{}
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $cap = Get-WindowsCapability -Online -Name OpenSSH.Server*
+          $res.capability = "$($cap.Name)"; $res.state_before = "$($cap.State)"; $res.get_seconds = $sw.Elapsed.TotalSeconds
+          $res.sshd_present_before = Test-Path "$env:windir\System32\OpenSSH\sshd.exe"
+          if ("$($cap.State)" -ne 'Installed') {
+            $sw2 = [Diagnostics.Stopwatch]::StartNew()
+            $name = $cap.Name
+            $job = Start-Job { Add-WindowsCapability -Online -Name $using:name | Select-Object Online,RestartNeeded | ConvertTo-Json }
+            if (Wait-Job $job -Timeout 480) { $res.add_result = (Receive-Job $job 2>&1 | Out-String) } else { $res.add_timeout = $true; Stop-Job $job }
+            $res.add_seconds = $sw2.Elapsed.TotalSeconds
+            $res.state_after = "$((Get-WindowsCapability -Online -Name $name).State)"
+          }
+          $sshd = "$env:windir\System32\OpenSSH\sshd.exe"
+          if (-not (Test-Path $sshd)) {
+            $url = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64-v10.0.0.0.msi'
+            $want = 'DDEC9C53864280759CF9F74791CEFD387100E3946AA849A1C138A4ED1B96B7D9'
+            $sw3 = [Diagnostics.Stopwatch]::StartNew()
+            Invoke-WebRequest $url -OutFile C:\winspike\openssh.msi -UseBasicParsing
+            $got = (Get-FileHash C:\winspike\openssh.msi -Algorithm SHA256).Hash
+            $res.msi_url = $url; $res.msi_sha256 = $got; $res.msi_sha256_ok = ($got -eq $want)
+            if ($got -eq $want) {
+              $p = Start-Process msiexec.exe -ArgumentList '/i', 'C:\winspike\openssh.msi', '/qn', '/norestart' -Wait -PassThru
+              $res.msi_exit = $p.ExitCode
+            }
+            $res.msi_seconds = $sw3.Elapsed.TotalSeconds
+            $sshd = "$env:ProgramFiles\OpenSSH\sshd.exe"
+          }
+          $res.sshd_path = $sshd
+          $res.sshd_version = (Get-Item $sshd -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+          $res.total_seconds = $sw.Elapsed.TotalSeconds
+          "openssh_install,$($sw.Elapsed.TotalSeconds)" | Add-Content "$env:R\timings.csv"
+          "SSHD_EXE=$sshd" | Add-Content $env:GITHUB_ENV
+          $res | ConvertTo-Json | Out-File -Encoding utf8 "$env:R\f7.json"
+          Get-Content "$env:R\f7.json"
+
+      - name: F3 configure sshd with the forced command
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $res = @{}
+          Start-Service sshd
+          Stop-Service sshd
+          $pw = (-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 28 | ForEach-Object { [char]$_ })) + 'a!Z9'
+          Write-Output "::add-mask::$pw"
+          "SPIKE_PW=$pw" | Add-Content $env:GITHUB_ENV
+          New-LocalUser -Name alicespike -Password (ConvertTo-SecureString $pw -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires | Out-Null
+          Add-LocalGroupMember -SID S-1-5-32-544 -Member alicespike
+          & $env:SPIKE sshkey C:\winspike\sshkey | Out-File -Encoding utf8 "$env:R\f3-key.json"
+          $ak = 'C:\ProgramData\ssh\administrators_authorized_keys'
+          Get-Content C:\winspike\sshkey\authorized_line | Set-Content -Encoding ascii $ak
+          $res.icacls_set = (icacls $ak /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' 2>&1 | Out-String)
+          $res.icacls_show = (icacls $ak | Out-String)
+          $cfgFile = 'C:\ProgramData\ssh\sshd_config'
+          $base = Get-Content $cfgFile -Raw
+          $res.default_config_has_admin_match = $base -match 'Match Group administrators'
+          $block = @(
+            'Match User alicespike',
+            '    ForceCommand "C:\Program Files\AliceSpike\winspike.exe" elevation',
+            '    AuthenticationMethods publickey',
+            '    PermitTTY no',
+            '    AllowTcpForwarding no',
+            '    AllowStreamLocalForwarding no',
+            '    X11Forwarding no',
+            '    PermitTunnel no') -join "`r`n"
+          Set-Content -Encoding ascii $cfgFile ("SyslogFacility LOCAL0`r`nLogLevel VERBOSE`r`n" + $base + "`r`n" + $block + "`r`n")
+          Copy-Item $cfgFile "$env:R\sshd_config"
+          $res.sshd_t = (& $env:SSHD_EXE -t 2>&1 | Out-String)
+          $res.sshd_t_exit = $LASTEXITCODE
+          Start-Service sshd
+          $res.sshd_status = "$((Get-Service sshd).Status)"
+          $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          $sys = Get-ItemProperty $k
+          $res.uac = @{ EnableLUA = $sys.EnableLUA; FilterAdministratorToken = $sys.FilterAdministratorToken
+                        ConsentPromptBehaviorAdmin = $sys.ConsentPromptBehaviorAdmin; LocalAccountTokenFilterPolicy_initial = $sys.LocalAccountTokenFilterPolicy }
+          Remove-ItemProperty $k -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue
+          $res | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 "$env:R\f3-setup.json"
+          Get-Content "$env:R\f3-setup.json"
+
+      - name: F3 sign in with the key (LocalAccountTokenFilterPolicy absent, then 1)
+        continue-on-error: true
+        run: |
+          $cmds = @('version', 'iis-deploy "a b" -- --x', "iis-dump --flag=val 'single quoted'", 'x & whoami | more %USERNAME%')
+          & $env:SPIKE sshrun -user alicespike -key C:\winspike\sshkey\id_ed25519 -password-env SPIKE_PW @cmds | Set-Content "$env:R\f3-ltfp-absent.json"
+          Get-Content "$env:R\f3-ltfp-absent.json"
+          Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
+          & $env:SPIKE sshrun -user alicespike -key C:\winspike\sshkey\id_ed25519 version | Set-Content "$env:R\f3-ltfp-1.json"
+          Get-Content "$env:R\f3-ltfp-1.json"
+          Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy
+          # The OpenSSH client too, with a known_hosts file written from the server's own host key.
+          "localhost $(Get-Content C:\ProgramData\ssh\ssh_host_ed25519_key.pub)" | Set-Content -Encoding ascii C:\winspike\known_hosts
+          icacls C:\winspike\sshkey\id_ed25519 /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+          $ssh = "$env:windir\System32\OpenSSH\ssh.exe"
+          if (-not (Test-Path $ssh)) { $ssh = "$env:ProgramFiles\OpenSSH\ssh.exe" }
+          & $ssh -i C:\winspike\sshkey\id_ed25519 -o UserKnownHostsFile=C:\winspike\known_hosts -o BatchMode=yes alicespike@localhost 'iis-deploy "a b" -- --x' 2>&1 | Set-Content "$env:R\f3-openssh-client.txt"
+          "exit=$LASTEXITCODE" | Add-Content "$env:R\f3-openssh-client.txt"
+          Get-Content "$env:R\f3-openssh-client.txt"
+
+      - name: F8 WinRM HTTPS listener app id
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $res = @{}
+          $res.quickconfig = (winrm quickconfig -quiet 2>&1 | Out-String)
+          $c = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
+          New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * -CertificateThumbprint $c.Thumbprint -Force | Out-Null
+          $res.listener_thumbprint = $c.Thumbprint
+          $res.listeners = (winrm enumerate winrm/config/listener 2>&1 | Out-String)
+          $res | ConvertTo-Json | Out-File -Encoding utf8 "$env:R\f8-winrm.json"
+          & $env:SPIKE sslenum | Out-File -Encoding utf8 "$env:R\f8-winrm-sslenum.json"
+          netsh http show sslcert | Out-File -Encoding utf8 "$env:R\f8-winrm-netsh.txt"
+          Get-Content "$env:R\f8-winrm-sslenum.json"
+
+      - name: F8 SSTP (time-boxed)
+        continue-on-error: true
+        timeout-minutes: 12
+        shell: powershell
+        run: |
+          $res = @{}
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            $r = Install-WindowsFeature RemoteAccess, DirectAccess-VPN -IncludeManagementTools
+            $res.feature_success = $r.Success; $res.restart_needed = "$($r.RestartNeeded)"
+          } catch { $res.feature_error = "$_" }
+          $res.feature_seconds = $sw.Elapsed.TotalSeconds
+          try { Install-RemoteAccess -VpnType Vpn -ErrorAction Stop | Out-Null; $res.install_remoteaccess = 'ok' } catch { $res.install_remoteaccess = "$_" }
+          $res.total_seconds = $sw.Elapsed.TotalSeconds
+          "sstp_attempt,$($sw.Elapsed.TotalSeconds)" | Add-Content "$env:R\timings.csv"
+          $res | ConvertTo-Json | Out-File -Encoding utf8 "$env:R\f8-sstp.json"
+          & $env:SPIKE sslenum | Out-File -Encoding utf8 "$env:R\f8-sstp-sslenum.json"
+          Get-Content "$env:R\f8-sstp.json"
+
+      - name: Final state
+        if: always()
+        continue-on-error: true
+        run: |
+          netsh http show sslcert | Set-Content "$env:R\netsh-final.txt"
+          & $env:SPIKE sslenum | Set-Content "$env:R\sslenum-final.json"
+          (Get-Date).ToUniversalTime().ToString('o') | Set-Content "$env:R\job-end.txt"
+          if (Test-Path C:\ProgramData\ssh\logs) { Copy-Item -Recurse C:\ProgramData\ssh\logs "$env:R\sshd-logs" }
+          Get-Content "$env:R\timings.csv"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: winspike-${{ matrix.os }}
+          path: C:\winspike\results
+          retention-days: 14
