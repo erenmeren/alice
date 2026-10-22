@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 
@@ -108,8 +109,15 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 			return d, err
 		}
 		c, found, err := h.Certificate(ctx, k.store, k.sha1)
+		if errors.Is(err, ErrStore) {
+			return d, failed(winproto.CodeStoreError, "a certificate store could not be opened")
+		}
 		if err != nil {
-			return d, failed(winproto.CodeStoreError, "a certificate could not be read")
+			// One certificate that cannot be read no longer fails the dump (W2 Ruling 19): it is named as
+			// dropped, so Alice reads the binding's leaf as unreadable, not as absent.
+			truncated = true
+			d.DroppedCertificates = append(d.DroppedCertificates, winproto.CertificateRef{Store: k.store, SHA1: k.sha1})
+			continue
 		}
 		if !found {
 			continue
@@ -183,13 +191,16 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 // the host sent reaches Alice raw.
 func cleanBinding(b winproto.SSLBinding) (winproto.SSLBinding, bool) {
 	appID, ok := winproto.CanonicalAppID(b.AppID)
-	if !ok || b.Port < 1 || b.Port > 65535 {
+	if !ok || b.Port < 1 || b.Port > 65535 || !winproto.ValidExtended(b.Extended) {
 		return b, false
 	}
 	out := winproto.SSLBinding{Type: b.Type, Port: b.Port, AppID: appID, Flags: b.Flags,
 		CertCheckMode: b.CertCheckMode, RevocationFreshnessTime: b.RevocationFreshnessTime,
 		URLRetrievalTimeout: b.URLRetrievalTimeout,
 		CTLIdentifier:       cleanValue(b.CTLIdentifier, winproto.MaxText), CTLStore: cleanValue(b.CTLStore, winproto.MaxText)}
+	if len(b.Extended) > 0 {
+		out.Extended = slices.Clone(b.Extended) // the extended parameters as read (F9), checked above
+	}
 	switch b.Type {
 	case winproto.BindingIPPort, winproto.BindingCCS:
 		// A ccs entry has ip 0.0.0.0, an empty hash and an empty store on a real host (W0).

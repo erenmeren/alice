@@ -45,6 +45,7 @@ var commandBudget = winproto.HelperBudget
 type helperError struct {
 	exit          int
 	code, message string
+	pendingOp     string // with RECOVERY_PENDING: the interrupted operation (ErrorResponse.PendingOp)
 }
 
 func (e *helperError) Error() string { return e.code + ": " + e.message }
@@ -57,10 +58,16 @@ func failed(code, msg string) error {
 	return &helperError{exit: winproto.ExitFailed, code: code, message: msg}
 }
 
-// command is one subcommand. Elevated ones need an elevated token (Ruling 3).
+// command is one subcommand. Elevated ones need an elevated token (Ruling 3). A W1 read command has
+// handle; a command that needs a WriteHost has run instead. A write command (W2) is always elevated
+// and runs under its gate (W2 Ruling 7). input is how many bytes of stdin the command reads (0: none,
+// stdin is never read).
 type command struct {
 	elevated bool
+	write    bool
+	input    int
 	handle   func(ctx context.Context, h Host, args []string) (any, error)
+	run      func(ctx context.Context, c *call) (any, error)
 }
 
 var commands = map[string]command{
@@ -72,66 +79,31 @@ var commands = map[string]command{
 
 // RunForced is the "ssh" entry: it splits SSH_ORIGINAL_COMMAND with winproto.SplitCommandLine and runs it.
 func RunForced(ctx context.Context, h Host, originalCommand string, stdin io.Reader, stdout io.Writer) int {
-	args, ok := winproto.SplitCommandLine(originalCommand)
-	if !ok {
-		return reply(stdout, nil, refused(winproto.CodeInvalidArgument, "the command line is not allowed"))
-	}
-	return Run(ctx, h, args, stdin, stdout)
+	return ExecuteForced(ctx, h, originalCommand, stdin, stdout).Exit
 }
 
 // Run executes one call (args[0] is the subcommand) under the call budget, prints exactly one JSON line
-// and returns the exit code.
-func Run(ctx context.Context, h Host, args []string, _ io.Reader, stdout io.Writer) int {
-	if len(args) == 0 {
-		return reply(stdout, nil, refused(winproto.CodeUsage, "usage: alice-helper <subcommand> [arguments]"))
-	}
-	c, ok := commands[args[0]]
-	if !ok {
-		return reply(stdout, nil, refused(winproto.CodeUnknownSubcommand, "unknown subcommand"))
-	}
-	ctx, cancel := context.WithTimeout(ctx, commandBudget)
-	defer cancel()
-	type result struct {
-		out any
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		if c.elevated {
-			el, err := h.Elevated()
-			if err != nil {
-				done <- result{nil, failed(winproto.CodeIOError, "the token could not be read")}
-				return
-			}
-			if !el {
-				done <- result{nil, refused(winproto.CodeNotElevated, "this subcommand needs an elevated token")}
-				return
-			}
-		}
-		out, err := c.handle(ctx, h, args[1:])
-		done <- result{out, err}
-	}()
-	// The budget ends the call even when a host reading ignores its context.
-	select {
-	case r := <-done:
-		return reply(stdout, r.out, r.err)
-	case <-ctx.Done():
-		return reply(stdout, nil, failed(winproto.CodeIOError, "the call took too long"))
-	}
+// and returns the exit code. Execute does the same and also tells whether the call was abandoned at
+// the end of its budget.
+func Run(ctx context.Context, h Host, args []string, stdin io.Reader, stdout io.Writer) int {
+	return Execute(ctx, h, args, stdin, stdout).Exit
 }
 
 // reply prints the answer or the error and returns the exit code.
-func reply(w io.Writer, out any, err error) int {
+func reply(w io.Writer, out any, err error) int { return answer(w, out, err).Exit }
+
+// answer prints the answer or the error and returns the call's Outcome.
+func answer(w io.Writer, out any, err error) Outcome {
 	if err != nil {
 		var he *helperError
 		if !errors.As(err, &he) {
 			he = &helperError{exit: winproto.ExitFailed, code: winproto.CodeIOError, message: "the operation failed"}
 		}
-		writeJSON(w, winproto.ErrorResponse{OK: false, Code: he.code, Message: he.message})
-		return he.exit
+		writeJSON(w, winproto.ErrorResponse{OK: false, Code: he.code, Message: he.message, PendingOp: he.pendingOp})
+		return Outcome{Exit: he.exit, Code: he.code}
 	}
 	writeJSON(w, out)
-	return winproto.ExitOK
+	return Outcome{Exit: winproto.ExitOK}
 }
 
 func writeJSON(w io.Writer, v any) {

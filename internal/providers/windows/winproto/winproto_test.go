@@ -2,6 +2,7 @@ package winproto_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -467,5 +468,41 @@ func TestWriteShapesJSON(t *testing.T) {
 	b, err = json.Marshal(winproto.RestoreInput{ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
 	if err != nil || string(b) != `{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]}` {
 		t.Errorf("restore input: %s %v", b, err)
+	}
+}
+
+func TestValidExtended(t *testing.T) {
+	b64 := func(n int) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, n)) }
+	many := make([]winproto.ExtendedParam, winproto.MaxExtendedParams)
+	for i := range many {
+		many[i] = winproto.ExtendedParam{Type: uint32(i), Data: b64(4)} //nolint:gosec // G115: small
+	}
+	for _, c := range []struct {
+		name string
+		in   []winproto.ExtendedParam
+		want bool
+	}{
+		{"none", nil, true},
+		{"empty", []winproto.ExtendedParam{}, true},
+		{"one", []winproto.ExtendedParam{{Type: 3, Data: b64(16)}}, true},
+		{"at the byte limit", []winproto.ExtendedParam{{Type: 0, Data: b64(winproto.MaxExtendedBytes)}}, true},
+		{"at the count limit", many, true},
+		{"over the count limit", append(append([]winproto.ExtendedParam{}, many...), winproto.ExtendedParam{Type: 99, Data: b64(1)}), false},
+		{"over the byte limit", []winproto.ExtendedParam{{Type: 0, Data: b64(winproto.MaxExtendedBytes + 1)}}, false},
+		{"no bytes", []winproto.ExtendedParam{{Type: 0, Data: ""}}, false},
+		{"not base64", []winproto.ExtendedParam{{Type: 0, Data: "!!!!"}}, false},
+		{"url base64", []winproto.ExtendedParam{{Type: 0, Data: "-_-_"}}, false},
+		{"duplicate type", []winproto.ExtendedParam{{Type: 2, Data: b64(1)}, {Type: 2, Data: b64(2)}}, false},
+	} {
+		if got := winproto.ValidExtended(c.in); got != c.want {
+			t.Errorf("%s: got %v", c.name, got)
+		}
+	}
+}
+
+func TestStepStatuses(t *testing.T) {
+	// helperproto.NginxStep documents "ok" | "failed"; the Windows steps use the same words.
+	if winproto.StepOK != "ok" || winproto.StepFailed != "failed" {
+		t.Fatal(winproto.StepOK, winproto.StepFailed)
 	}
 }

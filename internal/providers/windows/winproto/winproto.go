@@ -5,6 +5,7 @@
 package winproto
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"net/netip"
 	"regexp"
@@ -160,6 +161,12 @@ const (
 	StepRestore           = "restore"
 )
 
+// Step.Status values, the words helperproto.NginxStep uses.
+const (
+	StepOK     = "ok"
+	StepFailed = "failed"
+)
+
 // Step error classes (Step.Error and the answers' Error). ErrForbidden and ErrFileChanged equal
 // providers.DeployErrForbidden and providers.DeployErrFileChanged.
 const (
@@ -228,6 +235,27 @@ type WinFactsResponse struct {
 type ExtendedParam struct {
 	Type uint32 `json:"type"`
 	Data string `json:"data"`
+}
+
+// ValidExtended reports whether a record's extended parameters are within the bounds: at most
+// MaxExtendedParams, each Data standard base64 of 1 to MaxExtendedBytes bytes, no Type twice (a record
+// holds one parameter of each type).
+func ValidExtended(params []ExtendedParam) bool {
+	if len(params) > MaxExtendedParams {
+		return false
+	}
+	seen := make(map[uint32]bool, len(params))
+	for _, p := range params {
+		if seen[p.Type] || p.Data == "" || len(p.Data) > base64.StdEncoding.EncodedLen(MaxExtendedBytes) {
+			return false
+		}
+		seen[p.Type] = true
+		raw, err := base64.StdEncoding.DecodeString(p.Data)
+		if err != nil || len(raw) > MaxExtendedBytes {
+			return false
+		}
+	}
+	return true
 }
 
 // SSLBinding is one http.sys certificate binding (HTTP_SERVICE_CONFIG_SSL_*). Extended holds the

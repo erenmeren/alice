@@ -120,9 +120,10 @@ func TestBuildDumpOtherReadFailures(t *testing.T) {
 	for name, set := range map[string]func(*fakeHost){
 		"iis facts": func(h *fakeHost) { h.iisErr = boom },
 		"bindings":  func(h *fakeHost) { h.bindingsErr = boom },
-		"cert": func(h *fakeHost) {
+		// A store that cannot be opened at all still fails the dump (W2 Ruling 19).
+		"store": func(h *fakeHost) {
 			h.bindings = []winproto.SSLBinding{ipb(443, "My", h1)}
-			h.certErr = boom
+			h.certErr = fmt.Errorf("open: %w", ErrStore)
 		},
 	} {
 		h := dumpHost()
@@ -432,5 +433,64 @@ func TestDumpReportsSites(t *testing.T) {
 	d, err = BuildDump(context.Background(), h)
 	if err != nil || len(d.Sites) != winproto.MaxSites || !d.Truncated || !hasWarning(d, winproto.WarnListTruncated) {
 		t.Fatalf("%v %d %v", err, len(d.Sites), d.Truncated)
+	}
+}
+
+// W2 Ruling 19: one certificate that cannot be read is dropped, not a failed dump.
+func TestBuildDumpDropsAnUnreadableCertificate(t *testing.T) {
+	h := dumpHost()
+	h.bindings = []winproto.SSLBinding{ipb(443, "My", h1), ipb(444, "My", h2), ipb(445, "My", h3)}
+	h.certs = map[[2]string]winproto.StoreCertificate{{"My", h1}: cert("My", h1), {"My", h2}: cert("My", h2), {"My", h3}: cert("My", h3)}
+	h.certErrs = map[[2]string]error{{"My", h2}: errors.New("CRYPT_E_NOT_FOUND secret OS text")}
+	d, err := BuildDump(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Bindings) != 3 || len(d.Certificates) != 2 || d.Certificates[0].SHA1 != h1 || d.Certificates[1].SHA1 != h3 ||
+		!d.Truncated || !hasWarning(d, winproto.WarnListTruncated) {
+		t.Fatalf("%+v", d)
+	}
+	wantDropped(t, d, winproto.CertificateRef{Store: "My", SHA1: h2})
+	b, _ := json.Marshal(d)
+	if strings.Contains(string(b), "secret") {
+		t.Fatal("OS text in the dump")
+	}
+}
+
+func TestBuildDumpReadsExtendedParams(t *testing.T) {
+	b64 := func(n int) string { return base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", n))) }
+	ext := []winproto.ExtendedParam{{Type: 3, Data: b64(8)}, {Type: 0, Data: b64(24)}}
+	withExt := func(port int, e []winproto.ExtendedParam) winproto.SSLBinding {
+		b := ipb(port, "My", h1)
+		b.Extended = e
+		return b
+	}
+	many := make([]winproto.ExtendedParam, winproto.MaxExtendedParams+1)
+	for i := range many {
+		many[i] = winproto.ExtendedParam{Type: uint32(i), Data: b64(1)} //nolint:gosec // G115: small
+	}
+	h := dumpHost()
+	h.bindings = []winproto.SSLBinding{withExt(443, ext), withExt(444, nil), withExt(445, many),
+		withExt(446, []winproto.ExtendedParam{{Type: 1, Data: b64(winproto.MaxExtendedBytes + 1)}}),
+		withExt(447, []winproto.ExtendedParam{{Type: 1, Data: "%%"}})}
+	h.certs = map[[2]string]winproto.StoreCertificate{{"My", h1}: cert("My", h1)}
+	d, err := BuildDump(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Bindings) != 2 || !d.Truncated || !hasWarning(d, winproto.WarnListTruncated) {
+		t.Fatalf("%+v", d.Bindings)
+	}
+	if fmt.Sprint(d.Bindings[0].Extended) != fmt.Sprint(ext) || d.Bindings[1].Extended != nil {
+		t.Fatalf("%+v", d.Bindings)
+	}
+	// the dump's copy is its own
+	h.bindings[0].Extended[0].Data = "changed"
+	if d.Bindings[0].Extended[0].Data == "changed" {
+		t.Fatal("the dump shares the host's slice")
+	}
+	b, _ := json.Marshal(d.Bindings[1])
+	if strings.Contains(string(b), "extended") {
+		t.Fatalf("an empty extended list is sent: %s", b)
 	}
 }
