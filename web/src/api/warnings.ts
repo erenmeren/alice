@@ -56,6 +56,11 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   custom_location: [],
   key_group_open: [],
   certificate_block_dropped: [],
+  // R60: a Windows server (internal/providers/windows/winproto).
+  win_shared_config: [],
+  win_autocertrebind: [],
+  win_ccs_enabled: [],
+  win_expired_in_store: ['count'],
 };
 
 export function warningKey(w: Warning): string {
@@ -85,6 +90,7 @@ export const LOCATION_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   stream_tls: [],
   mail_tls: [],
   chain_unresolved: [],
+  win_ctl: [],
 };
 
 // locationWarningKey is the text key of a location warning; a code from a newer server gets the

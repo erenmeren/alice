@@ -1031,10 +1031,12 @@
     "software": {
       "nginx": "Nginx",
       "apache": "Apache",
-      "haproxy": "HAProxy"
+      "haproxy": "HAProxy",
+      "iis": "IIS"
     },
     "siteColumn": {
-      "haproxy": "Frontend"
+      "haproxy": "Frontend",
+      "windows": "IIS site"
     }
   },
   "warnings": {
@@ -1080,7 +1082,11 @@
     "kv_version_conflict": "Azure reported a version that Alice already knows with a different thumbprint. Alice kept what it had stored. Kind: {{object}}. Items: {{count}}.",
     "kv_listing_empty": "The last check found no certificates in this vault, although Alice knows some. Alice keeps them until the next check confirms it.",
     "web_server_config_invalid_discovery": "{{software}}'s configuration has an error, so Alice cannot read its websites until it is fixed.",
-    "web_server_helper_too_old": "The alice-helper on this server is too old to read {{software}}. Update the helper; SSH keys are still read."
+    "web_server_helper_too_old": "The alice-helper on this server is too old to read {{software}}. Update the helper; SSH keys are still read.",
+    "win_shared_config": "IIS on this server uses a shared configuration. Its sites come from the shared location.",
+    "win_autocertrebind": "Automatic rebinding of renewed certificates is turned on in http.sys. It can replace a certificate Alice deploys.",
+    "win_ccs_enabled": "The Centralized Certificate Store is turned on for IIS on this server. Its bindings are listed but not supported yet.",
+    "win_expired_in_store": "The certificate store of this server still holds expired certificates: {{count}}."
   },
   "targets": {
     "title": "Servers",
@@ -1099,7 +1105,9 @@
       "script": "Commands to run as root",
       "copy": "Copy commands",
       "copied": "Copied",
-      "profileWebServer": "{{software}} server"
+      "profileWebServer": "{{software}} server",
+      "profileWindows": "Windows server",
+      "scriptWindows": "PowerShell setup script (run once in an elevated PowerShell, in the folder that holds alice-helper.exe)"
     },
     "form": {
       "name": "Name",
@@ -1112,7 +1120,12 @@
       "typeLinux": "Linux server",
       "typeHelp": "Choose the web server software this server runs (Nginx, Apache or HAProxy) to see its websites too, or Linux server for SSH keys only. Prepare the server with the commands for the type you choose first.",
       "script": "Commands to prepare this server type",
-      "typeWebServer": "{{software}} server"
+      "typeWebServer": "{{software}} server",
+      "typeWindows": "Windows server",
+      "usernameWindows": "Windows account",
+      "usernameWindowsHelp": "A local account (alice) or a domain account written as DOMAIN\\account.",
+      "scriptWindows": "PowerShell setup script",
+      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe."
     },
     "connecting": "Connecting to the server…",
     "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
@@ -1133,14 +1146,19 @@
     "facts": {
       "neverScanned": "Not scanned yet.",
       "webServerStale": "The {{software}} details below may be out of date. Alice last read websites from this server on {{time}}.",
-      "webServerNotFound": "{{software}} was not found on this server."
+      "webServerNotFound": "{{software}} was not found on this server.",
+      "iisVersion": "IIS {{version}}",
+      "iisNotInstalled": "IIS is not installed",
+      "yes": "Yes",
+      "no": "No"
     },
     "openServer": "Open the server",
     "typeLabel": {
       "linux": "Linux server",
       "nginx": "Nginx server",
       "apache": "Apache server",
-      "haproxy": "HAProxy server"
+      "haproxy": "HAProxy server",
+      "windows": "Windows server"
     },
     "page": {
       "description": "Know what is connected, what changed, and what needs a closer look.",
@@ -1184,7 +1202,14 @@
         "lastScan": "Last scan",
         "discoveryInterval": "Discovery interval",
         "hostFingerprint": "Host fingerprint",
-        "lastProblem": "Last problem"
+        "lastProblem": "Last problem",
+        "windowsVersion": "Windows version",
+        "windowsBuild": "Windows build",
+        "installationType": "Installation type",
+        "iis": "IIS",
+        "elevated": "Elevated",
+        "stores": "Certificate stores",
+        "opensshVersion": "OpenSSH version"
       },
       "everyHours_one": "Every hour",
       "everyHours_other": "Every {{count}} hours",
@@ -1192,7 +1217,8 @@
       "operationsText": "Alice updates certificate and key files through its restricted helper. {{software}} configuration remains under your control.",
       "operationsTextLinux": "Alice reads and changes the SSH keys on this server through its restricted helper.",
       "readOnly": "Read only",
-      "operationsTextDiscovery": "Alice reads the certificate files {{software}} uses through its restricted helper. It never changes {{software}} files or configuration."
+      "operationsTextDiscovery": "Alice reads the certificate files {{software}} uses through its restricted helper. It never changes {{software}} files or configuration.",
+      "operationsTextWindows": "Alice reads the http.sys bindings and IIS sites of this server; deployment comes in a later release."
     }
   },
   "hostKeys": {
@@ -1785,7 +1811,8 @@
       "certificate": "Certificate",
       "expires": "Expires",
       "state": "State",
-      "actions": "Actions"
+      "actions": "Actions",
+      "binding": "Binding"
     },
     "defaultServer": "(default server)",
     "noWebsite": "(no server name)",
@@ -1868,7 +1895,8 @@
       "stream_tls": "TLS in a stream block is listed, but not supported in this version.",
       "mail_tls": "TLS in a mail block is listed, but not supported in this version.",
       "unknown": "Alice reported a note about this website that this version cannot describe.",
-      "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete."
+      "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete.",
+      "win_ctl": "This binding also uses a trusted-issuers list or client certificates. Alice does not model those."
     },
     "unsupported": {
       "variable": "The path uses a variable, so Alice cannot know which file is used.",
@@ -1885,7 +1913,12 @@
       "file_problem": "Alice cannot use the files at this place.",
       "unknown": "Alice cannot use this place for a reason this version does not know.",
       "conditional": "This file, or the name of its website, is set inside a conditional part of the configuration (such as an <If> or .if block, or a test Alice cannot evaluate), so Alice cannot tell when it is used.",
-      "unknown_keyword": "This certificate is on a bind line with an option Alice does not know, so Alice cannot tell which files that line uses."
+      "unknown_keyword": "This certificate is on a bind line with an option Alice does not know, so Alice cannot tell which files that line uses.",
+      "win_foreign_app": "This binding belongs to another application ({{application}}). Alice does not change it.",
+      "win_foreign_app_unknown": "This binding belongs to another application with the id {{app_id}}. Alice does not change it.",
+      "win_ccs": "This is a Centralized Certificate Store binding. Alice does not support these yet.",
+      "win_store_unsupported": "The certificate is in a store other than My or WebHosting. Alice does not support that store.",
+      "file_problem_windows": "Alice cannot use the certificate or key of this binding."
     },
     "problems": {
       "missing": "The file does not exist.",
@@ -1899,7 +1932,10 @@
       "bad_name": "The file name does not end in .pem, .crt, .cer, .cert, .key, .chained or .fullchain.",
       "special_filesystem": "The file is on a special file system.",
       "unknown": "Alice cannot use the file for a reason this version does not know.",
-      "name_not_allowed": "The file's real location (after links) has a character Alice cannot pass to the helper (a space, *, ~, comma or a non-ASCII letter), for example an acme.sh folder like *.example.com."
+      "name_not_allowed": "The file's real location (after links) has a character Alice cannot pass to the helper (a space, *, ~, comma or a non-ASCII letter), for example an acme.sh folder like *.example.com.",
+      "cert_missing": "The store does not hold the certificate this binding names.",
+      "key_missing": "The store holds the certificate without its private key.",
+      "key_inaccessible": "SYSTEM, the account http.sys runs as, cannot use the key."
     },
     "problemCertificate": "Certificate file: {{problem}}",
     "problemKey": "Key file: {{problem}}",
@@ -1929,7 +1965,10 @@
     "configInvalidDiscovery": "{{software}}'s configuration on this server has an error. The websites below are as Alice last read them.",
     "introDiscovery": "Each row is a certificate file that {{software}} uses. Alice reads these files and never changes them.",
     "unsupportedKeyDiscovery": "The certificate's key is neither RSA nor ECDSA.",
-    "keyGroupOpenDiscovery": "The private key file belongs to a user other than root or can be read by a group or by others."
+    "keyGroupOpenDiscovery": "The private key file belongs to a user other than root or can be read by a group or by others.",
+    "noSite": "(no IIS site)",
+    "problemCertificateWin": "Certificate: {{problem}}",
+    "problemKeyWin": "Private key: {{problem}}"
   },
   "deploy": {
     "title": "Deploy a certificate",

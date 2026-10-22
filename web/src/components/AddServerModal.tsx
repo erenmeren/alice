@@ -22,7 +22,11 @@ import { Icon } from '../design/Icon';
 // can only be left, never resubmitted).
 type Phase = 'form' | 'working' | 'confirm' | 'failed';
 
-type ServerType = 'linux' | WebServerType;
+type ServerType = 'linux' | WebServerType | 'windows';
+
+// The account Alice signs in as: the Linux setup script creates alice-svc, the Windows one alice (or a domain account).
+const LINUX_USER = 'alice-svc';
+const WINDOWS_USER = 'alice';
 
 // AddServerModal creates a Linux or an Nginx server, waits for the first connection test and, when the server
 // presented a fingerprint nobody confirmed yet, asks the Administrator to compare and confirm it.
@@ -52,7 +56,9 @@ export function AddServerModal({
   const [name, setName] = useState(initial?.name ?? '');
   const [host, setHost] = useState(initial?.host ?? '');
   const [port, setPort] = useState<number | string>(22);
-  const [username, setUsername] = useState('alice-svc');
+  const [username, setUsername] = useState(LINUX_USER);
+  // userEdited: the person typed the account, so choosing another server type leaves it alone.
+  const [userEdited, setUserEdited] = useState(false);
   const [phase, setPhase] = useState<Phase>('form');
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
@@ -60,6 +66,12 @@ export function AddServerModal({
   const [target, setTarget] = useState<Target | null>(null);
   const [candidate, setCandidate] = useState<HostKey | null>(null);
   const abort = useAbort();
+
+  // chooseType switches the server type; the account follows the type's default until the person edits it.
+  const chooseType = (next: ServerType) => {
+    setType(next);
+    if (!userEdited) setUsername(next === 'windows' ? WINDOWS_USER : LINUX_USER);
+  };
 
   const refresh = () => void client.invalidateQueries({ queryKey: TARGETS_KEY });
 
@@ -170,10 +182,11 @@ export function AddServerModal({
               label={t('targets.form.type')}
               description={t('targets.form.typeHelp')}
               value={type}
-              onChange={(e) => setType(e.currentTarget.value as ServerType)}
+              onChange={(e) => chooseType(e.currentTarget.value as ServerType)}
               data={[
                 { value: 'linux', label: t('targets.form.typeLinux') },
                 ...WEB_SERVER_TYPES.map((type) => ({ value: type, label: t('targets.form.typeWebServer', { software: softwareName(t, type) }) })),
+                { value: 'windows', label: t('targets.form.typeWindows') },
               ]}
             />
             <ProfileScript type={type} />
@@ -188,7 +201,18 @@ export function AddServerModal({
               autoComplete="off"
             />
             <NumberInput label={t('targets.form.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} required />
-            <TextInput label={t('targets.form.username')} value={username} onChange={(e) => setUsername(e.currentTarget.value)} required maxLength={32} />
+            <TextInput
+              label={t(type === 'windows' ? 'targets.form.usernameWindows' : 'targets.form.username')}
+              description={type === 'windows' ? t('targets.form.usernameWindowsHelp') : undefined}
+              value={username}
+              onChange={(e) => {
+                setUserEdited(true);
+                setUsername(e.currentTarget.value);
+              }}
+              required
+              maxLength={type === 'windows' ? 36 : 32}
+              autoComplete="off"
+            />
             {problem}
           </Stack>
           <DialogActions>
@@ -228,13 +252,15 @@ function ProfileScript({ type }: { type: ServerType }) {
   const { t } = useTranslation();
   const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
   const script = key.data?.profiles[type]?.script;
+  const windows = type === 'windows';
   if (!script) return <ErrorAlert error={key.error} />;
   return (
     <Stack gap={4}>
       <Text size="sm" fw={600}>
-        {t('targets.form.script')}
+        {t(windows ? 'targets.form.scriptWindows' : 'targets.form.script')}
       </Text>
-      <Code block tabIndex={0} aria-label={t('targets.form.script')} data-testid="add-server-script" style={{ ...WRAP, maxHeight: 160, overflow: 'auto' }} translate="no">
+      {windows && <Text size="xs">{t('targets.form.scriptWindowsHelp')}</Text>}
+      <Code block tabIndex={0} aria-label={t(windows ? 'targets.form.scriptWindows' : 'targets.form.script')} data-testid="add-server-script" style={{ ...WRAP, maxHeight: 160, overflow: 'auto' }} translate="no">
         {script}
       </Code>
       <CopyButton value={script}>

@@ -8,9 +8,19 @@ export function isWebServer(type: string): type is WebServerType {
   return (WEB_SERVER_TYPES as readonly string[]).includes(type);
 }
 
-// isServerType: a server Alice signs in to over SSH (Linux or a web server).
+// isWindows: a Windows server (IIS and http.sys bindings, reached over OpenSSH; R60).
+export function isWindows(type: string): boolean {
+  return type === 'windows';
+}
+
+// isServerType: a server Alice signs in to over SSH (Linux, a web server or Windows).
 export function isServerType(type: string): boolean {
-  return type === 'linux' || isWebServer(type);
+  return type === 'linux' || isWebServer(type) || isWindows(type);
+}
+
+// hasCertificateLocations: the server's page lists certificate locations (websites, or http.sys bindings).
+export function hasCertificateLocations(type: string): boolean {
+  return isWebServer(type) || isWindows(type);
 }
 
 // Why Alice cannot deploy to a web server right now, in the order it is shown. The facts and

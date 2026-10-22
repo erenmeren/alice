@@ -1,10 +1,11 @@
 import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
 import { capabilityText, can } from '../api/capabilities';
-import { canDeployTo, firstServerName, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
+import { canDeployTo, firstServerName, isWindows, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { canOn } from '../auth/permissions';
@@ -129,7 +130,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               <Table.Tr>
                 <Table.Th>{siteColumnLabel(t, target.type)}</Table.Th>
                 <Table.Th>{t('locations.columns.port')}</Table.Th>
-                <Table.Th>{t('locations.columns.file')}</Table.Th>
+                <Table.Th>{t(isWindows(target.type) ? 'locations.columns.binding' : 'locations.columns.file')}</Table.Th>
                 <Table.Th>{t('locations.columns.certificate')}</Table.Th>
                 <Table.Th>{t('locations.columns.expires')}</Table.Th>
                 <Table.Th>{t('locations.columns.state')}</Table.Th>
@@ -163,6 +164,19 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   );
 }
 
+// unsupportedText words why a place cannot be used. A Windows binding that belongs to another application names it
+// (details.application from the helper's table: iis, iisexpress, winrm, sstp), or shows the raw application id when
+// Alice does not know it (AD FS, for one); a file_problem there is about the store, not about files.
+function unsupportedText(t: TFunction, target: Target, l: CertificateLocation): string {
+  if (l.unsupported_reason === 'win_foreign_app') {
+    const application = typeof l.details?.application === 'string' ? l.details.application : '';
+    const appId = typeof l.details?.app_id === 'string' ? l.details.app_id : '';
+    return application !== '' ? t('locations.unsupported.win_foreign_app', { application }) : t('locations.unsupported.win_foreign_app_unknown', { app_id: appId });
+  }
+  if (l.unsupported_reason === 'file_problem' && isWindows(target.type)) return t('locations.unsupported.file_problem_windows');
+  return t(capabilityText(target, unsupportedReasonKey(l.unsupported_reason)));
+}
+
 function LocationRow({
   l,
   target,
@@ -192,18 +206,32 @@ function LocationRow({
   const sections = [...new Set(l.servers.map((x) => x.section ?? '').filter((n) => n !== ''))];
   const first = l.servers[0];
   const cert = l.certificate;
-  const problems = l.unsupported_reason === 'file_problem' ? [l.problem, l.key_problem].filter((p) => p !== '') : [];
+  const windows = isWindows(target.type);
+  // The certificate's and the key's problem, each worded for what it is (a Windows binding has a store, not files).
+  const problems =
+    l.unsupported_reason === 'file_problem'
+      ? [
+          { p: l.problem, key: windows ? 'locations.problemCertificateWin' : 'locations.problemCertificate' },
+          { p: l.key_problem, key: windows ? 'locations.problemKeyWin' : 'locations.problemKey' },
+        ].filter((x) => x.p !== '')
+      : [];
   return (
     <Table.Tr data-testid="location-row" data-location={l.id}>
       <Table.Td style={WRAP}>
         <Stack gap={2}>
-          {sections.map((n) => (
-            <Text key={n} size="sm">
-              {t('locations.frontend', { name: n })}
-            </Text>
-          ))}
+          {sections.map((n) =>
+            windows ? (
+              <Text key={n} size="sm" translate="no">
+                {n}
+              </Text>
+            ) : (
+              <Text key={n} size="sm">
+                {t('locations.frontend', { name: n })}
+              </Text>
+            ),
+          )}
           {names.length === 0 ? (
-            sections.length === 0 && <Text size="sm">{t('locations.noWebsite')}</Text>
+            sections.length === 0 && <Text size="sm">{t(windows ? 'locations.noSite' : 'locations.noWebsite')}</Text>
           ) : (
             <Group gap={4}>
               {names.map((n) =>
@@ -219,7 +247,7 @@ function LocationRow({
               )}
             </Group>
           )}
-          {first && (
+          {first && !windows && (
             <Stack gap={0}>
               <LabelledCode size="xs" text={t('locations.definedIn', { file: '' })} value={first.file} />
               <Text size="xs" c="dimmed">
@@ -277,10 +305,10 @@ function LocationRow({
             )}
           </Group>
           {missing && <Text size="xs">{t('locations.missingSince', { time: formatDateTime(l.missing_since, i18n.language) })}</Text>}
-          {!l.supported && <Text size="xs">{t(capabilityText(target, unsupportedReasonKey(l.unsupported_reason)))}</Text>}
-          {problems.map((p, i) => (
+          {!l.supported && <Text size="xs">{unsupportedText(t, target, l)}</Text>}
+          {problems.map(({ p, key }, i) => (
             <Text size="xs" key={`${p}-${i}`}>
-              {t(i === 0 ? 'locations.problemCertificate' : 'locations.problemKey', { problem: t(fileProblemKey(p)) })}
+              {t(key, { problem: t(fileProblemKey(p)) })}
             </Text>
           ))}
           {l.changed_outside_at && (

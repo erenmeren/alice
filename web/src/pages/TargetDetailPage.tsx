@@ -7,7 +7,7 @@ import { Navigate, useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { capabilityText } from '../api/capabilities';
-import { isServerType, isWebServer, webServerState } from '../api/webServer';
+import { hasCertificateLocations, isServerType, isWebServer, isWindows, webServerState } from '../api/webServer';
 import { softwareName } from '../components/software';
 import { CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
@@ -73,7 +73,7 @@ export function TargetDetailPage() {
     enabled: target.isSuccess,
   });
 
-  const locations = useLocations(id, false, target.data ? isWebServer(target.data.type) : false);
+  const locations = useLocations(id, false, target.data ? hasCertificateLocations(target.data.type) : false);
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
@@ -129,7 +129,7 @@ export function TargetDetailPage() {
   const pinned = hostKeys.data?.items.find((k) => k.status === 'pinned') ?? null;
   const observed = hostKeys.data?.items.find((k) => k.status === 'observed') ?? null;
   const added = addedNow;
-  const webServer = isWebServer(tg.type);
+  const webServer = hasCertificateLocations(tg.type);
   const visibleKeys = (keys.data?.items ?? []).filter((k) => !k.removed_at);
 
   const facts = connectionFacts(t, i18n, tg, pinned, discoveryFailed, websitesAsOf(locations.data?.items ?? []));
@@ -259,7 +259,11 @@ export function TargetDetailPage() {
             <FactList facts={facts} />
           </Panel>
           <Panel title={t('targets.page.operations')}>
-            <Text className={classes.small}>{isWebServer(tg.type) ? t(capabilityText(tg, 'targets.page.operationsText'), { software: softwareName(t, tg.type) }) : t('targets.page.operationsTextLinux')}</Text>
+            <Text className={classes.small}>{isWindows(tg.type)
+                ? t('targets.page.operationsTextWindows')
+                : isWebServer(tg.type)
+                  ? t(capabilityText(tg, 'targets.page.operationsText'), { software: softwareName(t, tg.type) })
+                  : t('targets.page.operationsTextLinux')}</Text>
             <Group gap="xs" mt="lg">
               {canOperate ? (
                 <Button variant="default" leftSection={<Icon name="Network" size={15} />} disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
@@ -385,6 +389,20 @@ function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostK
   if (f.helper_version) facts.push({ key: 'helper', label: t('targets.page.facts.helper'), value: f.helper_version });
   if (ws?.version) facts.push({ key: 'web_server', label: t('targets.page.facts.webServer', { software }), value: ws.version });
   else if (ws && !ws.found) facts.push({ key: 'web_server', label: t('targets.page.facts.webServer', { software }), value: t('targets.facts.webServerNotFound', { software }) });
+  const win = isWindows(target.type) ? f.windows : undefined;
+  if (win) {
+    facts.push({ key: 'win_product', label: t('targets.page.facts.windowsVersion'), value: win.product || '-' });
+    facts.push({ key: 'win_build', label: t('targets.page.facts.windowsBuild'), value: <Code translate="no">{win.build}</Code> });
+    if (win.installation_type) facts.push({ key: 'win_installation', label: t('targets.page.facts.installationType'), value: win.installation_type });
+    facts.push({
+      key: 'win_iis',
+      label: t('targets.page.facts.iis'),
+      value: win.iis_installed ? t('targets.facts.iisVersion', { version: win.iis_version }) : t('targets.facts.iisNotInstalled'),
+    });
+    facts.push({ key: 'win_elevated', label: t('targets.page.facts.elevated'), value: win.elevated ? t('targets.facts.yes') : t('targets.facts.no') });
+    if (win.stores.length > 0) facts.push({ key: 'win_stores', label: t('targets.page.facts.stores'), value: <Code translate="no">{win.stores.join(', ')}</Code> });
+    if (win.openssh_version) facts.push({ key: 'win_openssh', label: t('targets.page.facts.opensshVersion'), value: <Code translate="no">{win.openssh_version}</Code> });
+  }
   facts.push({
     key: 'connected',
     label: t('targets.page.facts.lastConnected'),

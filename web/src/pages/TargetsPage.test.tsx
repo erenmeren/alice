@@ -423,7 +423,7 @@ describe('TargetsPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'Add server' });
       const type = within(dialog).getByLabelText('Server type');
       expect(type).toHaveValue('linux');
-      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server', 'Apache server', 'HAProxy server']);
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server', 'Apache server', 'HAProxy server', 'Windows server']);
       expect(within(dialog).getByText(/^Choose the web server software this server runs/)).toBeInTheDocument();
       expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# linux setup script');
       await userEvent.selectOptions(type, 'nginx');
@@ -487,13 +487,86 @@ describe('TargetsPage', () => {
       expect(body).toEqual({ name: 'db-01', type: 'haproxy', host: 'db-01.example.com', port: 22, username: 'alice-svc' });
     });
 
+    describe('windows type', () => {
+      it('shows the PowerShell script, defaults the account to alice and sends a domain account verbatim', async () => {
+        withTargets('admin', []);
+        let body: unknown = null;
+        server.use(
+          http.post('/api/v1/targets', async ({ request }) => {
+            body = await request.json();
+            return HttpResponse.json({ target: { ...pending, type: 'windows' }, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 });
+          }),
+          http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1', status: 'succeeded' }))),
+          http.get('/api/v1/targets/:id', () => HttpResponse.json(targetWith({ ...pending, type: 'windows', status: 'ok' }))),
+          http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
+          http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
+          http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+        );
+        const { router } = await renderRoute('/servers');
+        await userEvent.click(await screen.findByRole('button', { name: 'Add server' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+        const user = within(dialog).getByLabelText(/^User name on the server/);
+        expect(user).toHaveValue('alice-svc');
+        await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
+        expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# windows setup script');
+        expect(within(dialog).getByText('PowerShell setup script')).toBeInTheDocument();
+        expect(within(dialog).getByText('Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe.')).toBeInTheDocument();
+        expect(within(dialog).getByLabelText(/^Windows account/)).toHaveValue('alice');
+        expect(within(dialog).getByLabelText(/^Windows account/)).toHaveAttribute('maxlength', '36');
+        await userEvent.type(within(dialog).getByLabelText(/^Name/), 'iis-01');
+        await userEvent.type(within(dialog).getByLabelText(/^Address/), 'iis-01.example.com');
+        const account = within(dialog).getByLabelText(/^Windows account/);
+        await userEvent.clear(account);
+        await userEvent.type(account, 'CORP\\alice-svc');
+        await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+        await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
+        expect(body).toEqual({ name: 'iis-01', type: 'windows', host: 'iis-01.example.com', port: 22, username: 'CORP\\alice-svc' });
+      });
+
+      it('restores the Linux default when switching back, but keeps a name the person typed', async () => {
+        withTargets('admin', []);
+        await renderRoute('/servers');
+        await userEvent.click(await screen.findByRole('button', { name: 'Add server' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+        const type = within(dialog).getByLabelText('Server type');
+        await userEvent.selectOptions(type, 'windows');
+        await userEvent.selectOptions(type, 'linux');
+        expect(within(dialog).getByLabelText(/^User name on the server/)).toHaveValue('alice-svc');
+        await userEvent.selectOptions(type, 'windows');
+        const account = within(dialog).getByLabelText(/^Windows account/);
+        await userEvent.clear(account);
+        await userEvent.type(account, 'svc-iis');
+        await userEvent.selectOptions(type, 'nginx');
+        expect(within(dialog).getByLabelText(/^User name on the server/)).toHaveValue('svc-iis');
+      });
+
+      it('words the type in Turkish', async () => {
+        withTargets('admin', [], 'tr');
+        await renderRoute('/servers', { languages: ['tr-TR'] });
+        await userEvent.click(await screen.findByRole('button', { name: 'Sunucu ekle' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Sunucu ekle' });
+        await userEvent.selectOptions(within(dialog).getByLabelText('Sunucu türü'), 'windows');
+        expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# windows setup script');
+        expect(within(dialog).getByText('PowerShell kurulum betiği')).toBeInTheDocument();
+        expect(within(dialog).getByLabelText(/^Windows hesabı/)).toHaveValue('alice');
+      });
+
+      it('lists the Windows profile in the preparation panel', async () => {
+        withTargets('admin', [targetFixture]);
+        await renderRoute('/servers');
+        await screen.findByTestId('platform-public-key');
+        await userEvent.selectOptions(screen.getByLabelText('Server type'), 'windows');
+        expect(screen.getByTestId('setup-script')).toHaveTextContent('# windows setup script');
+      });
+    });
+
     it('shows the choice in Turkish', async () => {
       withTargets('admin', [], 'tr');
       await renderRoute('/servers', { languages: ['tr-TR'] });
       await userEvent.click(await screen.findByRole('button', { name: 'Sunucu ekle' }));
       const dialog = await screen.findByRole('dialog', { name: 'Sunucu ekle' });
       expect(within(dialog).getByLabelText('Sunucu türü')).toBeInTheDocument();
-      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucusu', 'Nginx sunucusu', 'Apache sunucusu', 'HAProxy sunucusu']);
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucusu', 'Nginx sunucusu', 'Apache sunucusu', 'HAProxy sunucusu', 'Windows sunucusu']);
     });
   });
 });

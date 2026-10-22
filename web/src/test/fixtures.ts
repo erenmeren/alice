@@ -41,6 +41,7 @@ import type {
   LicenseDetail,
   LicenseStatus,
   WebServerFacts,
+  WindowsFacts,
   PlatformKeyInfo,
   Role,
   SessionInfo,
@@ -280,6 +281,7 @@ export const platformKeyFixture: PlatformKeyInfo = {
     nginx: { sudoers: '# nginx profile', script: '# nginx setup script\nset -eu\n' },
     apache: { sudoers: '# apache profile', script: '# apache setup script\nset -eu\n' },
     haproxy: { sudoers: '# haproxy profile', script: '# haproxy setup script\nset -eu\n' },
+    windows: { sudoers: '', script: '# windows setup script\n$AliceUser = \'alice\'\n' },
   },
 };
 
@@ -657,6 +659,57 @@ export const haproxyTargetFixture: Target = {
     web_server: webServerFacts({ software: 'haproxy', version: '2.6.12-1+deb12u3', conf_path: '/etc/haproxy/haproxy.cfg' }),
   },
 };
+
+// windowsFacts builds the facts.windows of a Windows server whose last test was fine (IIS 10.0 on Windows Server 2022).
+export function windowsFacts(o: Partial<WindowsFacts> = {}): WindowsFacts {
+  return {
+    build: '10.0.20348.2700',
+    product: 'Windows Server 2022 Datacenter',
+    installation_type: 'Server',
+    elevated: true,
+    iis_installed: true,
+    iis_version: '10.0',
+    stores: ['My', 'WebHosting'],
+    openssh_version: 'OpenSSH_for_Windows_9.5p2',
+    ...o,
+  };
+}
+
+// windowsTargetFixture is a Windows server (discovery only in W1: no deploy_certificate) whose last scan was fine.
+export const windowsTargetFixture: Target = {
+  ...targetFixture,
+  id: '0192b000-0000-7000-8000-0000000000a5',
+  name: 'web-iis',
+  type: 'windows',
+  host: 'iis-01.example.com',
+  username: 'CORP\\alice-svc',
+  capabilities: ['discover_certificates', 'test_connection'],
+  facts: {
+    ...targetFixture.facts,
+    os: { id: 'windows', version_id: '10.0.20348.2700', pretty_name: 'Windows Server 2022 Datacenter' },
+    windows: windowsFacts(),
+  },
+};
+
+// windowsBindingFixture is an http.sys SSL binding of an IIS site (the canonical text is its cert_path).
+export function windowsBindingFixture(o: Partial<CertificateLocation> = {}): CertificateLocation {
+  return locationFixture({
+    id: '0192c000-0000-7000-8000-0000000000w1',
+    target_id: windowsTargetFixture.id,
+    target_name: windowsTargetFixture.name,
+    cert_path: 'http.sys/hostnameport/www.example.test:443',
+    key_path: '',
+    key_type: '',
+    servers: [{ names: ['www.example.test'], section: 'Default Web Site', listens: [{ addr: 'www.example.test', port: 443, default_server: false }], file: '', line: 0 }],
+    key_exists: false,
+    key_mode: '',
+    key_owner: '',
+    key_group: '',
+    target_type: 'windows',
+    deployable: false,
+    ...o,
+  });
+}
 
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
   return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };

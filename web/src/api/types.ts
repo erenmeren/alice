@@ -322,7 +322,7 @@ export interface LicenseUploadResult {
 // Phase 3: servers (targets), host keys, SSH key inventory, jobs (api/openapi.yaml).
 
 export type TargetStatus = 'pending_host_key' | 'checking' | 'ok' | 'degraded' | 'unreachable' | 'host_key_changed' | 'auth_failed' | 'disabled';
-export type TargetType = 'linux' | WebServerType | 'azure_key_vault';
+export type TargetType = 'linux' | WebServerType | 'windows' | 'azure_key_vault';
 
 // Warning is a stable code (translated as warnings.<code>) and its parameters.
 export interface Warning {
@@ -377,6 +377,19 @@ export interface WebServerFacts {
   found: boolean;
 }
 
+// WindowsFacts are what the last connection test learned about a Windows server (absent on other servers and
+// before the first test). elevated false fails the test with ALC-WIN-0003.
+export interface WindowsFacts {
+  build: string;
+  product: string;
+  installation_type: string;
+  elevated: boolean;
+  iis_installed: boolean;
+  iis_version: string;
+  stores: string[];
+  openssh_version: string;
+}
+
 export interface TargetFacts {
   os: OSRelease;
   helper_version: string;
@@ -386,6 +399,7 @@ export interface TargetFacts {
   warnings: Warning[];
   unreadable: UnreadableLine[];
   web_server?: WebServerFacts;
+  windows?: WindowsFacts;
 }
 
 // The service that owns a row (R49): its id, name and environment (null for none).
@@ -444,7 +458,7 @@ export interface Target {
 
 export interface TargetCreateRequest {
   name: string;
-  type: 'linux' | WebServerType;
+  type: 'linux' | WebServerType | 'windows';
   host: string;
   port: number;
   username: string;
@@ -543,7 +557,7 @@ export interface PlatformKeyInfo {
   authorized_keys_line: string;
   helper_path: string;
   helper_protocol: number;
-  profiles: { linux: SetupSnippet; nginx: SetupSnippet; apache: SetupSnippet; haproxy: SetupSnippet };
+  profiles: { linux: SetupSnippet; nginx: SetupSnippet; apache: SetupSnippet; haproxy: SetupSnippet; windows: SetupSnippet };
 }
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead' | 'blocked_license';
@@ -707,7 +721,7 @@ export interface CertificateLocation {
   missing_since: string | null;
   version: number;
   active_deployment_id: string | null;
-  target_type: WebServerType;
+  target_type: WebServerType | 'windows';
   // deployable: the server's software deploys certificates (its deploy_certificate capability).
   deployable: boolean;
   // R52: what the location should have, what Alice last deployed and what is observed today; null when it follows

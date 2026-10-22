@@ -27,8 +27,11 @@
   "sshKeys.types.ecdsa-p256",
   "sshKeys.types.rsa-3072",
   "sshKeys.types.rsa-4096",
+  "targets.facts.iisVersion",
+  "targets.page.facts.iis",
   "webServer.siteColumn.haproxy",
   "webServer.software.apache",
   "webServer.software.haproxy",
+  "webServer.software.iis",
   "webServer.software.nginx"
 ]

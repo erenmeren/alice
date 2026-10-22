@@ -163,6 +163,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   // The SSH helper's warnings and the ones Alice makes from its unlisted accounts (protocol 6).
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
+  // R60: the Windows helper's warnings; win_ctl is a location warning, the others are server warnings.
+  const winWarnings = goConsts('internal/providers/windows/winproto/winproto.go', /^Warn/);
   // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
   const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/haproxy', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
@@ -190,10 +192,17 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   });
 
   it('lists the unsupported reasons and file problems of the Go sources and the specification', () => {
-    eq(goConsts('internal/providers/types.go', /^Unsupported[A-Z]/), UNSUPPORTED_REASONS);
-    eq(knownValues('CertificateLocation', 'unsupported_reason').map((v) => v.replace(/ \(.*\)$/, '')), UNSUPPORTED_REASONS);
-    eq(goConsts('internal/providers/types.go', /^CertProblem/), FILE_PROBLEMS);
-    eq(knownIn(topLevelText('FileProblem')), FILE_PROBLEMS);
+    // R60: the Windows provider's own reasons and problems (internal/providers/windows/convert.go).
+    const winReasons = goConsts('internal/providers/windows/convert.go', /^Unsupported[A-Z]/);
+    const winProblems = goConsts('internal/providers/windows/convert.go', /^Problem[A-Z]/);
+    expect(winReasons).toEqual(expect.arrayContaining(['win_foreign_app', 'win_ccs', 'win_store_unsupported']));
+    expect(winProblems).toEqual(expect.arrayContaining(['cert_missing', 'key_missing', 'key_inaccessible']));
+    eq(goConsts('internal/providers/types.go', /^Unsupported[A-Z]/), UNSUPPORTED_REASONS.filter((r) => !winReasons.includes(r)));
+    eq(knownValues('CertificateLocation', 'unsupported_reason').map((v) => v.replace(/ \(.*\)$/, '')).filter((r) => !winReasons.includes(r)), UNSUPPORTED_REASONS.filter((r) => !winReasons.includes(r)));
+    for (const r of winReasons) expect(UNSUPPORTED_REASONS, r).toContain(r);
+    eq(goConsts('internal/providers/types.go', /^CertProblem/), FILE_PROBLEMS.filter((p) => !winProblems.includes(p)));
+    eq(knownIn(topLevelText('FileProblem')).filter((p) => !winProblems.includes(p)), FILE_PROBLEMS.filter((p) => !winProblems.includes(p)));
+    for (const p of winProblems) expect(FILE_PROBLEMS, p).toContain(p);
   });
 
   it('lists the configuration error classes and reasons', () => {
@@ -202,26 +211,31 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     eq(knownValues('WebServerFacts', 'config_error'), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
     eq(goConsts('internal/providers/types.go', /^ConfigReason/), CONFIG_REASONS);
     eq(knownValues('WebServerFacts', 'config_error_reason'), CONFIG_REASONS);
-    eq(enumOf('WebServerFacts', 'software'), [...WEB_SERVER_TYPES]);
+    // 'iis' is the software of a Windows server (R60); the three web servers are the SSH ones.
+    eq(enumOf('WebServerFacts', 'software'), [...WEB_SERVER_TYPES, 'iis']);
   });
 
   it('knows every location warning of the specification and the inventory, and every provider warning at one level', () => {
     for (const w of knownValues('CertificateLocation', 'warnings')) expect(Object.keys(LOCATION_WARNINGS), w).toContain(w);
     for (const w of inventoryWarnings) expect(Object.keys(LOCATION_WARNINGS), w).toContain(w);
     for (const w of typesWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).toContain(w);
+    for (const w of winWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).toContain(w);
   });
 
   it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
-    const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings]);
+    const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings, ...winWarnings]);
     for (const w of Object.keys(LOCATION_WARNINGS)) expect(sources.has(w), `location warning ${w} has no source`).toBe(true);
-    const server = new Set([...typesWarnings, ...webServerWarnings, ...haproxyconfWarnings, ...openapiTargetWarnings]);
+    const server = new Set([...typesWarnings, ...webServerWarnings, ...haproxyconfWarnings, ...openapiTargetWarnings, ...winWarnings]);
+    const windowsOnly = ['win_shared_config', 'win_autocertrebind', 'win_ccs_enabled', 'win_expired_in_store'];
+    expect(winWarnings).toEqual(expect.arrayContaining([...windowsOnly, 'win_ctl']));
+    expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ctl');
     expect(haproxyconfWarnings).toContain('config_file_not_read');
     const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_helper_too_old', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'config_dir_not_read', 'config_file_not_read', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
     const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users', 'account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported', 'accounts_nul_byte', 'list_truncated_uid']);
     const keyVault = ['kv_item_unreadable', 'kv_version_conflict', 'kv_listing_empty']; // Phase 5: what a vault poll could not use or doubted (internal/providers/types.go, internal/inventory/kv_prepare.go)
-    for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || webServerOnly.includes(w) || keyVault.includes(w), `warning ${w} is in no group`).toBe(true);
+    for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || webServerOnly.includes(w) || keyVault.includes(w) || windowsOnly.includes(w), `warning ${w} is in no group`).toBe(true);
   });
 
   it('knows every warning of the SSH helper and of its unlisted accounts (protocol 6, AUD-03)', () => {
@@ -258,6 +272,9 @@ describe('Nginx deployment, website and fact labels cover the specification and 
 
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
     for (const w of [...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    for (const w of winWarnings.filter((x) => x !== 'win_ctl')) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    expect(warningKey({ code: 'win_expired_in_store', params: { count: '3' } })).toBe('warnings.win_expired_in_store');
+    expect(warningKey({ code: 'win_expired_in_store', params: {} })).toBe('warnings.incomplete');
     expect(openapiTargetWarnings).toEqual(expect.arrayContaining(['web_server_profile_missing', 'stream_tls', 'config_file_writable']));
   });
 

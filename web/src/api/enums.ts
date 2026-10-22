@@ -106,6 +106,10 @@ export const UNSUPPORTED_REASONS: readonly string[] = [
   'key_conflict',
   'file_problem',
   'unsupported_key',
+  // R60: a Windows server's http.sys bindings (internal/providers/windows/convert.go).
+  'win_foreign_app',
+  'win_ccs',
+  'win_store_unsupported',
   'unknown',
 ];
 
@@ -122,6 +126,10 @@ export const FILE_PROBLEMS: readonly string[] = [
   'bad_name',
   'name_not_allowed',
   'special_filesystem',
+  // R60: a Windows binding's certificate and key (the store holds no such certificate, no key, or SYSTEM cannot use it).
+  'cert_missing',
+  'key_missing',
+  'key_inaccessible',
   'unknown',
 ];
 

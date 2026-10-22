@@ -14,6 +14,9 @@ import {
   webServerFacts,
   apacheTargetFixture,
   haproxyTargetFixture,
+  windowsBindingFixture,
+  windowsFacts,
+  windowsTargetFixture,
   nginxTargetFixture,
   nginxTargetWith,
   keyLocationFixture,
@@ -571,6 +574,86 @@ describe('TargetDetailPage', () => {
       view.unmount();
       await open('tr', 'tr-TR');
       expect((await screen.findAllByRole('button', { name: /^Sertifika dağıt/ }))[0]).toHaveAccessibleDescription('Apache sunucularında henüz kullanılamıyor');
+    });
+
+    describe('windows facts', () => {
+      const addrs = [{ addr: 'www.example.test', port: 443, default_server: false }];
+      const bound = windowsBindingFixture();
+      const foreign = windowsBindingFixture({
+        id: 'loc-winrm',
+        cert_path: 'http.sys/ipport/0.0.0.0:5986',
+        supported: false,
+        unsupported_reason: 'win_foreign_app',
+        deployable: false,
+        servers: [],
+        details: { app_id: '{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}', application: 'winrm' },
+      });
+      const adfs = windowsBindingFixture({
+        id: 'loc-adfs',
+        cert_path: 'http.sys/ipport/0.0.0.0:8443',
+        supported: false,
+        unsupported_reason: 'win_foreign_app',
+        servers: [],
+        details: { app_id: '{11111111-2222-3333-4444-555555555555}', application: '' },
+      });
+      const ccs = windowsBindingFixture({ id: 'loc-ccs', cert_path: 'http.sys/ccs/443', supported: false, unsupported_reason: 'win_ccs', servers: [{ names: ['ccs.example.test'], section: 'Store Site', listens: addrs, file: '', line: 0 }] });
+      const broken = windowsBindingFixture({ id: 'loc-key', cert_path: 'http.sys/ipport/0.0.0.0:9443', supported: false, unsupported_reason: 'file_problem', key_problem: 'key_inaccessible', warnings: ['win_ctl'], servers: [] });
+      const open = async (target: Target, lang: string, tag: string, items = [bound, foreign, adfs, ccs, broken]) => {
+        onServer('operator', target, [], lang);
+        server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items, truncated: false })));
+        return renderRoute(`/servers/${target.id}`, { languages: [tag] });
+      };
+
+      it('shows the Windows and IIS facts and the bindings with their site, text and a disabled deploy control', async () => {
+        const target = { ...windowsTargetFixture, facts: { ...windowsTargetFixture.facts, warnings: [{ code: 'win_expired_in_store', params: { count: '3' } }] } };
+        await open(target, 'en', 'en-US');
+        const fact = async (label: string) => (await screen.findByText(label, { selector: 'dt' })).nextElementSibling;
+        expect(await fact('Windows version')).toHaveTextContent('Windows Server 2022 Datacenter');
+        expect(await fact('Windows build')).toHaveTextContent('10.0.20348.2700');
+        expect(await fact('Installation type')).toHaveTextContent('Server');
+        expect(await fact('IIS')).toHaveTextContent('IIS 10.0');
+        expect(await fact('Elevated')).toHaveTextContent('Yes');
+        expect(await fact('Certificate stores')).toHaveTextContent('My, WebHosting');
+        expect(await fact('OpenSSH version')).toHaveTextContent('OpenSSH_for_Windows_9.5p2');
+        expect(await fact('User on the server')).toHaveTextContent('CORP\\alice-svc');
+        expect(screen.getByText('Alice reads the http.sys bindings and IIS sites of this server; deployment comes in a later release.')).toBeInTheDocument();
+        expect(screen.getByText('The certificate store of this server still holds expired certificates: 3.')).toBeInTheDocument();
+        expect(screen.getByRole('columnheader', { name: 'IIS site' })).toBeInTheDocument();
+        const rows = await screen.findAllByTestId('location-row');
+        const first = rows.find((r) => r.textContent?.includes('http.sys/hostnameport/www.example.test:443'))!;
+        expect(within(first).getByText('Default Web Site')).toBeInTheDocument();
+        expect(within(first).getByText('www.example.test')).toBeInTheDocument();
+        expect(within(first).getByText('www.example.test:443', { selector: 'code' })).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application (winrm). Alice does not change it.')).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application with the id {11111111-2222-3333-4444-555555555555}. Alice does not change it.')).toBeInTheDocument();
+        expect(screen.getByText('http.sys/ccs/443')).toBeInTheDocument();
+        expect(screen.getByText('This is a Centralized Certificate Store binding. Alice does not support these yet.')).toBeInTheDocument();
+        expect(screen.getByText('Private key: SYSTEM, the account http.sys runs as, cannot use the key.')).toBeInTheDocument();
+        expect(screen.getByText('This binding also uses a trusted-issuers list or client certificates. Alice does not model those.')).toBeInTheDocument();
+        const deploy = screen.getAllByRole('button', { name: /^Deploy certificate:/ });
+        expect(deploy.length).toBeGreaterThan(0);
+        for (const b of deploy) {
+          expect(b).toHaveAttribute('aria-disabled', 'true');
+          expect(b).toHaveAccessibleDescription('Not available for IIS servers yet');
+        }
+        expect(screen.queryByText('IIS is not installed')).not.toBeInTheDocument();
+      });
+
+      it('says IIS is not installed and not elevated', async () => {
+        const target = { ...windowsTargetFixture, facts: { ...windowsTargetFixture.facts, windows: windowsFacts({ iis_installed: false, iis_version: '', elevated: false }) } };
+        await open(target, 'en', 'en-US', [foreign]);
+        expect((await screen.findByText('IIS', { selector: 'dt' })).nextElementSibling).toHaveTextContent('IIS is not installed');
+        expect((await screen.findByText('Elevated', { selector: 'dt' })).nextElementSibling).toHaveTextContent('No');
+      });
+
+      it('words the same page in Turkish', async () => {
+        await open(windowsTargetFixture, 'tr', 'tr-TR');
+        expect((await screen.findByText('Windows sürümü', { selector: 'dt' })).nextElementSibling).toHaveTextContent('Windows Server 2022 Datacenter');
+        expect(screen.getByRole('columnheader', { name: 'IIS sitesi' })).toBeInTheDocument();
+        expect(screen.getByText('Bu bağlama başka bir uygulamaya ait (winrm). Alice onu değiştirmez.')).toBeInTheDocument();
+        const deploy = screen.getAllByRole('button', { name: /^Sertifika dağıt/ });
+        expect(deploy[0]).toHaveAccessibleDescription('IIS sunucularında henüz kullanılamıyor');
+      });
     });
 
     it('an HAProxy server shows frontends with deployment disabled', async () => {

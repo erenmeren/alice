@@ -11,7 +11,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { Panel } from './ui';
 import { WRAP } from './wrap';
 
-type Profile = 'linux' | WebServerType;
+type Profile = 'linux' | WebServerType | 'windows';
 
 // PlatformKeyPanel shows Alice's public key and the commands that prepare a server (spec §12.2,
 // §18.5 step 7). The public key is not secret; the private key never leaves the secret store.
@@ -46,11 +46,12 @@ export function PlatformKeyPanel({ titleOrder = 2 }: { titleOrder?: 2 | 3 }) {
               data={[
                 { value: 'linux', label: t('targets.prepare.profileLinux') },
                 ...WEB_SERVER_TYPES.map((type) => ({ value: type, label: t('targets.prepare.profileWebServer', { software: softwareName(t, type) }) })),
+                { value: 'windows', label: t('targets.prepare.profileWindows') },
               ]}
               maw={320}
             />
             <Text size="sm" fw={600}>
-              {t('targets.prepare.script')}
+              {t(profile === 'windows' ? 'targets.prepare.scriptWindows' : 'targets.prepare.script')}
             </Text>
             <Code block data-testid="setup-script" style={WRAP} translate="no">
               {script}
