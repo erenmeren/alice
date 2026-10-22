@@ -536,6 +536,13 @@ func pemCert(der []byte) []byte {
 	return []byte("-----BEGIN CERTIFICATE-----\n" + b64(der) + "\n-----END CERTIFICATE-----\n")
 }
 
+// chain is the new certificate's chain as the binding record keeps it (leaf, intermediate).
+func (f *fixture) chain() []string {
+	return []string{f.newSHA256, hexSHA256(f.ca.Intermediate.Raw)}
+}
+
+// TestDeployUnchanged (Ruling 10, fix round 3): unchanged only when the record names the new
+// certificate, no intermediate was added and Alice's last committed bind left this chain served.
 func TestDeployUnchanged(t *testing.T) {
 	setup := func(t *testing.T, interInCA bool) *fixture {
 		f := newFixture(t)
@@ -544,30 +551,147 @@ func TestDeployUnchanged(t *testing.T) {
 		if interInCA {
 			f.h.ca[f.interSHA1] = f.ca.Intermediate.Raw
 		}
+		f.expect = f.newSHA256
 		f.reset()
 		return f
 	}
-	t.Run("no intermediate added", func(t *testing.T) {
+	served := func(t *testing.T, f *fixture) []string {
+		t.Helper()
+		r, err := readBindingState(f.h, canon443)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Chain
+	}
+	t.Run("a binding Alice never wrote: one same-hash write, then unchanged", func(t *testing.T) {
 		f := setup(t, true)
-		o, r, out := f.deploy(op1, f.input(func(in *winproto.DeployInput) { in.ExpectSHA256 = f.newSHA256 }))
+		o, r, out := f.deploy(op1, f.input())
+		if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || len(f.h.updates) != 1 || f.h.updates[0].CertSHA1 != f.newSHA1 {
+			t.Fatalf("%+v %s", o, out)
+		}
+		if !reflect.DeepEqual(served(t, f), f.chain()) {
+			t.Fatal(served(t, f))
+		}
+		f.reset()
+		o, r, out = f.deploy(op2, f.input())
 		if o.Exit != 0 || r.Phase != winproto.PhaseUnchanged || r.AliceImported || len(f.h.updates) != 0 || len(f.h.pfxs) != 0 {
 			t.Fatalf("%+v %s updates %d", o, out, len(f.h.updates))
 		}
-		if p := f.phases(op1); !reflect.DeepEqual(p, []string{winproto.PhasePrepared, winproto.PhaseUnchanged}) {
+		if p := f.phases(op2); !reflect.DeepEqual(p, []string{winproto.PhasePrepared, winproto.PhaseUnchanged}) {
 			t.Fatal(p)
 		}
 		if len(f.h.events) != 0 {
 			t.Fatal(f.h.events)
 		}
+		if rec, _ := readBindingState(f.h, canon443); rec.Op != op2 || !reflect.DeepEqual(rec.Chain, f.chain()) {
+			t.Fatalf("%+v", rec)
+		}
+		// Fencing nothing and handing the record back keeps the chain: a third deploy is unchanged too.
+		f.reset()
+		if _, r, out := f.deploy(op3, f.input()); r.Phase != winproto.PhaseUnchanged {
+			t.Fatalf("%s", out)
+		}
 	})
 	t.Run("an intermediate added: a same-hash write", func(t *testing.T) {
 		f := setup(t, false)
-		o, r, out := f.deploy(op1, f.input(func(in *winproto.DeployInput) { in.ExpectSHA256 = f.newSHA256 }))
+		_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Chain: f.chain()})
+		o, r, out := f.deploy(op1, f.input())
 		if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || r.AliceImported || len(f.h.updates) != 1 ||
 			f.h.updates[0].CertSHA1 != f.newSHA1 {
 			t.Fatalf("%+v %s", o, out)
 		}
 	})
+	t.Run("another chain served: a same-hash write", func(t *testing.T) {
+		f := setup(t, true)
+		_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Chain: []string{f.newSHA256}})
+		if _, r, out := f.deploy(op1, f.input()); r.Phase != winproto.PhaseCommitted || len(f.h.updates) != 1 {
+			t.Fatalf("%s", out)
+		}
+	})
+	t.Run("after an interrupted deploy that added an intermediate, the redeploy writes", func(t *testing.T) {
+		// Task 9 on real Windows: built 2, served 1 forever if the redeploy answered unchanged.
+		f := setup(t, false)
+		_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Chain: f.chain()})
+		f.h.pointErr = func(n string) error {
+			if n == "deploy.writing" {
+				return errors.New("kill")
+			}
+			return nil
+		}
+		f.killedDeploy(op1, f.input())
+		f.h.pointErr = nil
+		if c := served(t, f); c != nil {
+			t.Fatalf("the chain was not cleared before the bind: %v", c)
+		}
+		if _, ok := f.h.ca[f.interSHA1]; !ok {
+			t.Fatal("the intermediate was not imported")
+		}
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		f.reset()
+		o, r, out := f.deploy(op2, f.input())
+		if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || len(f.h.updates) != 1 || f.h.updates[0].CertSHA1 != f.newSHA1 {
+			t.Fatalf("%+v %s", o, out)
+		}
+		if !reflect.DeepEqual(served(t, f), f.chain()) {
+			t.Fatal(served(t, f))
+		}
+	})
+	t.Run("a fence of a prepared operation keeps the served chain", func(t *testing.T) {
+		f := setup(t, true)
+		_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Op: op3, Chain: f.chain()})
+		mustWrite(t, f.h, func() journal {
+			j := sampleJournal(op3)
+			j.Phase = winproto.PhaseCommitted
+			return j
+		}())
+		f.h.pointErr = func(n string) error {
+			if n == "deploy.prepared" {
+				return errors.New("kill")
+			}
+			return nil
+		}
+		f.killedDeploy(op1, f.input())
+		f.h.pointErr = nil
+		if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseFenced {
+			t.Fatalf("%s", out)
+		}
+		if rec, _ := readBindingState(f.h, canon443); rec.Op != op3 || !reflect.DeepEqual(rec.Chain, f.chain()) {
+			t.Fatalf("%+v", rec)
+		}
+	})
+}
+
+func TestBindingRecordChain(t *testing.T) {
+	h := newWriteHost()
+	chain := []string{s256a, s256b}
+	if err := writeBindingState(h, bindingRecord{Binding: canon443, Op: op1, Chain: chain}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := readBindingState(h, canon443); err != nil || r.Op != op1 || !reflect.DeepEqual(r.Chain, chain) {
+		t.Fatal(r, err)
+	}
+	for _, bad := range [][]string{{"x"}, {"A" + s256a[1:]}, make([]string, winproto.MaxChainCerts+2)} {
+		for i := range bad {
+			if bad[i] == "" {
+				bad[i] = s256a
+			}
+		}
+		if err := writeBindingState(h, bindingRecord{Binding: canon443, Chain: bad}); !errors.Is(err, errBadJournal) {
+			t.Errorf("wrote %v", bad)
+		}
+		raw, _ := json.Marshal(bindingRecord{Binding: canon443, Chain: bad})
+		h.state[bindingRecordName(canon443)] = raw
+		if _, err := readBindingState(h, canon443); !errors.Is(err, errBadJournal) {
+			t.Errorf("read %v", bad)
+		}
+	}
+	// Writing an op alone clears the chain.
+	_ = writeBindingRecord(h, canon443, op2)
+	if r, _ := readBindingState(h, canon443); r.Chain != nil {
+		t.Fatal(r.Chain)
+	}
 }
 
 // TestBindPreservesTheWholeRecord is Review Focus 2.
@@ -787,6 +911,7 @@ func TestDeployFailuresAfterTheGate(t *testing.T) {
 			f.h.addCert("MY", f.nw.Cert.Raw, true)
 			f.h.setRecord(withHash(f.rec, f.newSHA1))
 			f.h.ca[f.interSHA1] = f.ca.Intermediate.Raw
+			_ = writeBindingState(f.h, bindingRecord{Binding: canon443, Chain: f.chain()})
 			failPhase(f, winproto.PhaseUnchanged)
 			f.expect = f.newSHA256
 		}, code: winproto.CodeOutcomeUnknown},

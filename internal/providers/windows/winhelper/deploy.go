@@ -184,7 +184,7 @@ func cmdIISDeploy(ctx context.Context, c *call) (any, error) {
 	case pending != "":
 		return nil, recoveryPending(pending)
 	}
-	rec, err := readBindingRecord(h, req.canonical) // read again: latestOp read it, nothing changed it under the lock
+	rec, err := readBindingState(h, req.canonical) // read again: latestOp read it, nothing changed it under the lock
 	if err != nil {
 		return nil, failed(winproto.CodeIOError, "the record of the binding's latest operation cannot be read")
 	}
@@ -218,8 +218,9 @@ func cmdIISDeploy(ctx context.Context, c *call) (any, error) {
 		// Re-attaching a key to a certificate someone else put there is not Alice's call (Ruling 9).
 		return nil, precondition(winproto.CodeKeyUnusable, "the certificate is in the store without a usable key")
 	}
-	if rec == op {
-		rec = ""
+	prevRecord := rec.Op
+	if prevRecord == op {
+		prevRecord = ""
 	}
 
 	wctx, err := c.gate.enter()
@@ -228,8 +229,8 @@ func cmdIISDeploy(ctx context.Context, c *call) (any, error) {
 	}
 	t := &deployTx{ctx: wctx, h: h, j: journal{Op: op, Phase: winproto.PhasePrepared, Binding: req.canonical, Locator: req.loc,
 		Previous: cloneRecord(b), PreviousSHA1: b.CertSHA1, PreviousSHA256: req.expect, NewSHA1: newSHA1, NewSHA256: newSHA256,
-		Store: store, Intermediates: []certRef{}, AliceImported: !exists, PrevRecord: rec, Steps: []winproto.Step{},
-		ForbiddenSPKI: req.spki, ForbiddenLeaf: req.leaf}}
+		Store: store, Intermediates: []certRef{}, AliceImported: !exists, PrevRecord: prevRecord, Steps: []winproto.Step{},
+		ForbiddenSPKI: req.spki, ForbiddenLeaf: req.leaf}, served: rec.Chain, chain: chainOf(in)}
 	return t.run(in, sec)
 }
 
@@ -240,10 +241,22 @@ func cloneRecord(b winproto.SSLBinding) winproto.SSLBinding {
 
 // deployTx is an iis-deploy after its gate: every outcome is recorded in its journal.
 type deployTx struct {
-	ctx   context.Context // the gate's write context
-	h     WriteHost
-	j     journal
-	built int
+	ctx    context.Context // the gate's write context
+	h      WriteHost
+	j      journal
+	built  int
+	served []string // the binding record's chain: what Alice's last committed bind left served
+	chain  []string // this deployment's chain (chainOf)
+}
+
+// chainOf is a deployment's chain as the binding record keeps it: the DER SHA-256 of the leaf, then
+// of each intermediate in the input's order.
+func chainOf(in content) []string {
+	out := []string{sum256(in.leaf.Raw)}
+	for _, c := range in.intermediates {
+		out = append(out, sum256(c.Raw))
+	}
+	return out
 }
 
 func (t *deployTx) answer() winproto.DeployResponse {
@@ -286,7 +299,8 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	}
 	// The binding record names this operation from the prepared journal on (a prepared operation
 	// changed nothing; latestOp walks through it to prev_record).
-	if err := writeBindingRecord(h, j.Binding, j.Op); err != nil {
+	// The served chain stays: nothing is written to the record before the writing journal.
+	if err := writeBindingState(h, bindingRecord{Binding: j.Binding, Op: j.Op, Chain: t.served}); err != nil {
 		return nil, err
 	}
 	if err := point(h, "deploy.prepared"); err != nil {
@@ -344,9 +358,11 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 		t.built = 1 + len(c.Chain)
 	}
 
-	// Ruling 10: unchanged only when the record names the new certificate and no intermediate was
-	// added (schannel's chain cache needs a same-hash write otherwise, §6.4).
-	if j.Previous.CertSHA1 == j.NewSHA1 && len(j.Intermediates) == 0 {
+	// Ruling 10 (fix round 3): unchanged only when the record names the new certificate, no
+	// intermediate was added, and Alice's last committed bind left this very chain served. Otherwise a
+	// same-hash write makes schannel build the chain again (its cache, §6.4): after an interrupted
+	// deployment that added an intermediate, a binding Alice never wrote, or another chain.
+	if j.Previous.CertSHA1 == j.NewSHA1 && len(j.Intermediates) == 0 && slices.Equal(t.served, t.chain) {
 		j.Phase = winproto.PhaseUnchanged
 		if err := writeJournal(h, *j); err != nil {
 			return nil, err
@@ -354,6 +370,12 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 		return t.answer(), nil
 	}
 
+	// From the bind on, what is served may change (a write, a kill, a restore): the chain goes first.
+	if len(t.served) > 0 {
+		if err := writeBindingRecord(h, j.Binding, j.Op); err != nil {
+			return nil, err
+		}
+	}
 	j.Phase = winproto.PhaseWriting
 	if err := t.write("deploy.writing"); err != nil {
 		return nil, err
@@ -395,6 +417,8 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 		j.Phase = winproto.PhaseWriting
 		return t.selfRestore(winproto.StepJournal, winproto.ErrIO)
 	}
+	// Best effort: without the chain the next deployment of this certificate writes once more.
+	_ = writeBindingState(h, bindingRecord{Binding: j.Binding, Op: j.Op, Chain: t.chain})
 	if err := point(h, "deploy.committed"); err != nil {
 		return nil, err
 	}

@@ -237,9 +237,17 @@ func writeJournal(h WriteHost, j journal) error {
 // bindingRecord is bindings/<hex SHA-256 of the canonical text>.json: the operation that last started
 // changing the binding (Op "" when none). iis-restore rolls back only that operation; a record outlives
 // every journal it makes unrestorable.
+//
+// Chain is what schannel serves for the binding as far as Alice knows (fix round 3): the DER SHA-256s
+// of the leaf and the intermediates of the last bind Alice committed, written with committed. It is
+// cleared before any bind (the record may change from then on: a write, a kill, a restore), so it is
+// set only while the record is exactly what that committed bind left. iis-deploy answers unchanged
+// only when it equals the deployment's chain (schannel serves the chain it built at the last write,
+// W0 F5); otherwise a same-hash write rebuilds it. No key material: hashes of public certificates.
 type bindingRecord struct {
-	Binding string `json:"binding"`
-	Op      string `json:"op"`
+	Binding string   `json:"binding"`
+	Op      string   `json:"op"`
+	Chain   []string `json:"chain,omitempty"`
 }
 
 // bindingRecordName is a binding's record file name.
@@ -251,27 +259,53 @@ func bindingRecordName(canonical string) string {
 // readBindingRecord returns the operation recorded for the binding ("" when none). A record that does
 // not decode, names another binding or an invalid operation is errBadJournal.
 func readBindingRecord(h WriteHost, canonical string) (string, error) {
-	data, found, err := h.ReadState(bindingRecordName(canonical))
-	if err != nil || !found {
-		return "", err
-	}
-	var r bindingRecord
-	if err := decodeState(data, &r); err != nil || r.Binding != canonical || (r.Op != "" && !winproto.ValidOpID(r.Op)) {
-		return "", errBadJournal
-	}
-	return r.Op, nil
+	r, err := readBindingState(h, canonical)
+	return r.Op, err
 }
 
-// writeBindingRecord records op for the binding (op "" clears it), durably.
+// readBindingState reads the binding's whole record (zero when there is none).
+func readBindingState(h WriteHost, canonical string) (bindingRecord, error) {
+	data, found, err := h.ReadState(bindingRecordName(canonical))
+	if err != nil || !found {
+		return bindingRecord{Binding: canonical}, err
+	}
+	var r bindingRecord
+	if err := decodeState(data, &r); err != nil || !r.valid(canonical) {
+		return bindingRecord{Binding: canonical}, errBadJournal
+	}
+	return r, nil
+}
+
+// valid: the record names canonical, a valid operation or none, and a chain of at most
+// MaxChainCerts+1 DER SHA-256s (leaf and intermediates).
+func (r bindingRecord) valid(canonical string) bool {
+	if r.Binding != canonical || (r.Op != "" && !winproto.ValidOpID(r.Op)) || len(r.Chain) > winproto.MaxChainCerts+1 {
+		return false
+	}
+	for _, s := range r.Chain {
+		if !validSHA256(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeBindingRecord records op for the binding (op "" clears it) with no served chain, durably.
 func writeBindingRecord(h WriteHost, canonical, op string) error {
-	if op != "" && !winproto.ValidOpID(op) {
+	return writeBindingState(h, bindingRecord{Binding: canonical, Op: op})
+}
+
+// writeBindingState replaces the binding's whole record, durably. A record readBindingState would
+// refuse is never written.
+func writeBindingState(h WriteHost, r bindingRecord) error {
+	if !r.valid(r.Binding) {
 		return errBadJournal
 	}
-	raw, err := json.Marshal(bindingRecord{Binding: canonical, Op: op})
+	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	return h.WriteState(bindingRecordName(canonical), raw)
+	return h.WriteState(bindingRecordName(r.Binding), raw)
 }
 
 // maxRecordChain bounds the walk from a binding record through operations that changed nothing.
@@ -326,14 +360,17 @@ func handBack(h WriteHost, j journal) error {
 	if j.Binding == "" || !changedNothing(j.Phase) {
 		return nil // an operation that changed the record keeps it (Linux's releaseRecord)
 	}
-	rec, err := readBindingRecord(h, j.Binding)
+	rec, err := readBindingState(h, j.Binding)
 	if err != nil {
 		return err
 	}
-	if rec != j.Op {
+	if rec.Op != j.Op {
 		return nil
 	}
-	return writeBindingRecord(h, j.Binding, j.PrevRecord)
+	// The served chain is kept: an operation that changed nothing never reached its bind (the chain is
+	// cleared before the writing journal), so the chain still describes what the record serves.
+	rec.Op = j.PrevRecord
+	return writeBindingState(h, rec)
 }
 
 // recoveryPending is the refusal of iis-deploy on a binding whose latest operation is interrupted
