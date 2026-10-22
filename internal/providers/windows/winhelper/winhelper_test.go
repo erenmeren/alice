@@ -112,10 +112,19 @@ func TestElevationGate(t *testing.T) {
 	h.elevatedErr = errors.New("token")
 	code, out = run(t, h, "iis-dump")
 	wantError(t, code, out, 4, "IO_ERROR")
-	// An elevated token reaches the (placeholder) dump handler.
-	h = &fakeHost{elevated: true}
+	// An elevated token reaches the dump handler.
+	h = &fakeHost{elevated: true, appcmd: []byte(`<appcmd/>`)}
 	code, out = run(t, h, "iis-dump")
-	wantError(t, code, out, 4, "IO_ERROR")
+	if code != 0 {
+		t.Fatalf("%d %s", code, out)
+	}
+	var r winproto.IISDumpResponse
+	if err := json.Unmarshal(out, &r); err != nil || !r.OK {
+		t.Fatal(err, string(out))
+	}
+	// iis-dump takes no arguments.
+	code, out = run(t, h, "iis-dump", "extra")
+	wantError(t, code, out, 2, "USAGE")
 }
 
 func TestWinFacts(t *testing.T) {
@@ -335,6 +344,19 @@ func TestBudgetEndsTheCall(t *testing.T) {
 	h := &fakeHost{block: true}
 	start := time.Now()
 	code, out := run(t, h, "win-facts")
+	wantError(t, code, out, 4, "IO_ERROR")
+	if time.Since(start) > time.Second {
+		t.Fatalf("took %s", time.Since(start))
+	}
+}
+
+func TestBudgetEndsTheDump(t *testing.T) {
+	old := commandBudget
+	commandBudget = 50 * time.Millisecond
+	t.Cleanup(func() { commandBudget = old })
+	h := &fakeHost{elevated: true, bindingBlock: true}
+	start := time.Now()
+	code, out := run(t, h, "iis-dump")
 	wantError(t, code, out, 4, "IO_ERROR")
 	if time.Since(start) > time.Second {
 		t.Fatalf("took %s", time.Since(start))

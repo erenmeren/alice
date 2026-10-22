@@ -148,8 +148,3 @@ func cmdVersion(_ context.Context, _ Host, args []string) (any, error) {
 	}
 	return winproto.VersionResponse{OK: true, Helper: winproto.Version, Protocol: winproto.Protocol}, nil
 }
-
-// cmdIISDump is a placeholder until the dump lands (Task 3).
-func cmdIISDump(_ context.Context, _ Host, _ []string) (any, error) {
-	return nil, failed(winproto.CodeIOError, "the dump is not available")
-}

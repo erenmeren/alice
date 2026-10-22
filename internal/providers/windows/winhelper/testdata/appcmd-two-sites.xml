@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<appcmd>
+    <SITE SITE.NAME="Shop" SITE.ID="1" bindings="http/*:80:shop.example.test,https/*:443:www.example.test" state="Started">
+        <site name="Shop" id="1">
+            <bindings>
+                <binding protocol="http" bindingInformation="*:80:shop.example.test" />
+                <binding protocol="https" bindingInformation="*:443:www.example.test" sslFlags="1" />
+                <binding protocol="https" bindingInformation="10.0.0.5:8443:" />
+            </bindings>
+        </site>
+    </SITE>
+    <SITE SITE.NAME="Admin &amp; Co" SITE.ID="2" bindings="https/*:9443:" STATE="Stopped">
+        <site name="Admin &amp; Co" id="2">
+            <bindings>
+                <binding protocol="https" bindingInformation="*:9443:" sslFlags="3" />
+                <binding protocol="net.tcp" bindingInformation="808:*" />
+            </bindings>
+        </site>
+    </SITE>
+</appcmd>

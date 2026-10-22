@@ -45,9 +45,7 @@ func cmdWinFacts(ctx context.Context, h Host, args []string) (any, error) {
 	iis, err := h.IISFacts(ctx)
 	switch {
 	case err == nil:
-		iis = winproto.IISFacts{Installed: iis.Installed, Version: cleanValue(iis.Version, winproto.MaxText),
-			SharedConfig: iis.SharedConfig, CCSEnabled: iis.CCSEnabled, CCSPath: cleanValue(iis.CCSPath, winproto.MaxText),
-			AutoCertRebind: iis.AutoCertRebind}
+		iis = cleanIISFacts(iis)
 	case errors.Is(err, ErrIISNotInstalled):
 		iis = winproto.IISFacts{}
 	default:

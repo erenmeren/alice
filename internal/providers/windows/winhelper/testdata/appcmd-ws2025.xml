@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<appcmd>
+
+    <SITE SITE.NAME="Default Web Site" SITE.ID="1" bindings="http/*:80:,net.tcp/808:*,net.msmq/localhost,msmq.formatname/localhost,net.pipe/*" state="Started">
+
+        <site name="Default Web Site" id="1">
+
+            <bindings>
+
+                <binding protocol="http" bindingInformation="*:80:" />
+
+                <binding protocol="net.tcp" bindingInformation="808:*" />
+
+                <binding protocol="net.msmq" bindingInformation="localhost" />
+
+                <binding protocol="msmq.formatname" bindingInformation="localhost" />
+
+                <binding protocol="net.pipe" bindingInformation="*" />
+
+            </bindings>
+
+            <limits />
+
+            <logFile>
+
+                <customFields>
+
+                </customFields>
+
+            </logFile>
+
+            <traceFailedRequestsLogging />
+
+            <hsts />
+
+            <applicationDefaults />
+
+            <virtualDirectoryDefaults />
+
+            <ftpServer>
+
+                <connections />
+
+                <security>
+
+                    <dataChannelSecurity />
+
+                    <commandFiltering>
+
+                    </commandFiltering>
+
+                    <ssl />
+
+                    <sslClientCertificates />
+
+                    <authentication>
+
+                        <anonymousAuthentication />
+
+                        <basicAuthentication />
+
+                        <clientCertAuthentication />
+
+                        <customAuthentication>
+
+                            <providers>
+
+                            </providers>
+
+                        </customAuthentication>
+
+                    </authentication>
+
+                    <customAuthorization>
+
+                        <provider />
+
+                    </customAuthorization>
+
+                </security>
+
+                <customFeatures>
+
+                    <providers>
+
+                    </providers>
+
+                </customFeatures>
+
+                <messages />
+
+                <fileHandling />
+
+                <firewallSupport />
+
+                <userIsolation>
+
+                    <activeDirectory />
+
+                </userIsolation>
+
+                <directoryBrowse />
+
+                <logFile />
+
+            </ftpServer>
+
+            <application path="/">
+
+                <virtualDirectoryDefaults />
+
+                <virtualDirectory path="/" physicalPath="C:\inetpub\wwwroot" />
+
+            </application>
+
+        </site>
+
+    </SITE>
+
+    <SITE SITE.NAME="spike" SITE.ID="9001" bindings="https/*:8443:,https/*:8444:sni.spike.test,https/*:8446:,https/*:8447:mwa.spike.test" state="Started">
+
+        <site name="spike" id="9001">
+
+            <bindings>
+
+                <binding protocol="https" bindingInformation="*:8443:" />
+
+                <binding protocol="https" bindingInformation="*:8444:sni.spike.test" sslFlags="1" />
+
+                <binding protocol="https" bindingInformation="*:8446:" />
+
+                <binding protocol="https" bindingInformation="*:8447:mwa.spike.test" sslFlags="1" />
+
+            </bindings>
+
+            <limits />
+
+            <logFile>
+
+                <customFields>
+
+                </customFields>
+
+            </logFile>
+
+            <traceFailedRequestsLogging />
+
+            <hsts />
+
+            <applicationDefaults />
+
+            <virtualDirectoryDefaults />
+
+            <ftpServer>
+
+                <connections />
+
+                <security>
+
+                    <dataChannelSecurity />
+
+                    <commandFiltering>
+
+                    </commandFiltering>
+
+                    <ssl />
+
+                    <sslClientCertificates />
+
+                    <authentication>
+
+                        <anonymousAuthentication />
+
+                        <basicAuthentication />
+
+                        <clientCertAuthentication />
+
+                        <customAuthentication>
+
+                            <providers>
+
+                            </providers>
+
+                        </customAuthentication>
+
+                    </authentication>
+
+                    <customAuthorization>
+
+                        <provider />
+
+                    </customAuthorization>
+
+                </security>
+
+                <customFeatures>
+
+                    <providers>
+
+                    </providers>
+
+                </customFeatures>
+
+                <messages />
+
+                <fileHandling />
+
+                <firewallSupport />
+
+                <userIsolation>
+
+                    <activeDirectory />
+
+                </userIsolation>
+
+                <directoryBrowse />
+
+                <logFile />
+
+            </ftpServer>
+
+            <application path="/">
+
+                <virtualDirectoryDefaults />
+
+                <virtualDirectory path="/" physicalPath="C:\inetpub\spike" />
+
+            </application>
+
+        </site>
+
+    </SITE>
+
+</appcmd>
