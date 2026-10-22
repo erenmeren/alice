@@ -31,6 +31,7 @@
   "alice/internal/providers/windows/winproto": 100,
   "alice/internal/providers/windows/winhelper": 95,
   "alice/internal/providers/windows/wintest": 90,
+  "alice/cmd/alice-fakewindows": 90,
   "alice/internal/providers/haproxyconf": 92,
   "alice/internal/providers/webserver": 98,
   "alice/internal/providers/tlspin": 97,

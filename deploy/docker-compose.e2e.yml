@@ -29,6 +29,8 @@ services:
       # Not for a CA (discovery trusts nothing): the stack is up only once the fleet answers, so no journey scans a
       # fleet that is still starting.
       fakefleet: { condition: service_healthy }
+      # The Windows journey (web/e2e/windows.spec.ts): the emulated Windows server answers before any journey adds it.
+      fakewindows: { condition: service_healthy }
       # The directory sign-in journey (web/e2e/ldap.spec.ts): no CA is shared (the journey pastes the fake directory's CA
       # into the directory's own CA field, as a customer does with an internal CA).
       fakeldap: { condition: service_healthy }
@@ -241,6 +243,38 @@ services:
           - malformed.fleet.alice-e2e.test
     healthcheck:
       test: ["CMD", "/alice-fakefleet", "ctl", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  # Test-only emulated Windows server for the Windows journey (web/e2e/windows.spec.ts, R60): the demo host of
+  # internal/providers/windows/wintest as a container (cmd/alice-fakewindows): Windows Server 2022 Datacenter with IIS
+  # 10.0, the sites "Default Web Site" and "Intranet", and four http.sys entries (www.win.example.test:443 with SNI,
+  # 0.0.0.0:8443, WinRM's 0.0.0.0:5986 and a Centralized Certificate Store entry on 443). Its helper answers come from
+  # the helper's own code (winhelper) behind an SSH server that behaves like Windows OpenSSH. Its SSH host key, test CA
+  # and certificates are generated when it starts. No key is authorized until Playwright pipes the Windows setup
+  # script Alice shows into "docker compose exec -T fakewindows /alice-fakewindows ctl prepare" (it authorizes the key
+  # of the script's $AuthorizedKey line); "ctl hostkey" prints the host key's fingerprint. The control API listens on
+  # loopback inside the container only. Alice reaches it as fakewindows:22 on the internal backend network; it
+  # publishes nothing and runs as a non-root user: ports 22 and 443 are bindable because the container's unprivileged
+  # port start is 0 (a namespaced sysctl), not because of a capability.
+  fakewindows:
+    image: alice-e2e-fakewindows
+    build:
+      context: ..
+      dockerfile: test/images/fakewindows/Dockerfile
+    command: ["serve", "--listen", ":22", "--tls-bind", "0.0.0.0", "--ctl", "127.0.0.1:9093"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    mem_limit: 128m
+    pids_limit: 128
+    ulimits: { core: 0 }
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "/alice-fakewindows", "ctl", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10

@@ -51,10 +51,11 @@ var testOnlyImports = []string{
 // lists the binaries that ship). cmd/alice-fakesmtp and cmd/alice-fakeidp are the same kind of tool for the
 // mail and OpenID Connect fakes (internal/testutil/fakesmtp and fakeidp); cmd/alice-fakeacme is the one of
 // the fake ACME CA (internal/testutil/fakeacme); cmd/alice-fakefleet is the one of the fake TLS fleet of the
-// network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9).
+// network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9);
+// cmd/alice-fakewindows is the one of the emulated Windows host of the Windows journey (wintest, R60).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
 	"internal/providers/providertest", "internal/providers/windows/wintest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
-	"internal/testutil/fakefleet", "cmd/alice-fakefleet",
+	"internal/testutil/fakefleet", "cmd/alice-fakefleet", "cmd/alice-fakewindows",
 	"internal/vconsole/sign/openpgp/openpgptest"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
@@ -498,6 +499,11 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakesmtp"), "alice/internal/testutil/fakesmtp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeidp"), "alice/internal/testutil/fakeidp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeacme"), "alice/internal/testutil/fakeacme", "the fake ACME tool is where the fake is linked")
+	// The Windows emulator is linked by its e2e tool only, never by any build of Alice (R60).
+	for _, tags := range []string{"", "e2e testlicense"} {
+		assert.NotContains(t, goListDeps(t, tags, "./cmd/alice"), "alice/internal/providers/windows/wintest", "tags %q", tags)
+	}
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakewindows"), "alice/internal/providers/windows/wintest", "the fake Windows tool is where the emulator is linked")
 }
 
 // TestWindowsHelperLinksOnlyItsProtocol: alice-helper.exe (design 2026-10-21 §7, R60) links, besides the

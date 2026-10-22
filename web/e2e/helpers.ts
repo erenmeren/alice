@@ -841,6 +841,13 @@ export function targetExec(args: string[], input?: string): string {
   return composeExec('sshtarget', args, input);
 }
 
+// windowsExec runs the emulated Windows server's tool (compose service "fakewindows", cmd/alice-fakewindows) and
+// returns its standard output: ctl prepare (input: the Windows setup script), ctl hostkey, ctl ping. The same
+// alice-e2e* project guard as targetExec: never the owner stack.
+export function windowsExec(args: string[], input?: string): string {
+  return composeExec('fakewindows', ['/alice-fakewindows', ...args], input);
+}
+
 export interface DrainResult {
   ran: number;
   cut_off?: boolean;

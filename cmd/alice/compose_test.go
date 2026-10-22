@@ -129,8 +129,8 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	// The overlay adds the SSH target and the fake Azure service, nothing else; the release file has neither.
-	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp", "fakefleet", "fakeldap"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP, identity provider, TLS fleet and directory services")
-	for _, fake := range []string{"fakeazure", "fakeacme", "fakefleet", "fakeldap"} {
+	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp", "fakefleet", "fakewindows", "fakeldap"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP, identity provider, TLS fleet, Windows host and directory services")
+	for _, fake := range []string{"fakeazure", "fakeacme", "fakefleet", "fakewindows", "fakeldap"} {
 		_, fakeInBase := base.Services[fake]
 		assert.False(t, fakeInBase, "the release compose file has no %s service", fake)
 	}
@@ -619,6 +619,62 @@ func TestE2EFakeFleetIsTestOnlyHardenedOnItsOwnNetwork(t *testing.T) {
 	base := readCompose(t, "../../deploy/docker-compose.yml")
 	_, inBase := base.Networks["fleet"]
 	assert.False(t, inBase, "the release compose file has no fleet network")
+}
+
+// The emulated Windows host (cmd/alice-fakewindows, R60) exists only in the test overlay: it publishes nothing, sits
+// only on the internal backend network, is hardened like the other fakes, needs no volume (Alice reads none of its
+// CA) and keeps its control API on loopback. Alice starts only once it answers.
+func TestFakeWindowsIsTestOnlyAndUnpublished(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakewindows"]
+	require.True(t, ok)
+	assert.Empty(t, fake.Ports, "the emulated Windows host publishes nothing")
+	assert.Equal(t, []string{"backend"}, fake.Networks.names(), "only the internal backend network")
+	assert.Empty(t, fake.Networks["backend"].Aliases, "no other name than its service name")
+	assert.Equal(t, "alice-e2e-fakewindows", fake.Image)
+	assert.Equal(t, "..", fake.Build.Context)
+	assert.Equal(t, "test/images/fakewindows/Dockerfile", fake.Build.Dockerfile)
+	_, err := os.Stat("../../" + fake.Build.Dockerfile)
+	assert.NoError(t, err)
+	assert.Equal(t, "65532:65532", fake.User, "non-root")
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd, "ports 22 and 443 are bound through the unprivileged port start sysctl, not a capability")
+	assert.Equal(t, map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, fake.Sysctls)
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Empty(t, fake.Volumes)
+	assert.Equal(t, []string{"CMD", "/alice-fakewindows", "ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, []string{"serve", "--listen", ":22", "--tls-bind", "0.0.0.0", "--ctl", "127.0.0.1:9093"}, fake.Command,
+		"the control API stays on loopback")
+	assert.Equal(t, "service_healthy", overlay.Services["alice"].DependsOn["fakewindows"].Condition)
+}
+
+// The release compose file and image never mention the emulated Windows host.
+func TestReleaseComposeAndImageNeverMentionTheFakeWindows(t *testing.T) {
+	for _, path := range []string{"../../deploy/docker-compose.yml", "../../deploy/Dockerfile"} {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, s := range []string{"fakewindows", "alice-fakewindows", "wintest"} {
+			assert.NotContains(t, string(raw), s, "%s", path)
+		}
+	}
+}
+
+// The emulated Windows host's image builds on the same two pinned base images as the release image.
+func TestFakeWindowsDockerfileReusesTheReleaseBaseImages(t *testing.T) {
+	release := dockerfileFroms(t, "../../deploy/Dockerfile")
+	fake := dockerfileFroms(t, "../../test/images/fakewindows/Dockerfile")
+	require.Len(t, fake, 2, "a builder and a runtime image")
+	for ref := range fake {
+		assert.Contains(t, ref, "@sha256:")
+		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
+	}
+	raw, err := os.ReadFile("../../test/images/fakewindows/Dockerfile")
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "PRIVATE "+"KEY", "no key material in the image")
+	assert.Contains(t, string(raw), "USER 65532:65532")
 }
 
 const (

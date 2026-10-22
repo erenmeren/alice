@@ -1,0 +1,409 @@
+// Command alice-fakewindows is the emulated Windows server of the e2e stack (compose service fakewindows on the
+// internal backend network) for the Windows journey (web/e2e/windows.spec.ts, R60). It is a test tool: it is built
+// into the e2e fake Windows image only and never ships (internal/archtest lists it in testOnlyDirs). It wraps
+// internal/providers/windows/wintest: the fixed demo host of wintest.Demo (Windows Server 2022 Datacenter with IIS
+// 10.0, two IIS sites, four http.sys entries), whose helper answers run the helper's own code (winhelper), behind an
+// SSH server that behaves like Windows OpenSSH (every session after the first on one connection sees the first
+// session's command, design 2026-10-21 §8).
+//
+//	alice-fakewindows serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
+//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare
+//
+// serve generates a fresh Ed25519 host key and the demo host's test CA and certificates when it starts (nothing is
+// stored in the repository or the image), listens for SSH on --listen and serves the demo's TLS bindings on --tls-bind
+// at their own ports (443, 8443, 5986; "IP:0" gives random ports, for tests). No client key is authorized until
+// "ctl prepare" reads the Windows setup script Alice shows on its standard input and authorizes the key of its one
+// $AuthorizedKey = '...' line (the counterpart of the SSH target's alice-e2e-prepare); a later prepare replaces it.
+// The control API has no authentication beyond its address: it listens on loopback only (serve refuses any other
+// address), ctl talks to loopback only, and it runs inside the container ("docker compose exec -T fakewindows
+// /alice-fakewindows ctl prepare < script").
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"maps"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/signal"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"alice/internal/platform/clock"
+	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/windows/wintest"
+)
+
+const (
+	defaultListen  = ":22"
+	defaultTLSBind = "0.0.0.0"
+	defaultCtl     = "127.0.0.1:9093"
+	// maxScript is the largest setup script ctl prepare takes (Alice's is about 20 KiB).
+	maxScript = 1 << 20
+)
+
+// maxCtlBody is the largest control answer ctl prints (a variable for tests).
+var maxCtlBody int64 = 1 << 20
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
+}
+
+const usage = `Usage: alice-fakewindows <command>
+
+Commands:
+  serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
+        Run the emulated Windows server: SSH on --listen (default :22), the demo's TLS bindings on --tls-bind
+        (default 0.0.0.0, at their own ports; IP:0 for random ports), the control API on --ctl (default
+        127.0.0.1:9093, loopback only).
+  ctl [--ctl ADDR] <command>
+        Drive a running server (answer on stdout, errors on stderr, exit 1 on failure):
+        ping | hostkey (the SHA256 fingerprint of the host key) | endpoints (the TLS listeners) |
+        prepare (stdin: Alice's Windows setup script; authorizes the key of its $AuthorizedKey line)
+`
+
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprint(stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "serve":
+		cfg, err := parseServe(args[1:], stderr)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "alice-fakewindows serve: %v\n", err)
+			return 2
+		}
+		log := slog.New(slog.NewTextHandler(stderr, nil))
+		if err := serve(ctx, cfg, log); err != nil {
+			log.Error("alice-fakewindows stopped", "error", err.Error())
+			return 1
+		}
+		return 0
+	case "ctl":
+		return runCtl(ctx, args[1:], stdin, stdout, stderr)
+	default:
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows: unknown command %q\n\n%s", args[0], usage)
+		return 2
+	}
+}
+
+// ---- serve ----
+
+type serveConfig struct {
+	Listen  string
+	TLSBind string
+	Ctl     string
+	// ready, when set, is called once everything listens (tests).
+	ready func(sshAddr, ctl string, hostKey ssh.PublicKey)
+}
+
+func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfg := serveConfig{}
+	fs.StringVar(&cfg.Listen, "listen", defaultListen, "address of the SSH server")
+	fs.StringVar(&cfg.TLSBind, "tls-bind", defaultTLSBind, "IP address of the TLS bindings (IP:0 for random ports)")
+	fs.StringVar(&cfg.Ctl, "ctl", defaultCtl, "address of the control API (loopback only)")
+	if err := fs.Parse(args); err != nil {
+		return serveConfig{}, err
+	}
+	if fs.NArg() != 0 {
+		return serveConfig{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if _, _, err := net.SplitHostPort(cfg.Listen); err != nil {
+		return serveConfig{}, fmt.Errorf("--listen %q is not an address with a port", cfg.Listen)
+	}
+	ip := cfg.TLSBind
+	if h, p, err := net.SplitHostPort(cfg.TLSBind); err == nil {
+		if p != "0" {
+			return serveConfig{}, fmt.Errorf("--tls-bind %q: the bindings listen on their own ports, or on random ones with :0", cfg.TLSBind)
+		}
+		ip = h
+	}
+	if a, err := netip.ParseAddr(ip); err != nil || a.Zone() != "" {
+		return serveConfig{}, fmt.Errorf("--tls-bind %q is not an IP address", cfg.TLSBind)
+	}
+	if err := checkLoopback(cfg.Ctl); err != nil {
+		return serveConfig{}, fmt.Errorf("--ctl: %w", err)
+	}
+	return cfg, nil
+}
+
+// serve runs the emulated server until ctx ends. It logs addresses and the host key's fingerprint, never a key.
+func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops the TLS listeners
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		return err
+	}
+	m, err := wintest.Demo(clock.Real{}.Now())
+	if err != nil {
+		return err
+	}
+	if err := m.Serve(ctx, cfg.TLSBind); err != nil {
+		return fmt.Errorf("serve the TLS bindings on %s: %w", cfg.TLSBind, err)
+	}
+	sshSrv, err := linuxsshtest.Listen(cfg.Listen, signer, m.Handler())
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
+	}
+	defer sshSrv.Close()
+	sshSrv.StickyFirstCommand() // Windows OpenSSH (W0); no client can sign in before ctl prepare
+	ctlLn, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Ctl)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.Ctl, err)
+	}
+	if err := boundLoopback(ctlLn.Addr()); err != nil {
+		_ = ctlLn.Close()
+		return err
+	}
+	c := &control{ssh: sshSrv, model: m, fingerprint: ssh.FingerprintSHA256(signer.PublicKey())}
+	srv := &http.Server{Handler: c.handler(), ReadHeaderTimeout: 10 * time.Second}
+	errs := make(chan error, 1)
+	go func() { errs <- srv.Serve(ctlLn) }()
+	host, port := sshSrv.Addr()
+	sshAddr := net.JoinHostPort(host, strconv.Itoa(port))
+	attrs := []any{"ssh", sshAddr, "ctl", ctlLn.Addr().String(), "host_key", c.fingerprint}
+	for p, addr := range c.endpoints(ctx) {
+		attrs = append(attrs, "tls_"+p, addr)
+	}
+	log.Info("alice-fakewindows is serving", attrs...)
+	if cfg.ready != nil {
+		cfg.ready(sshAddr, ctlLn.Addr().String(), signer.PublicKey())
+	}
+	select {
+	case err = <-errs:
+	case <-ctx.Done():
+		err = nil
+	}
+	shutdown, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer stop()
+	_ = srv.Shutdown(shutdown)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// control is the loopback control API of a running server.
+type control struct {
+	ssh         *linuxsshtest.Server
+	model       *wintest.Model
+	fingerprint string
+}
+
+func (c *control) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /hostkey", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, c.fingerprint+"\n")
+	})
+	mux.HandleFunc("GET /endpoints", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, c.endpoints(r.Context()))
+	})
+	mux.HandleFunc("POST /prepare", func(w http.ResponseWriter, r *http.Request) {
+		script, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxScript))
+		if err != nil {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "the script is larger than " + strconv.Itoa(maxScript) + " bytes"})
+			return
+		}
+		key, err := authorizedKeyOf(script)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		c.ssh.Authorize(key)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	return mux
+}
+
+// endpoints maps each TLS binding port of the demo host to the address its listener has.
+func (c *control) endpoints(ctx context.Context) map[string]string {
+	bindings, _ := c.model.Host().SSLBindings(ctx)
+	out := map[string]string{}
+	for _, b := range bindings {
+		if ep := c.model.Endpoint(b.Port); ep != "" {
+			out[strconv.Itoa(b.Port)] = ep
+		}
+	}
+	return out
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// keyLinePrefix starts the line of the Windows setup script that holds Alice's administrators_authorized_keys line
+// (internal/providers/windows/setup.go).
+const keyLinePrefix = "$AuthorizedKey ="
+
+// authorizedKeyOf finds the one $AuthorizedKey = '<line>' assignment of a setup script and parses its line as
+// administrators_authorized_keys does (options, then the key). Any other count of such lines is refused.
+func authorizedKeyOf(script []byte) (ssh.PublicKey, error) {
+	var found []string
+	for _, line := range strings.Split(string(script), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, keyLinePrefix) {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		return nil, fmt.Errorf("the script has %d lines %s '...', not exactly one", len(found), keyLinePrefix)
+	}
+	value := strings.TrimSpace(strings.TrimPrefix(found[0], keyLinePrefix))
+	if len(value) < 2 || value[0] != '\'' || value[len(value)-1] != '\'' {
+		return nil, fmt.Errorf("the line %s is not a single-quoted string", keyLinePrefix)
+	}
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(value[1 : len(value)-1]))
+	if err != nil {
+		return nil, fmt.Errorf("the line %s holds no public key: %w", keyLinePrefix, err)
+	}
+	return key, nil
+}
+
+// checkLoopback accepts only a literal loopback IP (127.0.0.0/8 or ::1, no zone, no IPv4-mapped form) with a port.
+func checkLoopback(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	bad := fmt.Errorf("%q must be a loopback IP address with a port (127.0.0.1:9093)", addr)
+	if err != nil || host == "" {
+		return bad
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return bad
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Zone() != "" || ip.Is4In6() || !ip.IsLoopback() {
+		return bad
+	}
+	return nil
+}
+
+// boundLoopback checks the address a listener really bound.
+func boundLoopback(a net.Addr) error {
+	ap, err := netip.ParseAddrPort(a.String())
+	if err != nil || ap.Addr().Zone() != "" || ap.Addr().Is4In6() || !ap.Addr().IsLoopback() {
+		return fmt.Errorf("the control listener is bound to %s, not a loopback address", a)
+	}
+	return nil
+}
+
+// ---- ctl ----
+
+var ctlCommands = map[string][2]string{
+	"ping":      {http.MethodGet, "/ping"},
+	"hostkey":   {http.MethodGet, "/hostkey"},
+	"endpoints": {http.MethodGet, "/endpoints"},
+	"prepare":   {http.MethodPost, "/prepare"},
+}
+
+func runCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ctl", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addr := fs.String("ctl", defaultCtl, "address of the control API (loopback only)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() == 0 {
+		_, _ = fmt.Fprint(stderr, usage)
+		return 2
+	}
+	name := fs.Arg(0)
+	cmd, ok := ctlCommands[name]
+	if !ok {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl: unknown command %q (%s)\n", name, strings.Join(slices.Sorted(maps.Keys(ctlCommands)), ", "))
+		return 2
+	}
+	if fs.NArg() != 1 {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl %s: takes no argument but %q\n", name, strings.Join(fs.Args()[1:], " "))
+		return 2
+	}
+	if err := checkLoopback(*addr); err != nil {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl: the control address %v\n", err)
+		return 2
+	}
+	var body []byte
+	if name == "prepare" {
+		b, err := io.ReadAll(io.LimitReader(stdin, maxScript+1))
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl prepare: read the script: %v\n", err)
+			return 1
+		}
+		if len(b) > maxScript {
+			_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl prepare: the script is larger than %d bytes\n", maxScript)
+			return 1
+		}
+		body = b
+	}
+	return ctlRequest(ctx, *addr, cmd[0], cmd[1], name, body, stdout, stderr)
+}
+
+// ctlRequest sends one request to the loopback control API and copies the answer to stdout.
+func ctlRequest(ctx context.Context, addr, method, path, name string, body []byte, stdout, stderr io.Writer) int {
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, method, "http://"+addr+path, bytes.NewReader(body))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl: %v\n", err)
+		return 1
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 30 * time.Second}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req) //nolint:gosec // G704: the address was checked to be loopback
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl: the server does not answer at %s: %v\n", addr, err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, maxCtlBody+1))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl: %v\n", err)
+		return 1
+	}
+	if int64(len(answer)) > maxCtlBody {
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl %s: the answer is larger than %d bytes\n", name, maxCtlBody)
+		return 1
+	}
+	if resp.StatusCode != http.StatusOK {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(answer, &e)
+		if e.Error == "" {
+			e.Error = resp.Status
+		}
+		_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl %s: %s\n", name, e.Error)
+		return 1
+	}
+	_, _ = stdout.Write(answer)
+	return 0
+}
