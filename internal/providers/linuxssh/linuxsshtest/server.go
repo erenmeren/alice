@@ -68,6 +68,8 @@ type Server struct {
 	maxAuth    int // SetMaxAuthTries
 	loginCheck func(user string, key ssh.PublicKey) bool
 	stall      bool
+	sticky     bool
+	closeOnce  sync.Once
 }
 
 // StallHandshake makes the server accept TCP connections from now on and say nothing: the client
@@ -134,24 +136,49 @@ func (s *Server) AcceptNoAuth() {
 	s.noAuth = true
 }
 
-// NewServer starts a server with a random Ed25519 host key. It stops when the test ends.
+// NewServer starts a server on 127.0.0.1 with a random Ed25519 host key. It stops when the test ends.
 func NewServer(t testing.TB, h Handler) *Server {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	s, err := Listen("127.0.0.1:0", NewHostKey(t), h)
 	if err != nil {
 		t.Fatalf("linuxsshtest: listen: %v", err)
+	}
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Listen starts a server on addr with the given host key. Close stops it. NewServer is Listen on a
+// random loopback port with a random host key; a test tool that runs outside a test (the e2e fake
+// of a host) uses Listen with its own address and key.
+func Listen(addr string, hostKey ssh.Signer, h Handler) (*Server, error) {
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return nil, err
 	}
 	s := &Server{
 		ln:      ln,
 		done:    make(chan struct{}),
-		signers: []ssh.Signer{NewHostKey(t)},
+		signers: []ssh.Signer{hostKey},
 		handler: h,
 		conns:   map[net.Conn]struct{}{},
 	}
 	s.wg.Add(1)
 	go s.serve()
-	t.Cleanup(s.stop)
-	return s
+	return s, nil
+}
+
+// Close stops the server and drops its connections. It may be called more than once.
+func (s *Server) Close() {
+	s.closeOnce.Do(s.stop)
+}
+
+// StickyFirstCommand models Windows OpenSSH (design 2026-10-21 §8, phase W0): every exec session
+// after the first on one connection is handed the FIRST session's command line (its standard input
+// stays its own). Commands still records what the client actually sent. Off by default.
+func (s *Server) StickyFirstCommand() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sticky = true
 }
 
 func (s *Server) stop() {
@@ -355,6 +382,7 @@ func (s *Server) handleConn(c net.Conn) {
 		close(closed)
 	}()
 	var sessions sync.WaitGroup
+	first := &firstCommand{}
 	for nc := range chans {
 		s.mu.Lock()
 		hold := s.holdOpens
@@ -373,13 +401,30 @@ func (s *Server) handleConn(c net.Conn) {
 		sessions.Add(1)
 		go func() {
 			defer sessions.Done()
-			s.serveSession(ch, creqs, closed, sc)
+			s.serveSession(ch, creqs, closed, sc, first)
 		}()
 	}
 	sessions.Wait()
 }
 
-func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <-chan struct{}, conn ssh.Conn) {
+// firstCommand is the first exec line of one connection (StickyFirstCommand).
+type firstCommand struct {
+	mu   sync.Mutex
+	line string
+	set  bool
+}
+
+// resolve returns the line the handler is called with: the first line of the connection.
+func (f *firstCommand) resolve(line string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.set {
+		f.line, f.set = line, true
+	}
+	return f.line
+}
+
+func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <-chan struct{}, conn ssh.Conn, first *firstCommand) {
 	defer func() { _ = ch.Close() }()
 	for req := range reqs {
 		if req.Type != "exec" {
@@ -397,14 +442,19 @@ func (s *Server) serveSession(ch ssh.Channel, reqs <-chan *ssh.Request, closed <
 		s.mu.Lock()
 		s.commands = append(s.commands, p.Command)
 		h := s.handler
+		sticky := s.sticky
 		s.mu.Unlock()
+		line := p.Command
+		if sticky {
+			line = first.resolve(p.Command)
+		}
 		stdin, err := io.ReadAll(ch)
 		if err != nil {
 			return
 		}
 		resp := Response{Stderr: []byte("sh: command not found\n"), Exit: 127}
 		if h != nil {
-			resp = h(p.Command, stdin)
+			resp = h(line, stdin)
 		}
 		if resp.Hangup {
 			_ = conn.Close()
