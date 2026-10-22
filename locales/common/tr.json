@@ -2143,6 +2143,42 @@
       "needs_attention_unconfirmed": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
         "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının nasıl sonuçlandığını henüz doğrulayamıyor (dosya: {{cert_path}}): sunucu beklendiği gibi yanıt vermedi.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini denetleyin. Dağıtım: {{deployment_id}}"
+      },
+      "failed_windows": {
+        "subject": "{{target_name}} sunucusunda sertifika dağıtımı başarısız oldu",
+        "body": "Alice {{target_name}} sunucusunda bir sertifikayı dağıtamadı (bağlama: {{cert_path}}). Bağlama önceki sertifikasını kullanmaya devam ediyor.\n\nAlice'teki dağıtım geçmişi her adımı, nedeni ve yapılması gerekenleri gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "rollback_failed_windows": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (bağlama: {{cert_path}}). Değişiklik başarısız oldu ve bağlamanın önceki sertifikaya geri yöneltilmesi de başarısız oldu.\n\nÖnceki sertifika sunucunun sertifika deposunda kalır. Önceki sertifika: {{previous_certificate}}. Web sitesini hemen denetleyin, sonra sunucuda bağlamanın sertifikasını (netsh http show sslcert) önceki sertifikayla karşılaştırın; yanlışsa bağlamayı IIS Yöneticisi'nde önceki sertifikaya geri yöneltin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "outcome_unknown_windows": {
+        "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının sonucunu doğrulayamadı",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (bağlama: {{cert_path}}) ancak dağıtımın nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nWeb sitesini ve sunucuda bağlamanın sertifikasını (netsh http show sslcert) hemen denetleyin. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır. Önceki sertifika: {{previous_certificate}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "restored_unverified_windows": {
+        "subject": "{{target_name}} sunucusunda önceki sertifika yeniden bağlandı ancak Alice web sitesinin onu sunduğunu doğrulayamadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı başarısız oldu (bağlama: {{cert_path}}) ve Alice bağlamayı önceki sertifikaya geri yöneltti. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin bu sunucudaki başka bir bağlama veya önündeki bir yük dengeleyici yanıt veriyor ya da denetim bağlantı kuramamış olabilir.\n\nWeb sitesini hemen denetleyin. Yanlışsa sunucuda bağlamayı netsh http show sslcert ile denetleyin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "superseded_windows": {
+        "subject": "{{target_name}} sunucusunda sonraki bir işlem bir dağıtımın bağlamasını değiştirdi",
+        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını tamamlayamadı veya geri alamadı (bağlama: {{cert_path}}), çünkü daha sonraki bir işlem bağlamayı zaten değiştirdi. Alice hiçbir şeyi geri yüklemedi.\n\nWeb sitesinin şu anda hangi sertifikayı sunduğunu denetleyin, sonra Alice'te sunucunun sayfasında Keşfet düğmesine tıklayın. Dağıtım: {{deployment_id}}"
+      },
+      "needs_attention_windows": {
+        "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",
+        "body": "Bir sertifika dağıtımı sırasında {{target_name}} sunucusuyla bağlantı kesildi (bağlama: {{cert_path}}) ve Alice dağıtımı tamamlamak veya geri almak için sunucuya erişemiyor.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini ve sunucunun bağlantısını denetleyin. Dağıtım: {{deployment_id}}"
+      },
+      "rollback_forbidden_windows": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusundaki başarısız bir dağıtım, önceki sertifika ele geçirildiği için geri alınmadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı (bağlama: {{cert_path}}) başarısız oldu. Alice bağlamayı önceki sertifikaya geri yöneltmedi, çünkü o sertifika iptal edilmiş ya da özel anahtarı ele geçirilmiş. Bağlama başarısız değişikliğin bıraktığı gibi kalır; bu yüzden başka bir sertifika dağıtılana kadar web sitesi çalışmayabilir.\n\nWeb sitesini hemen denetleyin. Alice'teki dağıtım geçmişinde gösterilen nedeni giderin, ardından geçerli bir sertifikayı yeniden dağıtın. Bağlamayı asla elle önceki sertifikaya geri yöneltmeyin: anahtarı ele geçirilmiştir. Dağıtım: {{deployment_id}}"
+      },
+      "pending_change_restored_windows": {
+        "subject": "Alice {{target_name}} sunucusunda bağlamayı daha eski bir sertifikaya geri yöneltti; sertifikanız dağıtılmadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı (bağlama: {{cert_path}}), aynı bağlamada Alice'in artık izlemediği, tamamlanmamış daha önceki bir değişiklik buldu. Alice bağlamayı o önceki değişiklikten önceki sertifikaya geri yöneltti; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu sertifika, dağıtım istendiğinde sunulandan daha eski olabilir, hatta süresi dolmuş olabilir. Bu dağıtımın sertifikası dağıtılmadı.\n\nWeb sitesini hemen denetleyin. Sonra Alice'te sunucunun sayfasında Keşfet düğmesine tıklayın ve sertifikayı yeniden dağıtın. Önceki değişiklik: {{operation_id}}. Dağıtım: {{deployment_id}}"
+      },
+      "needs_attention_unconfirmed_windows": {
+        "subject": "Alice {{target_name}} sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
+        "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının nasıl sonuçlandığını henüz doğrulayamıyor (bağlama: {{cert_path}}): sunucu beklendiği gibi yanıt vermedi.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini denetleyin. Dağıtım: {{deployment_id}}"
       }
     },
     "location": {

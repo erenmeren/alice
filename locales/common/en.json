@@ -2143,6 +2143,42 @@
       "needs_attention_unconfirmed": {
         "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
         "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (file {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"
+      },
+      "failed_windows": {
+        "subject": "Certificate deployment failed on {{target_name}}",
+        "body": "Alice could not deploy a certificate on the server {{target_name}} (binding {{cert_path}}). The binding keeps its previous certificate.\n\nThe deployment history in Alice shows each step, the reason and what to do. Deployment: {{deployment_id}}"
+      },
+      "rollback_failed_windows": {
+        "subject": "Manual action needed: certificate restore failed on {{target_name}}",
+        "body": "Alice deployed a certificate on the server {{target_name}} (binding {{cert_path}}). The change failed, and pointing the binding back to the previous certificate failed too.\n\nThe previous certificate stays in the server's certificate store. Previous certificate: {{previous_certificate}}. Check the website now, then on the server compare the certificate of the binding (netsh http show sslcert) with the previous certificate, and point the binding back to it in IIS Manager if it is wrong. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "outcome_unknown_windows": {
+        "subject": "Alice could not confirm a certificate deployment on {{target_name}}",
+        "body": "Alice started deploying a certificate on the server {{target_name}} (binding {{cert_path}}), but could not confirm how it ended and has stopped trying.\n\nCheck the website now, and the certificate of the binding on the server (netsh http show sslcert). If the change reached the server, the previous certificate is still in its certificate store. Previous certificate: {{previous_certificate}}. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "restored_unverified_windows": {
+        "subject": "The previous certificate is bound again on {{target_name}} but Alice could not confirm the website serves it",
+        "body": "A certificate deployment on the server {{target_name}} failed (binding {{cert_path}}), and Alice pointed the binding back to the previous certificate. Alice could not confirm that the website serves the previous certificate, for example because another binding on this server or a load balancer in front of it answers, or because the check could not connect.\n\nCheck the website now. If it is wrong, check the binding on the server with netsh http show sslcert. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "superseded_windows": {
+        "subject": "A later operation changed the binding of a deployment on {{target_name}}",
+        "body": "Alice could not finish or undo a certificate deployment on the server {{target_name}} (binding {{cert_path}}) because a later operation has already changed the binding. Alice did not restore anything.\n\nCheck which certificate the website serves now, then choose Discover on the server's page in Alice. Deployment: {{deployment_id}}"
+      },
+      "needs_attention_windows": {
+        "subject": "Alice cannot finish a deployment on {{target_name}}",
+        "body": "The connection to the server {{target_name}} was lost during a certificate deployment (binding {{cert_path}}), and Alice cannot reach the server to finish or undo it.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website and the server's connection. Deployment: {{deployment_id}}"
+      },
+      "rollback_forbidden_windows": {
+        "subject": "Manual action needed: a failed deployment on {{target_name}} was not undone because the previous certificate is compromised",
+        "body": "A certificate deployment on the server {{target_name}} (binding {{cert_path}}) failed. Alice did not point the binding back to the previous certificate, because it was revoked or its private key is compromised. The binding stays as the failed change left it, so the website may not work until another certificate is deployed.\n\nCheck the website now. Fix the cause shown in the deployment history in Alice, then deploy a valid certificate again. Never point the binding back to the previous certificate by hand: its key is compromised. Deployment: {{deployment_id}}"
+      },
+      "pending_change_restored_windows": {
+        "subject": "Alice pointed the binding on {{target_name}} back to an older certificate; your certificate was not deployed",
+        "body": "A certificate deployment on the server {{target_name}} (binding {{cert_path}}) found an unfinished earlier change of the same binding that Alice no longer followed. Alice pointed the binding back to the certificate from before that earlier change, so the website now serves that certificate. That certificate may be older than the one the website served when the deployment was requested, and it may even have expired. The certificate of this deployment was not deployed.\n\nCheck the website now. Then choose Discover on the server's page in Alice and deploy the certificate again. Earlier change: {{operation_id}}. Deployment: {{deployment_id}}"
+      },
+      "needs_attention_unconfirmed_windows": {
+        "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
+        "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (binding {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"
       }
     },
     "location": {

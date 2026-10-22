@@ -430,6 +430,8 @@ var discoverKeys = []string{
 	"errors.deployment.unknown_operation.action", "errors.deployment.recovery_exhausted.action",
 	"errors.deployment.outcome_unknown.action", "errors.deployment.rollback_file_changed.action",
 	"errors.deployment.rescan_needed.action", "email.deployment.superseded.body", "email.deployment.pending_change_restored.body", "errors.deployment.pending_change_restored.action",
+	// R61: the Windows texts of the same e-mails
+	"email.deployment.superseded_windows.body", "email.deployment.pending_change_restored_windows.body",
 }
 
 // Every text that names the control names it the same way in both languages, and no other text does.

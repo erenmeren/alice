@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -9,11 +10,14 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/platform/db"
+	"alice/internal/providers"
 )
 
 // Email templates sent to every Administrator (R37 item 14). Texts: locales/common email.<template>.
 // Every deployment template takes target_name, cert_path and deployment_id, and those that name a
 // backup also backup_dir (BackupRoot/<operation id>, Alice's own value, never text from the server).
+// A deployment to an http.sys binding of a Windows server is queued in its Windows text instead
+// (WindowsTemplate, R61).
 const (
 	TemplateHostKeyChanged = "target.host_key_changed" // params target_name, old_fingerprint, new_fingerprint
 	TemplateAuthFailed     = "target.auth_failed"      // params target_name
@@ -174,13 +178,97 @@ func (s *Service) notifyACME(ctx context.Context, tx pgx.Tx, acmeCertificate uui
 }
 
 // notifyDeployment queues an e-mail about a deployment (deployment.*) for the destination's and the certificate's
-// services.
+// services; a Windows deployment's in its Windows text (windowsDeploymentMail).
 func (s *Service) notifyDeployment(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string, params map[string]string) error {
 	svcs, err := deploymentServices(ctx, tx, deployment)
 	if err != nil {
 		return err
 	}
+	template, params, err = windowsDeploymentMail(ctx, tx, deployment, template, params)
+	if err != nil {
+		return err
+	}
 	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
+}
+
+// windowsTemplateSuffix makes the Windows text of a deployment e-mail (WindowsTemplate).
+const windowsTemplateSuffix = "_windows"
+
+// WindowsTemplate is the Windows text of the deployment e-mail template (R61): the same facts as the Linux text, for an
+// http.sys binding of a Windows server. It names the binding (param cert_path: the binding's canonical text), never a
+// file, the Linux helper's backup folder or Nginx; where the Linux text names the backup folder (backup_dir:
+// rollback_failed, outcome_unknown) it names the previous certificate instead (previous_certificate). The Linux texts
+// and their params are unchanged.
+func WindowsTemplate(template string) string { return template + windowsTemplateSuffix }
+
+// WindowsDeploymentTemplates lists the Windows texts of the deployment e-mails (render tests).
+func WindowsDeploymentTemplates() []string {
+	out := make([]string, 0, len(deploymentTemplates))
+	for _, t := range deploymentTemplates {
+		out = append(out, WindowsTemplate(t))
+	}
+	return out
+}
+
+// deploymentTemplates are the deployment e-mails (deployment.*), each with a Windows text.
+var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown,
+	TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
+	TemplateDeploymentRollbackForbidden, TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed}
+
+// windowsDeploymentMail is the template and params of a deployment e-mail as queued. A deployment to anything but an
+// http.sys binding keeps both as given, byte for byte. A binding's (R61) is the Windows text (WindowsTemplate) and, in
+// place of backup_dir (a Linux folder; a binding has none), previous_certificate on the texts that named it: what the
+// start record wrote of the certificate the binding named before the change (previousCertificate).
+func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string,
+	params map[string]string) (string, map[string]string, error) {
+	var (
+		kind providers.LocationKind
+		raw  []byte
+	)
+	err := tx.QueryRow(ctx, "SELECT location_kind, rollback_info FROM deployments WHERE id = $1", deployment).Scan(&kind, &raw)
+	if err != nil {
+		return "", nil, fmt.Errorf("inventory: read the deployment's location kind: %w", err)
+	}
+	if kind != providers.LocationWinSSLBinding || !slices.Contains(deploymentTemplates, template) {
+		return template, params, nil
+	}
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		if k != "backup_dir" {
+			out[k] = v
+		}
+	}
+	if template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown {
+		var ref *providers.BackupRef
+		if len(raw) > 0 {
+			ref = &providers.BackupRef{}
+			if json.Unmarshal(raw, ref) != nil {
+				ref = nil
+			}
+		}
+		out["previous_certificate"] = previousCertificate(ref)
+	}
+	return WindowsTemplate(template), out, nil
+}
+
+// previousCertificate names the certificate a Windows binding named before the change, from its start record (W2
+// Ruling 17): `<store> \ <thumbprint>` as the deployment's page shows it, else the thumbprint, else "SHA-256 <hex>"
+// (the DER's SHA-256, all the record keeps when a scan changed the binding meanwhile), else "-". Only values that keep
+// their rule are named.
+func previousCertificate(ref *providers.BackupRef) string {
+	if ref == nil {
+		return "-"
+	}
+	sha1 := backupSHA1RE.MatchString(ref.PreviousSHA1)
+	switch {
+	case sha1 && backupStoreRE.MatchString(ref.Store):
+		return ref.Store + ` \ ` + ref.PreviousSHA1
+	case sha1:
+		return ref.PreviousSHA1
+	case hex64RE.MatchString(ref.PreviousSHA256):
+		return "SHA-256 " + ref.PreviousSHA256
+	}
+	return "-"
 }
 
 // notifyLocation queues an e-mail about a website (location.drift_*) for its server's and its certificate's services.
