@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -172,30 +173,139 @@ func setupSSHCommand(ctx context.Context, account, key, knownHosts string, extra
 }
 
 // setupSSHWith runs one client (one connection) with extra options and returns its exit code, stdout
-// and stderr; it fails the test when the client runs longer than 30 s.
+// and stderr; it fails the test when the client does not end (setupSSHAs).
 func setupSSHWith(t *testing.T, key, knownHosts string, extra []string, line string) (int, []byte, []byte) {
 	t.Helper()
 	return setupSSHAs(t, setupAccount, key, knownHosts, extra, line)
 }
 
-// setupSSHAs is setupSSHWith as another account.
+// The bounds of one client run: the first try, and the one retry of a version call that did not end.
+const (
+	setupSSHBound      = 30 * time.Second
+	setupSSHRetryBound = 60 * time.Second
+)
+
+// setupSSHAs is setupSSHWith as another account. A client that runs longer than setupSSHBound is
+// diagnosed (setupDiagnose) and fails the test, except a version call: the first sign-in of an account
+// (its profile created, the newly copied helper scanned on its first start) hung on 2 of 5 W2 runner
+// runs with nothing on stdout or stderr, so a version call is tried once more with -v and
+// setupSSHRetryBound, and a second run that does not end fails the test.
 func setupSSHAs(t *testing.T, account, key, knownHosts string, extra []string, line string) (int, []byte, []byte) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	code, stdout, stderr, ended := setupSSHRun(t, setupSSHBound, account, key, knownHosts, extra, line)
+	if ended {
+		return code, stdout, stderr
+	}
+	setupDiagnose(t, fmt.Sprintf("ssh %s@localhost %v %q did not end within %s", account, extra, line, setupSSHBound))
+	require.Equal(t, winproto.SubVersion, line, "ssh %s@localhost %v %q did not end: %s %s", account, extra, line, stdout, stderr)
+	t.Logf("trying ssh %s@localhost %v %q once more, with -v and %s", account, extra, line, setupSSHRetryBound)
+	code, stdout, stderr, ended = setupSSHRun(t, setupSSHRetryBound, account, key, knownHosts, append(append([]string{}, extra...), "-v"), line)
+	if !ended {
+		setupDiagnose(t, fmt.Sprintf("the second ssh %s@localhost %v %q did not end within %s", account, extra, line, setupSSHRetryBound))
+	}
+	require.True(t, ended, "ssh %s@localhost %v %q did not end twice: %s %s", account, extra, line, stdout, stderr)
+	t.Logf("the second run ended with exit %d; its stderr:\n%s", code, stderr)
+	return code, stdout, stderr
+}
+
+// setupSSHRun runs one client with the bound; ended is false when the bound killed it.
+func setupSSHRun(t *testing.T, bound time.Duration, account, key, knownHosts string, extra []string, line string) (code int, stdout, stderr []byte, ended bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	cmd := setupSSHCommand(ctx, account, key, knownHosts, extra, line)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = 5 * time.Second // a killed client's pipes never keep the test waiting
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err := cmd.Run()
-	require.NoError(t, ctx.Err(), "ssh %v %q did not end: %s %s", extra, line, stdout.Bytes(), stderr.Bytes())
-	code := 0
+	if ctx.Err() != nil {
+		return -1, out.Bytes(), errOut.Bytes(), false
+	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		code = exit.ExitCode()
 	} else {
 		require.NoError(t, err)
 	}
-	return code, stdout.Bytes(), stderr.Bytes()
+	return code, out.Bytes(), errOut.Bytes(), true
+}
+
+// setupDiagnoseScript is what setupDiagnose logs: sshd's service, the processes of a sign-in with their
+// start times, the profiles of the test's accounts, sshd's own log file (when sshd_config logs to one)
+// and the last events of OpenSSH and of Microsoft Defender.
+const setupDiagnoseScript = `$ErrorActionPreference = 'Continue'
+'--- Get-Service sshd'
+Get-Service -Name sshd | Format-List Name, Status, StartType | Out-String -Width 200
+'--- Get-Process (sign-in processes)'
+Get-Process -Name sshd, sshd-session, sshd-auth, alice-helper, ssh -ErrorAction SilentlyContinue |
+    Sort-Object StartTime | Format-Table -AutoSize Name, Id, @{ n = 'StartTime'; e = { $_.StartTime.ToString('o') } }, CPU | Out-String -Width 200
+'--- profiles of alice*'
+Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.LocalPath -like '*\alice*' } |
+    Format-Table -AutoSize LocalPath, Loaded, LastUseTime | Out-String -Width 200
+'--- sshd log (C:\ProgramData\ssh\logs, last 20 lines)'
+$log = Get-ChildItem -LiteralPath 'C:\ProgramData\ssh\logs' -Filter '*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+if ($log) { Get-Content -LiteralPath $log.FullName -Tail 20 } else { 'no log file' }
+'--- OpenSSH/Operational (last 20)'
+Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 20 -ErrorAction SilentlyContinue | Sort-Object TimeCreated |
+    ForEach-Object { "$($_.TimeCreated.ToString('o')) $($_.Id) $($_.Message)" }
+'--- Microsoft-Windows-Windows Defender/Operational (last 5)'
+Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' -MaxEvents 5 -ErrorAction SilentlyContinue | Sort-Object TimeCreated |
+    ForEach-Object { "$($_.TimeCreated.ToString('o')) $($_.Id) $($_.Message)" }
+`
+
+// setupDiagnose logs what the machine shows after a client that did not end. It never fails the test
+// itself and is bounded, so a diagnosis cannot hang either.
+func setupDiagnose(t *testing.T, what string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", setupDiagnoseScript)
+	cmd.Env = powershellEnviron()
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s; diagnostics (err %v):\n%s", what, err, out)
+}
+
+// waitForSSHD waits until sshd on port 22 answers with its "SSH-" banner (the setup script has just
+// restarted it), for at most a minute.
+func waitForSSHD(t *testing.T) {
+	t.Helper()
+	start := time.Now()
+	deadline := start.Add(time.Minute)
+	var last error
+	for {
+		last = sshdBanner()
+		if last == nil {
+			t.Logf("sshd answered after %s", time.Since(start).Round(time.Millisecond))
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	setupDiagnose(t, "sshd did not answer on port 22")
+	require.NoError(t, last, "sshd answers on port 22 within a minute")
+}
+
+// sshdBanner connects to port 22 once and reads the first four bytes of the server's banner.
+func sshdBanner() error {
+	c, err := net.DialTimeout("tcp", "localhost:22", 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	b := make([]byte, 4)
+	if _, err := io.ReadFull(c, b); err != nil {
+		return err
+	}
+	if string(b) != "SSH-" {
+		return fmt.Errorf("port 22 answers %q, not an SSH banner", b)
+	}
+	return nil
 }
 
 // freeLoopbackPort is a TCP port nothing listens on at the moment.
@@ -384,6 +494,9 @@ $s = @($a.Access | ForEach-Object { $_.IdentityReference.Translate([System.Secur
 @{ protected = $a.AreAccessRulesProtected; sids = ($s -join ',') } | ConvertTo-Json -Compress`)), &acl))
 	assert.True(t, acl.Protected, "no inherited access")
 	assert.ElementsMatch(t, []string{setupAdministrators, setupLocalSystem}, strings.Split(acl.SIDs, ","))
+
+	// sshd answers before the first connection (the script has just restarted it).
+	waitForSSHD(t)
 
 	// The host key, pinned from ssh-keyscan and checked against sshd's own public key file.
 	hostPub, err := os.ReadFile(setupHostEd25519Pub)
