@@ -3,10 +3,11 @@
 Alice reads the certificates of a Windows server: every HTTPS binding of http.sys (the Windows HTTP server that IIS,
 WinRM, SSTP and other applications share), the IIS sites that use each binding, and the certificate bound there
 from the machine store, with its expiry and store. The bindings appear under **Websites on this server** with the
-column **IIS site**, and the certificates under **Certificates** like any certificate Alice found. **On a Windows
-server Alice only reads in this release.** It never imports, binds or removes a certificate, never changes IIS or
-http.sys and never restarts a service. The deploy controls on a Windows server's page are shown disabled with the
-note "Not available for IIS servers yet".
+column **IIS site**, grouped by the certificate they serve, and the certificates under **Certificates** like any
+certificate Alice found. Alice deploys certificates to the bindings IIS uses: it imports the certificate into the
+machine store and points the binding to it ([What a deployment changes](#what-a-deployment-changes)). It never
+changes IIS's own configuration (`applicationHost.config`), never removes a certificate in this release and never
+restarts a service.
 
 Alice signs in over SSH (the OpenSSH Server of Windows) with its own key. It never gets a shell: sshd runs
 **alice-helper.exe** for every sign-in of Alice's account, and the helper does only a fixed list of things. This
@@ -167,6 +168,33 @@ The script stops at the first error. It changes nothing before it has checked th
 
 The script never changes User Account Control and never sets `LocalAccountTokenFilterPolicy`.
 
+## What a deployment changes
+
+A deployment changes only the binding it names and the machine certificate stores:
+
+- **`LocalMachine\CA`** (Intermediate Certification Authorities): each intermediate certificate of the chain that is
+  not there yet. Intermediates are never replaced or removed (other certificates may need them).
+- **The binding's own store** (`LocalMachine\My`, Personal, or `LocalMachine\WebHosting`): the certificate, with its
+  private key as a machine key in the Microsoft Software Key Storage Provider that cannot be exported, usable by
+  SYSTEM and Administrators. Its friendly name is `Alice <name> <expiry date> <operation>`. A copy that is already in
+  the store with a usable key is used as it is. Alice never moves a binding to another store.
+- **The http.sys binding**: one change that points it to the new certificate and keeps every other setting
+  (client-certificate negotiation, revocation checks, the TLS 1.3 and legacy TLS switches, the HTTP/2 and other
+  extended settings). IIS serves the new certificate to the next connection; nothing is restarted and IIS's own
+  configuration is not touched.
+- **`C:\ProgramData\Alice\helper`**: the helper's journal (`journal\<operation>.json`), one record per binding
+  (`bindings\`), the list of certificates it imported (`imports.json`) and its lock file (`helper.lock`). No private
+  key is ever written there. The folder must stay Administrators and SYSTEM only, as the script makes it: the helper
+  refuses to change anything when it is a link or junction, owned by someone else or not writable
+  (`ALC-WIN-0007`).
+- **The Application event log**, source `Alice Helper`: event **1001** after a deployment and **1002** after the
+  previous certificate was put back, each with the operation, the binding and the old and new SHA-256 of the
+  certificate (never a key).
+
+When the check after the change fails, the helper points the binding back to the previous certificate, which stays in
+its store. The previous certificate, the imported certificates and their keys stay in the stores in this release (a
+later release removes the ones Alice imported, after a waiting time).
+
 ## Troubleshooting
 
 ### ALC-WIN-0001: the helper is not set up
@@ -206,8 +234,11 @@ order:
 ### Antivirus and EDR
 
 Antivirus or endpoint protection that blocks or inspects `C:\Program Files\Alice\alice-helper.exe` can make a
-discovery fail or time out. Allow the program `C:\Program Files\Alice\alice-helper.exe` and the folder
-`C:\ProgramData\Alice\helper` in its exclusions. Alice is tested with Defender real-time protection off.
+discovery or a deployment fail or time out (an interrupted deployment is finished or undone by Alice later). Allow
+the program `C:\Program Files\Alice\alice-helper.exe` and the folder `C:\ProgramData\Alice\helper` in its
+exclusions. Alice is tested with Defender real-time protection off. The first connection to a server prepared a
+moment ago can take longer than later ones (Windows may still be creating the new account's profile at its first sign-in): if the
+first **Test connection** times out, choose it again.
 
 ## Removing Alice from a Windows server
 
@@ -233,4 +264,6 @@ Choose **Remove server** in Alice, then on the server, in an elevated PowerShell
 5. If nothing else uses it, remove OpenSSH Server
    (`Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`) or keep it.
 
-IIS, http.sys and the certificates stay as they are; Alice never changed them.
+IIS, http.sys and the certificates stay as they are: the bindings keep serving the certificates Alice deployed. To
+remove a certificate Alice imported, find it by its friendly name (`Alice ...`) in the certificate store and delete
+it with its key (`Remove-Item -DeleteKey`) once no binding uses it.

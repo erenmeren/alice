@@ -349,9 +349,10 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
 
-### 24.7 Windows servers (R60)
+### 24.7 Windows servers (R60, R61)
 
-(Phase W1, read only; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
+(Phase W1, read only: WIN-01..WIN-14; phase W2, deployment, verification and rollback (R61): WIN-15..WIN-28; design
+`docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
 `docs/superpowers/rulings/windows-iis.md`.) The emulated host `internal/providers/windows/wintest` runs the helper's own
 decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (windows-2022, windows-2025).
 
@@ -371,6 +372,20 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | WIN-12 | A binding's certificate is also found by network discovery | The certificate is linked by its DER fingerprint and shown as managed |
 | WIN-13 | Hostile helper output (control characters, overlong names, invalid records, hostile appcmd XML) | Text is cleaned or the record dropped; the dump is bounded; no hostile value reaches inventory unchecked |
 | WIN-14 | The emulator and the real helper answer the read subcommands (`version`, refusals, `win-facts`, `tls-probe`, `iis-dump`) | The answers agree field by field on windows-2022 and windows-2025 (fidelity test) |
+| WIN-15 | Manual deployment to an SNI (`hostnameport`) and an IP (`ipport`) binding with a public-CA chain, a private CA without its root, and verification skipped | Steps `import_chain`, `import_certificate`, `bind`, `verify`; the deployment ends committed at level 3, 2 or 1 (R51); the binding names the new certificate and the location's token is the new leaf's DER SHA-256 |
+| WIN-16 | The binding names another certificate than the one Alice last saw (re-pointed since discovery), or the binding is gone | `iis-deploy` refuses `HASH_MISMATCH` / `BINDING_NOT_FOUND` before any change (`windows.binding_changed` ALC-WIN-0004, retryable; `windows.binding_not_found` ALC-WIN-0005); nothing imported, nothing written |
+| WIN-17 | The certificate is already bound and Alice's last committed bind left the same chain | `unchanged` without an http.sys write; after an interrupted deployment, on a binding Alice never wrote, or with a new intermediate, a same-hash write instead, so schannel serves the whole chain |
+| WIN-18 | The binding carries other settings: client-certificate negotiation, revocation values, `DISABLE_TLS13` / `DISABLE_LEGACY_TLS`, a CTL, the Ex records' extended parameters | A deployment and a restore change only the certificate hash and nothing else of the record (read back after the write; on windows-2022 and windows-2025 too) |
+| WIN-19 | http.sys refuses the imported key (1312), or the record reads back different after the update | The helper restores the previous record itself (guarded) and answers `restored` with `failed_step bind` (`key_unusable` or `read_back`); Alice records rolled back with `windows.key_unusable` or the read-back cause |
+| WIN-20 | The website keeps serving the previous certificate after the bind (verification fails) | `iis-restore` puts the previous certificate back; the deployment ends rolled back with the verification-failed text and the previous certificate (`store \ sha1`) shown |
+| WIN-21 | The previous certificate is revoked or compromised (R48), on every restore path: the self-restore after a read-back mismatch, `iis-restore` from Alice, a re-sent restore | The helper checks the guard itself, restores nothing and answers `restore_forbidden`; the deployment ends `rollback_failed` with `deployment.rollback_forbidden`; a once-forbidden restore stays forbidden |
+| WIN-22 | Alice or the helper is killed, or the server reboots, at every journal point of `iis-deploy` and `iis-restore` | After Alice's recovery (`iis-status`, then `iis-fence` or `iis-restore`) the binding names exactly the previous or the new certificate and the deployment's record agrees with what is served |
+| WIN-23 | A delayed `iis-deploy` arrives after Alice fenced its operation | The helper answers `FENCED` and changes nothing; a fenced operation never runs (AUD-05) |
+| WIN-24 | The 50 s budget ends while a write subcommand runs | Before the first durable write: `IO_ERROR` and no journal; after it: `OUTCOME_UNKNOWN` (uncertain, never a refusal), and the journal decides at the next `iis-status` |
+| WIN-25 | Schannel builds a chain of another length than Alice deployed (an intermediate already in `CA`, or one missing) | The verify step carries `chain_differs` with `deployed_chain` and `built_chain`; the page shows "Windows serves a chain of N certificates; Alice deployed M"; the R51 trust check decides |
+| WIN-26 | An ACME and a Key Vault binding reach a Windows binding; a certificate of another service | Automatic deployment to the http.sys binding as for a file; a certificate of another service needs the scoped-access trust (R49) |
+| WIN-27 | The private key on its way to the server | Only on the helper's standard input, never on the command line, in a journal, a log, an error, an event or an answer; the PEM, PKCS #8, PFX and password buffers are cleared after use |
+| WIN-28 | The emulator and the real helper answer the write subcommands (`iis-deploy`, `iis-restore`, `iis-status`, `iis-fence`, their refusals); the runner after the tests | The answers and the resulting http.sys records agree on windows-2022 and windows-2025; no http.sys record, certificate, key, site or data directory of the tests is left behind |
 
 ## 25. Security Test Plan
 

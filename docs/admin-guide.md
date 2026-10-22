@@ -1442,7 +1442,8 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 
 ### Windows servers
 
-A **Windows server** (Windows Server 2019, 2022 or 2025, with or without IIS) is discovery only in this release. Alice
+A **Windows server** (Windows Server 2019, 2022 or 2025, with or without IIS) is a server Alice discovers and deploys
+certificates to (the HTTPS bindings of http.sys, which IIS uses). Alice
 signs in over the Windows OpenSSH Server with its own key, as a local account `alice` or a domain account such as
 `CORP\alice-svc`, and sshd runs only **alice-helper.exe** for that account: Alice never gets a shell. Prepare the
 server once with the PowerShell setup script that **Add server** shows for **Windows server**; see
@@ -1456,9 +1457,40 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   found. Bindings of other applications (WinRM, SSTP, AD FS, IIS Express), Centralized Certificate Store bindings and
   bindings in a store other than Personal (`My`) or Web Hosting are listed as not supported, with the reason. A
   certificate missing from its store, a missing key or a key Windows cannot use is shown as a problem.
-- Alice does not manage the SSH keys of a Windows server, and never changes anything on it in this release:
-  deployment, drift and cleanup follow in a later release. The deploy controls are shown disabled with "Not available
-  for IIS servers yet".
+- **Websites on this server** groups the bindings of a Windows server by the certificate they serve: a group row
+  shows the certificate's subject, expiry and how many bindings use it, with the bindings beneath; bindings without a
+  certificate are in the last group **No certificate**. A certificate is deployed per binding: choose **Deploy** on a
+  binding, or tick several in the deploy dialog, where **Select all bindings of this certificate** picks every
+  binding of one group. ACME and Key Vault bindings deploy to Windows bindings automatically, as to a file, under the
+  same rules (services, trust between services).
+- **What a deployment does on the server.** The helper imports the intermediate certificates into the machine's
+  **Intermediate Certification Authorities** store (`CA`) and the certificate with a private key that cannot be
+  exported into the binding's own store (**Personal** `My` or **Web Hosting**), then points the binding to the new
+  certificate in one change that keeps every other setting of the binding, and reads it back. The deployment's page
+  shows the steps **Import the chain**, **Import the certificate**, **Bind** and **Verify**. A binding that already
+  serves the certificate is left alone (**no change needed**). If the binding names another certificate than the one
+  Alice last saw, nothing is changed (`ALC-WIN-0004`); scan the server again.
+- **Verification** works as for Nginx (see [How Alice verifies a deployment](#how-alice-verifies-a-deployment)): Alice
+  connects to each binding with a fresh connection (for an SNI binding with its host name, for an IP binding with the
+  IIS host names that use it); for a binding on a specific address Alice cannot reach, the helper checks it from the
+  server itself. Windows builds the chain it sends from the server's own stores, which can differ from the chain
+  Alice deployed; the page then says "Windows serves a chain of N certificates; Alice deployed M", and the trust check
+  decides.
+- **Rollback.** When the check fails, or Windows refuses the change (for example a key it cannot use), the previous
+  certificate is put back: it stays in the store, so the binding is simply pointed back to it. The page names it as
+  **Previous certificate: `<store>` \ `<SHA-1 thumbprint>`**. A revoked or compromised previous certificate is never
+  put back (the helper checks it on the server too); the deployment then ends **rollback failed** and names it so you
+  can choose another certificate. Imported certificates, their keys and the intermediates stay in the stores in this
+  release (cleanup follows in a later release).
+- **Event Log.** Each change is written to the server's Application log, source **Alice Helper**: event **1001** after
+  a deployment and **1002** after a restore, with the operation, the binding and the old and new SHA-256 (never a
+  key). The helper also keeps a journal of each change under `C:\ProgramData\Alice\helper`; an interrupted
+  deployment (Alice or the server restarted) is finished or undone from it automatically.
+- Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment (see [troubleshooting.md](troubleshooting.md)).
+  A helper from before this release cannot deploy: Alice names it outdated (`ALC-WIN-0002`) before changing anything.
+- Alice does not manage the SSH keys of a Windows server. Not deployable in this release: Centralized Certificate
+  Store bindings, bindings of other applications or other stores, a binding whose only problem is its key, and a host
+  name written with non-ASCII letters (use its `xn--` form in IIS).
 
 ## SSH keys
 

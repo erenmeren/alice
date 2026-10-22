@@ -1,6 +1,6 @@
 # Windows servers and IIS as a deployment target: design
 
-Status: W0 spike done (§14.1); **W1 built (R60)** (§16); W2-W7 design only. Date: 2026-10-21. Written against `main` at `72fa1f9a` (migrations up to `00029`,
+Status: W0 spike done (§14.1); **W1 built (R60)** (§16); **W2 built (R61)** (§17); W3-W7 design only. Date: 2026-10-21. Written against `main` at `72fa1f9a` (migrations up to `00029`,
 decisions up to R56; R57 and R58 are taken by parallel work). Decision number: **R59+ when implemented** (recorded in
 `alice-v1/00-decisions.md` by the phase that builds it, not before). Migration and error-code numbers: the next free
 ones at merge time. Roadmap and shared groundwork: [2026-10-21-deployment-targets-roadmap.md](2026-10-21-deployment-targets-roadmap.md).
@@ -466,7 +466,7 @@ Acceptance:
   managed).
 - Real-runner helper tests and the fidelity test pass for the read subcommands.
 
-### Phase W2 — Deployment, verification, rollback (size XL, ~12 tasks)
+### Phase W2 — Deployment, verification, rollback (size XL, ~12 tasks; built, R61, §17)
 
 `iis-deploy`, `iis-restore`, `iis-status`, `iis-fence`; import and bind; the journal; the guard on the server; the
 provider's `DeployCertificate`, `RollbackDeployment`, `DeploymentStatus`, `FenceDeployment`, `VerifyDeployment`;
@@ -542,6 +542,8 @@ Images measured in W0 (§14.1): `windows-2022` = Windows Server 2022 Datacenter 
 | F6 | `appcmd list site /config /xml` resolves shared configuration and is available on Server Core. | Read `applicationHost.config` with redirection handled by the helper. | **Confirmed on Desktop Experience; Server Core not testable on a hosted runner.** Exit 0 in ~0.04 s, `<appcmd><SITE SITE.NAME SITE.ID bindings state><site><bindings><binding protocol bindingInformation sslFlags/>` parsed with `encoding/xml`; unknown site: exit 1 and an empty `<appcmd>`. With `redirection.config` pointed at a local copy, appcmd listed the copy's sites (not a site added only to the local file) and wrote a new site to the copy only. `appcmd.exe` is present with `Web-Server` and no `Web-Mgmt-*` feature installed (the images ship part of `Web-Server` already). |
 | F7 | OpenSSH Server installs on the GitHub Windows images in reasonable time. | Pinned Win32-OpenSSH MSI. | **Confirmed.** 2022: capability `NotPresent`, `Add-WindowsCapability` 25.5-32.5 s, no restart, sshd `OpenSSH_8.1p1 for Windows`. 2025: already `Installed` (1.2 s check), `OpenSSH_9.5p2 for Windows`. MSI fallback pinned in §12 item 5, not needed. |
 | F8 | The application ids of WinRM, AD FS and SSTP bindings, for the `win_foreign_app` names. | Show the raw id. | **WinRM and SSTP measured, AD FS raw id.** WinRM HTTPS listener (present on both images, its `CertificateThumbprint` equal to the record's hash): `0.0.0.0:5986`, `{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}`, NULL store. SSTP (`RemoteAccess` + `Install-RemoteAccess -VpnType Vpn`, 2025 build 26100 in 206 s; on 2022 the same steps left no SSTP record, and a first 2025 attempt asked for a restart): `0.0.0.0:443` and `[::]:443`, `{ba195980-cd49-458b-9e23-c84ee0adcd75}`, store `MY`. Also seen: IIS Express `{214124cd-d05b-4309-9af9-9caa44b2b74a}` (100 records). AD FS cannot be installed on a runner and no Microsoft page fetched in W0 states its id: unknown, the raw id is shown. |
+| F9 (W2) | `HttpQueryServiceConfiguration` of the Ex records returns each extended parameter (HTTP/2 window and limits, performance, TLS restrictions, error headers, session ticket keys), a type not set is reported as such, and an update of the base record leaves them as they were. | Rewrite each extended parameter after the base update and self-restore when the read-back still differs. | **Confirmed on 2022 and 2025, with precisions** (W2 runs 39855366097, 39857454542; §14.1). A base update kept every extended parameter on ipport and hostnameport records; the helper's `exRepair` strategy (read back, rewrite only what changed) wrote none. 2022 answers a type not set `ERROR_NOT_FOUND` (1168, also types 6-9); 2025 reports types 0-4 set with defaults, type 5 "not supported", type 6 undecodable; type 2 is an aggregate with absolute pointers whose reported size on a hostnameport record includes the SNI host's padding. |
+| F10 (W2) | `PFXImportCertStore` of the standard-library PFX into a memory store, then `CertAddCertificateContextToStore(CERT_STORE_ADD_NEW)` into `LocalMachine\My`, keeps the key link so http.sys binds it without 1312. | Import straight into the target store, or the `NCryptImportKey` route of `tools/winspike`. | **Confirmed on 2022 and 2025** (W2 runs 39855366097, 39857454542). With `CRYPT_MACHINE_KEYSET \| PKCS12_ALWAYS_CNG_KSP`: Microsoft Software Key Storage Provider, not exportable (`NCryptExportKey` 0x80090029), bound without 1312; no fallback needed. |
 
 ### 14.1 Spike results
 
@@ -567,6 +569,25 @@ Images measured in W0 (§14.1): `windows-2022` = Windows Server 2022 Datacenter 
   with version 2.0 and `HTTP_INITIALIZE_CONFIG`; the result is the ULONG return value, not `GetLastError`).
   `x/sys/windows.CryptAcquireCertificatePrivateKey` declares the 4-byte BOOL out-parameter as `*bool`: bind it with a
   `*uint32`. `netsh http show sslcert` and the API enumeration agreed record for record (108 records).
+- W2 (R61) measured F9 and F10 on branch `windows-w2` with the real helper's own tests (`cmd/alice-winhelper`,
+  `.github/workflows/windows.yml`; 6 of the 20 budgeted runs, listed in the rulings file "W2 (R61)"):
+  - **F9 confirmed on windows-2022 and windows-2025** (runs <https://github.com/erenmeren/alice/actions/runs/39855366097>
+    and <https://github.com/erenmeren/alice/actions/runs/39857454542>): `HttpUpdateServiceConfiguration` of an ipport
+    or hostnameport base record keeps every extended parameter the record holds; the helper's `exRepair` strategy
+    (base update, read the Ex parameters back, rewrite only what changed) made no Ex write on either image. 2022
+    answers an unset type `ERROR_NOT_FOUND` (1168), types 6-9 included; 2025 reports types 0-4 as set with their
+    defaults, type 5 "not supported", type 6 undecodable (the helper reads 0-5). Type 2 (performance) is an aggregate
+    of six entries with absolute pointers; on a hostnameport record its reported size includes the SNI host's
+    padding, so the helper takes its extent from the entries. An Ex type the helper cannot decode is left out and
+    never written. A deployment and its restore keep client-certificate negotiation, the revocation values, the TLS
+    flags and a set HTTP/2 window (`TestFidelityDeployKeepsEverySetting`, runs 4-6 green).
+  - **F10 confirmed on both images** (the same runs): `PFXImportCertStore(CRYPT_MACHINE_KEYSET |
+    PKCS12_ALWAYS_CNG_KSP)` of the standard-library PFX into a memory store, then `CERT_STORE_ADD_NEW` into
+    `LocalMachine\My`, keeps the key link: software KSP, not exportable (`NCryptExportKey` 0x80090029), bound without
+    1312.
+  - F5 again, between the import and the write: an intermediate the helper imported is not served until the record is
+    written (a deployment killed at `deploy.writing` still serves the leaf alone); only a write changes the served
+    chain. Hence the binding record keeps the chain of Alice's last committed bind, and `unchanged` needs it (§17).
 
 ## 15. Open questions for the owner (the implementation proceeds on the default)
 
@@ -602,3 +623,23 @@ Built on branch `windows-w1` (plan `docs/superpowers/plans/2026-10-22-windows-w1
 | Errors | `ALC-WIN-0001` `helper_missing`, `ALC-WIN-0002` `helper_outdated`, `ALC-WIN-0003` `not_elevated` | None |
 | UI | Add a Windows server, setup script, Windows and IIS facts, bindings with "IIS site", deploy disabled; EN and TR | The grouping of bindings per certificate (Q5) waits for W2 |
 | Tests | Emulator `wintest` (with Windows OpenSSH's first-command behaviour), real-Windows workflow `windows.yml` on windows-2022 and windows-2025 (fidelity test of the read subcommands, setup script smoke test; ports 45300-45399), e2e fake `cmd/alice-fakewindows` | `internal/api/nul.go` renamed (reserved name on Windows) instead of the spike's sparse checkout |
+
+## 17. Phase W2 as built (2026-10-23, R61)
+
+Built on branch `windows-w2` (plan `docs/superpowers/plans/2026-10-22-windows-w2-deployment-verification-rollback.md`,
+16 tasks); decision R61, rulings in [windows-iis.md](../rulings/windows-iis.md) "W2 (R61)", test IDs
+`WIN-15`..`WIN-28` (`alice-v1/06-quality.md` §24.7), STRIDE `WN-10`..`WN-13`. No migration.
+
+| Item | As built | Differs from this design |
+|---|---|---|
+| Protocol | `winproto` 1 gains `iis-deploy`, `iis-restore`, `iis-status`, `iis-fence` (`--op <uuid>` only; input as JSON on standard input, 256 KiB and 32 KiB); helper `0.2.0`; Alice refuses a helper below `WriteMinVersion` `0.2.0` before sending | `iis-cleanup` stays W3; the target store is not sent: the helper uses the binding's own (Q9) |
+| Transaction | Platform-neutral in `winhelper` behind `WriteHost`, run by the real helper and the emulator: helper lock (20 s), journal phases as on Linux, binding records naming the latest operation and the chain of Alice's last committed bind, fences, a write gate (`IO_ERROR` before the first durable write, `OUTCOME_UNKNOWN` after it, no answer on a kill) | A known operation id is `OPERATION_EXISTS` even when prepared (recovery fences it); `unchanged` also needs the recorded chain to equal the deployment's (W0 F5) |
+| Import | Standard-library PFX of the leaf and key (password 32 printable characters, 192 bits), `PFXImportCertStore(CRYPT_MACHINE_KEYSET\|PKCS12_ALWAYS_CNG_KSP)` into a memory store, then `CERT_STORE_ADD_NEW` into the binding's store; intermediates into `CA` first; friendly name `Alice <name> <notAfter> <op8>`; `imports.json` | F10 confirmed: no `NCryptImportKey` route; the "target store" input of §6.3 is not sent |
+| Bind | One `HttpUpdateServiceConfiguration` with the record as read, hash and store changed; base and Ex read back; Ex rewritten only when changed (`exRepair`); read-back mismatch or 1312 → self-restore under the guard | F9 confirmed: no Ex write needed on 2022 and 2025; the dump reads no Ex parameters (only the deploy and restore paths do); an undecodable Ex type is left out and never written |
+| Restore and recovery | `iis-restore` checks the R48 guard on every path (the self-restore too), `restore_forbidden` monotonic per operation; `BACKUP_MISSING` refused before any write; `iis-status`, `iis-fence` as on Linux; events 1001 and 1002 | §6.5's `SUPERSEDED`/`file_changed` as built: a record already naming the previous certificate is `restored` without a write |
+| Provider | Capabilities `deploy_certificate`, `verify_deployment` added; `DeployCertificate`, `RollbackDeployment`, `DeploymentStatus`, `FenceDeployment`, `VerifyDeployment`, one fresh connection per helper call; `RollbackTraits{BackupOnTarget, SelfRestores}`, guard satisfied on every 0.2.0 helper; Windows reasons for every helper code | `RollbackRequest.Backup` (the start record's backup) names the previous certificate, not the location's details |
+| Verification | `internal/providers/tlsverify` shared with Nginx (unchanged behaviour); endpoints from the locator, the IIS host headers for SNI, the helper's `tls-probe` for a specific IP Alice cannot reach; fresh handshakes; `chain_differs`, `deployed_chain`, `built_chain` on the verify step | `win.chain_differs` rides on the verify step's params (no warnings column) |
+| Inventory and engine | `win_sslbinding` locations deployable (manual, ACME, Key Vault; R49 trust unchanged); rollback info `store`, `previous_sha1`, `previous_sha256`; the token after a deployment is the leaf's DER SHA-256; a cut scan relabels nothing; `deployjobs` unchanged | Two bugs found by the end-to-end tests fixed (a stored locator's port as `json.Number`; the token's form) |
+| Errors | `ALC-WIN-0004`..`ALC-WIN-0012` (`binding_changed`, `binding_not_found`, `busy`, `io_error`, `store_error`, `key_unusable`, `backup_missing`, `location_unsupported`, `helper_refused`) | `OUTCOME_UNKNOWN` and `OPERATION_EXISTS` are uncertain, not refusals |
+| UI | Bindings grouped by the certificate they serve ("No certificate" last), the deploy dialog's grouped picker with "Select all bindings of this certificate", the steps import chain, import certificate, bind, verify, the previous certificate (`store \ sha1`), the chain note; Windows wording for every deployment reason, notice and e-mail; EN and TR | Notices and e-mails got Windows texts in W2 rather than later |
+| Tests | Emulator write half (whole-record replace, schannel's chain cache, kill at every journal point, reboot), engine tests on the emulator (manual, ACME, Key Vault, levels, guard rows, kill matrix), real-Windows fidelity of every write subcommand on windows-2022 and windows-2025 (6 of 20 runs; ports 45330-45389, a clean runner checked last), e2e deploy and rollback (`ctl stale-tls-on`) | The real kill is in process (an `alicetest` build hook) |

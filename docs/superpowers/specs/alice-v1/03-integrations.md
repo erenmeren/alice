@@ -480,11 +480,12 @@ Details:
 - No API-token download of private keys.
 - No Windows or macOS targets.
 
-## 13A. Windows servers and IIS over SSH (amendment, R60)
+## 13A. Windows servers and IIS over SSH (amendment, R60, R61)
 
 (Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
 rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
-target, connection and discovery. Deployment, verification, rollback (W2), drift and cleanup (W3) follow.
+target, connection and discovery. Amendment R61 (phase W2): deployment, verification, rollback and recovery
+(13A.8-13A.11). Drift and cleanup (W3) follow.
 
 ### 13A.1 Supported systems
 
@@ -546,14 +547,21 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 
 | Subcommand | Elevation | Answer |
 |---|---|---|
-| `version` | not needed | helper version (`0.1.0`), protocol 1, `MinProtocol` 1 |
+| `version` | not needed | helper version (`0.2.0` since W2; W1's was `0.1.0`), protocol 1, `MinProtocol` 1 |
 | `win-facts` | not needed | OS product, build, installation type; IIS installed and version; elevated or not; stores; OpenSSH version |
 | `iis-dump` | required (`NOT_ELEVATED`, exit 2) | http.sys SSL bindings, their certificates, IIS sites, warning facts (13A.5) |
 | `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa>` | not needed | the chain served on that address, as the Linux helper's probe |
+| `iis-deploy --op <uuid>` (W2) | required | `winproto.DeployInput` on standard input (at most 256 KiB): locator, expected DER SHA-256, chain PEM, key PEM, the R48 lists; answers the phase (`committed`, `unchanged`, `restored`, `restore_failed`, `restore_forbidden`), the steps, `alice_imported`, `built_chain_length` and the previous certificate (13A.8) |
+| `iis-restore --op <uuid>` (W2) | required | `winproto.RestoreInput` on standard input (both lists, at most 32 KiB); answers `restored`, `restore_failed` or `restore_forbidden` (13A.9) |
+| `iis-status --op <uuid>` (W2) | required | the operation's journal phase and whether another process holds the helper lock now |
+| `iis-fence --op <uuid>` (W2) | required | a `fenced` tombstone for an operation that never wrote, or the phase it reached |
 
-Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 adds `iis-deploy`, `iis-restore`,
-`iis-status`, `iis-fence`, `iis-cleanup` to protocol 1; W1's helper answers `UNKNOWN_SUBCOMMAND` for them. Every answer
-is bounded by the 50 s budget (`IO_ERROR` when it ends) and the output caps.
+Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 added `iis-deploy`, `iis-restore`,
+`iis-status`, `iis-fence` to protocol 1 (helper `0.2.0`); W1's helper answers `UNKNOWN_SUBCOMMAND` for them, and Alice
+refuses before sending to a helper older than `0.2.0` (`windows.helper_outdated`). `iis-cleanup` is W3: a `0.2.0`
+helper answers it `UNKNOWN_SUBCOMMAND`. Every answer is bounded by the 50 s budget and the output caps: a read
+subcommand answers `IO_ERROR` when it ends; a write subcommand answers `IO_ERROR` only before its first durable write
+and `OUTCOME_UNKNOWN` (exit 4, uncertain) after it (13A.8).
 
 ### 13A.5 Discovery algorithm
 
@@ -609,9 +617,110 @@ overlong names) is cleaned or the record dropped.
 
 ### 13A.7 Explicit W1 limits
 
-- Read only: no import, bind, removal or restart; the deploy controls are disabled for a Windows server.
+- Read only in W1: no import, bind, removal or restart (W2 deploys, 13A.8; nothing is removed before W3).
 - No SSH key inventory or rotation on Windows (`inventory.IsServer` is false for it).
 - No Centralized Certificate Store deployment (W5), no Remote Desktop certificate (W6), no WinRM transport (W7).
-- The TLS extended parameters of the Ex records are not read (W2 reads and preserves them before writing).
+- The TLS extended parameters of the Ex records are not read by the dump (W2 reads and preserves them on the deploy
+  and restore paths only, 13A.8).
 - The AD FS application id is unknown: its bindings show the raw id.
-- One location per http.sys binding; the grouping of bindings that share a certificate waits for W2.
+- One location per http.sys binding; W2 groups the bindings that share a certificate in the UI.
+
+### 13A.8 Deployment (`iis-deploy`, amendment R61)
+
+A Windows binding (`win_sslbinding`, supported, no problem) is deployable manually and by ACME and Key Vault bindings
+(R49 trust unchanged). Alice's side is the existing engine (pre-check, start record, send, outcome, verify, rollback,
+recovery); `internal/jobs/deployjobs` has no Windows branch. The provider refuses before sending a helper older than
+`0.2.0` (`windows.helper_outdated`) and a locator whose host is not an ASCII host token or whose IP is not canonical
+(`windows.location_unsupported`: IDN U-labels, CCS). The command line is `iis-deploy --op <uuid>`; everything else is
+JSON on standard input (the key never on a command line). The helper:
+
+1. Validates the input (`BAD_CONTENT`, `INVALID_ARGUMENT`), refuses an operation id it knows (`OPERATION_EXISTS`) or
+   has fenced (`FENCED`), takes `helper.lock` (20 s, then `BUSY`), checks the data directory (no reparse point,
+   Administrators or SYSTEM as owner, writable; else `JOURNAL_FAILED`).
+2. Reads the binding (base record and the Ex records' extended parameters, types 0-5) and refuses with
+   `HASH_MISMATCH` (nothing changed) when its certificate's DER SHA-256 is not the expected one, `BINDING_NOT_FOUND`
+   when it is gone, `RECOVERY_PENDING` (with the operation) when the binding's latest operation is `writing` or
+   `restoring`; a certificate already in the store without a usable key is `KEY_UNUSABLE`.
+3. Journal `prepared` (`C:\ProgramData\Alice\helper\journal\<op>.json`; temporary file, flush,
+   `MoveFileEx(MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)`): the full previous record, previous and new SHA-1
+   and DER SHA-256, the store, the lists; never key material. The binding record
+   (`...\bindings\<sha256 of the canonical text>.json`) names the operation.
+4. `import_chain`: each intermediate into `LocalMachine\CA` when absent (never replaced, never removed).
+5. `import_certificate`: a standard-library PFX of the leaf and key with a one-time password, imported with
+   `PFXImportCertStore(CRYPT_MACHINE_KEYSET|PKCS12_ALWAYS_CNG_KSP)` into a memory store and added to the binding's
+   own store (`My` or `WebHosting`; a binding is never moved between stores): a machine key in the Microsoft Software
+   Key Storage Provider, not exportable. The friendly name is `Alice <name> <notAfter> <op8>`; the import goes into
+   `imports.json` (W3's cleanup). A copy already in the store with a usable key is used as is (`alice_imported`
+   false). Every buffer that held the key, the PFX or the password is cleared.
+6. `unchanged` (journal `unchanged`, nothing written to http.sys) when the record already names the new certificate,
+   no intermediate was added and the binding record's chain (Alice's last committed bind) equals this one; otherwise
+   a write follows, a same-hash write when only the chain differs (schannel serves the chain of the last write).
+7. Journal `writing`; `bind`: one `HttpUpdateServiceConfiguration` with the record as read, only hash and store
+   changed (a NULL store written back NULL), then the base and Ex records read back; Ex parameters a base update
+   changed are rewritten (none on 2022 and 2025, design §14 F9). A read-back that differs, or http.sys's 1312 (no
+   usable key), makes the helper restore the previous record itself under the guard and answer `restored` with
+   `failed_step bind` (`read_back`, `key_unusable`).
+8. Journal `committed`, the binding record's chain, event 1001 in the Application log (source `Alice Helper`:
+   operation, binding, old and new SHA-256). The answer carries `built_chain_length` (schannel's chain after the
+   imports, root excluded).
+
+The 50 s budget: until the `prepared` journal is written its end is `IO_ERROR`; after it every failure is
+`OUTCOME_UNKNOWN` (uncertain; the journal decides at the next `iis-status`), and the helper finishes its step or
+self-restore within 8 s. A killed helper answers nothing; the engine recovers. Steps shown: `import_chain`,
+`import_certificate`, `bind`, `verify`.
+
+### 13A.9 Verification, rollback and recovery (amendment R61)
+
+- **Verification (R51)** through `internal/providers/tlsverify`, shared with Nginx: `hostnameport` → the target's
+  address and port with SNI = the host; an `ipport` wildcard → the target's address and port with SNI from each IIS
+  host header, else the certificate (`SNIFor`); a specific IP → Alice probes it when it can (`probeFromAlice`),
+  otherwise the helper's `tls-probe` from the server. The Administrator's port, SNI, skip and probe address apply.
+  Every probe is a fresh handshake. The served chain length is compared with `built_chain_length`; when that differs
+  from Alice's chain the verify step's params carry `chain_differs`, `deployed_chain`, `built_chain` (the page shows
+  `deployments.warnings.win_chain_differs`) and the R51 trust check decides.
+- **Rollback** (`iis-restore --op <id>`, the R48 lists on standard input): from `committed`, `writing` or a
+  `restore_failed` re-try; when the record already names the previous certificate, `restored` without a write; a
+  third certificate is `restore_failed` (`file_changed`), nothing done. The previous certificate must be in its store
+  with a usable key (`BACKUP_MISSING`, nothing changed). The helper checks the previous certificate's leaf and SPKI
+  SHA-256 against the journal's and the input's lists on every restore path (its own self-restore too): forbidden is
+  `restore_forbidden`, nothing restored, and it stays forbidden for that operation. Then one update back to the full
+  previous record, read back, event 1002. A rollback failure names the previous certificate (`store`,
+  `previous_sha1`; the page, notices and e-mails show `<store> \ <sha1>`). Intermediates added stay in `CA`.
+- **Recovery**: `iis-status` reports the journal's phase (and whether another process holds the lock now);
+  `iis-fence` writes a tombstone for an operation that never wrote, so a late `iis-deploy` with that id is `FENCED`;
+  the engine's existing recovery table decides. The http.sys configuration and the journal survive a reboot.
+- **Rollback info**: the start record keeps `previous_sha256` (the compare-and-swap token), and `store` and
+  `previous_sha1` while the scanned certificate is still the token's; `backup_dir` is empty. After a deployment the
+  location's token is the new leaf's DER SHA-256.
+
+### 13A.10 Failure and edge cases covered in W2
+
+| Case | Outcome |
+|---|---|
+| The binding was re-pointed since discovery, or removed | `windows.binding_changed` (ALC-WIN-0004, retryable), `windows.binding_not_found` (ALC-WIN-0005); nothing changed |
+| Another change runs on the server (the helper lock) | `windows.busy` (ALC-WIN-0006, retryable) after 20 s |
+| An earlier operation on the binding is unfinished | `deployment.recovery_pending` with the operation: the engine recovers it first |
+| The journal directory is unwritable, a reparse point or foreign-owned; a state file cannot be written | `windows.io_error` (ALC-WIN-0007): refused before any change, or the previous certificate put back |
+| A store cannot be opened, an import fails | `windows.store_error` (ALC-WIN-0008): the record untouched, `restored` with that step |
+| The key is unusable (an existing copy without a key, http.sys's 1312) | `windows.key_unusable` (ALC-WIN-0009); the binding serves its previous certificate |
+| The bind reads back wrong | The helper restores the previous record itself (guarded): rolled back |
+| Verification fails (wrong leaf, network, trust) | `iis-restore` under the guard; R51 decides |
+| The previous certificate is revoked or compromised (R48) | `restore_forbidden`, nothing restored: `rollback_failed` with `deployment.rollback_forbidden` |
+| The previous certificate or its key is gone at rollback | `windows.backup_missing` (ALC-WIN-0010); nothing changed |
+| Alice or the helper killed at any journal point; the server reboots | The journal, the fence and the engine's recovery: the binding names exactly the previous or the new certificate |
+| The budget ends after the first write | `OUTCOME_UNKNOWN`: uncertain, recovered, never a refusal |
+| Schannel builds another chain than deployed | `chain_differs` on the verify step; the trust check decides |
+| A cut scan | No location is relabelled for what was cut; the stored row stays deployable |
+| A locator Alice does not write to (IDN U-label host, CCS, another store) | `windows.location_unsupported` (ALC-WIN-0011) before sending |
+| Any other helper refusal | `windows.helper_refused` (ALC-WIN-0012) with `helper_code` |
+
+### 13A.11 Explicit W2 limits
+
+- No drift observation for Windows locations, no `iis-cleanup`: imported certificates, their keys and intermediates
+  stay in the stores (W3).
+- A location whose only problem is its key (`key_missing`, `key_inaccessible`) stays unsupported; IDN host headers
+  are not deployed in their U-label form.
+- The Ex records' extended parameters are read on the deploy and restore paths only (types 0-5); a type the helper
+  cannot decode is left out and never written (safe while a base update keeps them, design §14 F9).
+- There is no manual "roll back this deployment" action (as for every target).
+- The real-Windows workflow is not yet a required check and the helper is not yet in the release bundle (W4).

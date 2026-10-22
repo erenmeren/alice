@@ -2265,6 +2265,135 @@
   ]
  },
  {
+  "id": "WIN-15",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsManualDeployment",
+   "internal/jobs/deployjobs:TestWindowsDeploymentLevels",
+   "internal/providers/windows:TestDeployOutcomeTable",
+   "internal/providers/windows:TestLocatorOfTheStoredLocator",
+   "internal/inventory:TestTheTokenAfterADeploymentIsTheProvidersForm",
+   "web/e2e/windows.spec.ts:deploy and roll back"
+  ]
+ },
+ {
+  "id": "WIN-16",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsHashMismatchChangesNothing",
+   "internal/providers/windows/winhelper:TestDeployRefusalsChangeNothing",
+   "cmd/alice-winhelper:TestFidelityDeployRefusals"
+  ]
+ },
+ {
+  "id": "WIN-17",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsUnchanged",
+   "internal/providers/windows/winhelper:TestDeployUnchanged",
+   "cmd/alice-winhelper:TestFidelityUnchangedAndSameHashWrite"
+  ]
+ },
+ {
+  "id": "WIN-18",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestBindPreservesTheWholeRecord",
+   "internal/providers/windows/wintest:TestModelUpdateReplacesTheWholeRecord",
+   "cmd/alice-winhelper:TestFidelityDeployKeepsEverySetting",
+   "cmd/alice-winhelper:TestRealUpdateKeepsTheRecordAndExParams"
+  ]
+ },
+ {
+  "id": "WIN-19",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestBindKeyUnusable",
+   "internal/providers/windows/winhelper:TestReadBackMismatchSelfRestores",
+   "cmd/alice-winhelper:TestFidelityKeyUnusable"
+  ]
+ },
+ {
+  "id": "WIN-20",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsFailedVerificationRollsBack",
+   "web/e2e/windows.spec.ts:stale-tls-on"
+  ]
+ },
+ {
+  "id": "WIN-21",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRestoreForbiddenOnEveryPath",
+   "internal/jobs/deployjobs:TestWindowsRollbackGuardRows",
+   "internal/providers/windows:TestWindowsLocationTargetContract",
+   "cmd/alice-winhelper:TestRealRestoreForbidden"
+  ]
+ },
+ {
+  "id": "WIN-22",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/wintest:TestModelKillAtEveryPoint",
+   "internal/providers/windows/winhelper:TestRecoveryAfterAKillAtEveryPoint",
+   "internal/jobs/deployjobs:TestWindowsDeploymentSurvivesAKillAtEveryPoint"
+  ]
+ },
+ {
+  "id": "WIN-23",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestStatusAndFence",
+   "internal/providers/windows:TestWindowsLocationTargetContract",
+   "cmd/alice-winhelper:TestFidelityStatusAndFence"
+  ]
+ },
+ {
+  "id": "WIN-24",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestWriteGateNeverLiesAfterTheFirstWrite",
+   "internal/providers/windows:TestDeployOutcomeUnknownIsUncertain"
+  ]
+ },
+ {
+  "id": "WIN-25",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDeployChainDiffers",
+   "internal/providers/windows/wintest:TestModelChainCache"
+  ]
+ },
+ {
+  "id": "WIN-26",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsACMEAutomaticDeployment",
+   "internal/jobs/deployjobs:TestWindowsKeyVaultAutomaticDeployment",
+   "internal/jobs/deployjobs:TestWindowsCrossServiceNeedsTrust"
+  ]
+ },
+ {
+  "id": "WIN-27",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestNoKeyMaterialOutsideStdin",
+   "internal/providers/windows:TestDeployKeyIsNeverOutsideStdin",
+   "internal/providers/windows/winproto:TestDeployInputIsRedacted"
+  ]
+ },
+ {
+  "id": "WIN-28",
+  "status": "test",
+  "tests": [
+   "cmd/alice-winhelper:TestFidelityDeploySNIAndIP",
+   "cmd/alice-winhelper:TestFidelityDeployRefusals",
+   "cmd/alice-winhelper:TestFidelityStatusAndFence",
+   "cmd/alice-winhelper:TestRealRunnerIsClean"
+  ]
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [

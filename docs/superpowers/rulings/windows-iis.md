@@ -394,3 +394,410 @@ One line each: the ruling, then why.
 - The certificate of each binding is linked to inventory by fingerprint (managed in network discovery): Task 12
   (`TestWindowsScanStoresBindingLocations`), e2e Certificates page.
 - Real-runner helper tests and the fidelity test pass for the read subcommands: Task 11, runs above.
+
+# W2 (R61)
+
+Phase W2 (deployment, verification and rollback) was built on branch `windows-w2` from the plan
+`docs/superpowers/plans/2026-10-22-windows-w2-deployment-verification-rollback.md` (16 tasks), on the owner's
+approval of W0-W4 with the §15 defaults (2026-10-22). Spec: R61 in `docs/superpowers/specs/alice-v1/00-decisions.md`,
+`02-architecture.md` ("Windows servers"), `03-integrations.md` §13A.4 and §13A.8-§13A.10, `04-security.md` §14.4
+(WN-1 and WN-4 amended, WN-10..WN-13), `06-quality.md` §24.7 (WIN-15..WIN-28), design §14 (F9, F10), §14.1 and §17.
+No migration. None of the rulings below is a pricing decision; the security-relevant ones the owner should confirm are
+listed under [Owner items (W2)](#owner-items-w2).
+
+## The plan's rulings as built (W2)
+
+The plan's 24 rulings stand as written, except where an entry says "Amended".
+
+1. **Decision R61, no migration.** As written: the schema of `00031` carries everything; error codes
+   `ALC-WIN-0004`..`ALC-WIN-0012`; test IDs `WIN-15`..`WIN-28`.
+2. **Protocol 1, helper 0.2.0.** As written: `winproto.Version` `0.2.0`, `1.0.0` kept for the first released helper
+   (W4); a 0.2.0 helper answers `iis-cleanup` `UNKNOWN_SUBCOMMAND` (W3).
+3. **A W1 helper is outdated for writing.** As written (`winproto.WriteMinVersion` `0.2.0`, `VersionAtLeast`: missing
+   parts count as zero, an unparsable version is below). Amended (Tasks 7, 8): every write method, `VerifyDeployment`
+   included, also returns `ErrUnsupported` on a session without its capability (never fires in production); a dial
+   failure or a context that ended before Run is `no_change` (nothing reached the helper).
+4. **Command line and standard input.** As written. Amended (Tasks 1, 3): `RestoreInput` is bounded by
+   `winproto.MaxRestoreInput` (32 KiB); all six `DeployInput` members are required (the lists have no `omitempty`);
+   JSON syntax, missing, duplicate or unknown members and bad PEM are `BAD_CONTENT`, a value Alice does not deploy to
+   (a locator, a hash, a list) is `INVALID_ARGUMENT`; the key PEM body may not contain spaces or tabs.
+5. **ASCII host tokens.** As written. Amended (Task 1): `ValidHost` also refuses `_`, a bare `*`, `*.` alone and a
+   wildcard anywhere but the leading label (the 253 bytes count the `*.`); `Locator.Canonical()` is strict, not
+   normalising (lower-case braced app id, netip-canonical unmapped IP, no host on an ipport, no IP on a hostnameport),
+   and equals W1's discovery text (`TestWriteLocatorCanonicalEqualsDiscovery`).
+6. **Helper codes get Windows reasons.** As written. Amended (Tasks 7, 8, 10): `OPERATION_EXISTS` from `iis-deploy`
+   is uncertain (an earlier send may have committed; the engine reads the status), not `no_change`; the transport's
+   `ssh.output_too_large` keeps its name; a restore that fails maps by its class (`backup_missing`, `key_unusable`,
+   `store_error` to their Windows reasons, `io_error` to `windows.io_error`, every other class
+   `deployment.rollback_failed`); `windows.helper_missing` met on an uncertain path (a killed helper: exit 255, no
+   JSON) is recorded as `deployment.interrupted`, as Linux records `ssh.helper_missing`.
+7. **Mutating handlers honour their context; the budget never lies.** As written. Amended (Task 2 and its review):
+   once `enter` succeeded, **every** error a handler returns is answered `OUTCOME_UNKNOWN` (exit 4), not only the
+   budget's end: a handler that meets a failure after `enter` records it in the journal and answers with a phase; a
+   refusal before `enter` passes through. A kill at a point answers **nothing** (no line on stdout, like a dead
+   process): `winhelper.ExitKilled` 137 in process, `wintest.KilledExit` 255 at the SSH layer (an ssh client sees no
+   exit status). Standard input is read before the elevation check, so an oversized input from an unelevated caller
+   is `TOO_LARGE`.
+8. **Journal and binding records.** As written. Amended (Tasks 2, 3): exit codes 2 (`USAGE`, `INVALID_ARGUMENT`,
+   `BAD_CONTENT`, `TOO_LARGE`, `NOT_ELEVATED`), 3 (`HASH_MISMATCH`, `FENCED`, `OPERATION_EXISTS`, `RECOVERY_PENDING`
+   with `pending_op`, `BINDING_NOT_FOUND`, `KEY_UNUSABLE`, `BACKUP_MISSING`, `UNKNOWN_OP`, `SUPERSEDED`), 4 (`BUSY`,
+   `JOURNAL_FAILED`, `IO_ERROR`, `STORE_ERROR`, `OUTCOME_UNKNOWN`); any known operation id is `OPERATION_EXISTS`, a
+   prepared one too (Linux restarts a prepared operation; on Windows recovery fences it); the binding record is
+   `{"binding": <canonical text>, "op": <op>, "chain": [...]}` (`op` "" clears); a tombstone is `{op, phase fenced,
+   prev_record}` and tombstones are not bounded (WriteHost has no listing; W3); `imports.json` keeps at most 1024
+   entries, oldest dropped; state files are read up to `winhelper.MaxStateBytes` (512 KiB) from a regular file, never
+   through a reparse point; the journal gains `forbidden_final` and `cause_error` (Ruling 12), cross-checked on read.
+9. **Import.** Amended: the one-time PFX password is **32 printable ASCII characters (192 random bits)**, not 32 raw
+   bytes: `PFXImportCertStore` takes a wide string and the PBES2 key and the BMPString MAC must agree on the text.
+   PBKDF2 and the PKCS #12 KDF run over `[]byte` so their buffers can be cleared (HMAC's internal pad state cannot,
+   like Go's parsed keys, WN-4). Keys accepted: PKCS #8, PKCS #1, SEC 1, RSA or ECDSA (Ed25519 or an encrypted key is
+   `BAD_CONTENT`). `ImportPFX` of a certificate the store already holds returns its SHA-1, leaves the copy alone and
+   deletes the key the import had just persisted (`NCryptDeleteKey`, silent); a copy without a usable key is refused
+   `KEY_UNUSABLE` before the gate. F10's primary route held (below), so no fallback route was built.
+10. **Bind.** Amended: `unchanged` needs three things: the record names the new certificate, no intermediate was
+    added, **and the binding record's `chain` (leaf and intermediate DER SHA-256s of Alice's last committed bind)
+    equals this deployment's chain**; otherwise a same-hash write (W0 F5: schannel serves the chain of the record's
+    last write). A deployment takes the binding record without a chain at `prepared`, writes its chain after
+    `committed`, and every restore write clears it, so a kill anywhere leaves the next deployment a same-hash write.
+    F9 (below): the real helper's strategy `exRepair` updates the base record, reads the Ex parameters back and
+    rewrites only what changed (none on 2022 and 2025); the real dump reads no Ex parameters (only the deploy and
+    restore paths' live read does: run 1 showed an Ex read error dropped every binding); an Ex parameter type the
+    helper cannot decode is left out of the record and never written; types 0-5 are read. The record vanishing at
+    the bind is `restore_failed`, `failed_step bind`, `error file_changed`; any other update error is "maybe written":
+    the self-restore runs and the answer carries `error io_error`.
+11. **The lists are checked by the helper on every restore path.** As written. Precision (Task 2): on Windows the
+    guard checks the certificate's SPKI (the key belongs to the store certificate; a different key cannot complete a
+    handshake for it); with both lists empty an unparsable DER is not forbidden (Linux's `guard.empty()`).
+12. **Restore preconditions.** Amended: **`restore_forbidden` is monotonic**: the guard that forbade (journal lists ∪
+    the input's) is kept in the journal, so a re-sent restore with smaller lists stays forbidden; past `MaxForbidden`
+    the journal is marked `forbidden_final`; a failed write of the grown guard is `OUTCOME_UNKNOWN`, never
+    `restore_forbidden`. **`BACKUP_MISSING` in `iis-restore` is refused before the gate without a journal write** (a
+    later restore can still succeed); in the deploy's self-restore the same condition is `restore_failed`, `error
+    backup_missing`. "Usable" means found, with a key, no key problem, and its DER SHA-256 equal to the journal's
+    `previous_sha256`. For a `committed` journal a record naming the previous hash counts as restored without a write;
+    for a half-written one (writing, restoring, restore_failed, restore_forbidden) only an exact match counts. A later
+    `restored` answers the original cause (`cause_step`, `cause_error`).
+13. **Event Log.** As written: 1001 `operation <op> binding <canonical> old <prev sha256> new <new sha256>`, 1002 the
+    same with old and new swapped, written only after an actual write-back; the helper never registers the source
+    (the setup script does; without it Event Viewer shows "description not found" next to the text).
+14. **Alice imported or not.** As written: a key problem stays `file_problem`, unsupported.
+15. **Verification.** Amended (Tasks 5, 8): `tlsverify` may import `platform/clock` and `platform/netaddr` and joins
+    the providers' allow list; `Options.Log`; the probe errors read `tls probe: ...`; Alice's probe is a fresh
+    handshake for Nginx too (no session cache, tickets off: it never resumed, nothing measured changes); the IIS host
+    headers give SNI for both ipport forms; the helper's `tls-probe` address is `127.0.0.1` for hostnameport and
+    `0.0.0.0`, `::1` for `[::]`, the IP itself for a specific address; endpoints are deduplicated by (port, SNI), at
+    most 10; an Administrator's probe address stands for every endpoint, a specific-IP binding included; an ipport
+    wildcard probes the port without telling `0.0.0.0` from `[::]` (as Nginx and W1 Ruling 7): a probe that reaches
+    the other family's record fails and rolls back (safe side).
+16. **`win.chain_differs`.** As written; the params ride on the verify step whenever `built_chain_length` > 0 differs
+    from the deployed length, on success and on failure.
+17. **Rollback info.** Amended: `providers.RollbackRequest` gains `Backup BackupRef` (the start record's rollback info),
+    because the location's details are "as last discovered" and may already show the new certificate (Task 7
+    review); `previous_sha256` is the send's compare-and-swap token; `store` and `previous_sha1` are written only while
+    the location's `cert_file_sha256` still equals the token (a scan in between may have seen a rebind); `backup_dir`
+    stays in the API, empty, beside the new `backup_store` and `backup_sha1` (`^(?i:my|webhosting)$`). Notices and
+    e-mails of a Windows deployment name the previous certificate (`<store> \ <sha1>`) instead of a backup folder
+    (`*_windows` texts, not deferred: an e-mail sending a Windows administrator to `/var/lib/alice-helper/backups`
+    is wrong advice).
+18. **A cut scan does not block a deployment.** Amended (Task 8): per verdict: `win_foreign_app` is dropped only when
+    the sites may be cut, a `cert_missing` only when the entries or certificates may be cut, Alice's own drops
+    counted as cuts; `leaf_unreadable` stays.
+19. **One unreadable certificate no longer fails the dump.** As written; `winhelper.ErrStore` marks "the store could
+    not be opened" (fails the dump), every other certificate error drops that certificate.
+20. **Engine unchanged.** As written: `internal/jobs/deployjobs` has no production change. Amended (Tasks 8, 10, 11):
+    `providertest.CheckLocationTarget`'s empty-guard rollback runs on a fresh operation and checks the forbidden one
+    stays unrestored (monotonic guard); `ListDeployableLocations` lists any non-file location of a deploying type by
+    its kind (F5 and Kubernetes must gate deployment per location kind); the token recorded after a Windows deployment
+    is the new leaf's DER SHA-256 (`newCertSHA256`, Task 11 fix), not the PEM's; the provider reads a stored locator
+    whose port is a `json.Number` (Task 11 fix).
+21. **UI grouping (§15 Q5).** As written. Amended (Task 13): the grouped picker is `DeployDialog`'s location mode (fed
+    by the panel's bindings); "Select all bindings of this certificate" replaces the selection with that group's
+    deployable bindings; the "No certificate" group has no such control; with several bindings picked, a certificate
+    is offered only when it fits every one; a deployment is shown as Windows when it has `backup_store` or its path
+    starts with `http.sys/`; `io_error` is a fifth Windows step class.
+22. **Runner hygiene.** As written. Amended (Task 9): the last check is `TestRealRunnerIsClean` in
+    `zz_runner_clean_windows_test.go` (go test runs files in name order; no TestMain, which the lock-holder child would
+    also run) and also fails on any machine key file created after the test binary started (`Crypto\Keys` and
+    `Crypto\RSA\MachineKeys`); the keep-everything record has no CTL (http.sys refuses a CTL the machine lacks, W0 F2).
+23. **e2e forced rollback.** As written (`ctl stale-tls-on` / `ctl stale-tls-off`); Task 14's report adds its rulings.
+24. **Test IDs.** As written: `WIN-15`..`WIN-28`, `WN-10`..`WN-13`, WN-1 and WN-4 amended.
+
+## W2 facts measured on real runners
+
+Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
+2025 Datacenter, Desktop Experience).
+
+- **F9: CONFIRMED on windows-2022 and windows-2025** (runs
+  <https://github.com/erenmeren/alice/actions/runs/39855366097> and
+  <https://github.com/erenmeren/alice/actions/runs/39857454542>). `HttpUpdateServiceConfiguration` of an ipport or
+  hostnameport base record keeps every extended parameter the record holds (HTTP/2 window and limits, performance,
+  TLS restrictions, error headers); the helper's `exRepair` strategy (base update, read the Ex parameters back,
+  rewrite only what changed) made no Ex write on either image. Precisions: 2022 answers an Ex type that is not set
+  `ERROR_NOT_FOUND` (1168), types 6-9 included (not `ERROR_FILE_NOT_FOUND` as the plan guessed); 2025 reports types
+  0-4 as set, with their defaults when nobody set them, answers type 5 "not supported", and type 6 is undecodable;
+  the helper reads only 0-5. Type 2 (performance) is an aggregate of six entries with absolute pointers; on a
+  hostnameport record its reported size includes the SNI host's padding, so the helper takes its extent from the
+  entries (run 1's "reset" verdict was an artefact of those pointers). An Ex type the helper cannot decode is left
+  out and never written, which is safe because F9 holds. `TestFidelityDeployKeepsEverySetting` adds: a deployment and
+  its restore keep client-certificate negotiation, the revocation values, the TLS flags and a set HTTP/2 window, on
+  the real machine and on the emulator (runs 4-6 green).
+- **F10: CONFIRMED on both images** (runs <https://github.com/erenmeren/alice/actions/runs/39855366097> and
+  <https://github.com/erenmeren/alice/actions/runs/39857454542>). `PFXImportCertStore(CRYPT_MACHINE_KEYSET |
+  PKCS12_ALWAYS_CNG_KSP)` of the standard-library PFX into a memory store, then
+  `CertAddCertificateContextToStore(CERT_STORE_ADD_NEW)` into `LocalMachine\My`, keeps the key link: the key is in
+  the Microsoft Software Key Storage Provider, not exportable (`NCryptExportKey` refused with 0x80090029), and
+  http.sys binds the certificate without 1312. The fallback routes were not needed.
+- **W0 F5 between the import and the write** (run 4 onwards): an intermediate the helper imported is not served
+  until the record is written (a deployment killed at `deploy.writing` still serves the leaf alone on both hosts);
+  only a write changes the served chain, hence the binding record's `chain` (Ruling 10).
+
+### Runner runs used (6 of 20)
+
+| Run | Head | Result | What it found |
+|---|---|---|---|
+| 1 <https://github.com/erenmeren/alice/actions/runs/39853315055> | `0e144e16` | failed, both images | W1 dump fidelity regressions (an Ex read error dropped every binding: the dump now reads no Ex); update and import bind `Element not found` (1168: an unset Ex type); F9 looked like "reset" on 2025 (an artefact of the performance aggregate's pointers); F10's import lands in the software KSP, not exportable |
+| 2 <https://github.com/erenmeren/alice/actions/runs/39855366097> | `47fa5060` | failed | F9 and F10 confirmed (above); 2025 hostnameport Ex type 2 did not decode (329 bytes: the aggregate's extent, fixed in `5c36ac9c`); 2022 `TestRealSetupScript` first `version` timed out (a W1 test; flake) |
+| 3 <https://github.com/erenmeren/alice/actions/runs/39857454542> | `5c36ac9c` | failed | F9 on ipport and hostnameport on both images, F10 on both; only failure W1's `TestFidelityVersionAndRefusals` sending `iis-deploy` expecting W1's unknown (swapped to `iis-cleanup` in Task 9) |
+| 4 <https://github.com/erenmeren/alice/actions/runs/39860675538> | `4654e471` | **green** on both images | Every Task 6 and Task 9 test passed (not skipped), `TestRealRestoreForbidden` and `TestRealRunnerIsClean` included |
+| 5 <https://github.com/erenmeren/alice/actions/runs/39863868398> | `7c2b08d1` | 2022 green; 2025 failed | Only `TestRealSetupScript`'s first `version` after setup did not end (second occurrence): hardened in `95b3e817` (wait for sshd's banner, diagnostics, one retry at 60 s); every Task 9 fidelity test passed on both images |
+| 6 <https://github.com/erenmeren/alice/actions/runs/39866197908> | `90f83ad8` | **green** on both images | The binding record chain (Task 3 fix rounds 3-4) on real Windows |
+
+The `ci.yml` runs of the branch: 39853314997 at `0e144e16` (gitleaks flagged the redaction test's fake PEM in
+`winproto_test.go`, fingerprinted in `.gitleaksignore` by the controller; `internal/notify`
+`TestF62UntrustedCertificateAndThePin` failed once and passes locally, untouched by W2); 39860675128 at `4654e471`
+(go, secrets, web, ssh-matrix, licensectl green; coverage and stack cancelled by the next push). The final runs are
+Task 16's.
+
+## Rulings made during execution (W2)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- Commit trailer `Co-Authored-By: Claude Opus 5.5`: the commits are written by that model and only the owner's own
+  instructions may override the session's attribution rule (cost: the coordinator rewrites unpushed trailers or
+  accepts them).
+- Order 1 → (2 → 3 → 4) ∥ 5 → 6 ∥ 7 → 8 → 9 → 10 ∥ 12 → 11 → 13 → 14 → 15 → 16, with Task 6 starting after Task 2's
+  review (it needs only `WriteHost`; an early runner run measures F9/F10 sooner), Task 3 in parallel with Task 2's
+  re-review, Task 9 in parallel with Tasks 7 and 8, Task 12 after Task 7, Task 15 in parallel with Task 14: disjoint
+  files in each pair.
+- `windows-w2` pushed at `0e144e16` for runner run 1, before Task 9: F9 and F10 measured with Task 6's own tests.
+- The controller committed the `.gitleaksignore` fingerprint itself (as W1 `03f467c0`): a pushed commit cannot be
+  rewritten.
+- The server-side notification and e-mail texts of a Windows deployment got Windows wording in W2 (`2db347aa`), not
+  W3: a Windows administrator sent to a Linux backup folder is wrong advice.
+- `TestRealSetupScript` retries a timed-out first `version` once with 60 s and logs diagnostics: runs 2 and 5 hung on
+  the first sign-in of the just-created account with sshd already answering (cost: one real one-off hang is masked
+  once; the second timeout still fails).
+
+### Task 1 (winproto)
+
+- `ValidHost` and `Locator.Canonical()` as in Rulings 5 (strict, not normalising): the locator comes from Alice's
+  stored, canonical W1 locator or from stdin, and must never address another record than its text names.
+- `Canonical()` lives in `winproto` (convert.go's is unexported in package windows); equality pinned by a test.
+- `ValidOpID` refuses the nil UUID; `ValidForbidden` is helperproto's rule; `WriteGrace < HelperBudget` is asserted.
+
+### Task 2 (winhelper write core)
+
+- A `write` command is elevated whatever its `elevated` field says (safety by construction).
+- The four subcommands were registered only by Task 3 (a stub would answer something else than
+  `UNKNOWN_SUBCOMMAND`).
+- `OUTCOME_UNKNOWN` is exit 4, message "the call took too long after the first change".
+- The journal's `Previous` is the record as read (raw store, "" for NULL), `Store` the effective one; a journal that
+  `readJournal` would refuse is never written; the previous record's own canonical text must equal the journal's
+  binding (http.sys spellings folded).
+- `handBack` returns the binding record only after an operation that changed nothing (prepared, unchanged, fenced),
+  as Linux's `releaseRecord`.
+- `ErrStore` is the store-open sentinel the real host must wrap; any other certificate error drops that certificate.
+- `NewPFXPassword` has no error result: `crypto/rand.Read` never fails since Go 1.24.
+
+### Task 3 (iis-deploy, iis-restore, iis-status, iis-fence)
+
+- No `WriteHost` method added: `built_chain_length` is `1 + len(Certificate(store, newSHA1).Chain)` read after both
+  imports (0 when that read fails after the gate).
+- A record that cannot go into a journal (Ex over bounds, invalid store, a host that does not canonicalise) is
+  `IO_ERROR` before the gate; one naming no valid SHA-1 or a certificate its store lacks is `HASH_MISMATCH`.
+- Journal and binding-record write failures while the record is untouched are `OUTCOME_UNKNOWN` (Task 2's gate rule);
+  a failed `committed` write rolls back with `failed_step journal`; outcome journals are best effort.
+- A failure of `import_chain` or `import_certificate` ends `restored` with that `failed_step` and the record untouched.
+- The binding record is written right after the `prepared` journal and names the operation from then on; an
+  `unchanged` journal keeps it.
+- The import inventory is best effort (a failed `recordImport` only means W3 leaves that certificate alone); an import
+  that answers another SHA-1 than the leaf's is recorded too.
+- Existing-copy race (residual): a third party adding the identical certificate between the check and `ImportPFX`
+  under the lock is recorded `alice_imported:true` (W3 may add an "existed" result).
+- Friendly name `Alice <first DNS SAN, else IP SAN, else CN> <notAfter yyyy-mm-dd> <op8>`, cleaned and bounded.
+- `forbidden_final` and `cause_error` are new journal fields (Ruling 12); journals without them read false and "".
+- The grown guard's journal write is load-bearing (`OUTCOME_UNKNOWN` when it fails), security-relevant.
+- The binding record's `chain` lifecycle (Ruling 10); residual: a third party's same-hash write is not seen, but it
+  can only make what is served fresher.
+
+### Task 4 (wintest write half)
+
+- A killed call answers exit 255 with nothing on stdout (an ssh client's "no exit status").
+- The model decodes the PFX with go-pkcs12 (already a direct dependency; the helper does not link wintest) and accepts
+  only a single leaf with a matching RSA or ECDSA key.
+- The model's dump strips `Extended`, its live `Binding` read keeps it (the real helper's rule); its Ex reset on a
+  base update is stricter than F9 (documented).
+- An unwritten record builds its chain at its first handshake, then it is cached; a same-hash write rebuilds it.
+- `FailImport` is a level, `FailUpdate` and `KillAt` one-shot; `CorruptReadBack` arms the next update.
+- `Points`, `SetLockWait` and `SetDataDirUnsafe` added for the kill-point completeness check, quick `BUSY` tests and
+  `JOURNAL_FAILED`. Review minor (accepted, latent): the abandoned-handler path has no slow-host fault yet.
+
+### Task 5 (tlsverify)
+
+- The archtest rule, `Options.Log`, the moved context check, skip and empty endpoint list, the re-check of a server
+  probe's answer, the exported `ProbeOnce` and `ASCIILower`, nginx's own `TLSProber` struct delegating (nginx's tests
+  unchanged), the fresh handshake and the `tls probe:` texts (Ruling 15).
+- One line of nginx's `guard_test.go` changed: the file `TestOnlyProbeTLSConfigSkipsVerification` reads moved to
+  `tlsverify.go` (keeping the text in a comment would have emptied the guard).
+
+### Task 6 (cmd/alice-winhelper)
+
+- Ex data has a portable form: the 32-byte `PARAM_EX` with each pointer replaced by an offset into Data, followed by
+  the pointed-to bytes; the reserved pointers of TLS restrictions and session ticket keys have no documented size, so
+  a record with one set is refused (`IO_ERROR` before any change) and dropped from the dump.
+- A hostnameport record's key address is `0.0.0.0` with the port (the spike's route); an empty store or CTL string is
+  written back NULL.
+- `ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED` and (run 2) `ERROR_NOT_FOUND` from an Ex query mean "not set".
+- `DataDirSafe` checks the data directory, `journal\` and `bindings\` (made with the inherited ACL, owner set to
+  Administrators, then every owner re-checked); a missing data directory is `JOURNAL_FAILED` (the setup script makes
+  it, the helper never does).
+- `helper.lock` is one locked byte (`LockFileEx` exclusive, fail-immediately, retried every 200 ms up to `LockWait`).
+- http.sys input arenas are `//go:noinline` heap objects (a stack pointer must never reach the kernel); state files
+  are read with full sharing and the replace-rename retries on a sharing violation.
+- A failed or repeated import deletes the key it persisted; `BuildPFX` names no key container, which makes that safe.
+
+### Task 7 (provider: errors, gate, rollback, status, fence)
+
+- The restore_failed shapes the provider accepts (failed_step `restore` with a class, or `bind`/`bind`/`file_changed`);
+  anything else is uncertain, the safe side.
+- Status `none` and `fenced` must carry no journal fields (else `ssh.protocol_error`); a fence answering fenced with
+  `Active` is a protocol error, as on Nginx.
+- `RECOVERY_PENDING` carries only `operation_id`; `windows.helper_refused` always carries `helper_code`;
+  `binding_changed`, `busy` and `io_error` are retryable.
+
+### Task 8 (provider: deploy, verify, capabilities)
+
+- Capabilities `test_connection`, `discover_certificates`, `deploy_certificate`, `verify_deployment`; `RollbackTraits
+  {Backup: BackupOnTarget, SelfRestores: true}`; `guardsRollback` true from protocol 1.
+- A restored answer's class must be one of the mapped ones (`""` or `file_changed` is uncertain); restore_forbidden
+  and restore_failed in a deploy answer must name a cause.
+- The rollback failure's params come from the start record's backup, else the deploy answer's validated values; a
+  malformed store or SHA-1 is left out.
+- A helper probe's refusal or an undecodable answer is "not reached"; an SSH failure is the error (unverifiable).
+
+### Task 9 (real Windows: fidelity of the write subcommands)
+
+- The kill on the real helper is in process (the `alicetest` build's `Point` returns an error), exactly what a killed
+  process leaves behind; journal write-through is checked by `TestRealStateFiles`.
+- The model is given the record as the real helper reads it after netsh (the base reading is W1's twin's job).
+- netsh options an image refuses are dropped from the end and logged; the positive controls still require
+  client-certificate negotiation, the revocation mode bit, the freshness time, the URL timeout and the Ex window.
+- The intermediate is not pre-imported for W2 deploys: the helper's `import_chain` must do it.
+- `TestRealRestoreForbidden`'s last step asserts a re-sent restore of the same operation stays `restore_forbidden`,
+  then a later deployment's restore succeeds (the plan's "a restore without lists then restores" contradicts the
+  monotonic guard); netsh's own `show sslcert` text is an independent oracle after deploy and restore.
+- The finding behind Ruling 10's chain (an interrupted same-certificate deployment that imported an intermediate left
+  schannel's short chain served forever) was fixed in the helper, not pinned.
+
+### Task 10 (inventory)
+
+- `RollbackRequest.Backup` is filled for every non-file kind, never for a file (Nginx unaffected); only
+  `win_sslbinding` gets the Windows-shaped rollback info.
+- `errorParamKeys` gains `helper_version`, `required_version`, `store`, `previous_sha1`; `stepParamKeys` gains
+  `chain_differs`, `deployed_chain`, `built_chain`.
+- Review minor (accepted): every deployment's start transaction reads the location kind with one extra SELECT.
+
+### Task 11 (engine and jobs on the emulator)
+
+- The two production bugs it found were fixed in the packages that own them (`32a7bdab` locator port, `6b4b6d1e`
+  token), minimal: without them no Windows deployment from the database works, or none after the first.
+- The Windows token rule is keyed on `win_sslbinding` only (F5 and Kubernetes keep `sha256(PEM)` until their phases).
+- The kill matrix turns `StaleTLS` off before the reboot (a website that never takes a change is another property);
+  the incident for the guard rows is inserted by SQL.
+- Review minor (accepted): after `restore_forbidden` the location's token stays the old DER hash while the binding
+  names the new certificate, as on Nginx; the next discovery corrects it.
+
+### Task 12 (API)
+
+- No Windows text has a placeholder (each reason comes from several helper answers); `helper_version` is shown when it
+  is a short version-like token (an unparsable version is exactly what makes a helper outdated).
+- `chain_differs` must be exactly `true`, the chain lengths 1-99.
+- `target.invalid_config` stays unregistered (shared with linuxssh since W1; the API validates the config first).
+
+### Task 13 (web)
+
+- The step texts are "Import the chain", "Import the certificate", "Bind", "Verify" (TR "Bağlamayı güncelleme" for
+  bind); the chain note is a page-level notice (`win-chain-differs`).
+- Windows wording for every deployment reason whose shared text names Nginx, files or the backup folder is a web-side
+  override (`deployments.windowsErrors.<reason>`); `rollback_forbidden` keeps its shared title with a Windows cause
+  and action; the ssh transport reasons kept in W2 get Windows actions.
+
+### Notices and e-mails (`2db347aa`)
+
+- The Windows switch is in `notifyDeployment` (the one path every deployment e-mail takes); 9 `*_windows` texts, Linux
+  texts byte-identical; one param `previous_certificate` composed in Go (`<store> \ <sha1>`, else the SHA-1, else
+  `SHA-256 <hex>`, else `-`); the Windows `rollback_forbidden` text never names the previous certificate (R48).
+
+### Task 14 (e2e)
+
+- Recorded by Task 16 from Task 14's report.
+
+## Acceptance (design §13 W2)
+
+- Manual deploy to an SNI and an IP binding, committed at level 3 (public-CA chain), 2 (private CA without root) and
+  1 (skip): Tasks 8 (`TestDeployOutcomeTable`), 11 (`TestWindowsManualDeployment`, `TestWindowsDeploymentLevels`),
+  14 (e2e journey EN and TR).
+- A hash mismatch changes nothing; an unchanged certificate answers unchanged: Tasks 3
+  (`TestDeployRefusalsChangeNothing`, `TestDeployUnchanged`), 11 (`TestWindowsHashMismatchChangesNothing`,
+  `TestWindowsUnchanged`).
+- A failed verification rolls back; a forbidden backup restores nothing and ends `rollback_failed` with
+  `deployment.rollback_forbidden`; the helper's own refusal on a real runner: Tasks 3 (`TestRestoreForbiddenOnEveryPath`),
+  8 (`TestWindowsLocationTargetContract`), 9 (`TestRealRestoreForbidden`, runs 4 and 6 green on both images), 11
+  (`TestWindowsFailedVerificationRollsBack`, `TestWindowsRollbackGuardRows`), 14 (e2e rollback).
+- The crash table passes on the emulator; the fidelity test passes for every write subcommand on real Windows: Tasks 4
+  (`TestModelKillAtEveryPoint`), 3 (`TestRecoveryAfterAKillAtEveryPoint`), 11
+  (`TestWindowsDeploymentSurvivesAKillAtEveryPoint`), 9 (`TestFidelity*` of the write subcommands, runs 4 and 6).
+- ACME and Key Vault automatic deployment reach a Windows location; the scoped-access trust check applies: Tasks 10,
+  11 (`TestWindowsACMEAutomaticDeployment`, `TestWindowsKeyVaultAutomaticDeployment`,
+  `TestWindowsCrossServiceNeedsTrust`).
+- Final gates: see Task 16.
+
+## Owner items (W2)
+
+- **Confirm the security-relevant rulings**: `restore_forbidden` monotonic in the helper (Ruling 12); the guard checks
+  the certificate's SPKI on Windows (Ruling 11); the PFX password of 192 bits (Ruling 9); `unchanged` only with the
+  recorded chain (Ruling 10); an Ex parameter type the helper cannot decode left out and never written (Ruling 10,
+  safe while F9 holds: a later Windows that resets Ex parameters on a base update would lose that one setting
+  silently); the dual-wildcard probe (Ruling 15); key problems stay unsupported (Ruling 14).
+- **Windows Server 2019, Server Core, a domain account**: the write path (`HttpUpdateServiceConfiguration`, F9 and
+  F10) is measured on 2022 and 2025 only; the owner's manual matrix (W4) covers 2019 and Server Core.
+- **Antivirus**: Defender real-time protection is off on the runners. A deployment writes the journal under
+  `C:\ProgramData\Alice\helper` and machine keys under `C:\ProgramData\Microsoft\Crypto\Keys`; check a deployment with
+  Defender (or the customer's EDR) on.
+- **First connection to a freshly prepared server**: runs 2 and 5 saw the first sign-in of a just-created account hang
+  past its timeout once (profile creation or Defender's first scan suspected); Alice's first **Test connection** may
+  time out once. The diagnostics of the retry say which when it fires again.
+- **A Windows recovery stuck on a missing helper** reads "interrupted" until the recovery escalates to needs attention
+  (Task 10 ruling): a server set up wrong (cmd.exe answering, sshd without the forced command) shows that reason for a
+  few recovery rounds.
+- **Commit trailers**: the W2 commits carry `Co-Authored-By: Claude Opus 5.5` (controller ruling), not the plan's.
+- **Not deployable yet, by design**: IDN host headers in their U-label form (Ruling 5), a binding whose only problem is
+  its key (Ruling 14), CCS bindings (W5); a manual "roll back this deployment" action exists for no target.
+- **`internal/notify` `TestF62UntrustedCertificateAndThePin`** failed once on CI (passes locally; untouched by W2).
+
+## Deferred to W3
+
+- A real kill between `ImportPFX` and `recordImport` leaves an imported certificate and key that `imports.json` does
+  not list; only the prepared journal's `new_sha1` names it: W3's cleanup must also read journals.
+- The binding record stores the input chain, not schannel's built chain: an intermediate a third party adds after
+  Alice's commit makes a redeploy answer `unchanged` with `built_chain_length` longer than served (`win.chain_differs`
+  shows it); W3's cleanup of Alice-imported intermediates must clear binding-record chains naming them.
+- `ImportPFX` reports no "existed" result (the existing-copy race of Task 3); W3's cleanup could otherwise remove a
+  certificate someone else added in that window.
+- Tombstones (`iis-fence`) are not bounded; W3's cleanup can bound them.
+- `location.drift_*` e-mails for Windows bindings still say "file"; `needsAttentionTemplate` picks the lost-connection
+  text only for `ssh.*` causes, so a Windows deployment whose connection was lost gets the unconfirmed text.
+- The dump does not show `alice_imported` (W3's cleanup does); intermediates Alice added stay in `CA` (design §6.7).
+- R52 drift for Windows locations, `iis-cleanup`, the incident cleanup rule (Q7), as planned.

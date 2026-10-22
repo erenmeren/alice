@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — Windows servers (deployment, R61)
+
+**Added**
+- Windows servers (deployment): certificates deploy to the HTTPS bindings of http.sys on a Windows server, manually
+  and by ACME and Key Vault bindings. Alice's helper imports the intermediates into the machine's `CA` store and the
+  certificate with a private key that cannot be exported into the binding's own store (`My` or `Web Hosting`), points
+  the binding to it in one change that keeps every other setting of the binding, and reads it back. A journal on the
+  server lets Alice finish or undo an interrupted deployment; each change is logged in the Application event log
+  (source `Alice Helper`, events 1001 and 1002).
+- Verification as for Nginx (Installed, Served, Trusted), with a fresh connection per check; for a binding Alice cannot
+  reach, the helper checks it from the server. When Windows sends another chain than Alice deployed, the deployment
+  page says so. A failed check puts the previous certificate back, never a revoked or compromised one (checked on the
+  server too).
+- **Websites on this server** groups a Windows server's bindings by the certificate they serve; the deploy dialog can
+  select every binding of one certificate. Deployment pages, notices and e-mails show the Windows steps (import the
+  chain, import the certificate, bind) and name the previous certificate by store and thumbprint.
+- Codes `ALC-WIN-0004` to `ALC-WIN-0012` (binding changed or not found, server busy, a file or store error on the
+  server, an unusable key, a missing previous certificate, a binding Alice does not deploy to, a refusal of the
+  helper), with troubleshooting entries. English and Turkish.
+
+**Changed**
+- `alice-helper.exe` 0.2.0: copy it from this release to each Windows server (see
+  [windows-host-preparation.md](docs/windows-host-preparation.md)); Alice names an older helper outdated before
+  changing anything. Alice's own TLS check no longer offers session tickets (for every server type: it never resumed
+  a session). No migration. Rulings: `docs/superpowers/rulings/windows-iis.md` "W2 (R61)".
+
 ## Unreleased — Windows servers (discovery, R60)
 
 **Added**
