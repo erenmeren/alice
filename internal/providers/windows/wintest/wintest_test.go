@@ -165,6 +165,33 @@ func TestModelDumpMatchesWhatWasAdded(t *testing.T) {
 	}
 }
 
+// The emulator runs the helper's dump code, so a certificate over the helper's bounds is named in
+// dropped_certificates, and one the store does not hold is not (final review M3).
+func TestModelDumpNamesDroppedCertificates(t *testing.T) {
+	m := NewModel()
+	ca := pki.NewCA("Big", pki.ECDSA256, now)
+	sans := make([]string, 0, 3000)
+	for i := range 3000 {
+		sans = append(sans, fmt.Sprintf("name-%04d.big.example.test", i))
+	}
+	big := ca.Issue(pki.Opts{CommonName: "big.example.test", SANs: sans}, now)
+	if len(big.Cert.Raw) <= winproto.MaxCertDER {
+		t.Fatalf("the leaf is %d bytes, not over %d", len(big.Cert.Raw), winproto.MaxCertDER)
+	}
+	h := m.AddCertificate("My", big.CertPEM, big.KeyPEM, CertOptions{})
+	m.AddBinding(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS, CertSHA1: h, Store: "MY"})
+	m.AddBinding(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 8443, AppID: winproto.AppIDIIS, CertSHA1: strings.Repeat("ab", 20), Store: "My"})
+	r, _ := call(t, m, "iis-dump")
+	var d winproto.IISDumpResponse
+	if err := json.Unmarshal(r.Stdout, &d); err != nil || r.Exit != 0 {
+		t.Fatalf("exit %d %v: %s", r.Exit, err, r.Stdout)
+	}
+	if len(d.Certificates) != 0 || !d.Truncated || len(d.DroppedCertificates) != 1 ||
+		d.DroppedCertificates[0] != (winproto.CertificateRef{Store: "MY", SHA1: h}) {
+		t.Fatalf("certificates %d truncated %v dropped %+v", len(d.Certificates), d.Truncated, d.DroppedCertificates)
+	}
+}
+
 func TestModelUnusableKeyIsAProblemInTheDump(t *testing.T) {
 	m := NewModel()
 	ca := pki.NewCA("Key", pki.ECDSA256, now)

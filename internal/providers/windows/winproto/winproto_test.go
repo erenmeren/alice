@@ -219,7 +219,8 @@ func TestDumpJSONShape(t *testing.T) {
 			t.Errorf("%s keys: %v, want %v", name, got, exp)
 		}
 	}
-	check("dump", keys(t, d), want("ok iis bindings certificates sites expired_in_store warnings truncated"))
+	check("dump", keys(t, d), want("ok iis bindings certificates dropped_certificates sites expired_in_store warnings truncated"))
+	check("certificate ref", keys(t, winproto.CertificateRef{}), want("store sha1"))
 	check("binding", keys(t, d.Bindings[0]), want("type ip host port app_id cert_sha1 store flags cert_check_mode revocation_freshness_time url_retrieval_timeout ctl_identifier ctl_store"))
 	check("binding bare", keys(t, winproto.SSLBinding{}), want("type port app_id cert_sha1 store flags cert_check_mode revocation_freshness_time url_retrieval_timeout"))
 	check("cert", keys(t, cert), want("store sha1 sha256 der chain friendly_name not_after has_key key_provider key_exportable key_usable_by_system key_problem"))

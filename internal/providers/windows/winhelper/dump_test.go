@@ -67,8 +67,20 @@ func TestBuildDumpMissingCertificateIsNotAnError(t *testing.T) {
 	h := dumpHost()
 	h.bindings = []winproto.SSLBinding{ipb(443, "My", h1)}
 	d, err := BuildDump(context.Background(), h)
-	if err != nil || len(d.Bindings) != 1 || len(d.Certificates) != 0 || d.Truncated {
+	if err != nil || len(d.Bindings) != 1 || len(d.Certificates) != 0 || d.Truncated || len(d.DroppedCertificates) != 0 {
 		t.Fatalf("%v %+v", err, d)
+	}
+}
+
+// A certificate dropped for the bounds or as malformed is named in dropped_certificates, so Alice can tell it from
+// one the store does not hold (final review M3).
+func wantDropped(t *testing.T, d winproto.IISDumpResponse, want ...winproto.CertificateRef) {
+	t.Helper()
+	if want == nil {
+		want = []winproto.CertificateRef{}
+	}
+	if fmt.Sprint(d.DroppedCertificates) != fmt.Sprint(want) || d.DroppedCertificates == nil {
+		t.Fatalf("dropped %v, want %v", d.DroppedCertificates, want)
 	}
 }
 
@@ -157,6 +169,8 @@ func TestDumpCutsAtItsBounds(t *testing.T) {
 	if err != nil || len(d.Bindings) != 3 || len(d.Certificates) != 0 || !d.Truncated || !hasWarning(d, winproto.WarnListTruncated) {
 		t.Fatalf("%v %+v", err, d)
 	}
+	wantDropped(t, d, winproto.CertificateRef{Store: "My", SHA1: h1}, winproto.CertificateRef{Store: "My", SHA1: h2},
+		winproto.CertificateRef{Store: "My", SHA1: h3})
 	// exactly at the limits is kept
 	ok := cert("My", h1)
 	ok.DER = base64.StdEncoding.EncodeToString(make([]byte, winproto.MaxCertDER))
@@ -169,6 +183,7 @@ func TestDumpCutsAtItsBounds(t *testing.T) {
 	if err != nil || len(d.Certificates) != 1 || len(d.Certificates[0].Chain) != winproto.MaxChainCerts {
 		t.Fatalf("%v %+v", err, d.Certificates)
 	}
+	wantDropped(t, d) // h2 and h3 are not in the store now: absent, not dropped
 
 	// the encoded answer is bounded: 400 certificates of 64 KiB (base64 87 KiB) are over 16 MiB
 	h = dumpHost()
@@ -287,6 +302,7 @@ func TestBuildDumpCleansCertificates(t *testing.T) {
 	if len(d.Certificates) != 1 || !d.Truncated {
 		t.Fatalf("%+v", d)
 	}
+	wantDropped(t, d, winproto.CertificateRef{Store: "My", SHA1: h2}, winproto.CertificateRef{Store: "My", SHA1: h3})
 	got := d.Certificates[0]
 	if got.Store != "My" || got.SHA1 != h1 || len(got.FriendlyName) != winproto.MaxText || got.KeyProvider != "prov" || got.KeyProblem != "key_missing" {
 		t.Fatalf("%+v", got)
@@ -302,7 +318,7 @@ func TestDumpJSONShapes(t *testing.T) {
 		t.Fatal(code, string(out))
 	}
 	s := string(out)
-	for _, want := range []string{`"bindings":[]`, `"certificates":[]`, `"sites":[]`, `"warnings":[]`, `"expired_in_store":{"My":0,"WebHosting":0}`} {
+	for _, want := range []string{`"bindings":[]`, `"certificates":[]`, `"sites":[]`, `"warnings":[]`, `"expired_in_store":{"My":0,"WebHosting":0}`, `"dropped_certificates":[]`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("%s missing in %s", want, s)
 		}

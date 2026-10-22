@@ -204,16 +204,26 @@ type Site struct {
 	Bindings []SiteBinding `json:"bindings"`
 }
 
+// CertificateRef names a certificate of a machine store.
+type CertificateRef struct {
+	Store string `json:"store"`
+	SHA1  string `json:"sha1"`
+}
+
 // IISDumpResponse answers "iis-dump".
+// DroppedCertificates names the certificates a binding names that the store holds but the helper left out (over
+// MaxCertDER or MaxChainCerts, or malformed; Truncated is then set too), so Alice tells them from certificates the
+// store does not hold (final review M3; protocol 1 grows, Ruling 2).
 type IISDumpResponse struct {
-	OK             bool               `json:"ok"`
-	IIS            IISFacts           `json:"iis"`
-	Bindings       []SSLBinding       `json:"bindings"`
-	Certificates   []StoreCertificate `json:"certificates"`
-	Sites          []Site             `json:"sites"`
-	ExpiredInStore map[string]int     `json:"expired_in_store"`
-	Warnings       []string           `json:"warnings"`
-	Truncated      bool               `json:"truncated"`
+	OK                  bool               `json:"ok"`
+	IIS                 IISFacts           `json:"iis"`
+	Bindings            []SSLBinding       `json:"bindings"`
+	Certificates        []StoreCertificate `json:"certificates"`
+	DroppedCertificates []CertificateRef   `json:"dropped_certificates"`
+	Sites               []Site             `json:"sites"`
+	ExpiredInStore      map[string]int     `json:"expired_in_store"`
+	Warnings            []string           `json:"warnings"`
+	Truncated           bool               `json:"truncated"`
 }
 
 // TLSProbeResponse is the shared tls-probe answer (design §7).

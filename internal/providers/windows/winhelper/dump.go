@@ -41,7 +41,8 @@ func cleanIISFacts(f winproto.IISFacts) winproto.IISFacts {
 // appcmd fails, so does the dump (Ruling 12). The error is a *helperError ready for the reply.
 func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 	d := winproto.IISDumpResponse{OK: true, Bindings: []winproto.SSLBinding{}, Certificates: []winproto.StoreCertificate{},
-		Sites: []winproto.Site{}, ExpiredInStore: map[string]int{}, Warnings: []string{}}
+		DroppedCertificates: []winproto.CertificateRef{}, Sites: []winproto.Site{}, ExpiredInStore: map[string]int{},
+		Warnings: []string{}}
 	stop := func() error {
 		if ctx.Err() != nil {
 			return failed(winproto.CodeIOError, "the call took too long")
@@ -115,7 +116,9 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 		}
 		cc, ok := cleanCertificate(c, k.store, k.sha1)
 		if !ok {
+			// Held by the store but not sent: named, so Alice does not read it as absent (bounded by the bindings).
 			truncated = true
+			d.DroppedCertificates = append(d.DroppedCertificates, winproto.CertificateRef{Store: k.store, SHA1: k.sha1})
 			continue
 		}
 		d.Certificates = append(d.Certificates, cc)

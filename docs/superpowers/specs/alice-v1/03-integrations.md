@@ -580,9 +580,11 @@ is bounded by the 50 s budget (`IO_ERROR` when it ends) and the output caps.
    application, key facts, flags. An IIS https binding without an entry is a location with the IIS application id and
    `cert_missing`.
 6. Supported rule, in order: `ccs` → `win_ccs`; no IIS binding uses the entry → `win_foreign_app` (`application`
-   `iis`, `iisexpress`, `winrm`, `sstp`, or "" with the raw id shown); a store other than `My` or `WebHosting`
+   `iis`, `iisexpress`, `winrm`, `sstp`, or "" with the raw id shown; `iis_unused` for an entry with IIS's own
+   application id that no site uses); a store other than `My` or `WebHosting`
    (case-insensitive) → `win_store_unsupported`; else supported. Problems: `cert_missing` (the store lacks the named
-   certificate), `key_missing`, `key_inaccessible`; a location with a problem is `file_problem`. A binding with a CTL or
+   certificate), `leaf_unreadable` (the store holds it but the helper left it out for its bounds: the dump names it
+   in `dropped_certificates`), `key_missing`, `key_inaccessible`; a location with a problem is `file_problem`. A binding with a CTL or
    client-certificate negotiation or mapping keeps its reason and gets the warning `win_ctl`.
 7. Inventory links each bound certificate by its DER hash (network discovery and inventory show it managed), stores
    the server warnings, and after a complete scan marks vanished locations missing.

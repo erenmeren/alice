@@ -30,6 +30,10 @@ const (
 	ProblemCertMissing     = "cert_missing"     // the binding names a certificate its store does not hold, or an IIS binding has no entry
 	ProblemKeyMissing      = "key_missing"      // the store holds the certificate without its key
 	ProblemKeyInaccessible = "key_inaccessible" // SYSTEM (http.sys) cannot use the key
+
+	// ApplicationIISUnused is the details "application" of an entry with IIS's application id that no IIS site
+	// binding uses (reason win_foreign_app): it is IIS's own leftover, not another application's (final review M2).
+	ApplicationIISUnused = "iis_unused"
 )
 
 // Bounds on what a remote server can make Alice carry (the webserver package's values).
@@ -258,6 +262,14 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 			stored[k] = c
 		}
 	}
+	// The certificates the store holds that the helper did not send (its bounds): not cert_missing (M3).
+	unread := map[certKey]bool{}
+	for _, c := range d.DroppedCertificates {
+		if len(unread) >= winproto.MaxCertificates {
+			break
+		}
+		unread[certKey{foldASCII(c.Store), foldASCII(c.SHA1)}] = true
+	}
 
 	dropped := d.Truncated
 	locs := map[string]*location{}
@@ -313,7 +325,7 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 
 	certs = make([]providers.DiscoveredCertificate, 0, len(locs))
 	for _, l := range locs {
-		certs = append(certs, finish(l, stored))
+		certs = append(certs, finish(l, stored, unread))
 	}
 	slices.SortFunc(certs, func(a, b providers.DiscoveredCertificate) int {
 		return cmp.Compare(a.Location.CertPath, b.Location.CertPath)
@@ -342,7 +354,7 @@ func supportedStore(s string) bool {
 }
 
 // finish decides a location's support, problems, certificate and details.
-func finish(l *location, stored map[certKey]winproto.StoreCertificate) providers.DiscoveredCertificate {
+func finish(l *location, stored map[certKey]winproto.StoreCertificate, unread map[certKey]bool) providers.DiscoveredCertificate {
 	slices.SortFunc(l.servers, func(a, b server) int {
 		return cmp.Or(cmp.Compare(a.site, b.site), cmp.Compare(a.info, b.info))
 	})
@@ -373,6 +385,9 @@ func finish(l *location, stored map[certKey]winproto.StoreCertificate) providers
 		switch {
 		case len(l.servers) == 0:
 			reason = UnsupportedForeignApp
+			if appID == winproto.AppIDIIS {
+				loc.Details["application"] = ApplicationIISUnused
+			}
 		case !supportedStore(store):
 			reason = UnsupportedStore
 		}
@@ -382,9 +397,14 @@ func finish(l *location, stored map[certKey]winproto.StoreCertificate) providers
 		if winproto.ValidSHA1(sha) {
 			loc.Details["cert_sha1"] = sha
 		}
-		c, ok := stored[certKey{foldASCII(store), sha}]
+		k := certKey{foldASCII(store), sha}
+		c, ok := stored[k]
 		if !ok {
 			loc.Problem = ProblemCertMissing
+			if unread[k] {
+				// The store holds it, the helper did not send it (over its bounds): it cannot be read, it is not gone.
+				loc.Problem = providers.CertProblemLeafUnreadable
+			}
 			break
 		}
 		certDetails(loc.Details, c)
