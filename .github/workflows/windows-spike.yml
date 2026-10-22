@@ -33,7 +33,11 @@ jobs:
           "step,seconds" | Set-Content "$env:R\timings.csv"
           $PSVersionTable | Out-String | Set-Content "$env:R\psversion.txt"
 
+      # internal/api/nul.go is a reserved device name on Windows and fails a full checkout: fetch only what the
+      # spike builds from (cone mode also brings go.mod and go.sum).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/winspike
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
 
