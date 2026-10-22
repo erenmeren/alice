@@ -60,7 +60,7 @@ func planRestore(ctx context.Context, h WriteHost, j journal, g guard) (restoreK
 // applyRestore carries out a planned restore after the gate and records its outcome in the journal.
 // The error is errKilled, or a journal that could not say restoring (nothing was written then; the
 // answer is OUTCOME_UNKNOWN and iis-status reads the journal as it was).
-func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind) (journal, error) {
+func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind, g guard) (journal, error) {
 	j.Steps = trimSteps(j.Steps)
 	failRestore := func(class string) (journal, error) {
 		j.Steps = append(j.Steps, stepFailed(winproto.StepRestore, class))
@@ -70,10 +70,8 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind)
 	}
 	restored := func() (journal, error) {
 		j.Steps = append(j.Steps, stepOK(winproto.StepRestore))
-		j.Phase, j.FailedStep = winproto.PhaseRestored, j.CauseStep
-		if j.CauseStep == "" {
-			j.Error = "" // a restore of a committed operation: no class of an earlier failure applies
-		}
+		// The cause's class, not a failed earlier restore's (a restore of a committed operation has none).
+		j.Phase, j.FailedStep, j.Error = winproto.PhaseRestored, j.CauseStep, j.CauseError
 		_ = writeJournal(h, j)
 		return j, nil
 	}
@@ -87,10 +85,18 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind)
 	case restoreStoreError:
 		return failRestore(winproto.ErrStore)
 	case restoreUnreadable:
-		return failRestore("")
+		return failRestore(winproto.ErrIO)
 	case restoreForbidden:
 		j.Steps = append(j.Steps, stepFailed(winproto.StepRestore, winproto.ErrForbidden))
 		j.Phase, j.FailedStep, j.Error = winproto.PhaseRestoreForbidden, winproto.StepRestore, winproto.ErrForbidden
+		// The guard only grows (R48, Linux's final restore_forbidden): the lists that forbade this
+		// restore are kept, so no later call with shorter lists puts the certificate back. Past
+		// MaxForbidden the outcome is final instead.
+		if len(g.SPKI) <= winproto.MaxForbidden && len(g.Leaf) <= winproto.MaxForbidden {
+			j.ForbiddenSPKI, j.ForbiddenLeaf = g.SPKI, g.Leaf
+		} else {
+			j.ForbiddenFinal = true
+		}
 		_ = writeJournal(h, j)
 		return j, nil
 	}
@@ -107,7 +113,7 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind)
 	case errors.Is(err, ErrBindingNotFound):
 		return failRestore(winproto.ErrFileChanged)
 	case err != nil:
-		return failRestore("")
+		return failRestore(winproto.ErrIO)
 	}
 	if err := point(h, "restore.bound"); err != nil {
 		return j, err
@@ -154,8 +160,9 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 		return winproto.RestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):])}
 	}
-	switch j.Phase {
-	case winproto.PhasePrepared, winproto.PhaseUnchanged, winproto.PhaseRestored, winproto.PhaseFenced:
+	switch {
+	case j.Phase == winproto.PhasePrepared, j.Phase == winproto.PhaseUnchanged, j.Phase == winproto.PhaseRestored,
+		j.Phase == winproto.PhaseFenced, j.Phase == winproto.PhaseRestoreForbidden && j.ForbiddenFinal:
 		return answer(j, len(j.Steps)), nil
 	}
 	switch sup, err := superseded(h, j); {
@@ -183,7 +190,7 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	}
 	j.Steps = trimSteps(j.Steps)
 	before := len(j.Steps)
-	j, err = applyRestore(wctx, h, j, kind)
+	j, err = applyRestore(wctx, h, j, kind, g)
 	if err != nil {
 		return nil, err
 	}

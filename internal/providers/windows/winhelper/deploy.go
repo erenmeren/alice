@@ -265,7 +265,7 @@ func (t *deployTx) write(pointName string) error {
 // (nothing to put back).
 func (t *deployTx) failUnbound(step, class string) (any, error) {
 	t.j.Steps = append(t.j.Steps, stepFailed(step, class))
-	t.j.Phase, t.j.FailedStep, t.j.CauseStep, t.j.Error = winproto.PhaseRestored, step, step, class
+	t.j.Phase, t.j.FailedStep, t.j.CauseStep, t.j.Error, t.j.CauseError = winproto.PhaseRestored, step, step, class, class
 	if err := writeJournal(t.h, t.j); err != nil {
 		return nil, err
 	}
@@ -323,6 +323,12 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 			return t.failUnbound(winproto.StepImportCertificate, storeClass(err))
 		}
 		if sha != j.NewSHA1 {
+			// A host that imported something else: record what it answered, so W3's cleanup finds it.
+			if c, found, err := h.Certificate(t.ctx, j.Store, sha); err == nil && found {
+				if der, err := base64.StdEncoding.DecodeString(c.DER); err == nil {
+					_ = recordImport(h, importEntry{Op: j.Op, Store: j.Store, SHA1: sha, SHA256: sum256(der)})
+				}
+			}
 			return t.failUnbound(winproto.StepImportCertificate, winproto.ErrStore)
 		}
 		// Best effort: an entry missing only means W3's cleanup leaves the certificate alone.
@@ -361,7 +367,8 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	case errors.Is(err, ErrBindingNotFound):
 		// The record went away under us: nothing was written and nothing can be put back.
 		j.Steps = append(j.Steps, stepFailed(winproto.StepBind, winproto.ErrFileChanged))
-		j.Phase, j.FailedStep, j.CauseStep, j.Error = winproto.PhaseRestoreFailed, winproto.StepBind, winproto.StepBind, winproto.ErrFileChanged
+		j.Phase, j.FailedStep, j.CauseStep = winproto.PhaseRestoreFailed, winproto.StepBind, winproto.StepBind
+		j.Error, j.CauseError = winproto.ErrFileChanged, winproto.ErrFileChanged
 		if err := writeJournal(h, *j); err != nil {
 			return nil, err
 		}
@@ -369,7 +376,7 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	case err != nil:
 		// Any other failure may come after part of the record changed (the host's Ex updates
 		// follow the base update): restore whatever is not exactly the previous record.
-		return t.selfRestore(winproto.StepBind, "")
+		return t.selfRestore(winproto.StepBind, winproto.ErrIO)
 	}
 	if err := point(h, "deploy.bound"); err != nil {
 		return nil, err
@@ -386,7 +393,7 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	if err := writeJournal(h, *j); err != nil {
 		// The journal must not say writing while the answer says committed: roll back.
 		j.Phase = winproto.PhaseWriting
-		return t.selfRestore(winproto.StepJournal, "")
+		return t.selfRestore(winproto.StepJournal, winproto.ErrIO)
 	}
 	if err := point(h, "deploy.committed"); err != nil {
 		return nil, err
@@ -399,7 +406,7 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 func (t *deployTx) selfRestore(step, class string) (any, error) {
 	j := &t.j
 	j.Steps = append(j.Steps, stepFailed(step, class))
-	j.FailedStep, j.CauseStep, j.Error = step, step, class
+	j.FailedStep, j.CauseStep, j.Error, j.CauseError = step, step, class, class
 	g := guard{SPKI: j.ForbiddenSPKI, Leaf: j.ForbiddenLeaf}
 	kind, err := planRestore(t.ctx, t.h, *j, g)
 	if err != nil {
@@ -408,7 +415,7 @@ func (t *deployTx) selfRestore(step, class string) (any, error) {
 			kind = restoreStoreError
 		}
 	}
-	res, err := applyRestore(t.ctx, t.h, *j, kind)
+	res, err := applyRestore(t.ctx, t.h, *j, kind, g)
 	if err != nil {
 		return nil, err
 	}

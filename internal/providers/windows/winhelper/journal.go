@@ -75,10 +75,17 @@ type journal struct {
 	FailedStep    string `json:"failed_step"`
 	CauseStep     string `json:"cause_step"`
 	Error         string `json:"error"`
+	// CauseError is the class of the failure that made the operation restore (CauseStep's), kept
+	// apart from Error, which a failed restore overwrites: a later successful restore answers it.
+	CauseError string `json:"cause_error"`
+	// ForbiddenFinal: a restore was forbidden by more hashes than the lists can hold, so
+	// restore_forbidden is final (re-sent restores answer it without a new check).
+	ForbiddenFinal bool `json:"forbidden_final"`
 	// PrevRecord is the binding record (latest operation) before this operation took it over.
 	PrevRecord string          `json:"prev_record"`
 	Steps      []winproto.Step `json:"steps"`
-	// ForbiddenSPKI and ForbiddenLeaf are the rollback guard iis-deploy received (R48): no restore of
+	// ForbiddenSPKI and ForbiddenLeaf are the rollback guard iis-deploy received (R48), grown by the
+	// lists of every restore they forbade (so restore_forbidden only ever stays so): no restore of
 	// this operation puts back a certificate they list.
 	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
 	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
@@ -90,7 +97,7 @@ var journalPhases = []string{winproto.PhasePrepared, winproto.PhaseWriting, winp
 var stepNames = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal, winproto.StepRestore}
 
 var errorClasses = []string{winproto.ErrKeyUnusable, winproto.ErrReadBack, winproto.ErrStore, winproto.ErrFileChanged,
-	winproto.ErrForbidden, winproto.ErrBackupMissing}
+	winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO}
 
 // validSHA256 reports 64 lower-case hex digits (helperproto's absent marker is not a hash here).
 func validSHA256(s string) bool {
@@ -173,7 +180,7 @@ func (j journal) valid(op string) bool {
 			return false
 		}
 	}
-	return (j.Error == "" || slices.Contains(errorClasses, j.Error)) &&
+	return (j.Error == "" || slices.Contains(errorClasses, j.Error)) && (j.CauseError == "" || slices.Contains(errorClasses, j.CauseError)) &&
 		winproto.ValidForbidden(j.ForbiddenSPKI) && winproto.ValidForbidden(j.ForbiddenLeaf)
 }
 

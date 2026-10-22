@@ -637,7 +637,7 @@ func TestBindErrorAfterAPartialWrite(t *testing.T) {
 		f := newFixture(t)
 		partial(f)
 		o, r, out := f.deploy(op1, f.input())
-		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepBind || r.CauseStep != winproto.StepBind || r.Error != "" {
+		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepBind || r.CauseStep != winproto.StepBind || r.Error != winproto.ErrIO {
 			t.Fatalf("%+v %s", o, out)
 		}
 		if !reflect.DeepEqual(f.current(), f.rec) || len(f.h.updates) != 2 || !reflect.DeepEqual(f.h.updates[1], f.rec) {
@@ -778,7 +778,7 @@ func TestDeployFailuresAfterTheGate(t *testing.T) {
 			failPhase(f, winproto.PhaseRestored)
 		}, code: winproto.CodeOutcomeUnknown},
 		{name: "committed unwritten: rolled back", setup: func(f *fixture) { failPhase(f, winproto.PhaseCommitted) },
-			phase: winproto.PhaseRestored, step: winproto.StepJournal},
+			phase: winproto.PhaseRestored, step: winproto.StepJournal, class: winproto.ErrIO},
 		{name: "restoring unwritten", setup: func(f *fixture) {
 			failPhase(f, winproto.PhaseCommitted)
 			failPhase(f, winproto.PhaseRestoring)
@@ -833,21 +833,31 @@ func TestDeployFailuresAfterTheGate(t *testing.T) {
 	}
 	t.Run("the import answers another SHA-1", func(t *testing.T) {
 		f := newFixture(t)
-		h := &otherImport{fakeWriteHost: f.h}
+		other := f.ca.Issue(leafOpts, testNow)
+		h := &otherImport{fakeWriteHost: f.h, der: other.Cert.Raw}
 		o, out := execute(t, context.Background(), h, bytes.NewReader(f.input()), winproto.SubIISDeploy, winproto.ArgOp, op1)
 		var r winproto.DeployResponse
 		_ = json.Unmarshal(out, &r)
 		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepImportCertificate || r.Error != winproto.ErrStore {
 			t.Fatalf("%+v %s", o, out)
 		}
+		// What the host answered is in the import inventory, so W3's cleanup finds it.
+		imports, err := readImports(f.h)
+		want := importEntry{Op: op1, Store: "MY", SHA1: sha1Hex(other.Cert.Raw), SHA256: hexSHA256(other.Cert.Raw)}
+		if err != nil || len(imports.Imports) != 1 || imports.Imports[0] != want {
+			t.Fatalf("%v %+v", err, imports)
+		}
 	})
 }
 
-type otherImport struct{ *fakeWriteHost }
+// otherImport is a host whose ImportPFX imports another certificate than the PFX's.
+type otherImport struct {
+	*fakeWriteHost
+	der []byte
+}
 
-func (o *otherImport) ImportPFX(ctx context.Context, store string, pfx, pw []byte, name string) (string, error) {
-	_, _ = o.fakeWriteHost.ImportPFX(ctx, store, pfx, pw, name)
-	return h3, nil
+func (o *otherImport) ImportPFX(_ context.Context, store string, _, _ []byte, _ string) (string, error) {
+	return o.addCert(store, o.der, true), nil
 }
 
 // failPhase makes the WriteState of a journal in that phase fail.
@@ -1011,4 +1021,91 @@ func TestJSONScanStrings(t *testing.T) {
 	if !sameRecord(winproto.SSLBinding{Extended: []winproto.ExtendedParam{}}, winproto.SSLBinding{}) {
 		t.Error("an empty and an absent Extended list differ")
 	}
+}
+
+// TestRecoveryAfterAKillAtEveryPoint (Review Focus 4 within the helper): after a kill at any point,
+// the recovery the phase allows (iis-fence for none or prepared, iis-restore otherwise) leaves the
+// record exactly the previous or exactly the new one, and a fenced operation never runs.
+func TestRecoveryAfterAKillAtEveryPoint(t *testing.T) {
+	points := []string{"deploy.locked", "deploy.prepared", "deploy.import_chain", "deploy.import_certificate",
+		"deploy.writing", "deploy.bound", "deploy.read_back", "deploy.committed",
+		"restore.restoring", "restore.bound", "restore.restored"}
+	for _, p := range points {
+		for _, lossy := range []bool{false, p == "deploy.bound"} {
+			name := p
+			if lossy {
+				name += ", the bind loses the Ex parameters"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newFixture(t)
+				if lossy {
+					// A kill after a partial base write: the record names the new hash without its Ex parameters.
+					n := 0
+					f.h.afterUpdate = func(b winproto.SSLBinding) winproto.SSLBinding {
+						if n++; n == 1 {
+							b.Extended = nil
+						}
+						return b
+					}
+				}
+				kill := func(name string) error {
+					if name == p {
+						return errors.New("kill")
+					}
+					return nil
+				}
+				if strings.HasPrefix(p, "restore.") {
+					if lossy {
+						return // the restore points follow a committed deploy only
+					}
+					f.committed(op1)
+					f.h.pointErr = kill
+					var out bytes.Buffer
+					if o := Execute(context.Background(), f.h, []string{winproto.SubIISRestore, winproto.ArgOp, op1},
+						bytes.NewReader(restoreInput([]string{}, []string{})), &out); !o.Killed {
+						t.Fatalf("%+v", o)
+					}
+				} else {
+					f.h.pointErr = kill
+					f.killedDeploy(op1, f.input())
+				}
+				if lossy && f.journal(op1).Phase != winproto.PhaseWriting {
+					t.Fatal("the lossy bind did not stop at writing")
+				}
+				f.h.pointErr, f.h.afterUpdate = nil, nil
+				_, st, _ := f.statusCall(winproto.SubIISStatus, op1)
+				fenced := false
+				switch st.Phase {
+				case winproto.PhaseNone, winproto.PhasePrepared:
+					if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseFenced {
+						t.Fatalf("fence: %s", out)
+					}
+					o, _, out := f.deploy(op1, f.input())
+					wantError(t, o.Exit, out, 3, winproto.CodeFenced)
+					fenced = true
+				case winproto.PhaseWriting, winproto.PhaseCommitted, winproto.PhaseRestoring:
+					if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+						t.Fatalf("restore: %s", out)
+					}
+				case winproto.PhaseRestored:
+				default:
+					t.Fatalf("phase %s", st.Phase)
+				}
+				cur := f.current()
+				if !reflect.DeepEqual(cur, f.rec) && !reflect.DeepEqual(cur, withHash(f.rec, f.newSHA1)) {
+					t.Fatalf("record %+v", cur)
+				}
+				if _, st, _ := f.statusCall(winproto.SubIISStatus, op1); !fenced && st.CurrentCertSHA256 != hexSHA256(certDERFor(f, cur.CertSHA1)) {
+					t.Fatal("status does not name what the record serves")
+				}
+			})
+		}
+	}
+}
+
+func certDERFor(f *fixture, sha string) []byte {
+	if sha == f.newSHA1 {
+		return f.nw.Cert.Raw
+	}
+	return f.old.Cert.Raw
 }

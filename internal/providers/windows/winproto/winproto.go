@@ -176,6 +176,8 @@ const (
 	ErrFileChanged   = "file_changed"
 	ErrForbidden     = "forbidden"
 	ErrBackupMissing = "backup_missing"
+	// ErrIO: a host call failed in a way no other class names (an I/O or httpapi failure).
+	ErrIO = "io_error"
 )
 
 // Bounds of the write subcommands. MaxExtendedBytes bounds each extended parameter's raw bytes.

@@ -262,7 +262,7 @@ func TestStepsEqualTheProviders(t *testing.T) {
 	}
 	for got, want := range map[string]string{
 		winproto.ErrKeyUnusable: "key_unusable", winproto.ErrReadBack: "read_back", winproto.ErrStore: "store_error",
-		winproto.ErrBackupMissing: "backup_missing",
+		winproto.ErrBackupMissing: "backup_missing", winproto.ErrIO: "io_error",
 	} {
 		if got != want {
 			t.Errorf("%q != %q", got, want)

@@ -3,6 +3,7 @@ package winhelper
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"alice/internal/providers/windows/winproto"
@@ -45,6 +46,44 @@ func TestRestoreForbiddenOnEveryPath(t *testing.T) {
 		}
 		if j := f.journal(op1); j.Phase != winproto.PhaseRestoreForbidden {
 			t.Fatal(j.Phase)
+		}
+	})
+	t.Run("forbidden by stdin, re-sent with empty lists: still forbidden (the guard only grows)", func(t *testing.T) {
+		f := newFixture(t)
+		f.committed(op1)
+		if _, r, out := f.restore(op1, []string{f.oldSPKI}, []string{}); r.Phase != winproto.PhaseRestoreForbidden {
+			t.Fatalf("%s", out)
+		}
+		if j := f.journal(op1); len(j.ForbiddenSPKI) != 1 || j.ForbiddenSPKI[0] != f.oldSPKI || j.ForbiddenFinal {
+			t.Fatalf("%+v", j)
+		}
+		f.reset()
+		o, r, out := f.restore(op1, []string{}, []string{})
+		if o.Exit != 0 || r.Phase != winproto.PhaseRestoreForbidden || len(f.h.updates) != 0 || len(f.h.writes()) != 0 {
+			t.Fatalf("%+v %s %v", o, out, f.h.writes())
+		}
+		if f.current().CertSHA1 != f.newSHA1 {
+			t.Fatal("restored")
+		}
+	})
+	t.Run("forbidden by more hashes than a list holds: final", func(t *testing.T) {
+		f := newFixture(t)
+		journalLeaf := make([]string, winproto.MaxForbidden)
+		stdinLeaf := []string{f.oldSHA256}
+		for i := range journalLeaf {
+			journalLeaf[i] = strings.Repeat("0", 56) + hexN(i)
+		}
+		f.deploy(op1, f.input(func(in *winproto.DeployInput) { in.ForbiddenLeaf = journalLeaf }))
+		if _, r, out := f.restore(op1, []string{}, stdinLeaf); r.Phase != winproto.PhaseRestoreForbidden {
+			t.Fatalf("%s", out)
+		}
+		j := f.journal(op1)
+		if !j.ForbiddenFinal || len(j.ForbiddenLeaf) != winproto.MaxForbidden {
+			t.Fatalf("final %v, %d hashes", j.ForbiddenFinal, len(j.ForbiddenLeaf))
+		}
+		f.reset()
+		if _, r, _ := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestoreForbidden || len(f.h.writes()) != 0 {
+			t.Fatal("not final", r)
 		}
 	})
 	t.Run("journal lists", func(t *testing.T) {
@@ -247,6 +286,37 @@ func TestRestoreRules(t *testing.T) {
 			t.Fatalf("%s", out)
 		}
 	})
+}
+
+// TestRestoreKeepsTheCauseClass: a failed restore's class does not replace the deployment's cause;
+// a later successful restore answers the cause's class.
+func TestRestoreKeepsTheCauseClass(t *testing.T) {
+	f := newFixture(t)
+	n := 0
+	f.h.afterUpdate = func(b winproto.SSLBinding) winproto.SSLBinding {
+		if n++; n == 1 {
+			b.Flags = 0 // the bind reads back wrong
+		}
+		return b
+	}
+	f.h.updateErr = func(winproto.SSLBinding) error {
+		if n == 1 {
+			return ErrKeyUnusable // the self-restore's update (the second) hits 1312
+		}
+		return nil
+	}
+	_, r, out := f.deploy(op1, f.input())
+	if r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrKeyUnusable || r.CauseStep != winproto.StepBind {
+		t.Fatalf("%s", out)
+	}
+	f.h.updateErr = nil
+	o, rr, out := f.restore(op1, []string{}, []string{})
+	if o.Exit != 0 || rr.Phase != winproto.PhaseRestored || rr.FailedStep != winproto.StepBind || rr.Error != winproto.ErrReadBack {
+		t.Fatalf("%+v %s", o, out)
+	}
+	if !reflect.DeepEqual(f.current(), f.rec) {
+		t.Fatal("not restored")
+	}
 }
 
 func TestRestoreInputRefusals(t *testing.T) {
