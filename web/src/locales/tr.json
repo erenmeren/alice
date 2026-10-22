@@ -1218,7 +1218,7 @@
       "operationsTextLinux": "Alice, bu sunucudaki SSH anahtarlarını kısıtlı yardımcı aracı üzerinden okur ve değiştirir.",
       "readOnly": "Salt okunur",
       "operationsTextDiscovery": "Alice, {{software}} tarafından kullanılan sertifika dosyalarını kısıtlı yardımcısıyla okur. {{software}} dosyalarını ve yapılandırmasını hiçbir zaman değiştirmez.",
-      "operationsTextWindows": "Alice bu sunucunun http.sys bağlamalarını ve IIS sitelerini okur; dağıtım sonraki bir sürümde gelecek."
+      "operationsTextWindows": "Alice bu sunucunun http.sys bağlamalarına kısıtlı yardımcısı üzerinden sertifika dağıtır. IIS siteleri ve ayarları sizin denetiminizde kalır."
     }
   },
   "hostKeys": {
@@ -1970,7 +1970,12 @@
     "keyGroupOpenDiscovery": "Özel anahtar dosyası root dışında bir kullanıcıya ait veya bir grup ya da diğer kullanıcılar tarafından okunabiliyor.",
     "noSite": "(IIS sitesi yok)",
     "problemCertificateWin": "Sertifika: {{problem}}",
-    "problemKeyWin": "Özel anahtar: {{problem}}"
+    "problemKeyWin": "Özel anahtar: {{problem}}",
+    "group": {
+      "noCertificate": "Sertifika yok",
+      "count_one": "{{count}} bağlama",
+      "count_other": "{{count}} bağlama"
+    }
   },
   "deploy": {
     "title": "Sertifika dağıtın",
@@ -2021,7 +2026,13 @@
     "pendingChangeRestored": "Yeni sertifika yazılmadı. Alice tamamlanmamış eski bir değişiklikten önceki dosyaları geri koydu; bu yüzden web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunulan sertifika olmayabilir.",
     "partialUnchanged_one": "Bu sertifikayı zaten kullanan web siteleri: {{count}}",
     "partialUnchanged_other": "Bu sertifikayı zaten kullanan web siteleri: {{count}}",
-    "serverOperationPending": "Yeni sertifika yazılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu dosyaları engelliyor; ayrıntılar aşağıda."
+    "serverOperationPending": "Yeni sertifika yazılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu dosyaları engelliyor; ayrıntılar aşağıda.",
+    "summaryWindows": "Alice sertifikayı bağlamanın sertifika deposuna, ara sertifikaları CA deposuna içe aktarır, bağlamayı yeni sertifikaya yöneltir ve sunulduğunu denetler. Herhangi bir adım başarısız olursa Alice bağlamayı önceki sertifikaya geri yöneltir.",
+    "bindings": "Bağlamalar",
+    "selectGroup": "Bu sertifikanın tüm bağlamalarını seç",
+    "selectGroupNamed": "Bu sertifikanın tüm bağlamalarını seç: {{name}}",
+    "succeededUnverifiedWindows": "Yeni sertifika dağıtıldı ve bağlama onu gösteriyor.",
+    "rollbackFailedRestoredWindows": "Bağlama yeniden önceki sertifikayı gösteriyor, ancak Alice web sitesinin onu sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin."
   },
   "deployments": {
     "page": {
@@ -2148,9 +2159,9 @@
       "verify_old": "Önceki sertifikayı doğrulama",
       "unknown": "Başka bir adım",
       "recover_pending": "Tamamlanmamış önceki değişikliği geri alma",
-      "import_chain": "Ara sertifikaları içe aktarma",
+      "import_chain": "Zinciri içe aktarma",
       "import_certificate": "Sertifikayı içe aktarma",
-      "bind": "Bağlamayı sertifikaya yöneltme",
+      "bind": "Bağlamayı güncelleme",
       "upload": "Yükleme",
       "install": "Kurma",
       "commit": "Profilleri değiştirme",
@@ -2192,7 +2203,39 @@
     },
     "sourceLabel": "Kaynak",
     "vaultLabel": "Kasa",
-    "versionLabel": "Kasa sürümü"
+    "versionLabel": "Kasa sürümü",
+    "bindingLabel": "Bağlama",
+    "previousWindows": "Önceki sertifika: {{store}} \\ {{sha1}}",
+    "previousWindowsForbidden": "Önceki sertifika (iptal edilmiş ya da ele geçirilmiş: onu yeniden bağlamayın): {{store}} \\ {{sha1}}",
+    "warnings": {
+      "win_chain_differs": "Windows {{built}} sertifikalık bir zincir sunuyor; Alice {{deployed}} sertifika dağıttı."
+    },
+    "stepError": {
+      "key_unusable": "Windows sertifikanın özel anahtarını kullanamıyor.",
+      "read_back": "Bağlama, Alice'in yazdığı gibi geri okunmadı.",
+      "store_error": "Windows sertifika deposunu açamadı ya da değiştiremedi.",
+      "backup_missing": "Önceki sertifika ya da özel anahtarı artık sertifika deposunda değil.",
+      "io_error": "Sunucuda bir Windows çağrısı başarısız oldu.",
+      "file_changed_windows": "Başka bir program bağlamayı değiştirdi: bağlama, Alice'in dağıtmadığı bir sertifikayı gösteriyor."
+    },
+    "windowsErrors": {
+      "deployment": {
+        "rollback_failed": {
+          "cause": "Dağıtım başarısız oldu ve bağlamanın önceki sertifikaya geri yöneltilmesi tamamlanmadı ya da doğrulanamadı. Önceki sertifika sunucunun sertifika deposunda kalır; deposu ve parmak izi bu dağıtımda gösterilir.",
+          "action": "Web sitesini şimdi denetleyin. Sunucuda bağlamanın sertifikasını (netsh http show sslcert) önceki sertifikayla karşılaştırın; yanlışsa bağlamayı IIS Yöneticisi'nde önceki sertifikaya geri yöneltin."
+        },
+        "restored_unverified": {
+          "title": "Önceki sertifika yeniden bağlandı, ancak web sitesi doğrulanmadı.",
+          "cause": "Alice bağlamayı önceki sertifikaya geri yöneltti, ancak ardından web sitesinin onu yeniden sunduğunu doğrulayamadı.",
+          "action": "Web sitesini şimdi denetleyin. Yanlışsa sunucuda bağlamayı netsh http show sslcert ile denetleyin."
+        },
+        "rollback_file_changed": {
+          "title": "Dağıtım sırasında başka bir program bağlamayı değiştirdi. Elle işlem gerekiyor.",
+          "cause": "Alice dağıtım yaparken ya da bağlamayı geri yöneltirken başka bir program bağlamayı değiştirdi: bağlama, Alice'in dağıtmadığı bir sertifikayı gösteriyor; bu yüzden Alice onu yeniden değiştirmedi.",
+          "action": "Web sitesini şimdi denetleyin. Bağlamayı hangi programın değiştirdiğini bulun (örneğin IIS Yöneticisi ya da bir yenileme aracı), ardından sunucunun sayfasında Keşfet'i seçin."
+        }
+      }
+    }
   },
   "routeError": {
     "title": "Bir sorun oluştu",

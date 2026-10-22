@@ -15,6 +15,8 @@ import {
   nginxTargetWith,
   sessionFor,
   sessionHandlers,
+  windowsBindingFixture,
+  windowsTargetFixture,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
@@ -421,5 +423,81 @@ describe('WebsitesPanel texts on an Nginx server that deploys', () => {
     expect(within(first).getByText('Ready')).toBeInTheDocument();
     expect(within(second).getByText('Alice supports RSA and ECDSA certificates only.')).toBeInTheDocument();
     expect(within(second).getByText(/A deployment keeps these permissions\./)).toBeInTheDocument();
+  });
+});
+
+// R61, design §15 Q5 (W2 Ruling 21): a Windows server's bindings are grouped by the certificate they serve.
+describe('WebsitesPanel on a Windows server', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-04T12:00:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const winPath = `/servers/${windowsTargetFixture.id}`;
+  const OTHER = { id: '0192c000-0000-7000-8000-0000000000c2', subject_cn: 'api.example.test', label: '', fingerprint: 'ef56'.repeat(16), not_after: '2027-01-15T00:00:00Z' };
+  const host = (h: string, port = 443) => [{ names: [h], section: 'Default Web Site', listens: [{ addr: h, port, default_server: false }], file: '', line: 0 }];
+  const bindings = [
+    windowsBindingFixture({ id: 'w-ip', cert_path: 'http.sys/ipport/0.0.0.0:8443', certificate: CERT, servers: host('www.example.test', 8443) }),
+    windowsBindingFixture({ id: 'w-none', cert_path: 'http.sys/hostnameport/old.example.test:443', certificate: null, servers: host('old.example.test') }),
+    windowsBindingFixture({ id: 'w-host', cert_path: 'http.sys/hostnameport/www.example.test:443', certificate: CERT, servers: host('www.example.test') }),
+    windowsBindingFixture({ id: 'w-api', cert_path: 'http.sys/hostnameport/api.example.test:443', certificate: OTHER, servers: host('api.example.test') }),
+  ];
+
+  it('groups the bindings by the certificate they serve, a last group without one, each binding with an enabled deploy control', async () => {
+    onNginx('operator', bindings, windowsTargetFixture);
+    await renderRoute(winPath);
+    const groups = await screen.findAllByTestId('certificate-group');
+    expect(groups).toHaveLength(3);
+    const head = (g: HTMLElement) => within(g).getByTestId('certificate-group-row');
+    expect(head(groups[0])).toHaveTextContent('api.example.test');
+    expect(head(groups[0])).toHaveTextContent('1 binding');
+    expect(head(groups[1])).toHaveTextContent('www.example.test');
+    expect(head(groups[1])).toHaveTextContent('2 bindings');
+    expect(within(head(groups[1])).getByText(/Sep 1, 2027/)).toBeInTheDocument();
+    expect(head(groups[2])).toHaveTextContent('No certificate');
+    expect(head(groups[2])).toHaveTextContent('1 binding');
+    // The bindings of a group are sorted by their canonical text.
+    const texts = (g: HTMLElement) => within(g).getAllByTestId('location-row').map((r) => r.getAttribute('data-location'));
+    expect(texts(groups[0])).toEqual(['w-api']);
+    expect(texts(groups[1])).toEqual(['w-host', 'w-ip']);
+    expect(texts(groups[2])).toEqual(['w-none']);
+    for (const b of screen.getAllByRole('button', { name: /^Deploy certificate:/ })) {
+      expect(b).toBeEnabled();
+      expect(b).not.toHaveAttribute('aria-disabled');
+    }
+    expect(screen.getAllByRole('button', { name: /^Deploy certificate:/ })).toHaveLength(4);
+    expect(screen.queryByText('Not available for IIS servers yet')).not.toBeInTheDocument();
+    // The page's prose names http.sys (a product name, not a key): the table is checked.
+    expectNoRawKeys(screen.getAllByTestId('certificate-group')[0].closest('table')!);
+  });
+
+  it('opens the deploy dialog with the bindings of the server grouped by certificate', async () => {
+    onNginx('operator', bindings, windowsTargetFixture);
+    server.use(http.get('/api/v1/certificates', () => HttpResponse.json({ items: [certificateFixture({ id: 'c9', subject_cn: 'fit.example.test' })], next_cursor: null })));
+    await renderRoute(winPath);
+    const row = (await screen.findAllByTestId('location-row')).find((r) => r.getAttribute('data-location') === 'w-ip')!;
+    await userEvent.click(within(row).getByRole('button', { name: /^Deploy certificate:/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Deploy a certificate' });
+    expect(within(dialog).getByRole('checkbox', { name: /http\.sys\/ipport\/0\.0\.0\.0:8443/ })).toBeChecked();
+    expect(within(dialog).getByRole('checkbox', { name: /http\.sys\/hostnameport\/www\.example\.test:443/ })).not.toBeChecked();
+    expect(within(dialog).getByRole('button', { name: 'Select all bindings of this certificate: www.example.test' })).toBeInTheDocument();
+  });
+
+  it('keeps Nginx rows ungrouped', async () => {
+    onNginx('operator', [locationFixture({ certificate: CERT }), locationFixture({ id: 'l2', cert_path: '/etc/nginx/ssl/b.crt' })]);
+    await renderRoute(path);
+    expect(await screen.findAllByTestId('location-row')).toHaveLength(2);
+    expect(screen.queryByTestId('certificate-group')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('certificate-group-row')).not.toBeInTheDocument();
+  });
+
+  it('words the groups in Turkish', async () => {
+    onNginx('operator', bindings, windowsTargetFixture, false, 'tr');
+    await renderRoute(winPath, { languages: ['tr-TR'] });
+    const groups = await screen.findAllByTestId('certificate-group');
+    expect(within(groups[1]).getByTestId('certificate-group-row')).toHaveTextContent('2 bağlama');
+    expect(within(groups[2]).getByTestId('certificate-group-row')).toHaveTextContent('Sertifika yok');
+    expectNoRawKeys(screen.getAllByTestId('certificate-group')[0].closest('table')!);
   });
 });

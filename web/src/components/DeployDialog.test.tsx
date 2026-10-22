@@ -11,6 +11,8 @@ import {
   sessionFor,
   sessionHandlers,
   stepFixture,
+  windowsBindingFixture,
+  windowsDeploymentFixture,
 } from '../test/fixtures';
 import { renderWithAuth } from '../test/render';
 import { server } from '../test/server';
@@ -39,7 +41,7 @@ function certificates(items: Certificate[]) {
   server.use(http.get('/api/v1/certificates', () => HttpResponse.json({ items, next_cursor: null })));
 }
 
-function showDialog(props: { certificate?: Certificate; location?: CertificateLocation }) {
+function showDialog(props: { certificate?: Certificate; location?: CertificateLocation; siblings?: CertificateLocation[] }) {
   return renderWithAuth(<DeployDialog opened onClose={() => {}} {...props} />);
 }
 
@@ -722,5 +724,71 @@ describe('DeployDialog polling', () => {
     const seen = polls;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(polls).toBe(seen);
+  });
+});
+
+// R61, design §15 Q5 (W2 Ruling 21): from a binding of a Windows server the dialog picks among the server's bindings,
+// grouped by the certificate they serve, and selects all bindings of one certificate at once.
+describe('DeployDialog on a Windows server', () => {
+  const SERVED = { id: '0192c000-0000-7000-8000-0000000000c1', subject_cn: 'www.example.test', label: '', fingerprint: 'ab12'.repeat(16), not_after: '2027-09-01T00:00:00Z' };
+  const OTHER = { ...SERVED, id: '0192c000-0000-7000-8000-0000000000c2', subject_cn: 'api.example.test', fingerprint: 'ef56'.repeat(16) };
+  const W1 = windowsBindingFixture({ id: L1, cert_path: 'http.sys/ipport/0.0.0.0:8443', certificate: SERVED });
+  const W2 = windowsBindingFixture({ id: L2, cert_path: 'http.sys/hostnameport/www.example.test:443', certificate: SERVED });
+  const W3 = windowsBindingFixture({ id: 'w3', cert_path: 'http.sys/hostnameport/api.example.test:443', certificate: OTHER });
+  const W4 = windowsBindingFixture({ id: 'w4', cert_path: 'http.sys/hostnameport/old.example.test:443', certificate: null });
+  const busy = windowsBindingFixture({ id: 'w5', cert_path: 'http.sys/ipport/0.0.0.0:9443', certificate: SERVED, active_deployment_id: D2 });
+  const siblings = [W3, W4, W1, busy, W2];
+
+  it('shows the bindings grouped by certificate and "Select all bindings of this certificate" selects exactly that group', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    let body: unknown = null;
+    server.use(
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(accepted([D1, L2], [D2, L1]), { status: 202 });
+      }),
+      http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(windowsDeploymentFixture({ id: String(params.id), location_id: params.id === D1 ? L2 : L1 }))),
+    );
+    await showDialog({ location: W3, siblings });
+    expect(await screen.findByText(/Alice imports the certificate into the certificate store of the binding/)).toBeInTheDocument();
+    const groups = screen.getAllByTestId('deploy-certificate-group');
+    expect(groups.map((g) => within(g).getByRole('heading').textContent)).toEqual(['api.example.test', 'www.example.test', 'No certificate']);
+    const box = (path: string) => screen.getByRole('checkbox', { name: new RegExp(path.replace(/[./]/g, '\\$&')) });
+    expect(box(W3.cert_path)).toBeChecked();
+    expect(box(busy.cert_path)).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Select all bindings of this certificate: No certificate/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Select all bindings of this certificate: www.example.test' }));
+    expect(box(W1.cert_path)).toBeChecked();
+    expect(box(W2.cert_path)).toBeChecked();
+    expect(box(W3.cert_path)).not.toBeChecked();
+    expect(box(W4.cert_path)).not.toBeChecked();
+    expect(box(busy.cert_path)).not.toBeChecked();
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    expect(body).toEqual({ location_ids: [L2, L1], confirm_incomplete_chain: false });
+    const lists = await screen.findAllByRole('list', { name: 'Steps' });
+    expect(lists).toHaveLength(2);
+    for (const name of ['Import the chain', 'Import the certificate', 'Bind', 'Verify']) expect(within(lists[0]).getByText(name)).toBeInTheDocument();
+    expect(within(lists[0]).queryByText('Backup')).not.toBeInTheDocument();
+  });
+
+  it('cannot deploy when every binding is unticked', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    await showDialog({ location: W1, siblings });
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: /0\.0\.0\.0:8443/ }));
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+  });
+
+  it('keeps a Linux website a single place without the picker', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    await showDialog({ location: locationFixture({ id: L1, key_type: 'ecdsa' }), siblings: [locationFixture({ id: L1, key_type: 'ecdsa' }), locationFixture({ id: L2, key_type: 'ecdsa' })] });
+    await screen.findByLabelText('Certificate');
+    expect(screen.queryByTestId('deploy-certificate-group')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 });

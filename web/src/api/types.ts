@@ -794,7 +794,11 @@ export interface Deployment {
   failed_step: string;
   cause_step: string;
   helper_error: string;
+  // backup_dir is "" for a Windows binding; its previous certificate is backup_store (My or WebHosting) and
+  // backup_sha1 (its SHA-1 thumbprint), both absent for any other deployment (R61).
   backup_dir: string;
+  backup_store?: string;
+  backup_sha1?: string;
   requested_by: string | null;
   requested_by_name: string;
   recovery_attempts: number;

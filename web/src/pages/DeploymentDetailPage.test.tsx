@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import type { DeploymentDetail } from '../api/types';
-import { deploymentDetailFixture, errorResponse, sessionFor, sessionHandlers, stepFixture } from '../test/fixtures';
+import { deploymentDetailFixture, errorResponse, sessionFor, sessionHandlers, stepFixture, WIN_PREVIOUS_SHA1, windowsDeploymentFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -557,5 +557,168 @@ describe('DeploymentDetailPage from Key Vault', () => {
     await renderRoute('/deployments/dk');
     expect(await screen.findByText('Missing permission in the vault')).toBeInTheDocument();
     expect(screen.getByText('Read the certificate from Key Vault', { selector: 'span, p' })).toBeInTheDocument();
+  });
+});
+
+// R61: a deployment to an http.sys binding of a Windows server.
+describe('DeploymentDetailPage of a Windows binding', () => {
+  const winSteps = (verify: Record<string, string> = { mode: 'remote' }) => [
+    stepFixture(1, 'verify_current'),
+    stepFixture(2, 'import_chain'),
+    stepFixture(3, 'import_certificate'),
+    stepFixture(4, 'bind'),
+    stepFixture(5, 'verify', 'ok', verify),
+  ];
+  const stepIds = () =>
+    Array.from(within(screen.getByRole('list', { name: /Steps|Adımlar/ })).getAllByRole('listitem')).map((i) => (i.closest('[data-step]') ?? i.querySelector('[data-step]'))?.getAttribute('data-step'));
+
+  it('shows the Windows steps in their order, the binding, no key file and the previous certificate by store and thumbprint', async () => {
+    show(windowsDeploymentFixture({ id: ID, steps: winSteps() }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('The new certificate is live and verified.')).toBeInTheDocument();
+    expect(stepIds()).toEqual(['verify_current', 'import_chain', 'import_certificate', 'bind', 'verify']);
+    const items = within(screen.getByRole('list', { name: 'Steps' })).getAllByRole('listitem');
+    expect(items[1]).toHaveTextContent('Import the chain');
+    expect(items[2]).toHaveTextContent('Import the certificate');
+    expect(items[3]).toHaveTextContent('Bind');
+    expect(items[4]).toHaveTextContent('Verify');
+    for (const i of items) expect(i).toHaveTextContent('Done');
+    expect(screen.queryByText('Backup')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reload')).not.toBeInTheDocument();
+    expect(screen.getByText('Binding', { selector: 'dt' }).nextElementSibling).toHaveTextContent('http.sys/hostnameport/www.example.test:443');
+    expect(screen.queryByText('Key file', { selector: 'dt' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Certificate file', { selector: 'dt' })).not.toBeInTheDocument();
+    expect(screen.getByText(`Previous certificate: My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+    expect(screen.queryByText(/Backup on the server/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('win-chain-differs')).not.toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('notes a chain Windows serves with another length than Alice deployed, with both numbers', async () => {
+    show(windowsDeploymentFixture({ id: ID, steps: winSteps({ mode: 'remote', chain_differs: 'true', deployed_chain: '3', built_chain: '2' }) }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByTestId('win-chain-differs')).toHaveTextContent('Windows serves a chain of 2 certificates; Alice deployed 3.');
+  });
+
+  it('words a failed bind by its Windows error class', async () => {
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rolled_back',
+        result: 'rolled_back',
+        phase: 'restored',
+        verified: '',
+        failed_step: 'bind',
+        helper_error: 'key_unusable',
+        error: { code: 'ALC-WIN-0009', reason: 'windows.key_unusable' },
+        steps: [stepFixture(1, 'verify_current'), stepFixture(2, 'import_chain'), stepFixture(3, 'import_certificate'), stepFixture(4, 'bind', 'failed', { error: 'key_unusable' })],
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('Failed at: Bind')).toBeInTheDocument();
+    expect(screen.getAllByText('Reason: Windows cannot use the private key of the certificate.')).toHaveLength(2);
+    // The error's text names http.sys (a product name, not a key): the steps are checked.
+    expectNoRawKeys(screen.getByRole('list', { name: 'Steps' }));
+  });
+
+  it('shows a failed rollback with the previous certificate by store and thumbprint, never the Linux backup folder', async () => {
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rollback_failed',
+        result: 'rollback_failed',
+        phase: 'restore_failed',
+        backup_store: 'WebHosting',
+        failed_step: 'verify',
+        error: { code: 'ALC-DEP-0008', reason: 'deployment.rollback_failed', params: { store: 'WebHosting', previous_sha1: WIN_PREVIOUS_SHA1 } },
+        steps: [...winSteps().slice(0, 4), stepFixture(5, 'verify', 'failed'), stepFixture(6, 'restore', 'failed', { error: 'backup_missing' })],
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('Alice cannot confirm which certificate the website serves. Manual action is needed.')).toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('pointing the binding back to the previous certificate');
+    expect(alert).toHaveTextContent('ALC-DEP-0008');
+    expect(alert).not.toHaveTextContent('/var/lib/alice-helper');
+    expect(alert).not.toHaveTextContent(/nginx/i);
+    expect(alert).not.toHaveTextContent(/files/);
+    expect(screen.getByText(`Previous certificate: WebHosting \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+    expect(screen.queryByText(/Backup on the server/)).not.toBeInTheDocument();
+    expect(screen.getByText('Reason: The previous certificate or its private key is no longer in the certificate store.')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('names the previous certificate from the error when the deployment does not carry it', async () => {
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rollback_failed',
+        phase: 'restore_failed',
+        backup_store: undefined,
+        backup_sha1: undefined,
+        error: { code: 'ALC-DEP-0008', reason: 'deployment.rollback_failed', params: { store: 'My', previous_sha1: WIN_PREVIOUS_SHA1 } },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(`Previous certificate: My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+  });
+
+  it('words the other rollback outcomes for a binding, not for files', async () => {
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rollback_failed',
+        phase: 'restored',
+        error: { code: 'ALC-DEP-0019', reason: 'deployment.restored_unverified' },
+      }),
+    );
+    const view = await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(/The binding names the previous certificate again/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/nginx|files/i);
+    view.unmount();
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rollback_failed',
+        phase: 'restore_failed',
+        helper_error: 'file_changed',
+        error: { code: 'ALC-DEP-0020', reason: 'deployment.rollback_file_changed' },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByRole('alert')).toHaveTextContent('another program changed the binding');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/nginx|files|\/var\/lib/i);
+    expect(screen.getByText('Reason: Another program changed the binding: it names a certificate Alice did not deploy.')).toBeInTheDocument();
+  });
+
+  it('keeps the rollback guard text of a refused undo (R48) and marks the previous certificate', async () => {
+    show(
+      windowsDeploymentFixture({
+        id: ID,
+        status: 'rollback_failed',
+        phase: 'restore_forbidden',
+        failed_step: 'restore',
+        error: { code: 'ALC-DEP-0025', reason: 'deployment.rollback_forbidden', params: { store: 'My', previous_sha1: WIN_PREVIOUS_SHA1 } },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(/Alice did not undo the failed change/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('The change failed, and Alice did not put the previous certificate back because it is revoked or compromised.');
+    expect(screen.getByText(`Previous certificate (revoked or compromised: never bind it again): My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+  });
+
+  it('is shown in Turkish', async () => {
+    show(windowsDeploymentFixture({ id: ID, steps: winSteps({ mode: 'remote', chain_differs: 'true', deployed_chain: '3', built_chain: '2' }) }), 'operator', 'tr');
+    await renderRoute(`/deployments/${ID}`, { languages: ['tr-TR'] });
+    await screen.findByTestId('win-chain-differs');
+    expect(stepIds()).toEqual(['verify_current', 'import_chain', 'import_certificate', 'bind', 'verify']);
+    const items = within(screen.getByRole('list', { name: 'Adımlar' })).getAllByRole('listitem');
+    expect(items[1]).toHaveTextContent('Zinciri içe aktarma');
+    expect(items[2]).toHaveTextContent('Sertifikayı içe aktarma');
+    expect(items[3]).toHaveTextContent('Bağlamayı güncelleme');
+    expect(items[4]).toHaveTextContent('Doğrulama');
+    expect(screen.getByText(`Önceki sertifika: My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+    expect(screen.getByTestId('win-chain-differs')).toHaveTextContent('Windows 2 sertifikalık bir zincir sunuyor; Alice 3 sertifika dağıttı.');
+    await waitFor(() => expectNoRawKeys());
   });
 });

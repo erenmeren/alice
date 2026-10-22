@@ -4,6 +4,7 @@ import {
   deploymentStatusText,
   deploymentView,
   isCancelled,
+  isWindowsDeployment,
   PENDING_CHANGE_RESTORED,
   rollbackForbidden,
   SERVER_OPERATION_PENDING,
@@ -44,22 +45,27 @@ const UNRESOLVED = /\{\{\s*\w+\s*\}\}/;
 // give, shows the generic message. The code is detail below the texts. An operation id (the
 // unfinished earlier change on the server that ALC-DEP-0023/0024 name) is shown as data, because the
 // action tells the operator to use it. neutral: a decision, not a failure (a cancelled deployment).
+// windows: a deployment to an http.sys binding (R61); a shared text that speaks of the files and the backup folder of a
+// Linux server has its binding wording in deployments.windowsErrors.<reason>.<part>, used in its place.
 export function DeploymentErrorAlert({
   error,
   heading,
   withCause = true,
   neutral = false,
+  windows = false,
 }: {
   error: ErrorRef | null;
   heading?: string;
   withCause?: boolean;
   neutral?: boolean;
+  windows?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   if (!error) return null;
   const params = error.params ?? {};
   const text = (part: 'title' | 'cause' | 'action'): string => {
-    const key = `errors.${error.reason}.${part}`;
+    const own = `deployments.windowsErrors.${error.reason}.${part}`;
+    const key = windows && i18n.exists(own) ? own : `errors.${error.reason}.${part}`;
     if (!i18n.exists(key)) return '';
     const out = t(key, params);
     return UNRESOLVED.test(out) ? '' : out;
@@ -101,6 +107,7 @@ export function DeploymentErrorAlert({
 export function DeploymentOutcome({ d }: { d: Deployment }) {
   const { t, i18n } = useTranslation();
   const view = deploymentView(d);
+  const windows = isWindowsDeployment(d);
   let color: string;
   let headline: string;
   let extra = '';
@@ -110,7 +117,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         const checked = d.verified === 'remote' || d.verified === 'local';
         const trust = d.verification?.trust;
         color = checked ? 'green' : 'yellow';
-        headline = t(checked ? 'deploy.succeeded' : 'deploy.succeededUnverified');
+        headline = t(checked ? 'deploy.succeeded' : windows ? 'deploy.succeededUnverifiedWindows' : 'deploy.succeededUnverified');
         extra = d.verified === 'local' ? t('deploy.verifiedLocally') : d.verified === 'skipped' ? t('deploy.verifySkipped') : '';
         if (checked && untrustedSuccess(d) && trust) {
           // R51: served, but the chain is not trusted: a warning that names the fault, never "verified".
@@ -143,7 +150,13 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         // guard refused (R48) put nothing back on purpose.
         color = 'red';
         headline = t(
-          rollbackForbidden(d) ? 'deploy.rollbackForbidden' : d.phase === 'restored' ? 'deploy.rollbackFailedRestored' : 'deploy.rollbackFailed',
+          rollbackForbidden(d)
+            ? 'deploy.rollbackForbidden'
+            : d.phase === 'restored'
+              ? windows
+                ? 'deploy.rollbackFailedRestoredWindows'
+                : 'deploy.rollbackFailedRestored'
+              : 'deploy.rollbackFailed',
         );
     }
   } else if (view === 'held') {
@@ -175,8 +188,10 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
           <Text size="sm">{t('deployments.recovery.next', { time: formatDateTime(d.recover_after, i18n.language) })}</Text>
         )}
       </Alert>
-      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} neutral={isCancelled(d)} />}
-      {d.verify_failed && d.status !== 'succeeded' && <DeploymentErrorAlert error={d.verify_failed} heading={t('deployments.verifyFailedTitle')} withCause={false} />}
+      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} neutral={isCancelled(d)} windows={windows} />}
+      {d.verify_failed && d.status !== 'succeeded' && (
+        <DeploymentErrorAlert error={d.verify_failed} heading={t('deployments.verifyFailedTitle')} withCause={false} windows={windows} />
+      )}
     </Stack>
   );
 }

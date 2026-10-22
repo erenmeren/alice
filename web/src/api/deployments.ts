@@ -53,6 +53,21 @@ export function rollbackForbidden(d: { phase: string; error?: { reason: string }
   return d.phase === 'restore_forbidden' || d.error?.reason === ROLLBACK_FORBIDDEN;
 }
 
+// isWindowsDeployment: a deployment to an http.sys binding of a Windows server (R61). Its previous certificate is named
+// by store and thumbprint, or the location is a binding (the canonical text starts with http.sys/).
+export function isWindowsDeployment(d: Pick<Deployment, 'cert_path'> & { backup_store?: string }): boolean {
+  return (d.backup_store ?? '') !== '' || d.cert_path.startsWith('http.sys/');
+}
+
+// windowsPrevious is the previous certificate of a Windows deployment (store and SHA-1 thumbprint): the deployment's
+// own, else the params of its error (a failed rollback names them); null when neither names both.
+export function windowsPrevious(d: Pick<Deployment, 'error'> & { backup_store?: string; backup_sha1?: string }): { store: string; sha1: string } | null {
+  if (d.backup_store && d.backup_sha1) return { store: d.backup_store, sha1: d.backup_sha1 };
+  const p = d.error?.params ?? {};
+  if (p.store && p.previous_sha1) return { store: p.store, sha1: p.previous_sha1 };
+  return null;
+}
+
 // SERVER_OPERATION_PENDING (ALC-DEP-0023): an unfinished earlier change blocks the files; this
 // deployment's certificate was not written, but an unfinished restore attempt may have put back one
 // of the two files, so "nothing was changed" would be false.

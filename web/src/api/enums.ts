@@ -137,6 +137,10 @@ export const FILE_PROBLEMS: readonly string[] = [
 // which adds file_changed.
 export const CONFIG_ERRORS: readonly string[] = ['key_mismatch', 'file_missing', 'cert_load', 'key_load', 'syntax', 'untrusted', 'unsupported', 'file_changed'];
 
+// WINDOWS_STEP_ERRORS: the step error classes of the Windows helper (winproto Err*, R61) other than file_changed, a
+// configuration error class already, and forbidden, which the phase restore_forbidden shows.
+export const WINDOWS_STEP_ERRORS: readonly string[] = ['key_unusable', 'read_back', 'store_error', 'backup_missing', 'io_error'];
+
 // CONFIG_REASONS: WebServerFacts.config_error_reason (providers.ConfigReason*).
 export const CONFIG_REASONS: readonly string[] = [
   'not_root_controlled',
@@ -165,6 +169,10 @@ export const stepNameKey = (name: string) => (known(DEPLOYMENT_STEP_NAMES, name)
 export const unsupportedReasonKey = (r: string) => `locations.unsupported.${known(UNSUPPORTED_REASONS, r) ? r : 'unknown'}`;
 export const fileProblemKey = (p: string) => `locations.problems.${known(FILE_PROBLEMS, p) ? p : 'unknown'}`;
 export const configErrorKey = (e: string) => `locations.configError.${known(CONFIG_ERRORS, e) ? e : 'unknown'}`;
+// stepErrorKey: the text of a step's error class or a deployment's helper_error. A Windows deployment's file_changed is
+// about its binding, not about files.
+export const stepErrorKey = (e: string, windows = false) =>
+  windows && e === 'file_changed' ? 'deployments.stepError.file_changed_windows' : known(WINDOWS_STEP_ERRORS, e) ? `deployments.stepError.${e}` : configErrorKey(e);
 export const configReasonKey = (r: string) => `locations.configReason.${known(CONFIG_REASONS, r) ? r : 'unknown'}`;
 export const verifiedKey = (v: string) => `deployments.verified.${known(VERIFIED_MODES, v) ? v : 'none'}`;
 

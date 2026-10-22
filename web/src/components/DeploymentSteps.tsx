@@ -2,7 +2,7 @@ import { Text } from '@mantine/core';
 import type { i18n, TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { FINAL_STATUSES } from '../api/deployments';
-import { configErrorKey, stepNameKey, stepStatusKey, trustErrorKey, trustStatusKey } from '../api/enums';
+import { stepErrorKey, stepNameKey, stepStatusKey, trustErrorKey, trustStatusKey } from '../api/enums';
 import type { DeploymentStatus, DeploymentStep } from '../api/types';
 import { OperationTimeline, type StepState } from './ui';
 import { WRAP } from './wrap';
@@ -18,9 +18,20 @@ const GROUPS: { id: string; members: string[] }[] = [
   { id: 'reload', members: ['reload'] },
   { id: 'verify', members: ['verify'] },
 ];
+// A deployment to an http.sys binding of a Windows server (R61) has its own steps, in this order: the intermediates go
+// into the CA store, the certificate into the binding's store, the binding is pointed to it, then Alice verifies. journal,
+// restore and verify_old follow as for files, in the order they happened.
+const WINDOWS_GROUPS: { id: string; members: string[] }[] = [
+  { id: 'import_chain', members: ['import_chain'] },
+  { id: 'import_certificate', members: ['import_certificate'] },
+  { id: 'bind', members: ['bind'] },
+  { id: 'verify', members: ['verify'] },
+];
 // kv_secret is the first step of a Key Vault deployment (the certificate is read from the vault before
 // anything reaches the server); it has a row only when the deployment came from a vault.
-const GROUPED = new Set(['verify_current', 'kv_secret', ...GROUPS.flatMap((g) => g.members)]);
+const grouped = (groups: { members: string[] }[]) => new Set(['verify_current', 'kv_secret', ...groups.flatMap((g) => g.members)]);
+const GROUPED = grouped(GROUPS);
+const WINDOWS_GROUPED = grouped(WINDOWS_GROUPS);
 
 type Shown = 'started' | 'ok' | 'failed' | 'skipped' | 'waiting' | 'notRun' | 'unknown';
 
@@ -59,10 +70,10 @@ function statusText(s: Shown): string {
 const STATE: Record<Shown, StepState> = { ok: 'done', failed: 'failed', started: 'running', waiting: 'waiting', skipped: 'skipped', notRun: 'notRun', unknown: 'unknown' };
 
 // Step details the server allows (DeploymentStep.params): shown only in the detail page. None: no lines.
-function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n): React.ReactNode[] {
+function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: boolean): React.ReactNode[] {
   const p = step.params ?? {};
   const lines: React.ReactNode[] = [];
-  if (p.error) lines.push(<Text key="error" size="xs">{t('deployments.stepDetail.error', { reason: t(configErrorKey(p.error)) })}</Text>);
+  if (p.error) lines.push(<Text key="error" size="xs">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(p.error, windows)) })}</Text>);
   if (p.reason) {
     const key = `errors.${p.reason}.title`;
     lines.push(
@@ -113,14 +124,28 @@ interface Row {
 
 // DeploymentSteps lists the steps of one deployment with a status each, as the design's operation
 // timeline; markers never carry the meaning alone, every row says it in words. The list is not a live
-// region itself: the screen that owns it announces the overall state.
-export function DeploymentSteps({ steps, status, detailed = false, vault = false }: { steps: DeploymentStep[]; status: DeploymentStatus | ''; detailed?: boolean; vault?: boolean }) {
+// region itself: the screen that owns it announces the overall state. windows: the steps of an http.sys binding.
+export function DeploymentSteps({
+  steps,
+  status,
+  detailed = false,
+  vault = false,
+  windows = false,
+}: {
+  steps: DeploymentStep[];
+  status: DeploymentStatus | '';
+  detailed?: boolean;
+  vault?: boolean;
+  windows?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const ended = FINAL_STATUSES.has(status);
+  const groups = windows ? WINDOWS_GROUPS : GROUPS;
+  const groupedNames = windows ? WINDOWS_GROUPED : GROUPED;
   const rows: Row[] = [];
   if (detailed) rows.push({ id: 'verify_current', label: t('deployments.steps.verify_current'), status: singleStatus(steps, 'verify_current', ended), detail: lastOf(steps, 'verify_current') });
   if (vault || steps.some((s) => s.name === 'kv_secret')) rows.push({ id: 'kv_secret', label: t('deployments.steps.kv_secret'), status: singleStatus(steps, 'kv_secret', ended), detail: lastOf(steps, 'kv_secret') });
-  for (const g of GROUPS) {
+  for (const g of groups) {
     rows.push({
       id: g.id,
       label: t(`deployments.steps.${g.id}`),
@@ -129,13 +154,13 @@ export function DeploymentSteps({ steps, status, detailed = false, vault = false
     });
   }
   const extra: string[] = [];
-  for (const s of [...steps].sort((a, b) => a.n - b.n)) if (!GROUPED.has(s.name) && !extra.includes(s.name)) extra.push(s.name);
+  for (const s of [...steps].sort((a, b) => a.n - b.n)) if (!groupedNames.has(s.name) && !extra.includes(s.name)) extra.push(s.name);
   for (const name of extra) {
     const known = stepNameKey(name);
     rows.push({ id: name, label: t(known), rawName: known === 'deployments.steps.unknown' ? name : undefined, status: singleStatus(steps, name, ended), detail: lastOf(steps, name) });
   }
   const detail = (r: Row): React.ReactNode => {
-    const lines = detailed && r.detail ? stepDetails(r.detail, t, i18n) : [];
+    const lines = detailed && r.detail ? stepDetails(r.detail, t, i18n, windows) : [];
     return lines.length > 0 ? lines : undefined;
   };
   return (

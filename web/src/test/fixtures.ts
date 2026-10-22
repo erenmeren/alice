@@ -675,7 +675,7 @@ export function windowsFacts(o: Partial<WindowsFacts> = {}): WindowsFacts {
   };
 }
 
-// windowsTargetFixture is a Windows server (discovery only in W1: no deploy_certificate) whose last scan was fine.
+// windowsTargetFixture is a Windows server (it deploys to its http.sys bindings since W2, R61) whose last scan was fine.
 export const windowsTargetFixture: Target = {
   ...targetFixture,
   id: '0192b000-0000-7000-8000-0000000000a5',
@@ -683,7 +683,7 @@ export const windowsTargetFixture: Target = {
   type: 'windows',
   host: 'iis-01.example.com',
   username: 'CORP\\alice-svc',
-  capabilities: ['discover_certificates', 'test_connection'],
+  capabilities: ['deploy_certificate', 'discover_certificates', 'test_connection', 'verify_deployment'],
   facts: {
     ...targetFixture.facts,
     os: { id: 'windows', version_id: '10.0.20348.2700', pretty_name: 'Windows Server 2022 Datacenter' },
@@ -706,7 +706,35 @@ export function windowsBindingFixture(o: Partial<CertificateLocation> = {}): Cer
     key_owner: '',
     key_group: '',
     target_type: 'windows',
-    deployable: false,
+    kind: 'win_sslbinding',
+    deployable: true,
+    ...o,
+  });
+}
+
+// WIN_PREVIOUS_SHA1 is the SHA-1 thumbprint of the certificate a Windows binding served before a deployment.
+export const WIN_PREVIOUS_SHA1 = '0a1b2c3d4e5f60718293a4b5c6d7e8f901234567';
+
+// windowsDeploymentFixture is a deployment to an http.sys binding of windowsTargetFixture (R61): no key file, no
+// backup folder; the previous certificate is named by its store and SHA-1 thumbprint.
+export function windowsDeploymentFixture(o: Partial<DeploymentDetail> = {}): DeploymentDetail {
+  return deploymentDetailFixture({
+    location_id: windowsBindingFixture().id,
+    target_id: windowsTargetFixture.id,
+    target_name: windowsTargetFixture.name,
+    cert_path: 'http.sys/hostnameport/www.example.test:443',
+    key_path: '',
+    backup_dir: '',
+    backup_store: 'My',
+    backup_sha1: WIN_PREVIOUS_SHA1,
+    steps: [
+      stepFixture(1, 'verify_current'),
+      stepFixture(2, 'import_chain'),
+      stepFixture(3, 'import_certificate'),
+      stepFixture(4, 'bind'),
+      stepFixture(5, 'journal'),
+      stepFixture(6, 'verify', 'ok', { mode: 'remote' }),
+    ],
     ...o,
   });
 }

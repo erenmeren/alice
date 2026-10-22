@@ -604,7 +604,7 @@ describe('TargetDetailPage', () => {
         return renderRoute(`/servers/${target.id}`, { languages: [tag] });
       };
 
-      it('shows the Windows and IIS facts and the bindings with their site, text and a disabled deploy control', async () => {
+      it('shows the Windows and IIS facts and the bindings with their site, text and an enabled deploy control (R61)', async () => {
         const target = { ...windowsTargetFixture, facts: { ...windowsTargetFixture.facts, warnings: [{ code: 'win_expired_in_store', params: { count: '3' } }] } };
         await open(target, 'en', 'en-US');
         const fact = async (label: string) => (await screen.findByText(label, { selector: 'dt' })).nextElementSibling;
@@ -616,7 +616,8 @@ describe('TargetDetailPage', () => {
         expect(await fact('Certificate stores')).toHaveTextContent('My, WebHosting');
         expect(await fact('OpenSSH version')).toHaveTextContent('OpenSSH_for_Windows_9.5p2');
         expect(await fact('User on the server')).toHaveTextContent('CORP\\alice-svc');
-        expect(screen.getByText('Alice reads the http.sys bindings and IIS sites of this server; deployment comes in a later release.')).toBeInTheDocument();
+        expect(screen.getByText('Alice deploys certificates to the http.sys bindings of this server through its restricted helper. IIS sites and their settings remain under your control.')).toBeInTheDocument();
+        expect(screen.queryByText(/deployment comes in a later release/)).not.toBeInTheDocument();
         expect(screen.getByText('The certificate store of this server still holds expired certificates: 3.')).toBeInTheDocument();
         expect(screen.getByRole('columnheader', { name: 'IIS site' })).toBeInTheDocument();
         const rows = await screen.findAllByTestId('location-row');
@@ -633,9 +634,10 @@ describe('TargetDetailPage', () => {
         const deploy = screen.getAllByRole('button', { name: /^Deploy certificate:/ });
         expect(deploy.length).toBeGreaterThan(0);
         for (const b of deploy) {
-          expect(b).toHaveAttribute('aria-disabled', 'true');
-          expect(b).toHaveAccessibleDescription('Not available for IIS servers yet');
+          expect(b).toBeEnabled();
+          expect(b).not.toHaveAttribute('aria-disabled');
         }
+        expect(screen.queryByText('Not available for IIS servers yet')).not.toBeInTheDocument();
         expect(screen.queryByText('IIS is not installed')).not.toBeInTheDocument();
       });
 
@@ -688,8 +690,10 @@ describe('TargetDetailPage', () => {
         expect((await screen.findByText('Windows sürümü', { selector: 'dt' })).nextElementSibling).toHaveTextContent('Windows Server 2022 Datacenter');
         expect(screen.getByRole('columnheader', { name: 'IIS sitesi' })).toBeInTheDocument();
         expect(screen.getByText('Bu bağlama başka bir uygulamaya ait (WinRM). Alice onu değiştirmez.')).toBeInTheDocument();
+        expect(screen.getByText('Alice bu sunucunun http.sys bağlamalarına kısıtlı yardımcısı üzerinden sertifika dağıtır. IIS siteleri ve ayarları sizin denetiminizde kalır.')).toBeInTheDocument();
         const deploy = screen.getAllByRole('button', { name: /^Sertifika dağıt/ });
-        expect(deploy[0]).toHaveAccessibleDescription('IIS sunucularında henüz kullanılamıyor');
+        expect(deploy[0]).toBeEnabled();
+        expect(screen.queryByText('IIS sunucularında henüz kullanılamıyor')).not.toBeInTheDocument();
       });
     });
 

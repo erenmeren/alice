@@ -1218,7 +1218,7 @@
       "operationsTextLinux": "Alice reads and changes the SSH keys on this server through its restricted helper.",
       "readOnly": "Read only",
       "operationsTextDiscovery": "Alice reads the certificate files {{software}} uses through its restricted helper. It never changes {{software}} files or configuration.",
-      "operationsTextWindows": "Alice reads the http.sys bindings and IIS sites of this server; deployment comes in a later release."
+      "operationsTextWindows": "Alice deploys certificates to the http.sys bindings of this server through its restricted helper. IIS sites and their settings remain under your control."
     }
   },
   "hostKeys": {
@@ -1970,7 +1970,12 @@
     "keyGroupOpenDiscovery": "The private key file belongs to a user other than root or can be read by a group or by others.",
     "noSite": "(no IIS site)",
     "problemCertificateWin": "Certificate: {{problem}}",
-    "problemKeyWin": "Private key: {{problem}}"
+    "problemKeyWin": "Private key: {{problem}}",
+    "group": {
+      "noCertificate": "No certificate",
+      "count_one": "{{count}} binding",
+      "count_other": "{{count}} bindings"
+    }
   },
   "deploy": {
     "title": "Deploy a certificate",
@@ -2021,7 +2026,13 @@
     "pendingChangeRestored": "The new certificate was not written. Alice put back the files from before an unfinished earlier change, so the website now serves the certificate it had before that change. That may not be the certificate it served when you chose Deploy.",
     "partialUnchanged_one": "Websites that already had this certificate: {{count}}",
     "partialUnchanged_other": "Websites that already had this certificate: {{count}}",
-    "serverOperationPending": "The new certificate was not written. An unfinished earlier change on the server blocks these files; see below."
+    "serverOperationPending": "The new certificate was not written. An unfinished earlier change on the server blocks these files; see below.",
+    "summaryWindows": "Alice imports the certificate into the certificate store of the binding and its intermediate certificates into the CA store, points the binding to the new certificate and checks that it is served. If any step fails, Alice points the binding back to the previous certificate.",
+    "bindings": "Bindings",
+    "selectGroup": "Select all bindings of this certificate",
+    "selectGroupNamed": "Select all bindings of this certificate: {{name}}",
+    "succeededUnverifiedWindows": "The new certificate was deployed and the binding points to it.",
+    "rollbackFailedRestoredWindows": "The binding names the previous certificate again, but Alice could not confirm that the website serves it. Check the website now."
   },
   "deployments": {
     "page": {
@@ -2148,9 +2159,9 @@
       "verify_old": "Verify the previous certificate",
       "unknown": "Other step",
       "recover_pending": "Undo an unfinished earlier change",
-      "import_chain": "Import the intermediate certificates",
+      "import_chain": "Import the chain",
       "import_certificate": "Import the certificate",
-      "bind": "Point the binding to it",
+      "bind": "Bind",
       "upload": "Upload",
       "install": "Install",
       "commit": "Switch the profiles",
@@ -2192,7 +2203,39 @@
     },
     "sourceLabel": "Source",
     "vaultLabel": "Vault",
-    "versionLabel": "Vault version"
+    "versionLabel": "Vault version",
+    "bindingLabel": "Binding",
+    "previousWindows": "Previous certificate: {{store}} \\ {{sha1}}",
+    "previousWindowsForbidden": "Previous certificate (revoked or compromised: never bind it again): {{store}} \\ {{sha1}}",
+    "warnings": {
+      "win_chain_differs": "Windows serves a chain of {{built}} certificates; Alice deployed {{deployed}}."
+    },
+    "stepError": {
+      "key_unusable": "Windows cannot use the private key of the certificate.",
+      "read_back": "The binding did not read back as Alice wrote it.",
+      "store_error": "Windows could not open or change the certificate store.",
+      "backup_missing": "The previous certificate or its private key is no longer in the certificate store.",
+      "io_error": "A Windows call on the server failed.",
+      "file_changed_windows": "Another program changed the binding: it names a certificate Alice did not deploy."
+    },
+    "windowsErrors": {
+      "deployment": {
+        "rollback_failed": {
+          "cause": "The deployment failed, and pointing the binding back to the previous certificate did not finish or could not be confirmed. The previous certificate stays in the certificate store of the server; its store and thumbprint are shown with this deployment.",
+          "action": "Check the website now. On the server, compare the certificate of the binding (netsh http show sslcert) with the previous certificate, and point the binding back to it in IIS Manager if it is wrong."
+        },
+        "restored_unverified": {
+          "title": "The previous certificate is bound again, but the website was not confirmed.",
+          "cause": "Alice pointed the binding back to the previous certificate, but then could not confirm that the website serves it again.",
+          "action": "Check the website now. If it is wrong, check the binding on the server with netsh http show sslcert."
+        },
+        "rollback_file_changed": {
+          "title": "Another program changed the binding during the deployment. Manual action is needed.",
+          "cause": "While Alice was deploying or pointing the binding back, another program changed the binding: it names a certificate Alice did not deploy, so Alice did not change it again.",
+          "action": "Check the website now. Find out which program changed the binding (for example IIS Manager or a renewal tool), then choose Discover on the server's page."
+        }
+      }
+    }
   },
   "routeError": {
     "title": "Something went wrong",

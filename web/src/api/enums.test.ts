@@ -17,10 +17,12 @@ import {
   UNSUPPORTED_REASONS,
   UPLOAD_WARNING_KEYS,
   VERIFIED_MODES,
+  WINDOWS_STEP_ERRORS,
   configErrorKey,
   configReasonKey,
   deploymentStateKey,
   fileProblemKey,
+  stepErrorKey,
   stepNameKey,
   stepStatusKey,
   unsupportedReasonKey,
@@ -205,6 +207,13 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     for (const p of winProblems) expect(FILE_PROBLEMS, p).toContain(p);
   });
 
+  // R61: the Windows helper's step error classes (winproto Err*), except file_changed (a configuration error class
+  // already) and forbidden (the rollback guard's, shown by the phase restore_forbidden).
+  it('lists the step error classes of the Windows helper', () => {
+    eq(goConsts('internal/providers/windows/winproto/winproto.go', /^Err[A-Z]/).filter((e) => e !== 'file_changed' && e !== 'forbidden'), WINDOWS_STEP_ERRORS);
+    expect(WINDOWS_STEP_ERRORS).toEqual(expect.arrayContaining(['key_unusable', 'read_back', 'store_error', 'backup_missing']));
+  });
+
   it('lists the configuration error classes and reasons', () => {
     eq(goConsts('internal/providers/types.go', /^ConfigErr/), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
     expect(goConsts('internal/providers/types.go', /^DeployErrFileChanged$/)).toEqual(['file_changed']);
@@ -293,6 +302,12 @@ describe('Nginx deployment, website and fact labels cover the specification and 
       for (const r of FILE_PROBLEMS) expect(typeof t(lang, fileProblemKey(r)), r).toBe('string');
       for (const r of CONFIG_ERRORS) expect(typeof t(lang, configErrorKey(r)), r).toBe('string');
       for (const r of CONFIG_REASONS) expect(typeof t(lang, configReasonKey(r)), r).toBe('string');
+      for (const r of WINDOWS_STEP_ERRORS) expect(t(lang, stepErrorKey(r)), r).toBe(t(lang, `deployments.stepError.${r}`));
+      for (const r of WINDOWS_STEP_ERRORS) expect(typeof t(lang, stepErrorKey(r)), r).toBe('string');
+      expect(typeof t(lang, stepErrorKey('file_changed', true))).toBe('string');
+      expect(stepErrorKey('file_changed', true)).toBe('deployments.stepError.file_changed_windows');
+      expect(stepErrorKey('file_changed')).toBe(configErrorKey('file_changed'));
+      expect(stepErrorKey('key_mismatch', true)).toBe(configErrorKey('key_mismatch'));
     });
 
     it('gives a value it does not know, and an empty one, a neutral text', () => {
@@ -302,6 +317,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
       expect(t(lang, unsupportedReasonKey('brand_new'))).toBe(t(lang, 'locations.unsupported.unknown'));
       expect(t(lang, fileProblemKey(''))).toBe(t(lang, 'locations.problems.unknown'));
       expect(t(lang, configErrorKey('brand_new'))).toBe(t(lang, 'locations.configError.unknown'));
+      expect(t(lang, stepErrorKey('brand_new', true))).toBe(t(lang, 'locations.configError.unknown'));
       expect(t(lang, locationWarningKey('brand_new'))).toBe(t(lang, 'locations.warnings.unknown'));
     });
 

@@ -1,4 +1,4 @@
-import type { CertificateLocation, Target } from './types';
+import type { CertificateLocation, CertificateRef, Target } from './types';
 
 // The single list of web-server target types. Phases B and C extend only this list.
 export const WEB_SERVER_TYPES = ['nginx', 'apache', 'haproxy'] as const;
@@ -79,4 +79,37 @@ export function listenAddrs(loc: CertificateLocation): string[] {
 // canDeployTo: a supported place that is still found and has no deployment running.
 export function canDeployTo(loc: CertificateLocation): boolean {
   return loc.supported && loc.missing_since === null && loc.active_deployment_id === null;
+}
+
+// CertificateGroup is the bindings of a Windows server that serve one certificate (cert null: they serve none Alice knows).
+export interface CertificateGroup {
+  key: string;
+  cert: CertificateRef | null;
+  items: CertificateLocation[];
+}
+
+// certificateSubject is the name a group shows for its certificate: the subject, else the label, else the start of
+// the fingerprint.
+export function certificateSubject(c: CertificateRef): string {
+  return c.subject_cn || c.label || c.fingerprint.slice(0, 16);
+}
+
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+// certificateGroups groups the bindings of a Windows server by the certificate they serve (design §15 Q5, W2 Ruling
+// 21): the groups by subject (then id), the bindings of each by canonical text, and a last group of the bindings that
+// serve no certificate.
+export function certificateGroups(locs: CertificateLocation[]): CertificateGroup[] {
+  const groups = new Map<string, CertificateGroup>();
+  for (const l of locs) {
+    const key = l.certificate?.id ?? '';
+    const g = groups.get(key) ?? { key, cert: l.certificate, items: [] };
+    g.items.push(l);
+    groups.set(key, g);
+  }
+  for (const g of groups.values()) g.items.sort((a, b) => byText(a.cert_path, b.cert_path) || byText(a.id, b.id));
+  return [...groups.values()].sort((a, b) => {
+    if (a.cert === null || b.cert === null) return a.cert === null ? (b.cert === null ? 0 : 1) : -1;
+    return byText(certificateSubject(a.cert), certificateSubject(b.cert)) || byText(a.key, b.key);
+  });
 }

@@ -63,6 +63,21 @@ describe('KVDeployDialog', () => {
     expect(within(runs[0]).getByRole('link', { name: 'Open this deployment' })).toHaveAttribute('href', '/deployments/d1');
   });
 
+  // R61: a Key Vault binding that deploys to an http.sys binding of a Windows server shows the Windows steps.
+  it('shows the Windows steps for a binding of a Windows server', async () => {
+    asRole('operator');
+    const win = bindingLocationFixture({ location_id: 'loc-w', target_name: 'web-iis', cert_path: 'http.sys/hostnameport/www.example.test:443' });
+    server.use(
+      http.post(`/api/v1/bindings/${BINDING_ID}/actions/deploy`, () => HttpResponse.json(accepted(['dw', 'loc-w']), { status: 202 })),
+      http.get('/api/v1/deployments/:id', () => new Promise(() => {})),
+    );
+    await renderWithStepUp(<KVDeployDialog binding={bindingFixture({ locations: [win], location_count: 1 })} certificate={cert()} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy now' }));
+    const run = await screen.findByTestId('deployment-run');
+    for (const name of ['Read the certificate from Key Vault', 'Import the chain', 'Import the certificate', 'Bind', 'Verify']) expect(within(run).getByText(name)).toBeInTheDocument();
+    expect(within(run).queryByText('Backup')).not.toBeInTheDocument();
+  });
+
   it('defaults to the CURRENT version even when it is not the first in the list', async () => {
     asRole('operator');
     await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert([V_NEW, V_OLD], V_OLD.version)} onClose={vi.fn()} />);

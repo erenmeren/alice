@@ -5,7 +5,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
 import { capabilityText, can } from '../api/capabilities';
-import { canDeployTo, firstServerName, isWindows, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
+import { canDeployTo, certificateGroups, certificateSubject, firstServerName, isWindows, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { canOn } from '../auth/permissions';
@@ -26,6 +26,9 @@ import { DisabledFeature } from './DisabledFeature';
 import { siteColumnLabel, softwareName } from './software';
 import { EmptyState, Panel, StatusBadge } from './ui';
 import { WRAP } from './wrap';
+
+// COLUMNS is the number of columns of the table (a group row spans them all).
+const COLUMNS = 7;
 
 const BLOCK_KEYS: Record<DeployBlock, string> = {
   status: 'locations.unavailable.status',
@@ -77,6 +80,22 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const settingsFor = items.find((l) => l.id === settingsId) ?? null;
   const asOf = websitesAsOf(items);
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
+  const windows = isWindows(target.type);
+  const row = (l: CertificateLocation) => (
+    <LocationRow
+      key={l.id}
+      l={l}
+      target={target}
+      site={siteLabel(l)}
+      blocked={state.block !== null}
+      canDeploy={canDeploy}
+      admin={admin}
+      locked={false}
+      onDeploy={() => setDeploying(l)}
+      onSettings={() => setSettingsId(l.id)}
+      onDriftChanged={() => void client.invalidateQueries({ queryKey: ['locations'] })}
+    />
+  );
 
   return (
     <Panel title={t('locations.title')} description={t(capabilityText(target, 'locations.intro'), { software })} aria-label={t('locations.title')} padded={false}>
@@ -136,35 +155,47 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               <Table.Tr>
                 <Table.Th>{siteColumnLabel(t, target.type)}</Table.Th>
                 <Table.Th>{t('locations.columns.port')}</Table.Th>
-                <Table.Th>{t(isWindows(target.type) ? 'locations.columns.binding' : 'locations.columns.file')}</Table.Th>
+                <Table.Th>{t(windows ? 'locations.columns.binding' : 'locations.columns.file')}</Table.Th>
                 <Table.Th>{t('locations.columns.certificate')}</Table.Th>
                 <Table.Th>{t('locations.columns.expires')}</Table.Th>
                 <Table.Th>{t('locations.columns.state')}</Table.Th>
                 <Table.Th>{t('locations.columns.actions')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
-            <Table.Tbody>
-              {items.map((l) => (
-                <LocationRow
-                  key={l.id}
-                  l={l}
-                  target={target}
-                  site={siteLabel(l)}
-                  blocked={state.block !== null}
-                  canDeploy={canDeploy}
-                  admin={admin}
-                  locked={false}
-                  onDeploy={() => setDeploying(l)}
-                  onSettings={() => setSettingsId(l.id)}
-                  onDriftChanged={() => void client.invalidateQueries({ queryKey: ['locations'] })}
-                />
-              ))}
-            </Table.Tbody>
+            {windows ? (
+              // R61, design §15 Q5: a Windows server's bindings grouped by the certificate they serve.
+              certificateGroups(items).map((g) => (
+                <Table.Tbody key={g.key} data-testid="certificate-group">
+                  <Table.Tr data-testid="certificate-group-row">
+                    <Table.Th colSpan={COLUMNS} scope="rowgroup">
+                      <Group gap="sm">
+                        {g.cert ? (
+                          <InternalLink to={`/certificates/${g.cert.id}`} translate="no" fw={600}>
+                            {certificateSubject(g.cert)}
+                          </InternalLink>
+                        ) : (
+                          <Text size="sm" fw={600}>
+                            {t('locations.group.noCertificate')}
+                          </Text>
+                        )}
+                        {g.cert && <Expiry notAfter={g.cert.not_after} />}
+                        <Text size="sm" c="dimmed">
+                          {t('locations.group.count', { count: g.items.length })}
+                        </Text>
+                      </Group>
+                    </Table.Th>
+                  </Table.Tr>
+                  {g.items.map(row)}
+                </Table.Tbody>
+              ))
+            ) : (
+              <Table.Tbody>{items.map(row)}</Table.Tbody>
+            )}
           </Table>
         </Table.ScrollContainer>
       )}
 
-      {deploying && <DeployDialog opened onClose={() => setDeploying(null)} location={deploying} />}
+      {deploying && <DeployDialog opened onClose={() => setDeploying(null)} location={deploying} siblings={windows ? items : undefined} />}
       {settingsFor && <LocationSettingsDialog location={settingsFor} canEdit={admin} onClose={() => setSettingsId(null)} />}
     </Panel>
   );

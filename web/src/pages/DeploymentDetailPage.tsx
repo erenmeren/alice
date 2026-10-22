@@ -2,11 +2,11 @@ import { Anchor, Code, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { deploymentView, rollbackForbidden } from '../api/deployments';
+import { deploymentView, isWindowsDeployment, rollbackForbidden, windowsPrevious } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
 import {
-  configErrorKey,
   deploymentStateKey,
+  stepErrorKey,
   stepNameKey,
   trustErrorKey,
   trustStatusKey,
@@ -68,6 +68,15 @@ function servedFingerprint(d: DeploymentDetail): string {
   return last?.params.served ?? '';
 }
 
+// chainDiffers is the chain note of a Windows deployment (R61): the lengths of the chain Windows serves (built) and of
+// the one Alice deployed, when the last verification that reported them found them different.
+function chainDiffers(d: DeploymentDetail): { built: string; deployed: string } | null {
+  let last: DeploymentStep | undefined;
+  for (const s of d.steps) if (s.name === 'verify' && s.params?.chain_differs === 'true' && (!last || s.n > last.n)) last = s;
+  if (!last?.params.built_chain || !last.params.deployed_chain) return null;
+  return { built: last.params.built_chain, deployed: last.params.deployed_chain };
+}
+
 // DeploymentDetailPage is one deployment: its status and state first (in words), what happened (the
 // outcome notice), then the sequence of steps and the recovery card, the operation details and the
 // evidence (fingerprints, backup folder). It follows a deployment that can still change.
@@ -94,6 +103,11 @@ export function DeploymentDetailPage() {
   }
   const d = dep.data;
   const view = deploymentView(d);
+  // R61: a deployment to an http.sys binding has no files: the binding, its own steps, the previous certificate by
+  // store and thumbprint instead of a backup folder, and the chain note.
+  const windows = isWindowsDeployment(d);
+  const previous = windows ? windowsPrevious(d) : null;
+  const chain = windows ? chainDiffers(d) : null;
   const time = (v: string | null) => (v ? formatDateTime(v, i18n.language) : '');
   // Ongoing recovery is described only while the deployment is not final; a finished one that went
   // through recovery says only that its outcome was confirmed, and after how many attempts.
@@ -134,8 +148,12 @@ export function DeploymentDetailPage() {
           ...(d.kv_version ? [{ key: 'version', label: t('deployments.versionLabel'), value: code(d.kv_version) }] : []),
         ]
       : []),
-    { key: 'file', label: t('deployments.fileLabel'), value: code(d.cert_path) },
-    { key: 'keyFile', label: t('deployments.keyFileLabel'), value: code(d.key_path) },
+    ...(windows
+      ? [{ key: 'binding', label: t('deployments.bindingLabel'), value: code(d.cert_path) }]
+      : [
+          { key: 'file', label: t('deployments.fileLabel'), value: code(d.cert_path) },
+          { key: 'keyFile', label: t('deployments.keyFileLabel'), value: code(d.key_path) },
+        ]),
     {
       key: 'requested',
       label: t('deployments.createdLabel'),
@@ -155,7 +173,7 @@ export function DeploymentDetailPage() {
     ...(trust ? [{ key: 'trust', label: t('deployments.trustLabel'), value: trustText(trust), testId: 'deployment-trust' }] : []),
   ];
   const failure = verifyFailureKey(d.verification?.failure ?? '');
-  const evidence = d.new_fingerprint !== '' || d.previous_fingerprint !== '' || served !== '' || d.backup_dir !== '';
+  const evidence = d.new_fingerprint !== '' || d.previous_fingerprint !== '' || served !== '' || d.backup_dir !== '' || previous !== null;
 
   return (
     <Stack gap="md">
@@ -183,11 +201,12 @@ export function DeploymentDetailPage() {
       <ErrorAlert error={dep.error} />
       <DeploymentOutcome d={d} />
       {view === 'working' && <Notice tone="info" role="status" title={t('deploy.working')} />}
+      {chain && <Notice tone="warning" testId="win-chain-differs" title={t('deployments.warnings.win_chain_differs', chain)} />}
 
       <div className={classes.detailGrid}>
         <div className={classes.stack}>
           <Panel title={t('deployments.page.sequence')} description={t('deployments.page.sequenceSub')} padded={false}>
-            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} />
+            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} windows={windows} />
           </Panel>
           {(recoveringNow || recoveredEarlier) && (
             <Panel title={t('deployments.recovery.title')} testId="recovery">
@@ -217,6 +236,11 @@ export function DeploymentDetailPage() {
                 {d.new_fingerprint !== '' && <LabelledCode text={t('deployments.new', { fingerprint: '' })} value={d.new_fingerprint} />}
                 {served !== '' && <LabelledCode text={t('deployments.stepDetail.served', { fingerprint: '' })} value={served} />}
                 {d.previous_fingerprint !== '' && <LabelledCode text={t('deployments.previous', { fingerprint: '' })} value={d.previous_fingerprint} />}
+                {previous && (
+                  <Text size="sm" style={WRAP} data-testid="windows-previous">
+                    {t(rollbackForbidden(d) ? 'deployments.previousWindowsForbidden' : 'deployments.previousWindows', previous)}
+                  </Text>
+                )}
                 {d.backup_dir !== '' && (
                   <LabelledCode text={t(rollbackForbidden(d) ? 'deployments.backupForbidden' : 'deployments.backup', { path: '' })} value={d.backup_dir} />
                 )}
@@ -233,7 +257,7 @@ export function DeploymentDetailPage() {
                 )}
                 {d.failed_step && <Text size="sm">{t('deployments.failedStep', { step: t(stepNameKey(d.failed_step)) })}</Text>}
                 {d.cause_step && <Text size="sm">{t('deployments.causeStep', { step: t(stepNameKey(d.cause_step)) })}</Text>}
-                {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(configErrorKey(d.helper_error)) })}</Text>}
+                {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(d.helper_error, windows)) })}</Text>}
               </Stack>
             </Panel>
           )}

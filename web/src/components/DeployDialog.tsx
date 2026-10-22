@@ -1,14 +1,14 @@
-import { Alert, Badge, Box, Button, Checkbox, Code, Group, Loader, NativeSelect, Stack, Text } from '@mantine/core';
+import { Alert, Badge, Box, Button, Checkbox, Code, Group, Loader, NativeSelect, Stack, Text, Title } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { certificateBlock, deployCandidates, listAllCertificates, MAX_CERTIFICATES, MAX_DEPLOY_LOCATIONS } from '../api/deployable';
-import { deploymentView, isSettled, watchDeployments } from '../api/deployments';
+import { deploymentView, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
 import { deployCertificate, getCertificate } from '../api/endpoints';
 import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/enums';
 import { isApiError } from '../api/client';
 import { isAbort } from '../api/jobs';
-import { canDeployTo } from '../api/webServer';
+import { canDeployTo, certificateGroups, certificateSubject, isWindows } from '../api/webServer';
 import { unavailableNote } from './DisabledFeature';
 import { CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
@@ -37,13 +37,16 @@ export interface DeployDialogProps {
   certificate?: Certificate;
   // location: deploy to this website (choose a certificate, unless certificate is given too).
   location?: CertificateLocation;
+  // siblings: with the location of a Windows server, the server's bindings: the dialog then picks among them, grouped
+  // by the certificate they serve, starting with the location (R61, design §15 Q5). Ignored for any other server.
+  siblings?: CertificateLocation[];
 }
 
 // DeployDialog deploys one certificate to one or several websites. All or nothing: the server
 // queues every deployment or none, and names only the first website that stops the request. After
 // "202" each deployment is followed by polling until it settles; success is announced only when a
 // deployment says succeeded.
-export function DeployDialog({ opened, onClose, certificate, location }: DeployDialogProps) {
+export function DeployDialog({ opened, onClose, certificate, location, siblings }: DeployDialogProps) {
   const { t } = useTranslation();
   // While the request is on its way the dialog cannot be closed: closing then would orphan
   // deployments the person has not seen.
@@ -58,7 +61,7 @@ export function DeployDialog({ opened, onClose, certificate, location }: DeployD
       closeOnEscape={!sending}
       withCloseButton={!sending}
     >
-      {opened && <DeployForm certificate={certificate} location={location} onClose={onClose} onSending={setSending} />}
+      {opened && <DeployForm certificate={certificate} location={location} siblings={siblings} onClose={onClose} onSending={setSending} />}
     </AppModal>
   );
 }
@@ -76,11 +79,13 @@ interface Run {
 function DeployForm({
   certificate,
   location,
+  siblings,
   onClose,
   onSending,
 }: {
   certificate?: Certificate;
   location?: CertificateLocation;
+  siblings?: CertificateLocation[];
   onClose: () => void;
   onSending: (sending: boolean) => void;
 }) {
@@ -100,8 +105,16 @@ function DeployForm({
   });
   const certs = useQuery({ queryKey: [...CERTIFICATES_KEY, 'deploy-candidates'], queryFn: listAllCertificates, enabled: certificate === undefined });
 
+  // bindings: the Windows server's bindings to pick from (the location among them), or null for one website.
+  const bindings =
+    location !== undefined && siblings !== undefined && isWindows(location.target_type)
+      ? siblings.some((l) => l.id === location.id)
+        ? siblings
+        : [location, ...siblings]
+      : null;
+  const windows = location !== undefined && isWindows(location.target_type);
   const [chosenId, setChosenId] = useState('');
-  const [picked, setPicked] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[]>(bindings && location ? [location.id] : []);
   const [confirmChain, setConfirmChain] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -114,16 +127,21 @@ function DeployForm({
     if (started) runsRef.current?.focus();
   }, [started]);
 
-  const candidates = certs.data && location ? deployCandidates(certs.data.items, location, now) : [];
+  // groups: the bindings by the certificate they serve; the picked ones are deployed in the order shown.
+  const groups = bindings ? certificateGroups(bindings) : [];
+  const pickedBindings = groups.flatMap((g) => g.items).filter((l) => picked.includes(l.id));
+  // A certificate is offered when it fits every picked binding (the location alone before any is picked).
+  const fitting = bindings ? (pickedBindings.length > 0 ? pickedBindings : location ? [location] : []) : location ? [location] : [];
+  const candidates = certs.data && location ? fitting.reduce((cs, l) => deployCandidates(cs, l, now), certs.data.items) : [];
   const chosen: Certificate | undefined = certificate ?? candidates.find((c) => c.id === chosenId);
   const block = chosen ? certificateBlock(chosen, now) : null;
   const incompleteChain = chosen !== undefined && !chosen.chain_complete;
   const chainBlocked = incompleteChain && !admin;
 
   const places = detail.data?.locations ?? [];
-  const targets: CertificateLocation[] = location ? [location] : places.filter((p) => picked.includes(p.id));
+  const targets: CertificateLocation[] = bindings ? pickedBindings : location ? [location] : places.filter((p) => picked.includes(p.id));
   const tooMany = targets.length > MAX_DEPLOY_LOCATIONS;
-  const knownLocations = location ? [location] : places;
+  const knownLocations = bindings ?? (location ? [location] : places);
 
   const ready =
     chosen !== undefined && block === null && !chainBlocked && (!incompleteChain || confirmChain) && targets.length > 0 && !tooMany && !busy;
@@ -229,7 +247,11 @@ function DeployForm({
                     <LocationWarning code={w} site={loc ? siteLabel(loc) : ''} mode={loc?.key_mode ?? ''} size="sm" />
                   </Alert>
                 ))}
-                <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} />
+                <DeploymentSteps
+                  steps={dep?.steps ?? []}
+                  status={dep?.status ?? 'pending'}
+                  windows={(loc !== undefined && isWindows(loc.target_type)) || (dep !== null && isWindowsDeployment(dep))}
+                />
                 {step && dep && !isSettled(dep) && (
                   <Text size="xs" c="dimmed" aria-live="polite">
                     {t('deployments.currentStep', { step: t(step) })}
@@ -282,7 +304,7 @@ function DeployForm({
       }}
     >
       <Stack gap="md">
-        <Text size="sm">{t('deploy.summary')}</Text>
+        <Text size="sm">{t(windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
 
         {certificate === undefined && (
           <>
@@ -320,7 +342,35 @@ function DeployForm({
           </Alert>
         )}
 
-        {location !== undefined && (
+        {bindings && (
+          <Checkbox.Group value={picked} onChange={setPicked} label={t('deploy.bindings')}>
+            <Stack gap="sm" mt="xs">
+              {groups.map((g) => {
+                const name = g.cert ? certificateSubject(g.cert) : '';
+                const choosable = g.items.filter((p) => p.deployable && canDeployTo(p)).map((p) => p.id);
+                return (
+                  <Box key={g.key} data-testid="deploy-certificate-group">
+                    <Group gap="xs" justify="space-between">
+                      <Title order={4} size="sm" translate={g.cert ? 'no' : undefined}>
+                        {g.cert ? name : t('locations.group.noCertificate')}
+                      </Title>
+                      {g.cert && choosable.length > 0 && (
+                        <Button size="xs" variant="subtle" aria-label={t('deploy.selectGroupNamed', { name })} onClick={() => setPicked(choosable)}>
+                          {t('deploy.selectGroup')}
+                        </Button>
+                      )}
+                    </Group>
+                    {g.items.map((p) => (
+                      <WebsiteChoice key={p.id} place={p} refused={refused === p.id} refusedText={refusedText} disabled={!p.deployable || !canDeployTo(p)} />
+                    ))}
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Checkbox.Group>
+        )}
+
+        {location !== undefined && !bindings && (
           <Stack gap={2}>
             <Text size="sm" fw={600}>
               {t('deploy.website')}

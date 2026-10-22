@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
-import { deploymentView, isSettled, watchDeployments } from '../api/deployments';
+import { deploymentView, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
 import { isAbort } from '../api/jobs';
 import { deployBinding, type Binding, type BindingDeployResult, type KVCertificateDetail } from '../api/keyvault';
 import { BINDINGS_KEY, DEPLOYMENTS_KEY, KV_CERTIFICATES_KEY, targetKey } from '../api/queryKeys';
@@ -149,7 +149,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                       <span translate="no">{site.target_name}</span> <Code translate="no">{site.cert_path}</Code>
                     </Text>
                   )}
-                  <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} vault />
+                  <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} vault windows={isWindowsDeployment(dep ?? { cert_path: site?.cert_path ?? '' })} />
                   {step && dep && !isSettled(dep) && (
                     <Text size="xs" c="dimmed" aria-live="polite">
                       {t('deployments.currentStep', { step: t(step) })}
