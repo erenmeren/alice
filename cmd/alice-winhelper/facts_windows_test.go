@@ -30,16 +30,34 @@ func requireReal(t *testing.T) {
 	}
 }
 
-// powershell runs a fixture or cross-check script (tests only: the helper never runs PowerShell).
-func powershell(t *testing.T, script string) []byte {
-	t.Helper()
+// runPowershell runs a fixture or cross-check script with extra environment variables (tests only: the
+// helper never runs PowerShell). Values reach the script through $env:, never through its text.
+func runPowershell(env map[string]string, script string) ([]byte, error) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
 		"$ErrorActionPreference = 'Stop'; "+script)
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	require.NoError(t, err, "powershell: %s\n%s", script, stderr.String())
+	if err != nil {
+		return out, errors.New(err.Error() + ": " + stderr.String())
+	}
+	return out, nil
+}
+
+func powershellEnv(t *testing.T, env map[string]string, script string) []byte {
+	t.Helper()
+	out, err := runPowershell(env, script)
+	require.NoError(t, err, "powershell: %s", script)
 	return out
+}
+
+func powershell(t *testing.T, script string) []byte {
+	t.Helper()
+	return powershellEnv(t, nil, script)
 }
 
 func TestRealHostIsElevated(t *testing.T) {

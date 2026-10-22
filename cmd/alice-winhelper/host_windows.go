@@ -28,14 +28,15 @@ import (
 // host is the real Windows machine behind winhelper.Host: it only reads, and every reading is a fixed
 // registry value, file, API call or program (design 2026-10-21 §7). Errors carry no OS text into the
 // answer: winhelper replaces them with fixed messages.
-type host struct{}
+type host struct {
+	now func() time.Time
+}
 
-func newHost() winhelper.Host { return host{} }
+func newHost() winhelper.Host {
+	return host{now: time.Now} //nolint:forbidigo // the helper is a separate binary; its clock is injected through host.now
+}
 
-var (
-	errNotImplemented = errors.New("alice-winhelper: not implemented yet")
-	errBadValue       = errors.New("alice-winhelper: a value has an unexpected type or size")
-)
+var errBadValue = errors.New("alice-winhelper: a value has an unexpected type or size")
 
 // dialTimeout bounds tls-probe's connection (winhelper bounds the handshake).
 const dialTimeout = 5 * time.Second
@@ -356,17 +357,21 @@ func openStore(name string) (windows.Handle, error) {
 	return h, err
 }
 
-func (host) SSLBindings(context.Context) ([]winproto.SSLBinding, error) {
-	return nil, errNotImplemented
+// SSLBindings reads http.sys's SSL tables through httpapi.dll (httpapi_windows.go).
+func (host) SSLBindings(context.Context) ([]winproto.SSLBinding, error) { return sslBindings() }
+
+// Certificate reads one machine store certificate with its chain and key facts (stores_windows.go).
+func (h host) Certificate(_ context.Context, store, sha1 string) (winproto.StoreCertificate, bool, error) {
+	return certificate(store, sha1, h.now())
 }
 
-func (host) Certificate(context.Context, string, string) (winproto.StoreCertificate, bool, error) {
-	return winproto.StoreCertificate{}, false, errNotImplemented
+// ExpiredInStore counts a machine store's expired certificates.
+func (h host) ExpiredInStore(_ context.Context, store string) (int, error) {
+	return expiredInStore(store, h.now())
 }
 
-func (host) ExpiredInStore(context.Context, string) (int, error) { return 0, errNotImplemented }
-
-func (host) AppcmdSites(context.Context) ([]byte, error) { return nil, errNotImplemented }
+// AppcmdSites runs appcmd for the IIS sites (appcmd_windows.go).
+func (host) AppcmdSites(ctx context.Context) ([]byte, error) { return appcmdSites(ctx) }
 
 // Dial is tls-probe's connection to an endpoint of the server itself.
 func (host) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
