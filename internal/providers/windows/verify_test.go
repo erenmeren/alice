@@ -2,6 +2,7 @@ package windows
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -179,4 +180,21 @@ func TestServerProbeRefusesWhatTheHelperCannotTake(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, reached, "no SNI is the helper's _")
 	assert.Equal(t, conns+1, e.srv.Connections())
+}
+
+// R61 Task 11: inventory hands the provider the locator as stored (providers.ParseLocator: a number is a json.Number),
+// not as discovered (an int): the provider reads the port of both forms and refuses a number that is not a port.
+func TestLocatorOfTheStoredLocator(t *testing.T) {
+	stored, err := providers.ParseLocator([]byte(`{"app_id":"` + winproto.AppIDIIS + `","host":"www.example.test","port":443,"type":"hostnameport"}`))
+	require.NoError(t, err)
+	loc := providers.CertLocation{Kind: providers.LocationWinSSLBinding, Locator: stored}
+	l, ok := locatorOf(loc)
+	require.True(t, ok)
+	assert.Equal(t, winproto.Locator{Type: winproto.BindingHostnamePort, Host: "www.example.test", Port: 443, AppID: winproto.AppIDIIS}, l)
+	assert.Len(t, Endpoints(loc, providers.VerifyOptions{}, nil), 1)
+	for _, n := range []string{"0", "65536", "-1", "4.5", "99999999999999999999"} {
+		bad := providers.Locator{"type": "hostnameport", "host": "www.example.test", "port": json.Number(n), "app_id": winproto.AppIDIIS}
+		_, ok := locatorOf(providers.CertLocation{Kind: providers.LocationWinSSLBinding, Locator: bad})
+		assert.False(t, ok, n)
+	}
 }

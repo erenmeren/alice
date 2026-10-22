@@ -2,6 +2,7 @@ package windows
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"strconv"
 
@@ -16,7 +17,7 @@ import (
 const maxEndpoints = 10
 
 // locatorOf reads a win_sslbinding location's locator into the protocol's Locator (a port stored as
-// JSON reads back as a float64). ok is false for a locator that is not one Alice deploys to (W2 Ruling
+// JSON reads back as a float64, or as the json.Number of providers.ParseLocator: inventory's form). ok is false for a locator that is not one Alice deploys to (W2 Ruling
 // 5: winproto.Locator.Canonical: a ccs record, a host that is not an ASCII lower-case name, an IP not in
 // its canonical form, a port outside 1-65535, an application id that is not a braced GUID).
 func locatorOf(loc providers.CertLocation) (winproto.Locator, bool) {
@@ -35,6 +36,10 @@ func locatorOf(loc providers.CertLocation) (winproto.Locator, bool) {
 	case float64:
 		if p == float64(int(p)) && p > 0 && p <= 65535 {
 			l.Port = int(p)
+		}
+	case json.Number: // the locator as inventory stored it (providers.ParseLocator)
+		if n, err := p.Int64(); err == nil && n > 0 && n <= 65535 {
+			l.Port = int(n)
 		}
 	}
 	_, ok := l.Canonical()
