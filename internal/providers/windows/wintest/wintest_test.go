@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -188,8 +189,8 @@ func TestModelFactsAndStores(t *testing.T) {
 		v["elevated"] != true || v["installation_type"] != "Server" {
 		t.Fatalf("%v", v)
 	}
-	if got := v["stores"].([]any); len(got) != 4 {
-		t.Fatalf("stores %v", got)
+	if got := fmt.Sprint(v["stores"]); got != "[My WebHosting CA Root]" {
+		t.Fatalf("stores %s: the real helper's order", got)
 	}
 	m.SetOS(winhelper.OSFacts{Build: "26100", Product: "Windows Server 2025", InstallationType: "Server Core", OpenSSHVersion: "OpenSSH_9.5"})
 	m.SetIIS(winproto.IISFacts{})
@@ -198,8 +199,8 @@ func TestModelFactsAndStores(t *testing.T) {
 		t.Fatalf("%v", v)
 	}
 	m.AddCertificate("Remote Desktop", pki.SelfSigned("rdp", pki.ECDSA256, now).CertPEM, nil, CertOptions{})
-	if _, v = call(t, m, "win-facts"); len(v["stores"].([]any)) != 5 {
-		t.Fatalf("a new store is listed: %v", v["stores"])
+	if _, v = call(t, m, "win-facts"); fmt.Sprint(v["stores"]) != "[My WebHosting CA Root Remote Desktop]" {
+		t.Fatalf("a new store is listed after the helper's four: %v", v["stores"])
 	}
 	// IIS missing: the dump still lists the http.sys entries, with no sites, and appcmd is never run.
 	m.AddBinding(winproto.SSLBinding{Type: "ccs", IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS})

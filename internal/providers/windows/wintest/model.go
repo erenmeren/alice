@@ -308,15 +308,30 @@ func (h host) IISFacts(context.Context) (winproto.IISFacts, error) {
 	return h.m.iis, nil
 }
 
+// helperStores are the stores the real helper names in win-facts, in its order (cmd/alice-winhelper's
+// factStores).
+var helperStores = []string{"My", "WebHosting", "CA", "Root"}
+
+// Stores answers as the real helper does: My, WebHosting, CA and Root in that order, those the model
+// holds, under the spelling of their first use. The real helper names no other store; a store a test
+// created beyond these four follows them, sorted, so that it stays visible to the test.
 func (h host) Stores(context.Context) ([]string, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
 	names := make([]string, 0, len(h.m.stores))
-	for _, s := range h.m.stores {
-		names = append(names, s.name)
+	for _, n := range helperStores {
+		if s, ok := h.m.stores[fold(n)]; ok {
+			names = append(names, s.name)
+		}
 	}
-	slices.Sort(names)
-	return names, nil
+	var others []string
+	for k, s := range h.m.stores {
+		if !slices.ContainsFunc(helperStores, func(n string) bool { return fold(n) == k }) {
+			others = append(others, s.name)
+		}
+	}
+	slices.Sort(others)
+	return append(names, others...), nil
 }
 
 func (h host) SSLBindings(context.Context) ([]winproto.SSLBinding, error) {

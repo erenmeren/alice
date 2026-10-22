@@ -138,7 +138,7 @@ func TestTestConnectionReport(t *testing.T) {
 	assert.Equal(t, 1, rep.HelperProtocol)
 	assert.Equal(t, providers.OSRelease{ID: "windows", VersionID: "10.0.20348.2700", PrettyName: "Windows Server 2022 Datacenter"}, rep.OS)
 	assert.Equal(t, &providers.WindowsFacts{Build: "10.0.20348.2700", Product: "Windows Server 2022 Datacenter", InstallationType: "Server",
-		Elevated: true, IISInstalled: true, IISVersion: "10.0", Stores: []string{"CA", "My", "Root", "WebHosting"},
+		Elevated: true, IISInstalled: true, IISVersion: "10.0", Stores: []string{"My", "WebHosting", "CA", "Root"},
 		OpenSSHVersion: "OpenSSH_for_Windows_8.1p1"}, rep.Windows)
 	assert.Equal(t, &providers.WebServerFacts{Software: "iis", Version: "10.0", Found: true, ConfigValid: true}, rep.WebServer)
 	assert.Empty(t, rep.Warnings)
