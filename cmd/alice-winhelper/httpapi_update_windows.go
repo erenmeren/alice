@@ -320,7 +320,7 @@ func readBase(k key) (winproto.SSLBinding, bool, error) {
 // exResult is what the query of one extended parameter type answered (TestReal* logs it for F9).
 type exResult struct {
 	Type   uint32
-	Status string // "set", "not_set" (ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND), "unsupported" (ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED)
+	Status string // "set", "not_set" (ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND), "unsupported" (ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED), "undecodable" (read, not carried)
 	Err    string // the query's answer when not "set" (diagnostics only, never in a helper answer)
 }
 
@@ -361,6 +361,9 @@ func readExtendedDetail(k key) ([]winproto.ExtendedParam, []exResult, error) {
 		case errors.Is(err, windows.ERROR_INVALID_PARAMETER), errors.Is(err, windows.ERROR_NOT_SUPPORTED):
 			results = append(results, exResult{Type: t, Status: "unsupported", Err: err.Error()})
 			continue
+		case undecodable(err):
+			results = append(results, exResult{Type: t, Status: "undecodable", Err: err.Error()})
+			continue
 		case err != nil:
 			return nil, results, err
 		}
@@ -368,6 +371,15 @@ func readExtendedDetail(k key) ([]winproto.ExtendedParam, []exResult, error) {
 		params = append(params, winproto.ExtendedParam{Type: t, Data: base64.StdEncoding.EncodeToString(data)})
 	}
 	return params, results, nil
+}
+
+// undecodable reports whether an Ex read failed after its query answered: a value the helper cannot
+// put in its portable form (a reserved pointer, a layout it does not know). Such a type is left out of
+// the record the helper reads, never written, and blocks nothing (W2 Task 6 ruling after runs 1 and 2):
+// a base update keeps the extended parameters on 2022 and 2025 (F9), so the record keeps it.
+func undecodable(err error) bool {
+	var e *exReadError
+	return errors.As(err, &e) && e.Stage != "query"
 }
 
 // readEx queries one extended parameter type of a record (QueryExact) and returns its portable form.

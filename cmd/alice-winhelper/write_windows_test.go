@@ -188,6 +188,29 @@ func TestExParamPortableForm(t *testing.T) {
 		_, err = flattenEx(r.b, r.base, off)
 		require.ErrorIs(t, err, errBadValue)
 	})
+	t.Run("2025 records", func(t *testing.T) {
+		// Runner run 2 (windows.yml 39855366097), Windows Server 2025: the raw type 2 query output of the
+		// hostnameport record alice-w2-f9.test:45331 (329 bytes at 0x277aacbfc160; its BufferSize says
+		// 127, the buffer is 121 bytes), and the portable form the ipport record's type 2 read as. Both
+		// hold the same (default) values, so both must have the same portable form.
+		raw, err := hex.DecodeString("0200b1130000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008c2bfac7a27000002000000000000000000000000000000060000007f00000030c2bfac7a27000061006c006900630065002d00770032002d00660039002e0074006500730074000000000000000000000000000800000090c2bfac7a270000010000000100000098c2bfac7a27000002000000040000009cc2bfac7a2700000300000004000000a0c2bfac7a2700000400000004000000a4c2bfac7a2700000500000001000000a8c2bfac7a270000000000000000000000000000ffffffff640000000000000001")
+		require.NoError(t, err)
+		require.Len(t, raw, 329)
+		data, err := flattenEx(raw, 0x277aacbfc160, 136)
+		require.NoError(t, err)
+		ipport := "AgAAAAAAAAAAAAAAAAAAAAYAAAB5AAAAIAAAAAAAAAAAAAAACAAAAIAAAAAAAAAAAQAAAAEAAACIAAAAAAAAAAIAAAAEAAAAjAAAAAAAAAADAAAABAAAAJAAAAAAAAAABAAAAAQAAACUAAAAAAAAAAUAAAABAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAD/////ZAAAAAAAAAAB"
+		assert.Equal(t, ipport, base64.StdEncoding.EncodeToString(data))
+		placed, err := relocateEx(data, 0x4000_0000)
+		require.NoError(t, err)
+		again, err := flattenEx(placed, 0x4000_0000, 0)
+		require.NoError(t, err)
+		assert.Equal(t, data, again)
+		// A reported size smaller than what the entries name is refused.
+		short := append([]byte(nil), raw...)
+		binary.LittleEndian.PutUint32(short[136+20:], 100)
+		_, err = flattenEx(short, 0x277aacbfc160, 136)
+		require.ErrorIs(t, err, errBadValue)
+	})
 	t.Run("error headers", func(t *testing.T) {
 		r := exRecord{b: make([]byte, 512), base: base}
 		binary.LittleEndian.PutUint32(r.b[off:], exErrorHeaders)

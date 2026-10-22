@@ -103,6 +103,18 @@ func flattenEx(rec []byte, base uint64, off int) ([]byte, error) {
 	case exHTTPPerformance:
 		size := int(binary.LittleEndian.Uint32(out[20:]))
 		outer := binary.LittleEndian.Uint64(out[exPointerOff:])
+		if binary.LittleEndian.Uint32(out[16:]) == perfParamMax && outer != 0 {
+			// The aggregate's BufferSize is not its extent: on a hostnameport record Windows Server
+			// 2025 (run 2) reported 127 for a 121-byte buffer, the 6 bytes that align it after the
+			// host name, running past the output. Its extent is computed from its entries, and the
+			// portable form carries that.
+			extent, err := perfExtent(at, outer, size)
+			if err != nil {
+				return nil, err
+			}
+			size = extent
+			binary.LittleEndian.PutUint32(out[20:], uint32(size)) //nolint:gosec // G115: bounded by the record
+		}
 		if err := pointer(exPointerOff, size); err != nil {
 			return nil, err
 		}
@@ -155,6 +167,32 @@ func flattenEx(rec []byte, base uint64, off int) ([]byte, error) {
 		return nil, errExUnsupported
 	}
 	return out, nil
+}
+
+// perfExtent is the extent of a performance aggregate at outer: its perfParamMax entries and the
+// values they point to, at most reported bytes, every byte inside the record at reads from.
+func perfExtent(at func(p uint64, n int) ([]byte, bool), outer uint64, reported int) (int, error) {
+	entries, ok := at(outer, perfParamMax*perfParamSize)
+	if !ok || reported < perfParamMax*perfParamSize {
+		return 0, errBadValue
+	}
+	extent := uint64(perfParamMax * perfParamSize)
+	for i := range perfParamMax {
+		e := entries[i*perfParamSize:]
+		q := binary.LittleEndian.Uint64(e[8:])
+		n := uint64(binary.LittleEndian.Uint32(e[4:]))
+		if q == 0 {
+			continue // checked by the caller
+		}
+		if q < outer || q-outer > uint64(reported) || n > uint64(reported)-(q-outer) {
+			return 0, errBadValue
+		}
+		extent = max(extent, q-outer+n)
+	}
+	if _, ok := at(outer, int(extent)); !ok { //nolint:gosec // G115: at most reported
+		return 0, errBadValue
+	}
+	return int(extent), nil //nolint:gosec // G115: at most reported
 }
 
 // relocateEx turns a portable parameter into the bytes to place at address at (8-byte aligned): the
