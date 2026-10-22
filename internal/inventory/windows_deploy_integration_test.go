@@ -204,6 +204,8 @@ func TestRequestDeploymentToAWindowsBinding(t *testing.T) {
 	h := f.h
 	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{web_server,config_valid}', 'false'::jsonb) WHERE id = $1", f.win)
 	require.NoError(t, err)
+	require.Equal(t, 1, h.count("SELECT count(*) FROM targets WHERE id = $1 AND facts->'web_server'->>'config_valid' = 'false'", f.win),
+		"the server's configuration reads invalid")
 
 	for name, loc := range map[string]uuid.UUID{"foreign": f.foreign, "key problem": f.keyProb, "ccs": f.ccs} {
 		_, err := h.svc.RequestDeployment(h.ctx, f.admin, inventory.DeployRequestInput{CertificateID: f.cert.ID, LocationIDs: []uuid.UUID{loc}})
@@ -263,7 +265,7 @@ func TestStartDeploymentWritesTheWindowsBackupRef(t *testing.T) {
 	assert.Equal(t, want, m.RollbackRequest(m.Guard).Backup, "the rollback names the recorded previous certificate")
 
 	// A scan between the material and the start record changed the binding's certificate: the token is still what the
-	// send compares, but the details' thumbprint may name the new certificate, so it is left out.
+	// send compares, but the details' store and thumbprint may be another certificate's, so both are left out.
 	r2 := f.request(f.spare)
 	f.start(r2.ID, func() {
 		_, err := h.db.Owner.Exec(h.ctx, `UPDATE certificate_locations SET cert_file_sha256 = $2,
@@ -272,7 +274,7 @@ func TestStartDeploymentWritesTheWindowsBackupRef(t *testing.T) {
 	})
 	got = nil
 	require.NoError(t, json.Unmarshal([]byte(f.rollbackInfo(r2.ID)), &got))
-	assert.Equal(t, map[string]any{"operation_id": r2.ID.String(), "store": "MY", "previous_sha256": derSHA(f.old)}, got)
+	assert.Equal(t, map[string]any{"operation_id": r2.ID.String(), "previous_sha256": derSHA(f.old)}, got)
 
 	// A file: exactly the Linux helper's backup folder, as before.
 	rf := f.request(f.file)

@@ -607,9 +607,10 @@ var (
 // startBackupRef is the rollback_info of the start record of deployment id, written before the first change. A file
 // (and any kind but a Windows binding): the Linux helper's backup folder of the operation. A Windows binding (W2
 // Ruling 17): no folder (the helper keeps the previous record in its journal) but the previous certificate, so that a
-// failed rollback can name it: the binding's store and the token as its DER SHA-256, both as the send uses them, and
-// the store's thumbprint the last discovery read, only while that discovery's certificate is still the token's (a
-// scan between the material and this record may name the new certificate). A value outside its rule is left out.
+// failed rollback can name it: the token as its DER SHA-256 (what the send compares), and the store and thumbprint
+// the last discovery read, both only while that discovery's certificate is still the token's (a scan between the
+// material and this record may name another certificate, or another store a third party rebound it into). A value
+// outside its rule is left out.
 func startBackupRef(ctx context.Context, tx pgx.Tx, id uuid.UUID, token string) (providers.BackupRef, error) {
 	var (
 		kind                 providers.LocationKind
@@ -625,10 +626,14 @@ FROM deployments d LEFT JOIN certificate_locations l ON l.id = d.location_id WHE
 		return providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()}, nil
 	}
 	ref := providers.BackupRef{OperationID: id, PreviousSHA256: token}
+	if fileSHA != token {
+		// The details belong to another certificate (a third party may also have moved the binding to another store).
+		return ref, nil
+	}
 	if backupStoreRE.MatchString(store) {
 		ref.Store = store
 	}
-	if backupSHA1RE.MatchString(sha1) && fileSHA == token {
+	if backupSHA1RE.MatchString(sha1) {
 		ref.PreviousSHA1 = sha1
 	}
 	return ref, nil
