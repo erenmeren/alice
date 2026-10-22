@@ -374,4 +374,23 @@ One line each: the ruling, then why.
   it on 2022 and 2025 with a second local administrator).
 - Real-runner acceptance (design §13 W1 item 4): met — windows.yml green on windows-2022 and windows-2025, run
   39778045600 (5th run; runs 1-4 fixed PSModulePath in tests, site state via appcmd env, sshd -T, PTY expectation,
-  group-membership idempotency): <https://github.com/erenmeren/alice/actions/runs/39778045600>
+  group-membership idempotency): <https://github.com/erenmeren/alice/actions/runs/39778045600>; after the final-review
+  fixes (C1's `command=` key line with the cross-account check) again green in run 39826796065 (7th of 7 runs; run 6
+  failed only in the test's own second-administrator setup, rewritten with net.exe):
+  <https://github.com/erenmeren/alice/actions/runs/39826796065>.
+- **`make ci` vuln stage**: `osv-scanner` fails on vite 8.3.1 (a dev dependency in `web/package-lock.json`, unchanged
+  by W1, the same on `main`): six advisories fixed in 8.3.3. W1 does not bump it; a lockfile update (Dependabot) is
+  the owner's call. Every other `make ci` stage passed locally (e2e 158 passed, hardening check, image check and scan).
+- `make secrets-scan` run from a git worktree scans no commits (the container cannot follow `.git` to the main
+  repository); the full-history scan with the main `.git` mounted found only the setup test's fake key blob, now
+  fingerprinted in `.gitleaksignore`.
+
+## Acceptance (design §13 W1)
+
+- A Windows server is added, its host key confirmed, its facts shown; a missing, old or not elevated helper is named
+  (ALC-WIN-0001..0003): Tasks 8, 13, 14, 15 (e2e journey EN and TR).
+- Discovery lists every http.sys binding; IIS bindings are their servers; foreign applications and CCS bindings are
+  unsupported with their reason; truncation warns and marks nothing missing: Tasks 3, 9, 12.
+- The certificate of each binding is linked to inventory by fingerprint (managed in network discovery): Task 12
+  (`TestWindowsScanStoresBindingLocations`), e2e Certificates page.
+- Real-runner helper tests and the fidelity test pass for the read subcommands: Task 11, runs above.
