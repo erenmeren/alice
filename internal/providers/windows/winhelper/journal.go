@@ -180,6 +180,9 @@ func (j journal) valid(op string) bool {
 			return false
 		}
 	}
+	if (j.ForbiddenFinal && j.Phase != winproto.PhaseRestoreForbidden) || (j.CauseError != "" && j.CauseStep == "") {
+		return false
+	}
 	return (j.Error == "" || slices.Contains(errorClasses, j.Error)) && (j.CauseError == "" || slices.Contains(errorClasses, j.CauseError)) &&
 		winproto.ValidForbidden(j.ForbiddenSPKI) && winproto.ValidForbidden(j.ForbiddenLeaf)
 }

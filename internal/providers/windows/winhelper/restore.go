@@ -97,7 +97,12 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 		} else {
 			j.ForbiddenFinal = true
 		}
-		_ = writeJournal(h, j)
+		// Unlike the other outcomes this write is load-bearing: a restore_forbidden answered while the
+		// journal keeps the shorter lists would let a later call restore. Always after the gate, so the
+		// error is answered OUTCOME_UNKNOWN (nothing of the record was written).
+		if err := writeJournal(h, j); err != nil {
+			return j, err
+		}
 		return j, nil
 	}
 	j.Phase = winproto.PhaseRestoring

@@ -1031,7 +1031,11 @@ func TestRecoveryAfterAKillAtEveryPoint(t *testing.T) {
 		"deploy.writing", "deploy.bound", "deploy.read_back", "deploy.committed",
 		"restore.restoring", "restore.bound", "restore.restored"}
 	for _, p := range points {
-		for _, lossy := range []bool{false, p == "deploy.bound"} {
+		variants := []bool{false}
+		if p == "deploy.bound" {
+			variants = append(variants, true)
+		}
+		for _, lossy := range variants {
 			name := p
 			if lossy {
 				name += ", the bind loses the Ex parameters"
@@ -1055,9 +1059,6 @@ func TestRecoveryAfterAKillAtEveryPoint(t *testing.T) {
 					return nil
 				}
 				if strings.HasPrefix(p, "restore.") {
-					if lossy {
-						return // the restore points follow a committed deploy only
-					}
 					f.committed(op1)
 					f.h.pointErr = kill
 					var out bytes.Buffer

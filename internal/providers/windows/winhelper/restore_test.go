@@ -86,6 +86,29 @@ func TestRestoreForbiddenOnEveryPath(t *testing.T) {
 			t.Fatal("not final", r)
 		}
 	})
+	t.Run("the grown guard cannot be written: OUTCOME_UNKNOWN, never restore_forbidden", func(t *testing.T) {
+		f := newFixture(t)
+		f.committed(op1)
+		f.h.writeStateErr = func(string) error { return errors.New("disk") }
+		o, _, out := f.restore(op1, []string{f.oldSPKI}, []string{})
+		wantError(t, o.Exit, out, 4, winproto.CodeOutcomeUnknown)
+		f.h.writeStateErr = nil
+		if j := f.journal(op1); j.Phase != winproto.PhaseCommitted || len(f.h.updates) != 1 {
+			t.Fatalf("%s %d", j.Phase, len(f.h.updates))
+		}
+		// The self-restore's forbidden outcome too.
+		g := newFixture(t)
+		n := 0
+		g.h.afterUpdate = func(b winproto.SSLBinding) winproto.SSLBinding {
+			if n++; n == 1 {
+				b.Flags = 0
+			}
+			return b
+		}
+		failPhase(g, winproto.PhaseRestoreForbidden)
+		o, _, out = g.deploy(op1, g.input(func(in *winproto.DeployInput) { in.ForbiddenSPKI = []string{g.oldSPKI} }))
+		wantError(t, o.Exit, out, 4, winproto.CodeOutcomeUnknown)
+	})
 	t.Run("journal lists", func(t *testing.T) {
 		f := newFixture(t)
 		f.deploy(op1, f.input(func(in *winproto.DeployInput) { in.ForbiddenLeaf = []string{f.oldSHA256} }))
@@ -316,6 +339,31 @@ func TestRestoreKeepsTheCauseClass(t *testing.T) {
 	}
 	if !reflect.DeepEqual(f.current(), f.rec) {
 		t.Fatal("not restored")
+	}
+}
+
+func TestJournalNewFieldsCrossChecks(t *testing.T) {
+	j := sampleJournal(op1)
+	j.Phase, j.ForbiddenFinal = winproto.PhaseRestoreForbidden, true
+	if !j.valid(op1) {
+		t.Fatal("refused a final restore_forbidden")
+	}
+	j.Phase = winproto.PhaseCommitted
+	if j.valid(op1) {
+		t.Fatal("accepted forbidden_final outside restore_forbidden")
+	}
+	j = sampleJournal(op1)
+	j.CauseError = winproto.ErrReadBack
+	if j.valid(op1) {
+		t.Fatal("accepted cause_error without cause_step")
+	}
+	j.CauseStep = winproto.StepBind
+	if !j.valid(op1) {
+		t.Fatal("refused cause_error with cause_step")
+	}
+	j.CauseError = "nope"
+	if j.valid(op1) {
+		t.Fatal("accepted an unknown cause class")
 	}
 }
 
