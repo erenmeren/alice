@@ -95,7 +95,12 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	m := wintest.NewModel()
+	return newEnvWith(t, wintest.NewModel())
+}
+
+// newEnvWith is newEnv on a model of the test's own (wintest.Demo).
+func newEnvWith(t *testing.T, m *wintest.Model) *env {
+	t.Helper()
 	srv := wintest.NewServer(t, m)
 	cred := newFakeCred(t)
 	e := &env{model: m, srv: srv, cred: cred, hk: &memHostKeys{}}

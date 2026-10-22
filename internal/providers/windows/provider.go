@@ -185,22 +185,6 @@ func (s *session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 	return rep, nil
 }
 
-// Discover reads the certificate half (Windows has no SSH key inventory, §2): iis-dump. Task 9
-// converts the dump into locations; until then the result carries no WebServer facts, which tells
-// inventory that certificates were not read, so nothing stored changes.
-func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
-	if err := s.open(); err != nil {
-		return providers.DiscoveryResult{}, err
-	}
-	if !req.Certificates {
-		return providers.DiscoveryResult{}, nil
-	}
-	if _, _, err := call[winproto.IISDumpResponse](ctx, s, winproto.SubIISDump); err != nil {
-		return providers.DiscoveryResult{}, err
-	}
-	return providers.DiscoveryResult{}, nil
-}
-
 // Bounds of the facts a connection test keeps.
 const (
 	maxStores      = 16

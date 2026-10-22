@@ -226,9 +226,6 @@ func TestTestConnectionNotElevated(t *testing.T) {
 	pe := providerErr(t, err)
 	assert.Equal(t, "windows.not_elevated", pe.Code)
 	assert.False(t, pe.Retryable)
-	// iis-dump refuses without elevation: the same reason.
-	_, err = e.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
-	assert.Equal(t, "windows.not_elevated", providerErr(t, err).Code)
 }
 
 // Ruling 13: a helper that does not know a subcommand is outdated.
@@ -247,16 +244,6 @@ func TestUnknownSubcommandIsOutdated(t *testing.T) {
 	assert.Equal(t, "windows.helper_outdated", pe.Code)
 	assert.Equal(t, "win-facts", pe.Params["subcommand"])
 	assert.Equal(t, winproto.CodeUnknownSubcommand, pe.Params["helper_code"])
-}
-
-func TestOtherRefusalsStayHelperRefused(t *testing.T) {
-	e := newEnv(t)
-	e.model.FailAppcmd(true)
-	_, err := e.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
-	pe := providerErr(t, err)
-	assert.Equal(t, "ssh.helper_refused", pe.Code)
-	assert.Equal(t, winproto.CodeIOError, pe.Params["helper_code"])
-	assert.True(t, pe.Retryable)
 }
 
 func TestMapHelper(t *testing.T) {
@@ -356,20 +343,6 @@ func TestAClosedSessionRunsNothing(t *testing.T) {
 	assert.Equal(t, "ssh.unreachable", providerErr(t, err).Code)
 	assert.Equal(t, dials, e.srv.Connections(), "a closed session dials nothing")
 	assert.Equal(t, []string{"version"}, e.srv.Commands())
-}
-
-// Windows has no SSH key inventory (§2 non-goal): a request for the SSH half sends nothing.
-func TestDiscoverIgnoresTheSSHHalf(t *testing.T) {
-	e := newEnv(t)
-	s := e.open(t)
-	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
-	require.NoError(t, err)
-	assert.Equal(t, providers.DiscoveryResult{}, res)
-	assert.Equal(t, []string{"version"}, e.srv.Commands())
-	res, err = s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true, Certificates: true})
-	require.NoError(t, err)
-	assert.Nil(t, res.WebServer, "until Task 9 converts the dump, the result says certificates were not read")
-	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
 }
 
 // Every call is a fresh connection (design §8), so a fresh env still dials once per call.
