@@ -25,7 +25,7 @@ const (
 
 // typeValues are the parameters of a refused target type.
 func typeValues() map[string]string {
-	return map[string]string{"values": strings.Join(append([]string{TypeLinux}, webServerTypes...), ", ")}
+	return map[string]string{"values": strings.Join(append(append([]string{TypeLinux}, webServerTypes...), TypeWindows), ", ")}
 }
 
 const (
@@ -36,6 +36,14 @@ const (
 // usernameRE is SEC-062's OS user name rule. It equals helperproto.ValidUser (inventory may not
 // import the linuxssh packages, §5.4); a test in Task 16 compares the two.
 var usernameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// windowsUserRE is R60 Ruling 1's Windows account rule (an optional NetBIOS domain of at most 15 characters and a
+// backslash, then a SAM account name of at most 20). It equals windows.ValidUser (inventory may not import the
+// provider); TestWindowsUserRuleEqualsTheProviders compares the two.
+var windowsUserRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9-]{0,14}\\)?[A-Za-z0-9][A-Za-z0-9._-]{0,19}$`)
+
+// windowsDefaultUser is the account a Windows server's setup script creates when none is named (windows.DefaultUser).
+const windowsDefaultUser = "alice"
 
 // labelRE is one RFC 1123 host name label (ASCII letters, digits, inner hyphens).
 var labelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -156,7 +164,7 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 	} else {
 		out.Name = name
 	}
-	if !IsServer(in.Type) {
+	if !IsSSHTarget(in.Type) {
 		errs.Add("type", validate.OneOf, typeValues())
 	}
 	if host, fe := NormalizeHost(in.Host); fe != nil {
@@ -170,10 +178,15 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 	case in.Port < 1 || in.Port > 65535:
 		errs.Add("port", validate.OutOfRange, map[string]string{"min": "1", "max": "65535"})
 	}
+	// A Linux account follows SEC-062, a Windows account R60 Ruling 1 (DOMAIN\name, kept as typed).
+	user, rule := ServiceUser, usernameRE
+	if in.Type == TypeWindows {
+		user, rule = windowsDefaultUser, windowsUserRE
+	}
 	out.Username = strings.TrimSpace(in.Username)
 	if out.Username == "" {
-		out.Username = ServiceUser
-	} else if !usernameRE.MatchString(out.Username) {
+		out.Username = user
+	} else if !rule.MatchString(out.Username) {
 		errs.Add("username", validate.Pattern, nil)
 	}
 	return out, errs

@@ -21,13 +21,14 @@ const (
 )
 
 // Target types (targets.type): a Linux server (SSH keys), an Nginx, Apache or HAProxy server (SSH keys and
-// certificates, spec §12) and an Azure Key Vault (spec §11). CreateTarget adds the servers,
-// CreateVault the vaults; neither accepts the other's type.
+// certificates, spec §12), a Windows server (http.sys bindings, no SSH keys; R60) and an Azure Key Vault (spec §11).
+// CreateTarget adds the servers, CreateVault the vaults; neither accepts the other's type.
 const (
 	TypeLinux         = "linux"
 	TypeNginx         = "nginx"
 	TypeApache        = "apache"
 	TypeHAProxy       = "haproxy"
+	TypeWindows       = providers.TargetTypeWindows
 	TypeAzureKeyVault = "azure_key_vault"
 )
 
@@ -38,8 +39,18 @@ var webServerTypes = []string{TypeNginx, TypeApache, TypeHAProxy}
 // IsWebServer reports whether typ is a web-server target type.
 func IsWebServer(typ string) bool { return slices.Contains(webServerTypes, typ) }
 
-// IsServer reports whether typ is a server (SSH keys): a Linux server or a web server.
+// IsServer reports whether typ is a server (SSH keys): a Linux server or a web server. A Windows server is not one: it
+// has no SSH key inventory (R60 Ruling 11), so the key routes and internal/sshkeys refuse it.
 func IsServer(typ string) bool { return typ == TypeLinux || IsWebServer(typ) }
+
+// IsSSHTarget reports whether Alice reaches a target of type typ over SSH with the platform key (host keys, connection
+// tests): a server or a Windows server (R60 Ruling 11).
+func IsSSHTarget(typ string) bool { return IsServer(typ) || typ == TypeWindows }
+
+// HasCertificateLocations reports whether a discovery of typ reports certificate locations (the certificate half of
+// Reconcile): a web server or a Windows server (R60 Ruling 11). Windows is not a web-server type: it does not deploy
+// in W1, so deployTypes must not offer it.
+func HasCertificateLocations(typ string) bool { return IsWebServer(typ) || typ == TypeWindows }
 
 // WebServerTypes returns a copy of the web-server target types.
 func WebServerTypes() []string { return slices.Clone(webServerTypes) }
@@ -135,6 +146,7 @@ type Facts struct {
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
 	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
 	WebServer      *providers.WebServerFacts     `json:"web_server,omitempty"` // what the last test or certificate scan learned of the web server
+	Windows        *providers.WindowsFacts       `json:"windows,omitempty"`    // what the last connection test of a Windows server learned (R60)
 	// KeyFiles: every account's candidate authorized_keys files of the last SSH scan (the files a
 	// deploy or a rotation may add a key to).
 	KeyFiles []providers.UserKeyFiles `json:"key_files,omitempty"`

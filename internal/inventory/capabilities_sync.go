@@ -20,7 +20,7 @@ func (s *Service) SyncCapabilities(ctx context.Context) (int, error) {
 	changed := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		changed = 0
-		for _, typ := range append([]string{TypeLinux, TypeAzureKeyVault}, webServerTypes...) {
+		for _, typ := range append([]string{TypeLinux, TypeWindows, TypeAzureKeyVault}, webServerTypes...) {
 			p, ok := s.providerFor(typ)
 			if !ok {
 				continue

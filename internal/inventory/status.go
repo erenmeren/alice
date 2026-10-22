@@ -124,12 +124,31 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		if r.WebServer != nil {
 			f.WebServer = mergeWebServerFacts(f.WebServer, *r.WebServer)
 		}
+		if r.Windows != nil {
+			f.Windows = cleanWindowsFacts(*r.Windows)
+		}
 		raw, err := json.Marshal(f)
 		if err != nil {
 			return err
 		}
 		return s.markConnected(ctx, tx, t, now, true, "connection_ok", raw)
 	})
+}
+
+// maxWindowsStores bounds the machine store names a Windows server's facts keep (the provider's own bound).
+const maxWindowsStores = 16
+
+// cleanWindowsFacts is a Windows report's facts made storable (jsonb refuses NUL): every string through clean, at
+// most maxWindowsStores stores. The report is not changed.
+func cleanWindowsFacts(w providers.WindowsFacts) *providers.WindowsFacts {
+	w.Build, w.Product, w.InstallationType = clean(w.Build), clean(w.Product), clean(w.InstallationType)
+	w.IISVersion, w.OpenSSHVersion = clean(w.IISVersion), clean(w.OpenSSHVersion)
+	stores := make([]string, 0, min(len(w.Stores), maxWindowsStores))
+	for _, s := range w.Stores[:min(len(w.Stores), maxWindowsStores)] {
+		stores = append(stores, clean(s))
+	}
+	w.Stores = stores
+	return &w
 }
 
 // mergeWebServerFacts is the stored web server facts after a report: the report replaces them, except

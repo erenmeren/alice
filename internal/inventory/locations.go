@@ -178,9 +178,10 @@ func prepareFields(d providers.DiscoveredCertificate, l providers.CertLocation, 
 	p := preparedLocation{}
 	switch {
 	case l.Problem == providers.CertProblemMissing || l.Problem == providers.CertProblemNotACertificate ||
-		l.Problem == providers.CertProblemLeafUnreadable:
+		l.Problem == providers.CertProblemLeafUnreadable || l.Problem == problemCertMissing:
 		// No certificate, or none Alice can tell is the one served: the stored link goes. For
 		// leaf_unreadable (REM-4) an older helper may have linked the intermediate after the leaf.
+		// cert_missing: a Windows binding names a certificate its store no longer holds (R60 Ruling 9).
 		p.gone = true
 	case l.Problem == "" && len(d.PEMChain) > 0:
 		// The leaf the server serves and the ordered path to its root only (B1-I1): what Alice
@@ -367,11 +368,19 @@ func listsEveryLocation(res providers.DiscoveryResult) bool {
 	})
 }
 
+// softwareIIS is the software a Windows server's facts name (the Windows provider's WebServerFacts.Software).
+const softwareIIS = "iis"
+
+// problemCertMissing is a Windows binding whose store does not hold the certificate it names (windows.ProblemCertMissing;
+// inventory may not import the provider): the location has no certificate (R60 Ruling 9).
+const problemCertMissing = "cert_missing"
+
 // configUsable reports whether the web server facts describe a configuration whose certificates may be
 // stored: the web server found, its configuration valid, and no error class (the provider sends none with a
-// valid configuration; one with an error class is treated as invalid).
+// valid configuration; one with an error class is treated as invalid). IIS need not be found (R60 Ruling 10):
+// http.sys bindings exist without it, and a plain Windows server's foreign bindings are still listed.
 func configUsable(n *providers.WebServerFacts) bool {
-	return n != nil && n.Found && n.ConfigValid && n.ConfigError == ""
+	return n != nil && (n.Found || n.Software == softwareIIS) && n.ConfigValid && n.ConfigError == ""
 }
 
 // existingLocation is what reconcileLocations reads of a stored location.

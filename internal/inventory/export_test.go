@@ -261,3 +261,15 @@ VALUES ($1, $2, $3, jsonb_build_object('host', $4::text, 'port', 443), $5, 'ok',
 	})
 	return target, err
 }
+
+// ValidWindowsUser exposes windowsUserRE to the test that compares it with windows.ValidUser.
+func ValidWindowsUser(s string) bool { return windowsUserRE.MatchString(s) }
+
+// ConfigUsable exposes configUsable.
+func ConfigUsable(n *providers.WebServerFacts) bool { return configUsable(n) }
+
+// WindowsDefaultUser is the Windows default account the inventory stores.
+const WindowsDefaultUser = windowsDefaultUser
+
+// ProblemCertMissing is the Windows problem whose location has no certificate.
+const ProblemCertMissing = problemCertMissing

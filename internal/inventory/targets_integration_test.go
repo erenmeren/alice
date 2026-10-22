@@ -191,7 +191,7 @@ func TestNginxTargets(t *testing.T) {
 	var verrs validate.Errors
 	require.ErrorAs(t, err, &verrs)
 	assert.Equal(t, "type", verrs[0].Field)
-	assert.Equal(t, map[string]string{"values": "linux, nginx, apache, haproxy"}, verrs[0].Params)
+	assert.Equal(t, map[string]string{"values": "linux, nginx, apache, haproxy, windows"}, verrs[0].Params)
 	// The address rules are the same (SEC-065), and so is the endpoint uniqueness within the type.
 	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "meta", Type: inventory.TypeNginx, Host: "169.254.169.254"})
 	require.ErrorAs(t, err, &verrs)
@@ -232,7 +232,7 @@ func TestNginxTargets(t *testing.T) {
 	plain := newHarness(t)
 	_, _, err = plain.svc.CreateTarget(plain.ctx, plain.user("bo", rbac.Admin, ""), inventory.NewTarget{Name: "n", Type: inventory.TypeNginx, Host: "10.0.0.11"})
 	require.ErrorAs(t, err, &verrs)
-	assert.Equal(t, map[string]string{"values": "linux, nginx, apache, haproxy"}, verrs[0].Params)
+	assert.Equal(t, map[string]string{"values": "linux, nginx, apache, haproxy, windows"}, verrs[0].Params)
 }
 
 // Nginx targets count toward the license limit like every other target (L-74).
