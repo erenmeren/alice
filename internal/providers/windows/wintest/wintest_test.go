@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -123,7 +124,7 @@ func TestModelDumpMatchesWhatWasAdded(t *testing.T) {
 		t.Fatalf("bindings %+v", d.Bindings)
 	}
 	for i, x := range want {
-		if d.Bindings[i] != x {
+		if !reflect.DeepEqual(d.Bindings[i], x) {
 			t.Fatalf("binding %d: got %+v want %+v", i, d.Bindings[i], x)
 		}
 	}

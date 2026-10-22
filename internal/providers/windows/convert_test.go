@@ -742,3 +742,38 @@ func TestDiscoverBoundsMissingLocations(t *testing.T) {
 	assert.Len(t, certs, winproto.MaxBindings)
 	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
 }
+
+// winproto.Locator.Canonical gives the text discovery gives the same record (W2 Task 1), for every
+// record W2 deploys to.
+func TestWriteLocatorCanonicalEqualsDiscovery(t *testing.T) {
+	for _, b := range []winproto.SSLBinding{
+		{Type: winproto.BindingHostnamePort, Host: "www.example.com", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingHostnamePort, Host: "*.example.com", Port: 8443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingHostnamePort, Host: "xn--bcher-kva.example", Port: 443, AppID: winproto.AppIDIISExpress},
+		{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingIPPort, IP: "::", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingIPPort, IP: "10.0.0.5", Port: 1, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingIPPort, IP: "2001:db8::1", Port: 65535, AppID: winproto.AppIDIIS},
+	} {
+		text, loc, ok := canonical(b)
+		require.True(t, ok, b)
+		wl := winproto.Locator{Type: loc["type"].(string), Port: loc["port"].(int), AppID: loc["app_id"].(string)}
+		wl.IP, _ = loc["ip"].(string)
+		wl.Host, _ = loc["host"].(string)
+		got, ok := wl.Canonical()
+		assert.True(t, ok, b)
+		assert.Equal(t, text, got)
+	}
+	// A record discovery lists but W2 does not deploy to (Ruling 5, ccs).
+	for _, b := range []winproto.SSLBinding{
+		{Type: winproto.BindingHostnamePort, Host: "bücher.example", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingCCS, Port: 443, AppID: winproto.AppIDIIS},
+	} {
+		_, loc, ok := canonical(b)
+		require.True(t, ok, b)
+		wl := winproto.Locator{Type: loc["type"].(string), Port: loc["port"].(int), AppID: loc["app_id"].(string)}
+		wl.Host, _ = loc["host"].(string)
+		_, ok = wl.Canonical()
+		assert.False(t, ok, b)
+	}
+}

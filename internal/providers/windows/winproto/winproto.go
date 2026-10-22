@@ -1,23 +1,30 @@
 // Package winproto is the protocol between Alice and the Windows helper (design 2026-10-21 §5, §7,
-// R60): subcommand names, exit codes, error codes, the JSON answers and the argument vocabulary that
-// both sides enforce. It uses only the standard library and helperproto, because the Windows helper
-// imports it too.
+// R60, R61): subcommand names, exit codes, error codes, the JSON inputs and answers and the argument
+// vocabulary that both sides enforce. It uses only the standard library and helperproto, because the
+// Windows helper imports it too.
 package winproto
 
 import (
+	"log/slog"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// Protocol and locations. Protocol 1 spans W1 and W2 (Ruling 2): W2 adds iis-deploy, iis-restore,
-// iis-status, iis-fence and iis-cleanup to it.
+// Protocol and locations. Protocol 1 spans W1 and W2 (W1 Ruling 2: nothing was released between
+// them): W2 adds iis-deploy, iis-restore, iis-status and iis-fence to it; iis-cleanup is W3. Version
+// is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 is W2's (W2 Ruling 2);
+// 1.0.0 is kept for the first released helper (W4). WriteMinVersion is the oldest helper Alice sends
+// a write subcommand to (W2 Ruling 3).
 const (
-	Protocol    = 1
-	MinProtocol = 1
-	Version     = "0.1.0" // helper version string; W2 sets "1.0.0"
+	Protocol        = 1
+	MinProtocol     = 1
+	Version         = "0.2.0"
+	WriteMinVersion = "0.2.0"
 
 	HelperPath   = `C:\Program Files\Alice\alice-helper.exe`
 	DataDir      = `C:\ProgramData\Alice\helper`
@@ -31,6 +38,15 @@ const (
 	SubWinFacts = "win-facts"
 	SubIISDump  = "iis-dump"
 	SubTLSProbe = "tls-probe"
+
+	// The write subcommands (W2). Their command line is the subcommand and ArgOp <operation id>
+	// only (W2 Ruling 4); iis-deploy reads a DeployInput and iis-restore a RestoreInput from stdin.
+	SubIISDeploy  = "iis-deploy"
+	SubIISRestore = "iis-restore"
+	SubIISStatus  = "iis-status"
+	SubIISFence   = "iis-fence"
+
+	ArgOp = "--op"
 )
 
 // Exit codes equal helperproto's.
@@ -51,6 +67,24 @@ const (
 	CodeProbeFailed       = "PROBE_FAILED"
 	CodeOutputTooLarge    = "OUTPUT_TOO_LARGE"
 	CodeStoreError        = "STORE_ERROR"
+
+	// The write subcommands' codes (design §7). Where a code means what the Linux helper's means it
+	// carries helperproto's name (a test compares).
+	CodeHashMismatch    = helperproto.CodeHashMismatch    // the record names another certificate than expected (exit 3, nothing changed)
+	CodeFenced          = helperproto.CodeFenced          // iis-deploy of a fenced operation (exit 3, nothing changed)
+	CodeSuperseded      = helperproto.CodeSuperseded      // iis-restore of an operation that is no longer the binding's latest
+	CodeOutcomeUnknown  = helperproto.CodeOutcomeUnknown  // the budget ended after the first durable write (exit 4)
+	CodeBusy            = helperproto.CodeBusy            // another process held helper.lock for LockWait
+	CodeRecoveryPending = helperproto.CodeRecoveryPending // the binding's latest operation is interrupted; ErrorResponse.PendingOp names it
+	CodeUnknownOp       = "UNKNOWN_OP"                    // no journal of that operation
+	CodeOperationExists = "OPERATION_EXISTS"              // iis-deploy of an operation the helper knows: a re-send never runs twice
+	CodeBadContent      = "BAD_CONTENT"                   // stdin is not a valid input
+	CodeTooLarge        = "TOO_LARGE"                     // stdin is over MaxDeployInput or MaxRestoreInput
+	CodeIISNotFound     = "IIS_NOT_FOUND"
+	CodeBindingNotFound = "BINDING_NOT_FOUND" // http.sys holds no record for the locator
+	CodeBackupMissing   = "BACKUP_MISSING"    // the previous certificate is not in its store with a usable key
+	CodeKeyUnusable     = "KEY_UNUSABLE"      // the certificate is in the store without a usable key
+	CodeJournalFailed   = "JOURNAL_FAILED"    // the journal directory cannot be trusted or written
 )
 
 // Binding types of SSLBinding.Type.
@@ -117,11 +151,46 @@ const (
 	PhaseRestoreForbidden = "restore_forbidden"
 )
 
+// Steps of a deployment or restore, with the values of providers.StepName* (a test compares them).
+const (
+	StepImportChain       = "import_chain"
+	StepImportCertificate = "import_certificate"
+	StepBind              = "bind"
+	StepJournal           = "journal"
+	StepRestore           = "restore"
+)
+
+// Step error classes (Step.Error and the answers' Error). ErrForbidden and ErrFileChanged equal
+// providers.DeployErrForbidden and providers.DeployErrFileChanged.
+const (
+	ErrKeyUnusable   = "key_unusable"
+	ErrReadBack      = "read_back"
+	ErrStore         = "store_error"
+	ErrFileChanged   = "file_changed"
+	ErrForbidden     = "forbidden"
+	ErrBackupMissing = "backup_missing"
+)
+
+// Bounds of the write subcommands. MaxExtendedBytes bounds each extended parameter's raw bytes.
+// WriteGrace is how long a write subcommand may still finish its step or self-restore after its
+// context ended (W2 Ruling 7).
+const (
+	MaxDeployInput    = 256 << 10
+	MaxRestoreInput   = 32 << 10
+	MaxExtendedParams = 16
+	MaxExtendedBytes  = 4096
+	MaxForbidden      = helperproto.MaxForbidden
+	LockWait          = 20 * time.Second
+	WriteGrace        = 8 * time.Second
+)
+
 // ErrorResponse is the helper's refusal (stdout, JSON), as helperproto's.
 type ErrorResponse struct {
 	OK      bool   `json:"ok"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// PendingOp is set with CodeRecoveryPending only: the interrupted operation (a ValidOpID).
+	PendingOp string `json:"pending_op,omitempty"`
 }
 
 // VersionResponse answers "version"; its tags are helperproto's so linuxssh.DecodeHelper reads it.
@@ -153,22 +222,32 @@ type WinFactsResponse struct {
 	OpenSSHVersion   string   `json:"openssh_version"`
 }
 
-// SSLBinding is one http.sys certificate binding (HTTP_SERVICE_CONFIG_SSL_*). Phase W0 (F2) has not
-// confirmed the extended parameters of Windows Server 2022 and later; they are added when it does.
+// ExtendedParam is one extended parameter of an http.sys record (an HTTP_SSL_SERVICE_CONFIG_EX_PARAM_TYPE
+// queried through the Ex configuration ids, F9): Data is the standard base64 of the parameter struct as
+// read, at most MaxExtendedBytes raw bytes, so the helper can write it back byte for byte.
+type ExtendedParam struct {
+	Type uint32 `json:"type"`
+	Data string `json:"data"`
+}
+
+// SSLBinding is one http.sys certificate binding (HTTP_SERVICE_CONFIG_SSL_*). Extended holds the
+// record's extended parameters (at most MaxExtendedParams, Windows Server 2022 and later), absent when
+// none is set.
 type SSLBinding struct {
-	Type                    string `json:"type"`
-	IP                      string `json:"ip,omitempty"`
-	Host                    string `json:"host,omitempty"`
-	Port                    int    `json:"port"`
-	AppID                   string `json:"app_id"`
-	CertSHA1                string `json:"cert_sha1"`
-	Store                   string `json:"store"`
-	Flags                   uint32 `json:"flags"`
-	CertCheckMode           uint32 `json:"cert_check_mode"`
-	RevocationFreshnessTime uint32 `json:"revocation_freshness_time"`
-	URLRetrievalTimeout     uint32 `json:"url_retrieval_timeout"`
-	CTLIdentifier           string `json:"ctl_identifier,omitempty"`
-	CTLStore                string `json:"ctl_store,omitempty"`
+	Type                    string          `json:"type"`
+	IP                      string          `json:"ip,omitempty"`
+	Host                    string          `json:"host,omitempty"`
+	Port                    int             `json:"port"`
+	AppID                   string          `json:"app_id"`
+	CertSHA1                string          `json:"cert_sha1"`
+	Store                   string          `json:"store"`
+	Flags                   uint32          `json:"flags"`
+	CertCheckMode           uint32          `json:"cert_check_mode"`
+	RevocationFreshnessTime uint32          `json:"revocation_freshness_time"`
+	URLRetrievalTimeout     uint32          `json:"url_retrieval_timeout"`
+	CTLIdentifier           string          `json:"ctl_identifier,omitempty"`
+	CTLStore                string          `json:"ctl_store,omitempty"`
+	Extended                []ExtendedParam `json:"extended,omitempty"`
 }
 
 // StoreCertificate is a certificate of a machine store. DER and Chain are standard base64; Chain is
@@ -292,3 +371,173 @@ func CanonicalAppID(s string) (string, bool) {
 
 // ValidStore reports whether s may name a certificate store.
 func ValidStore(s string) bool { return storeRE.MatchString(s) }
+
+// Locator names the http.sys record a write subcommand acts on: the providers.Locator of a
+// win_sslbinding location (type, ip or host, port, app_id).
+type Locator struct {
+	Type  string `json:"type"`
+	IP    string `json:"ip,omitempty"`
+	Host  string `json:"host,omitempty"`
+	Port  int    `json:"port"`
+	AppID string `json:"app_id"`
+}
+
+// Canonical is the locator's canonical text, the text W1's discovery gives the same record
+// ("http.sys/hostnameport/<host>:<port>", "http.sys/ipport/<addr:port>"). False for a locator Alice
+// does not deploy to: a ccs record, a host that is not a ValidHost, an IP not in its canonical form,
+// a port outside 1-65535, an application id that is not a lower-case braced GUID, or the other
+// type's member set.
+func (l Locator) Canonical() (string, bool) {
+	if !ValidAppID(l.AppID) || l.Port < 1 || l.Port > 65535 {
+		return "", false
+	}
+	switch l.Type {
+	case BindingHostnamePort:
+		if l.IP != "" || !ValidHost(l.Host) {
+			return "", false
+		}
+		return "http.sys/hostnameport/" + l.Host + ":" + strconv.Itoa(l.Port), true
+	case BindingIPPort:
+		ip, err := netip.ParseAddr(l.IP)
+		if err != nil || l.Host != "" || ip.Zone() != "" || ip.Unmap().String() != l.IP {
+			return "", false
+		}
+		return "http.sys/ipport/" + netip.AddrPortFrom(ip, uint16(l.Port)).String(), true //nolint:gosec // G115: 1..65535
+	}
+	return "", false
+}
+
+var hostRE = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// nilUUID is never an operation id.
+const nilUUID = "00000000-0000-0000-0000-000000000000"
+
+// ValidHost reports whether s is a host name Alice deploys to (W2 Ruling 5): labels of 1 to 63 ASCII
+// lower-case letters, digits and inner hyphens, at most 253 bytes, a leading "*." label allowed. An IDN
+// is deployable by its A-label; a U-label and a name in upper case (not folded) are refused.
+func ValidHost(s string) bool { return len(s) <= 253 && hostRE.MatchString(s) }
+
+// ValidOpID reports whether s is a lower-case UUID in 8-4-4-4-12 form, not the nil UUID.
+func ValidOpID(s string) bool { return s != nilUUID && helperproto.ValidOpID(s) }
+
+// ValidForbidden reports a forbidden list as helperproto's: at most MaxForbidden entries, each 64
+// lower-case hex digits, none twice.
+func ValidForbidden(list []string) bool { return helperproto.ValidForbidden(list) }
+
+// VersionAtLeast compares dotted-decimal versions (at most 4 parts of 1 to 5 digits, missing parts
+// zero): true when v is min or later. A version or minimum outside that form is never at least.
+func VersionAtLeast(v, min string) bool {
+	a, ok := versionParts(v)
+	b, okMin := versionParts(min)
+	if !ok || !okMin {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return true
+}
+
+func versionParts(v string) ([4]int, bool) {
+	var out [4]int
+	parts := strings.Split(v, ".")
+	if len(parts) > len(out) {
+		return out, false
+	}
+	for i, p := range parts {
+		if p == "" || len(p) > 5 || strings.Trim(p, "0123456789") != "" {
+			return out, false
+		}
+		out[i], _ = strconv.Atoi(p) // at most five digits always parse
+	}
+	return out, true
+}
+
+// DeployInput is the JSON on iis-deploy's stdin (W2 Ruling 4), at most MaxDeployInput bytes. ExpectSHA256
+// is the DER SHA-256 of the certificate the record must name now (the compare-and-swap token); ChainPEM is
+// the leaf and its intermediates; ForbiddenSPKI and ForbiddenLeaf are the rollback guard (R48, at most
+// MaxForbidden ValidForbidden hashes each). The target store is not sent: the helper keeps the record's.
+//
+// It carries a private key: its String, GoString and LogValue redact the values so %v, %+v, %#v, %s and
+// slog never print them. The type must still never be put into a log or an error: %d and json.Marshal
+// print the fields (the wire form requires marshaling).
+type DeployInput struct {
+	Locator       Locator  `json:"locator"`
+	ExpectSHA256  string   `json:"expect_sha256"`
+	ChainPEM      string   `json:"chain_pem"`
+	KeyPEM        string   `json:"key_pem"`
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+}
+
+// String redacts the key material so %v and %+v never print it.
+func (DeployInput) String() string { return "winproto.DeployInput{redacted}" }
+
+// GoString redacts the key material so %#v never prints it.
+func (DeployInput) GoString() string { return "winproto.DeployInput{redacted}" }
+
+// LogValue redacts the key material for log/slog handlers.
+func (DeployInput) LogValue() slog.Value { return slog.StringValue("redacted") }
+
+// Step is one step of a deployment or restore: Name a Step*, Status "ok" or "failed", Error an Err*
+// class or "" (never raw text).
+type Step struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Error  string `json:"error"`
+}
+
+// DeployResponse answers iis-deploy. Phase is PhaseCommitted, PhaseUnchanged, PhaseRestored,
+// PhaseRestoreFailed or PhaseRestoreForbidden; FailedStep, CauseStep and Error as
+// helperproto.NginxDeployResponse's. The SHA-1 and DER SHA-256 name the new and the previous
+// certificate, Store the store the record names (the one it named before: a binding never moves
+// between stores). AliceImported is false when the certificate was in the store already;
+// BuiltChainLength is the chain the helper built after the imports, leaf included, root excluded.
+type DeployResponse struct {
+	OK               bool   `json:"ok"`
+	Phase            string `json:"phase"`
+	FailedStep       string `json:"failed_step"`
+	CauseStep        string `json:"cause_step"`
+	Error            string `json:"error"`
+	Steps            []Step `json:"steps"`
+	NewSHA1          string `json:"new_sha1"`
+	NewSHA256        string `json:"new_sha256"`
+	PreviousSHA1     string `json:"previous_sha1"`
+	PreviousSHA256   string `json:"previous_sha256"`
+	Store            string `json:"store"`
+	AliceImported    bool   `json:"alice_imported"`
+	BuiltChainLength int    `json:"built_chain_length"`
+}
+
+// RestoreInput is the JSON on iis-restore's stdin, at most MaxRestoreInput bytes: the rollback guard as
+// it stands now, checked together with the journal's lists. Both members are required (possibly empty),
+// each at most MaxForbidden ValidForbidden hashes.
+type RestoreInput struct {
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+}
+
+// RestoreResponse answers iis-restore.
+type RestoreResponse struct {
+	OK         bool   `json:"ok"`
+	Phase      string `json:"phase"`
+	FailedStep string `json:"failed_step"`
+	CauseStep  string `json:"cause_step"`
+	Error      string `json:"error"`
+	Steps      []Step `json:"steps"`
+}
+
+// StatusResponse answers iis-status and iis-fence (helperproto.NginxStatusResponse without
+// backup_dir). Active is "another process holds helper.lock now".
+type StatusResponse struct {
+	OK                bool   `json:"ok"`
+	Phase             string `json:"phase"`
+	Active            bool   `json:"active"`
+	FailedStep        string `json:"failed_step"`
+	CauseStep         string `json:"cause_step"`
+	Error             string `json:"error"`
+	NewCertSHA256     string `json:"new_cert_sha256"`
+	CurrentCertSHA256 string `json:"current_cert_sha256"`
+}

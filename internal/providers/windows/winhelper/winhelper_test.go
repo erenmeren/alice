@@ -60,7 +60,7 @@ func wantError(t *testing.T, code int, out []byte, wantExit int, wantCode string
 func TestRunVersion(t *testing.T) {
 	h := &fakeHost{}
 	code, out := run(t, h, "version")
-	if code != 0 || string(out) != `{"ok":true,"helper":"0.1.0","protocol":1}`+"\n" {
+	if code != 0 || string(out) != `{"ok":true,"helper":"0.2.0","protocol":1}`+"\n" {
 		t.Fatalf("got %d %q", code, out)
 	}
 	code, out = run(t, h, "version", "x")
