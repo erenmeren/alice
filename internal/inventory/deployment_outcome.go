@@ -70,12 +70,14 @@ func verifyFailure(f *DeploymentFinish, failedStep, reason string, params map[st
 // uncertainCode is the code an uncertain outcome is recorded with. An answer Alice lost or could
 // not read (a dropped connection, a killed helper, malformed output: ssh.protocol_error, and
 // ssh.helper_missing for an exit status without JSON, which a killed helper also produces) says
-// nothing true about a deployment that is being recovered, so it is recorded as "not known yet".
-// Causes that name something real stay: ssh.unreachable, ssh.timeout, nginx.busy, and a verification
-// reason. A final state never goes through here.
+// nothing true about a deployment that is being recovered, so it is recorded as "not known yet";
+// windows.helper_missing is the Windows provider's name for the same answer (a killed helper: exit
+// 255 without JSON). Causes that name something real stay: ssh.unreachable, ssh.timeout, nginx.busy,
+// windows.busy (another process holds the helper's lock), windows.io_error (the helper's journal or
+// disk), and a verification reason. A final state never goes through here.
 func uncertainCode(code string) string {
 	switch code {
-	case "ssh.protocol_error", "ssh.helper_missing":
+	case "ssh.protocol_error", "ssh.helper_missing", "windows.helper_missing":
 		return interruptedCode
 	}
 	return firstCode(code)

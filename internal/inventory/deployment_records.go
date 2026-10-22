@@ -46,6 +46,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -187,14 +188,21 @@ func (m Material) VerifyRequest() providers.VerifyRequest {
 }
 
 // RollbackRequest restores the recorded operation and checks the recorded previous certificate; g is the rollback
-// guard as read right before this rollback (RollbackGuard), never an older one.
+// guard as read right before this rollback (RollbackGuard), never an older one. A location that is not a file carries
+// the rollback info its start record wrote (W2 Ruling 17: the Windows provider names the previous certificate of a
+// failed rollback from it, never from details a later discovery updated); a file's request carries none (the Linux
+// helper finds its backup by the operation).
 func (m Material) RollbackRequest(g providers.RollbackGuard) providers.RollbackRequest {
 	op := m.Deployment.ID
 	if m.Deployment.OperationID != nil {
 		op = *m.Deployment.OperationID
 	}
-	return providers.RollbackRequest{OperationID: op, Location: m.Location, OldFingerprint: m.PreviousFingerprint,
+	r := providers.RollbackRequest{OperationID: op, Location: m.Location, OldFingerprint: m.PreviousFingerprint,
 		OldChainLength: m.PreviousChainLength, OldSANs: m.OldSANs, KeyType: m.oldKeyType(), Verify: m.Verify, Guard: g, Backups: m.backups}
+	if !m.Location.Kind.IsFile() && m.Deployment.Backup != nil {
+		r.Backup = *m.Deployment.Backup
+	}
+	return r
 }
 
 func (m Material) oldKeyType() string {
@@ -588,6 +596,44 @@ FROM deployments d WHERE d.id = $1`, id, DeployStateRecovering).Scan(&exists, &p
 	return nil
 }
 
+// backupStoreRE and backupSHA1RE are winproto.ValidStore and winproto.ValidSHA1 (the inventory may not import the
+// provider's packages; TestBackupRulesEqualTheProtocols keeps them equal): a store name and a thumbprint the start
+// record of a Windows deployment writes into rollback_info.
+var (
+	backupStoreRE = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
+	backupSHA1RE  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
+
+// startBackupRef is the rollback_info of the start record of deployment id, written before the first change. A file
+// (and any kind but a Windows binding): the Linux helper's backup folder of the operation. A Windows binding (W2
+// Ruling 17): no folder (the helper keeps the previous record in its journal) but the previous certificate, so that a
+// failed rollback can name it: the binding's store and the token as its DER SHA-256, both as the send uses them, and
+// the store's thumbprint the last discovery read, only while that discovery's certificate is still the token's (a
+// scan between the material and this record may name the new certificate). A value outside its rule is left out.
+func startBackupRef(ctx context.Context, tx pgx.Tx, id uuid.UUID, token string) (providers.BackupRef, error) {
+	var (
+		kind                 providers.LocationKind
+		store, sha1, fileSHA string
+	)
+	err := tx.QueryRow(ctx, `SELECT d.location_kind, coalesce(l.details->>'store', ''), coalesce(l.details->>'cert_sha1', ''),
+    coalesce(l.cert_file_sha256, '')
+FROM deployments d LEFT JOIN certificate_locations l ON l.id = d.location_id WHERE d.id = $1`, id).Scan(&kind, &store, &sha1, &fileSHA)
+	if err != nil {
+		return providers.BackupRef{}, fmt.Errorf("inventory: read the location's previous certificate: %w", err)
+	}
+	if kind != providers.LocationWinSSLBinding {
+		return providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()}, nil
+	}
+	ref := providers.BackupRef{OperationID: id, PreviousSHA256: token}
+	if backupStoreRE.MatchString(store) {
+		ref.Store = store
+	}
+	if backupSHA1RE.MatchString(sha1) && fileSHA == token {
+		ref.PreviousSHA1 = sha1
+	}
+	return ref, nil
+}
+
 func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValues) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := checkClaim(ctx, tx); err != nil {
@@ -622,7 +668,11 @@ func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValue
 		if err != nil {
 			return err
 		}
-		backup, err := json.Marshal(providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()})
+		ref, err := startBackupRef(ctx, tx, id, v.ExpectCertSHA256)
+		if err != nil {
+			return err
+		}
+		backup, err := json.Marshal(ref)
 		if err != nil {
 			return err
 		}
@@ -640,8 +690,10 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 }
 
 // stepParamKeys are the step params a record keeps (providers.StepLogger's primitives; reason is the
-// failed verification's reason code, which a recovery reads back after a crash).
-var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error"}
+// failed verification's reason code, which a recovery reads back after a crash; chain_differs,
+// deployed_chain and built_chain: Windows serves a chain other than the one Alice deployed, W2 Ruling 16).
+var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error",
+	"chain_differs", "deployed_chain", "built_chain"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
@@ -653,7 +705,10 @@ var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "direct
 	// The Key Vault provider's closed params (Phase 5): the role a forbidden secret read lacks (F-41),
 	// the permission model, Azure's strict-shape code and request id, a refused client address, and
 	// "reason" (tenant_mismatch).
-	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason"}
+	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason",
+	// R61 (Windows): windows.helper_outdated names the helper's version and the one a write needs (W2 Ruling 3); a
+	// Windows rollback failure names the previous certificate's store and SHA-1 in place of backup_dir (Ruling 17).
+	"helper_version", "required_version", "store", "previous_sha1"}
 
 const (
 	maxParamValue = 256  // bytes of one param value

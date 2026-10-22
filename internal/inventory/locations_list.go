@@ -16,9 +16,10 @@ import (
 )
 
 // The websites a binding may be given (the binding dialog's list, carry 6): certificate locations
-// of web servers that are live and whose provider deploys, that the last scan found and that Alice
-// can deploy to (supported, a path the helper takes). Servers that are not connected right now are
-// listed too: readiness is checked by every deployment.
+// of servers that are live and whose provider deploys (web servers and Windows, W2 Ruling 20), that
+// the last scan found and that Alice can deploy to (supported; a file by two paths the helper takes,
+// a location of another kind by its locator, its canonical text and no key path: deployableIdentity).
+// Servers that are not connected right now are listed too: readiness is checked by every deployment.
 
 // LocationFilter selects deployable locations. KeyType is "", "rsa" or "ecdsa" (the key type of the
 // certificate the location holds; a location of an unknown type fits every certificate, as binding and
@@ -126,8 +127,9 @@ func (s *Service) ListDeployableLocations(ctx context.Context, f LocationFilter)
 FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL AND t.type = ANY($9::text[])
 WHERE l.supported AND l.missing_since IS NULL
-  AND length(l.cert_path) <= 4096 AND length(l.key_path) <= 4096
-  AND l.cert_path COLLATE "C" ~ $1 AND l.key_path COLLATE "C" ~ $1
+  AND CASE WHEN l.kind = 'server_file'
+      THEN length(l.cert_path) <= 4096 AND length(l.key_path) <= 4096 AND l.cert_path COLLATE "C" ~ $1 AND l.key_path COLLATE "C" ~ $1
+      ELSE l.locator IS NOT NULL AND l.key_path = '' AND l.cert_path <> '' AND char_length(l.cert_path) <= $11 END
   AND ($2 = '' OR l.key_type = $2 OR l.key_type = '')
   AND (NOT $3 OR l.binding_id IS NULL)
   AND ($4 = '' OR lower(t.name::text COLLATE "C") LIKE $4 ESCAPE '\'
@@ -137,7 +139,8 @@ WHERE l.supported AND l.missing_since IS NULL
   AND ($5::text IS NULL OR (lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id) > ($5::text COLLATE "C", $6::text COLLATE "C", $7::uuid))
   AND `+authz.OwnedVisible("t", "$10")+`
 ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id
-LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes(), f.Reach.SQL())
+LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes(), f.Reach.SQL(),
+		providers.MaxCanonicalLength)
 	if err != nil {
 		return DeployableLocationPage{}, fmt.Errorf("inventory: list deployable locations: %w", err)
 	}

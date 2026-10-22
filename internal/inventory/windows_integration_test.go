@@ -117,7 +117,8 @@ func TestCreateWindowsTargetKeepsTheDomainAccount(t *testing.T) {
 	var stored string
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT config->>'username' FROM targets WHERE id = $1", tg.ID).Scan(&stored))
 	assert.Equal(t, `CORP\alice-svc`, stored, "stored as typed")
-	assert.Equal(t, []string{"discover_certificates", "test_connection"}, tg.Capabilities)
+	assert.Equal(t, []string{"deploy_certificate", "discover_certificates", "test_connection", "verify_deployment"}, tg.Capabilities,
+		"W2 (R61): the Windows provider deploys")
 	assert.Equal(t, `CORP\alice-svc`, h.auditDetails("target.created")[0]["username"])
 
 	plain, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-02", Type: "windows", Host: "iis-02.corp.example"})
@@ -181,7 +182,7 @@ func TestWindowsScanStoresBindingLocations(t *testing.T) {
 	require.NotNil(t, l.Certificate)
 	assert.Equal(t, pki.Fingerprint(leaf.Cert), l.Certificate.Fingerprint)
 	assert.Equal(t, inventory.TypeWindows, l.TargetType)
-	assert.False(t, l.Deployable, "W1 does not deploy")
+	assert.True(t, l.Deployable, "W2 (R61): the Windows provider deploys")
 
 	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO discovery_certificates (fingerprint_sha256, is_leaf, subject_cn, issuer_cn, not_before, not_after,
     key_algorithm, pem, first_seen, last_seen) VALUES ($1, true, 'www.example.test', 'Win', $2, $3, 'ecdsa', $4, $5, $5)`,

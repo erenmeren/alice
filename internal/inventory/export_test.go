@@ -278,3 +278,11 @@ const ProblemCertMissing = problemCertMissing
 func WindowsAuthorizedKeysLine(publicKey, from string) string {
 	return windowsAuthorizedKeysLine(publicKey, from)
 }
+
+// DeployTypes exposes deployTypes: the target types whose registered provider deploys (W2 Ruling 20).
+func (s *Service) DeployTypes() []string { return s.deployTypes() }
+
+// ValidBackupStore and ValidBackupSHA1 expose the rules of a Windows rollback_info's store and thumbprint (winproto's).
+func ValidBackupStore(s string) bool { return backupStoreRE.MatchString(s) }
+
+func ValidBackupSHA1(s string) bool { return backupSHA1RE.MatchString(s) }

@@ -48,17 +48,18 @@ func IsServer(typ string) bool { return typ == TypeLinux || IsWebServer(typ) }
 func IsSSHTarget(typ string) bool { return IsServer(typ) || typ == TypeWindows }
 
 // HasCertificateLocations reports whether a discovery of typ reports certificate locations (the certificate half of
-// Reconcile): a web server or a Windows server (R60 Ruling 11). Windows is not a web-server type: it does not deploy
-// in W1, so deployTypes must not offer it.
+// Reconcile): a web server or a Windows server (R60 Ruling 11). Windows is not a web-server type (no web-server facts
+// gate its bindings); whether it deploys is its provider's capability, as for every type (deployTypes, W2 Ruling 20).
 func HasCertificateLocations(typ string) bool { return IsWebServer(typ) || typ == TypeWindows }
 
 // WebServerTypes returns a copy of the web-server target types.
 func WebServerTypes() []string { return slices.Clone(webServerTypes) }
 
-// deployTypes are the web-server types whose registered provider deploys certificates.
+// deployTypes are the target types with certificate locations whose registered provider deploys certificates: the
+// web servers, then Windows (W2 Ruling 20).
 func (s *Service) deployTypes() []string {
 	out := []string{}
-	for _, typ := range webServerTypes {
+	for _, typ := range append(WebServerTypes(), TypeWindows) {
 		if s.canDeploy(typ) {
 			out = append(out, typ)
 		}
