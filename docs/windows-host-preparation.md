@@ -61,8 +61,10 @@ the account is local.
    account** (`alice`, or the domain account of the domain setup, such as `CORP\alice-svc`) and **Server type**
    **Windows server**, and choose **Connect**.
 5. Alice shows **Is this your server?** with the server's **Fingerprint**. Compare it character by character with
-   the `SHA256:...` line of the same key type that the script printed in step 3 (you can print them again with
-   `& "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe" -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`). Only if it
+   the `SHA256:...` line of the same key type that the script printed in step 3. You can print them again with
+   `ssh-keygen.exe -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`, where `ssh-keygen.exe` lies next to `sshd.exe`:
+   `C:\Windows\System32\OpenSSH\ssh-keygen.exe` for the Windows capability, `C:\Program Files\OpenSSH\ssh-keygen.exe`
+   for the Win32-OpenSSH MSI (`(Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName` shows which). Only if it
    is the same, choose **Yes, this is my server**. If it differs, choose **No, cancel** and ask your network or
    security team.
 6. Alice tests the connection (the helper version, the Windows version, IIS, the token's elevation and the machine
@@ -139,8 +141,12 @@ The script stops at the first error. It changes nothing before it has checked th
 6. Copies the checked helper into `C:\Program Files\Alice` (owner Administrators, full control for Administrators
    and SYSTEM, read and execute for Alice's account, nothing inherited), checks the copy's checksum again and
    installs it as `C:\Program Files\Alice\alice-helper.exe`. Creates `C:\ProgramData\Alice` and
-   `C:\ProgramData\Alice\helper` for the helper's data with access for Administrators and SYSTEM only; a folder there
-   that is a link or junction is refused.
+   `C:\ProgramData\Alice\helper` for the helper's data with access for Administrators and SYSTEM only. Each folder's
+   access is set on the folder itself (its contents inherit it; the script never changes a whole tree, which would
+   follow junctions). A folder that already exists is refused when it is a link or junction, when it or anything in it
+   is owned by someone other than Administrators, SYSTEM or you, or when anything below it is a link or junction:
+   any user may create folders in `C:\ProgramData` before the script runs. Check and remove such a folder, then run
+   the script again.
 7. Adds the firewall rule `Alice-SSH-In` (inbound TCP 22 from `$AliceAddress`), replacing an earlier one. OpenSSH
    Server's own rule `OpenSSH-Server-In-TCP` accepts port 22 from every address; when Alice's address is set the
    script warns about it, and you can disable it if nobody else signs in over SSH.
@@ -200,8 +206,16 @@ Choose **Remove server** in Alice, then on the server, in an elevated PowerShell
 3. Remove `C:\Program Files\Alice` and `C:\ProgramData\Alice`, the firewall rule
    (`Remove-NetFirewallRule -Name Alice-SSH-In`) and the event source
    (`[System.Diagnostics.EventLog]::DeleteEventSource('Alice Helper')`).
-4. Remove the local account `alice` (`Remove-LocalUser alice`), or the domain account from the group policy of the
-   domain setup. The deny rights of a removed local account disappear with it.
+4. Remove the account's two deny rights first: removing an account does not remove it from the User Rights
+   Assignment, where its SID stays as an orphaned entry. Either open **Local Security Policy** (`secpol.msc`),
+   **Local Policies**, **User Rights Assignment**, and remove the account from "Deny log on locally" and "Deny log on
+   through Remote Desktop Services"; or note its SID (`(Get-LocalUser alice).SID.Value`), run
+   `secedit /export /cfg C:\AliceSetup\rights.inf /areas USER_RIGHTS`, delete `*<SID>` (and its comma) from the
+   lines `SeDenyInteractiveLogonRight` and `SeDenyRemoteInteractiveLogonRight` of that file, and run
+   `secedit /configure /db C:\AliceSetup\rights.sdb /cfg C:\AliceSetup\rights.inf /areas USER_RIGHTS`. An entry left
+   behind after the account was removed shows as a bare SID (`S-1-5-21-...`) and can be removed the same ways.
+   Then remove the local account `alice` (`Remove-LocalUser alice`), or the domain account from the group policy of
+   the domain setup.
 5. If nothing else uses it, remove OpenSSH Server
    (`Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`) or keep it.
 

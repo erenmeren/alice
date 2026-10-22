@@ -71,7 +71,19 @@ func TestSetupScriptEmbedsTheHelperChecksums(t *testing.T) {
 	assert.Contains(t, s, "'Alice Helper'")
 	assert.Contains(t, s, "ssh-keygen.exe")
 	assert.Contains(t, s, "-t")
-	assert.True(t, strings.HasSuffix(s, "Write-Output 'This server is ready for Alice.'\n"))
+	assert.True(t, strings.HasSuffix(s, "Write-Output 'This server is ready for Alice.'\n}\n"))
+	assert.Contains(t, s, "\n& {\nSet-StrictMode -Version 3\n", "the body is one block, so a pasted copy stops as a whole")
+
+	// Review round 1: no ACL change follows junctions, and an existing directory is checked first.
+	assert.NotContains(t, s, "'/T'", "icacls never recurses (it follows junctions)")
+	assert.Contains(t, s, "Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint", "a link or junction below is refused")
+	assert.Contains(t, s, ".GetOwner([System.Security.Principal.SecurityIdentifier])", "an existing directory's owner is checked")
+	assert.Contains(t, s, "if (Test-Path -LiteralPath $Path) { Assert-SafeDirectory $Path }")
+	assert.Contains(t, s, "New-AdminOnlyDirectory (Split-Path -Parent $HelperPath) -ReadExecute @($UserSid)\n")
+	assert.Contains(t, s, "foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) { New-AdminOnlyDirectory $d }\n")
+	assert.Contains(t, s, "Remove-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue\n")
+	assert.Contains(t, s, "-cnotcontains $keyBlob", "key blobs are compared with case")
+	assert.Regexp(t, `(?s)Test-Helper \$staging\n\} catch \{\n\s+Remove-Item -LiteralPath \$staging`, s, "a staged copy that fails the check is removed")
 	assert.NotContains(t, s, "LocalAccountTokenFilterPolicy", "the script never sets the policy (W0 F3)")
 	assert.NotContains(t, s, "StrictHostKeyChecking")
 	for i, r := range s {

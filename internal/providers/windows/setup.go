@@ -141,6 +141,8 @@ const scriptTemplate = `#Requires -RunAsAdministrator
 # Prepares this Windows server for Alice. Run it once in an elevated PowerShell (Windows PowerShell 5.1 or
 # PowerShell 7), in the directory that holds alice-helper.exe from the Alice bundle. Running it again is safe.
 # What it changes and how to undo it: docs/windows-host-preparation.md.
+# The whole script is one block, so a pasted copy also stops as a whole at the first error.
+& {
 Set-StrictMode -Version 3
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -161,6 +163,7 @@ $AuthorizedKeysFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
 $SshdConfig = 'C:\ProgramData\ssh\sshd_config'
 $AdministratorsSid = 'S-1-5-32-544'
 $SystemSid = 'S-1-5-18'
+$CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $NL = [string][char]13 + [char]10
 
@@ -191,15 +194,41 @@ function Assert-RealDirectory([string]$Path) {
     }
 }
 
+# An existing directory must be owned by Administrators, SYSTEM or the administrator running the script, and hold
+# no link or junction anywhere below it (anyone may create folders in C:\ProgramData before this script runs).
+function Assert-OwnedByAdministrators([string]$Path) {
+    $owner = (Get-Acl -LiteralPath $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if (@($AdministratorsSid, $SystemSid, $CurrentSid) -notcontains $owner) {
+        throw "$Path is owned by $owner, not by Administrators or SYSTEM, so someone else may have created it. Check and remove it, then run this script again."
+    }
+}
+
+function Assert-SafeDirectory([string]$Path) {
+    Assert-RealDirectory $Path
+    Assert-OwnedByAdministrators $Path
+    $link = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint | Select-Object -First 1)
+    if ($link.Count -gt 0) {
+        throw "$Path holds a link or junction ($($link[0].FullName)). Remove it, then run this script again."
+    }
+    foreach ($c in @(Get-ChildItem -LiteralPath $Path -Recurse -Force)) { Assert-OwnedByAdministrators $c.FullName }
+}
+
+# Creates a directory, or checks an existing one (Assert-SafeDirectory), and gives it Set-AdminOnlyAcl.
+function New-AdminOnlyDirectory([string]$Path, [string[]]$ReadExecute = @()) {
+    if (Test-Path -LiteralPath $Path) { Assert-SafeDirectory $Path } else { New-Item -ItemType Directory -Path $Path | Out-Null }
+    Assert-RealDirectory $Path
+    Set-AdminOnlyAcl $Path -Container -ReadExecute $ReadExecute
+}
+
 # Owner Administrators; full control for Administrators and SYSTEM only (plus read and execute for the SIDs in
-# $ReadExecute), inheritance from the parent removed. A directory's children inherit it.
+# $ReadExecute), inheritance from the parent removed. Only the path itself is changed (never /T, which follows
+# junctions): a directory's children inherit the new entries.
 function Set-AdminOnlyAcl([string]$Path, [switch]$Container, [string[]]$ReadExecute = @()) {
     $icacls = "$env:WINDIR\System32\icacls.exe"
     $inherit = ''
-    $tree = @()
-    if ($Container) { $inherit = '(OI)(CI)'; $tree = @('/T') }
-    Invoke-Checked "icacls (owner of $Path)" $icacls (@($Path, '/setowner', "*$AdministratorsSid") + $tree + @('/C', '/Q')) | Out-Null
-    Invoke-Checked "icacls (reset of $Path)" $icacls (@($Path, '/reset') + $tree + @('/C', '/Q')) | Out-Null
+    if ($Container) { $inherit = '(OI)(CI)' }
+    Invoke-Checked "icacls (owner of $Path)" $icacls @($Path, '/setowner', "*$AdministratorsSid", '/C', '/Q') | Out-Null
+    Invoke-Checked "icacls (reset of $Path)" $icacls @($Path, '/reset', '/C', '/Q') | Out-Null
     $grants = @('/grant:r', "*$($AdministratorsSid):$($inherit)F", "*$($SystemSid):$($inherit)F")
     foreach ($s in $ReadExecute) { $grants += "*$($s):$($inherit)RX" }
     Invoke-Checked "icacls (access of $Path)" $icacls (@($Path, '/inheritance:r') + $grants + @('/Q')) | Out-Null
@@ -336,7 +365,7 @@ try {
 $keyBlob = ($AuthorizedKey -split ' ')[2]
 $existing = @()
 if (Test-Path -LiteralPath $AuthorizedKeysFile) { $existing = @([System.IO.File]::ReadAllLines($AuthorizedKeysFile)) }
-$others = @($existing | Where-Object { @($_ -split '\s+') -notcontains $keyBlob })
+$others = @($existing | Where-Object { @($_ -split '\s+') -cnotcontains $keyBlob })
 $same = @($existing | Where-Object { $_.TrimEnd() -ceq $AuthorizedKey })
 if ($same.Count -ne 1 -or ($others.Count + 1) -ne $existing.Count) {
     [System.IO.File]::WriteAllText($AuthorizedKeysFile, ((@($others) + $AuthorizedKey) -join $NL) + $NL, $Utf8)
@@ -373,22 +402,20 @@ if ($new -cne $old) {
 
 # 7. The helper and its data directory: Administrators and SYSTEM only (the account may also read and run the
 # helper, so an unelevated sign-in is told so by the helper itself).
-$helperDir = Split-Path -Parent $HelperPath
-New-Item -ItemType Directory -Force -Path $helperDir | Out-Null
-Assert-RealDirectory $helperDir
-Set-AdminOnlyAcl $helperDir -Container -ReadExecute @($UserSid)
+New-AdminOnlyDirectory (Split-Path -Parent $HelperPath) -ReadExecute @($UserSid)
 $staging = "$HelperPath.new"
 Copy-Item -LiteralPath $HelperSource -Destination $staging -Force
-Test-Helper $staging
-Move-Item -LiteralPath $staging -Destination $HelperPath -Force
-foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) {
-    New-Item -ItemType Directory -Force -Path $d | Out-Null
-    Assert-RealDirectory $d
-    Set-AdminOnlyAcl $d -Container
+try {
+    Test-Helper $staging
+} catch {
+    Remove-Item -LiteralPath $staging -Force -ErrorAction SilentlyContinue
+    throw
 }
+Move-Item -LiteralPath $staging -Destination $HelperPath -Force
+foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) { New-AdminOnlyDirectory $d }
 
 # 8. The firewall rule for sshd, from Alice's address.
-__ADDRESS_NOTICE__Get-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+__ADDRESS_NOTICE__Remove-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue
 New-NetFirewallRule -Name 'Alice-SSH-In' -DisplayName 'Alice SSH (TCP 22)' -Description 'Alice signs in to alice-helper.exe over SSH.' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress $AliceAddress -Action Allow -Profile Any | Out-Null
 if ("$AliceAddress" -ne 'Any' -and @(Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Where-Object { "$($_.Enabled)" -eq 'True' }).Count -gt 0) {
     Write-Warning 'The firewall rule OpenSSH-Server-In-TCP (added with OpenSSH Server) still accepts port 22 from every address. Disable it if nobody else signs in over SSH.'
@@ -405,4 +432,5 @@ foreach ($k in @(Get-ChildItem -Path (Join-Path $SshDir 'ssh_host_*_key.pub'))) 
     Write-Host (Invoke-Checked 'ssh-keygen' $SshKeygen @('-lf', $k.FullName))
 }
 Write-Output 'This server is ready for Alice.'
+}
 `
