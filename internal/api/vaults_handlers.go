@@ -375,8 +375,8 @@ func (s *server) releaseVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, kvVersionJSON(got))
 }
 
-// vaultTypes are the values of GET /targets?type=.
-var vaultTypes = append(append([]string{inventory.TypeLinux}, inventory.WebServerTypes()...), inventory.TypeAzureKeyVault)
+// vaultTypes are the values of GET /targets?type= (every target type, not only Key Vaults; the name is historical).
+var vaultTypes = append(append([]string{inventory.TypeLinux}, inventory.WebServerTypes()...), inventory.TypeWindows, inventory.TypeAzureKeyVault)
 
 // accessCheckRequest is the optional body of POST /targets/{id}/actions/test.
 type accessCheckRequest struct {

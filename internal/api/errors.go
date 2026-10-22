@@ -286,6 +286,13 @@ var (
 	ErrHAProxyProfileMissing = ErrorCode{Code: "ALC-HAP-0003", Reason: "haproxy.profile_missing", Status: http.StatusBadGateway}
 	ErrHAProxyHelperTooOld   = ErrorCode{Code: "ALC-HAP-0004", Reason: "haproxy.helper_too_old", Status: http.StatusBadGateway}
 
+	// Windows servers (R60). Every other helper refusal of a Windows server stays ssh.helper_refused with its helper_code.
+	// helper_outdated carries helper_protocol and required_protocol, or subcommand and helper_code (a helper that does
+	// not know a subcommand), so its texts name no number; not_elevated: the helper's token is not elevated.
+	ErrWINHelperMissing  = ErrorCode{Code: "ALC-WIN-0001", Reason: "windows.helper_missing", Status: http.StatusBadGateway}
+	ErrWINHelperOutdated = ErrorCode{Code: "ALC-WIN-0002", Reason: "windows.helper_outdated", Status: http.StatusBadGateway}
+	ErrWINNotElevated    = ErrorCode{Code: "ALC-WIN-0003", Reason: "windows.not_elevated", Status: http.StatusBadGateway}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -617,6 +624,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
 		ErrApacheNotFound, ErrApacheConfigInvalid, ErrApacheProfileMissing, ErrApacheHelperTooOld,
 		ErrHAProxyNotFound, ErrHAProxyConfigInvalid, ErrHAProxyProfileMissing, ErrHAProxyHelperTooOld,
+		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,

@@ -1103,14 +1103,14 @@ paths:
       operationId: listTargets
       summary: Managed servers and Key Vaults (metadata only, never credentials)
       description: >-
-        type narrows the list to one kind (linux, nginx, apache, haproxy or azure_key_vault; anything else is 422 validation.one_of
+        type narrows the list to one kind (linux, nginx, apache, haproxy, windows or azure_key_vault; anything else is 422 validation.one_of
         on type). A Key Vault carries vault.
       x-permission: read
       x-scope: list
       parameters:
         - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
-        - { name: type, in: query, required: false, schema: { type: string, enum: [linux, nginx, apache, haproxy, azure_key_vault] } }
+        - { name: type, in: query, required: false, schema: { type: string, enum: [linux, nginx, apache, haproxy, windows, azure_key_vault] } }
       responses:
         "200":
           description: Servers
@@ -7906,10 +7906,10 @@ components:
       properties:
         service_id: { type: string, format: uuid, description: "R49: the service the new server goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         name: { type: string, minLength: 1, maxLength: 100 }
-        type: { type: string, enum: [linux, nginx, apache, haproxy], default: linux, description: Fixed at creation }
+        type: { type: string, enum: [linux, nginx, apache, haproxy, windows], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
-        username: { type: string, maxLength: 32, description: Absent means alice-svc }
+        username: { type: string, maxLength: 32, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
     TargetPatch:
       type: object
       additionalProperties: false
@@ -7976,6 +7976,20 @@ components:
               file_path: { type: string }
               line_no: { type: integer }
         web_server: { $ref: "#/components/schemas/WebServerFacts" }
+        windows: { $ref: "#/components/schemas/WindowsFacts" }
+    WindowsFacts:
+      type: object
+      description: Present for a Windows server that was tested (the last connection test)
+      required: [build, product, installation_type, elevated, iis_installed, iis_version, stores, openssh_version]
+      properties:
+        build: { type: string, examples: ["10.0.20348.2700"] }
+        product: { type: string, examples: [Windows Server 2022 Datacenter] }
+        installation_type: { type: string, examples: [Server, Server Core] }
+        elevated: { type: boolean, description: "The helper's token is elevated; false fails the test with ALC-WIN-0003" }
+        iis_installed: { type: boolean }
+        iis_version: { type: string, examples: ["10.0"] }
+        stores: { type: array, items: { type: string }, description: "Machine certificate store names (at most 16)" }
+        openssh_version: { type: string }
     Target:
       type: object
       required: [id, name, type, host, port, username, status, last_error, last_success_at, last_discovery_at,
@@ -7984,7 +7998,7 @@ components:
         service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         name: { type: string }
-        type: { type: string, enum: [nginx, apache, haproxy, linux, azure_key_vault] }
+        type: { type: string, enum: [nginx, apache, haproxy, linux, windows, azure_key_vault] }
         host: { type: string }
         port: { type: integer }
         username: { type: string }
@@ -8449,12 +8463,13 @@ components:
         helper_protocol: { type: integer }
         profiles:
           type: object
-          required: [linux, nginx, apache, haproxy]
+          required: [linux, nginx, apache, haproxy, windows]
           properties:
             linux: { $ref: "#/components/schemas/SetupSnippet" }
             nginx: { $ref: "#/components/schemas/SetupSnippet" }
             apache: { $ref: "#/components/schemas/SetupSnippet" }
             haproxy: { $ref: "#/components/schemas/SetupSnippet" }
+            windows: { $ref: "#/components/schemas/SetupSnippet", description: "A PowerShell script; sudoers is empty" }
     Job:
       type: object
       required: [id, type, kind, status, target_id, deployment_id, import_id, ssh_key_id, rotation_id, attempts, max_attempts, error, result,
@@ -8490,7 +8505,7 @@ components:
       type: object
       required: [kind, display_name_key, capabilities, config_schema]
       properties:
-        kind: { type: string, enum: [linuxssh, nginx, apache, haproxy, azurekv] }
+        kind: { type: string, enum: [linuxssh, nginx, apache, haproxy, windows, azurekv] }
         display_name_key: { type: string }
         capabilities: { type: array, items: { type: string } }
         config_schema:
@@ -8523,7 +8538,7 @@ components:
       description: Present for web servers that were tested or scanned
       required: [software, version, conf_path, config_valid, config_error, config_error_reason, config_error_file, found]
       properties:
-        software: { type: string, enum: [nginx, apache, haproxy], description: 'The web server software; equals the target type' }
+        software: { type: string, enum: [nginx, apache, haproxy, iis], description: 'The web server software; equals the target type, or iis on a Windows server' }
         version: { type: string, examples: [1.24.0] }
         conf_path: { type: string, examples: [/etc/nginx/nginx.conf] }
         config_valid: { type: boolean }
@@ -8701,7 +8716,7 @@ components:
         target_type:
           type: string
           enum: [nginx, apache, haproxy, windows, f5_bigip, kubernetes]
-          description: "The server's target type (its web server software); windows, f5_bigip and kubernetes are reserved (R59)"
+          description: "The server's target type (its web server software, or windows for the http.sys bindings of a Windows server); f5_bigip and kubernetes are reserved (R59)"
         kind:
           type: string
           enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret]

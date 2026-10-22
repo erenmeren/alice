@@ -11,7 +11,15 @@
     },
     "nginx": { "name": "Nginx sunucu" },
     "apache": { "name": "Apache sunucusu" },
-    "haproxy": { "name": "HAProxy sunucusu" }
+    "haproxy": { "name": "HAProxy sunucusu" },
+    "windows": {
+      "name": "Windows sunucusu",
+      "fields": {
+        "host": { "label": "Adres", "help": "Windows sunucusunun ana bilgisayar adı veya IP adresi." },
+        "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22 (Windows üzerindeki OpenSSH Server)." },
+        "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." }
+      }
+    }
   },
   "enum": {
     "role": {
@@ -1075,6 +1083,23 @@
         "title": "Bu sunucudaki alice-helper, HAProxy'yi okumak için çok eski.",
         "cause": "HAProxy'yi okumak için alice-helper 1.8.0 veya daha yenisi gerekiyor, sunucuda kurulu olan ise daha eski.",
         "action": "HAProxy profili alice-helper 1.8.0 veya daha yenisini gerektirir. Sunucular sayfasında Sunucu türü olarak HAProxy sunucusu seçeneğini seçin, komutları kopyalayın ve kurmak için sunucuda yeniden çalıştırın. Adımlar docs/haproxy-host-preparation.md dosyasında anlatılıyor."
+      }
+    },
+    "windows": {
+      "helper_missing": {
+        "title": "Alice yardımcısı bu Windows sunucusunda kurulu değil.",
+        "cause": "alice-helper.exe C:\\Program Files\\Alice içinde değil ya da OpenSSH onu Alice hesabının zorunlu komutu olarak çalıştırmıyor; bu yüzden oturum normal bir kabuk başlattı.",
+        "action": "Sunucular sayfasındaki Windows kurulum betiğini sunucuda yönetici olarak yeniden çalıştırın. Hazırlık adımları docs/windows-host-preparation.md dosyasında anlatılıyor."
+      },
+      "helper_outdated": {
+        "title": "Bu Windows sunucusundaki alice-helper.exe eski.",
+        "cause": "Sunucudaki yardımcı, Alice'in bu sürümünün beklediğinden daha eski ya da Alice'in gönderdiği bir komutu tanımıyor.",
+        "action": "Güncel Alice paketindeki alice-helper.exe dosyasını sunucuya kopyalayın ve Windows kurulum betiğini yeniden çalıştırın. Adımlar docs/windows-host-preparation.md dosyasında anlatılıyor."
+      },
+      "not_elevated": {
+        "title": "Bu Windows sunucusunda Alice hesabı yönetici belirteci almıyor.",
+        "cause": "Yardımcı yükseltilmeden çalıştı, bu yüzden http.sys bağlamalarını ve makine sertifika depolarını okuyamıyor. Windows Server 2022 ve 2025'te yerel Yöneticiler grubundaki bir üyenin anahtarla girişi yükseltilmiş olur; bu yüzden çoğunlukla hesaba sıkılaştırılmış bir etki alanı temel ayarı ya da UAC uzaktan kısıtlaması uygulanıyordur.",
+        "action": "docs/windows-host-preparation.md dosyasında anlatıldığı gibi sunucunun Yöneticiler grubunda üye olan bir etki alanı hesabı kullanın. Yerel hesap için belgelenmiş son çare olarak LocalAccountTokenFilterPolicy değerini 1 yapın, sonra Bağlantıyı sına'yı yeniden seçin."
       }
     },
     "certificate": {

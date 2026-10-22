@@ -103,6 +103,27 @@ type factsDTO struct {
 	Warnings       []warningDTO           `json:"warnings"`
 	Unreadable     []unreadableDTO        `json:"unreadable"`
 	WebServer      *webServerFactsDTO     `json:"web_server,omitempty"` // web servers only
+	Windows        *windowsFactsDTO       `json:"windows,omitempty"`    // Windows servers only (R60)
+}
+
+// windowsFactsDTO is what the last connection test of a Windows server found (providers.WindowsFacts).
+type windowsFactsDTO struct {
+	Build            string   `json:"build"`
+	Product          string   `json:"product"`
+	InstallationType string   `json:"installation_type"`
+	Elevated         bool     `json:"elevated"`
+	IISInstalled     bool     `json:"iis_installed"`
+	IISVersion       string   `json:"iis_version"`
+	Stores           []string `json:"stores"`
+	OpenSSHVersion   string   `json:"openssh_version"`
+}
+
+func windowsFactsJSON(w *providers.WindowsFacts) *windowsFactsDTO {
+	if w == nil {
+		return nil
+	}
+	return &windowsFactsDTO{Build: w.Build, Product: w.Product, InstallationType: w.InstallationType, Elevated: w.Elevated,
+		IISInstalled: w.IISInstalled, IISVersion: w.IISVersion, Stores: nonNil(w.Stores), OpenSSHVersion: w.OpenSSHVersion}
 }
 
 type targetDTO struct {
@@ -150,6 +171,7 @@ func factsJSON(f inventory.Facts) factsDTO {
 		OS:            osDTO{ID: f.OS.ID, VersionID: f.OS.VersionID, PrettyName: f.OS.PrettyName},
 		HelperVersion: f.HelperVersion, HelperProtocol: f.HelperProtocol,
 		HostKeys: []discoveredHostKeyDTO{}, Warnings: []warningDTO{}, Unreadable: []unreadableDTO{}, WebServer: webServerFactsJSON(f.WebServer),
+		Windows: windowsFactsJSON(f.Windows),
 	}
 	if f.SSHD != nil {
 		d.SSHD = &sshdDTO{

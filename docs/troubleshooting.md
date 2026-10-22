@@ -2121,6 +2121,30 @@ limitation).
 
 **What to do.** The HAProxy profile needs `alice-helper` 1.8.0 or newer. On the Servers page choose Server type HAProxy server, copy the commands and run them on the server again to install it. [haproxy-host-preparation.md](haproxy-host-preparation.md) describes the steps.
 
+## ALC-WIN-0001: Alice helper not set up on the Windows server
+
+**Meaning.** The Alice helper is not set up on this Windows server. (HTTP 502, reason `windows.helper_missing`.)
+
+**Likely cause.** `alice-helper.exe` is not in `C:\Program Files\Alice`, or OpenSSH does not run it as the forced command of the Alice account, so the login started a normal shell instead. `params.exit_code` is the exit status of that shell.
+
+**What to do.** Run the Windows setup script from the Servers page again as an administrator on the server. `docs/windows-host-preparation.md` describes the preparation.
+
+## ALC-WIN-0002: alice-helper.exe outdated on the Windows server
+
+**Meaning.** The `alice-helper.exe` on this Windows server is outdated. (HTTP 502, reason `windows.helper_outdated`.)
+
+**Likely cause.** The helper on the server is older than this version of Alice expects, or it does not know a command Alice sent. The params name either `helper_protocol` and `required_protocol`, or the `subcommand` and the `helper_code` the helper answered.
+
+**What to do.** Copy `alice-helper.exe` from the current Alice bundle to the server and run the Windows setup script again. `docs/windows-host-preparation.md` describes the steps.
+
+## ALC-WIN-0003: Alice account on the Windows server is not elevated
+
+**Meaning.** The Alice account on this Windows server does not get an administrator token. (HTTP 502, reason `windows.not_elevated`.)
+
+**Likely cause.** The helper ran without elevation, so it cannot read the http.sys bindings or the machine certificate stores. On Windows Server 2022 and 2025 a key logon of a local Administrators member is elevated, so this usually means that a hardened domain baseline or a UAC remote restriction applies to the account.
+
+**What to do.** Use a domain account that is a member of the server's Administrators group, as `docs/windows-host-preparation.md` describes. As a documented last resort for a local account, set `LocalAccountTokenFilterPolicy` to 1, then choose **Test connection** again.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)
