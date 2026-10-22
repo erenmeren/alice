@@ -32,9 +32,8 @@ type wenv struct {
 	loc     winproto.Locator
 	loc2    providers.CertLocation
 
-	mu       sync.Mutex
-	stdins   map[string][][]byte // what the server received on stdin, by subcommand
-	verified []providers.VerifyRequest
+	mu     sync.Mutex
+	stdins map[string][][]byte // what the server received on stdin, by subcommand
 }
 
 func newWEnv(t *testing.T) *wenv {
@@ -55,6 +54,7 @@ func newWEnv(t *testing.T) *wenv {
 		CertPath: "http.sys/hostnameport/" + wHost + ":443", Supported: true,
 		Details: map[string]any{"store": "My", "cert_sha1": sha1, "application": "iis"}}
 	w.record(m.Handler())
+	serve(t, m)
 	return w
 }
 
@@ -126,30 +126,12 @@ func (w *wenv) served() string {
 	return s
 }
 
-// session opens a session whose verification reads what the model serves (VerifyDeployment is
-// Task 8's; the verification itself is not what these tests are about).
+// session opens a session (its verification probes the model's listeners through env.probe and the
+// helper's tls-probe).
 func (w *wenv) session(t *testing.T) *session {
 	t.Helper()
 	s, ok := w.open(t).(*session)
 	require.True(t, ok)
-	s.caps = withDeploy(s.caps)
-	s.verify = func(_ context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
-		w.mu.Lock()
-		w.verified = append(w.verified, req)
-		w.mu.Unlock()
-		if req.Verify.Skip {
-			return providers.VerifyResult{OK: true, Mode: "skipped"}, nil
-		}
-		got, n, ok := w.model.Served("127.0.0.1", 443, wHost)
-		switch {
-		case !ok:
-			return providers.VerifyResult{Reason: "deployment.verify_unreachable", Params: map[string]string{"port": "443"}, Failure: providers.VerifyFailureNetwork}, nil
-		case got != req.Fingerprint:
-			return providers.VerifyResult{Mode: "remote", Served: got, ServedChainLength: n, Reason: "deployment.verify_failed",
-				Params: map[string]string{"port": "443"}, Failure: providers.VerifyFailureCertificate}, nil
-		}
-		return providers.VerifyResult{OK: true, Mode: "remote", Served: got, ServedChainLength: n, Level: providers.LevelServed}, nil
-	}
 	return s
 }
 
@@ -399,9 +381,9 @@ func TestRollbackUnverifiable(t *testing.T) {
 	op := uuid.New()
 	w.commit(t, op)
 	s := w.session(t)
-	s.verify = func(context.Context, providers.VerifyRequest) (providers.VerifyResult, error) {
-		return providers.VerifyResult{}, providers.NewError("ssh.unreachable", true, nil, nil)
-	}
+	// Neither Alice's probe nor the helper's tls-probe completes a handshake.
+	w.probe.setDown(true)
+	w.script(winproto.SubTLSProbe, func([]byte) linuxsshtest.Response { return refusalResponse(4, winproto.CodeProbeFailed) })
 	var log stepLog
 	out, err := s.RollbackDeployment(context.Background(), w.rollbackReq(op), &log)
 	require.NoError(t, providers.CheckRollbackReturn(out, err))
@@ -412,12 +394,16 @@ func TestRollbackUnverifiable(t *testing.T) {
 	assert.Equal(t, []string{"restore:ok", "verify_old:started", "verify_old:failed port=443"}, log.lines())
 	assert.Equal(t, derSHA256(w.old.Cert.Raw), w.served())
 
-	// Without a hook the session's own VerifyDeployment is used (Task 8); until then it cannot check.
-	s.verify = nil
-	out, err = s.RollbackDeployment(context.Background(), w.rollbackReq(op), nil)
-	require.NoError(t, providers.CheckRollbackReturn(out, err))
-	assert.Equal(t, providers.DeployRolledBack, out.Result)
-	assert.Equal(t, []string{"verify_old:failed"}, stepWords(out.Steps))
+	// A verification that errs (here: the session is closed) is a website that cannot be checked, as on
+	// Nginx: ok, verify_old failed, with the port of the first endpoint (the Administrator's port first).
+	require.NoError(t, s.Close())
+	var log2 stepLog
+	v, ok := s.checkOld(context.Background(), &log2, providers.VerifyRequest{Location: w.loc2, Fingerprint: derSHA256(w.old.Cert.Raw),
+		Verify: providers.VerifyOptions{Port: 8443}})
+	assert.True(t, ok)
+	assert.Equal(t, providers.StepFailed, v.step.Status)
+	assert.Empty(t, v.mode)
+	assert.Equal(t, []string{"verify_old:started", "verify_old:failed port=8443"}, log2.lines())
 }
 
 // stepLog is a StepLogger that keeps "name:status k=v" lines.
@@ -653,19 +639,6 @@ func TestRollbackAnswersOutsideTheContract(t *testing.T) {
 			assert.Equal(t, tc.want, out)
 		})
 	}
-}
-
-// withDeploy is caps with CapDeployCertificate: the write methods answer only with it (Task 8
-// advertises it; until then CheckUnsupported holds them to ErrUnsupported).
-func withDeploy(caps providers.CapabilitySet) providers.CapabilitySet {
-	return providers.NewCapabilitySet(append(caps.Sorted(), providers.CapDeployCertificate)...)
-}
-
-func TestLocatorPort(t *testing.T) {
-	for v, want := range map[any]string{443: "443", int64(8443): "8443", float64(444): "444", 4.5: "", "443": "", nil: ""} {
-		assert.Equal(t, want, locatorPort(providers.CertLocation{Locator: providers.Locator{"port": v}}), "%v", v)
-	}
-	assert.Empty(t, locatorPort(providers.CertLocation{}))
 }
 
 // A write command that cannot be built is refused before anything is dialled.

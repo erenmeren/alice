@@ -272,6 +272,11 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 	}
 
 	dropped := d.Truncated
+	// What W2 Ruling 18 must know of a cut: the helper's own cut (truncated, list_truncated: any list may
+	// lack entries), an entry Alice could not read (an IIS binding may want it), a site binding Alice could
+	// not read or no longer counted (it may use an entry).
+	helperCut := d.Truncated || slices.Contains(d.Warnings, winproto.WarnListTruncated)
+	entriesCut, sitesCut := helperCut, helperCut
 	locs := map[string]*location{}
 	entries := 0
 	for i := range d.Bindings {
@@ -279,6 +284,7 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 		text, loc, ok := canonical(b)
 		if !ok || locs[text] != nil || entries >= winproto.MaxBindings {
 			dropped = true
+			entriesCut = entriesCut || locs[text] == nil
 			continue
 		}
 		entries++
@@ -295,7 +301,7 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 			}
 			k, ok := parseSiteBinding(sb.Information, sb.SSLFlags)
 			if !ok || memberships >= maxMembershipsPerDump {
-				dropped = true
+				dropped, sitesCut = true, true
 				continue
 			}
 			memberships++
@@ -323,9 +329,22 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 		}
 	}
 
+	// W2 Ruling 18: a cut dump proves no verdict that rests on what may be missing: an entry no listed
+	// site uses (win_foreign_app) when the sites were cut, a certificate the listed certificates lack
+	// (cert_missing) when the helper cut its lists, an IIS binding without a listed entry (cert_missing)
+	// when the entries were cut. Such a location is left out (locations_dropped), so inventory keeps its
+	// stored row untouched instead of relabelling it. leaf_unreadable (dropped_certificates) is proven.
+	incomplete := dropped || helperCut
 	certs = make([]providers.DiscoveredCertificate, 0, len(locs))
 	for _, l := range locs {
-		certs = append(certs, finish(l, stored, unread))
+		dc := finish(l, stored, unread)
+		switch dl := dc.Location; {
+		case sitesCut && dl.Unsupported == UnsupportedForeignApp,
+			helperCut && l.entry != nil && dl.Problem == ProblemCertMissing,
+			entriesCut && l.entry == nil:
+			continue
+		}
+		certs = append(certs, dc)
 	}
 	slices.SortFunc(certs, func(a, b providers.DiscoveredCertificate) int {
 		return cmp.Compare(a.Location.CertPath, b.Location.CertPath)
@@ -335,7 +354,7 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 	if !d.IIS.Installed {
 		warns = append(warns, warning(providers.WarnWebServerNotFound))
 	}
-	if dropped || slices.Contains(d.Warnings, winproto.WarnListTruncated) {
+	if incomplete {
 		warns = append(warns, warning(providers.WarnListTruncated), warning(providers.WarnLocationsDropped))
 	} else if cut {
 		warns = append(warns, warning(providers.WarnListTruncated))

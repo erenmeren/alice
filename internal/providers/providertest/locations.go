@@ -202,7 +202,17 @@ func CheckLocationTarget(t testing.TB, h LocationTargetHarness) {
 			t.Errorf("guarded rollback: answered %q (error %q, reason %q), want rollback_failed, forbidden, %s", rb.Result, rb.Error, rb.Reason,
 				providers.ReasonRollbackForbidden)
 		}
-		rb = rollback("rollback", s, op, providers.RollbackGuard{}, b)
+		_ = s.Close()
+	}
+
+	// A rollback with an empty guard restores. It runs on an operation of its own: a target may keep a
+	// restore its guard once forbade forbidden for good (the Windows helper does, W2).
+	if s := open("rollback"); s != nil {
+		op, b := uuid.New(), &MemoryBackups{}
+		if out := deploy("rollback", s, op, h.ExpectCertSHA256, providers.RollbackGuard{}, b); out.Result != providers.DeployCommitted {
+			t.Errorf("rollback: the deployment answered %q, want committed", out.Result)
+		}
+		rb := rollback("rollback", s, op, providers.RollbackGuard{}, b)
 		if rb.Result != providers.DeployRolledBack {
 			t.Errorf("rollback: answered %q, want rolled_back", rb.Result)
 		}

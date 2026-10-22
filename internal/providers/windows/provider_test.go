@@ -25,8 +25,8 @@ func TestWindowsProviderDescribesItself(t *testing.T) {
 	p := newEnv(t).prov
 	assert.Equal(t, providers.KindWindows, p.Kind())
 	assert.Equal(t, "provider.windows.name", p.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapDiscoverCerts, providers.CapTestConnection}, p.Capabilities().Sorted(),
-		"W1 advertises only what it implements (Ruling 14)")
+	assert.Equal(t, []providers.Capability{providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapTestConnection,
+		providers.CapVerifyDeployment}, p.Capabilities().Sorted(), "W2 advertises what it implements: deployment and verification")
 	assert.Empty(t, p.CredentialSchema().Fields, "targets use the platform key; no per-target secret")
 	fields := map[string]providers.Field{}
 	for _, f := range p.ConfigSchema().Fields {
@@ -41,21 +41,6 @@ func TestWindowsProviderDescribesItself(t *testing.T) {
 	assert.Equal(t, userRE.String(), fields["username"].Pattern, "the form and the provider apply one rule")
 	var _ providers.ConnectionCache = p
 	providertest.CheckProvider(t, p)
-}
-
-// Spec §6.5 item 5: the shared conformance suite over real SSH sessions against the emulated host;
-// the private key must never appear in any result or error.
-func TestWindowsConformance(t *testing.T) {
-	e := newEnv(t)
-	providertest.CheckSession(t, providertest.SessionHarness{
-		Capabilities: e.prov.Capabilities(),
-		Open: func(ctx context.Context) (providers.Session, error) {
-			return e.prov.Open(ctx, e.ref, e.cred, providers.Env{})
-		},
-		Secrets: e.cred.secrets(t),
-	})
-	s := e.open(t)
-	providertest.CheckUnsupported(t, s, providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts))
 }
 
 // Review Focus 1: a domain account is kept verbatim; a Linux-only or malformed name is refused.

@@ -287,7 +287,11 @@ func TestDiscoverMatchesIISBindings(t *testing.T) {
 		}
 		f.site("Site A", tc.info, tc.flags)
 		certs, warns, _ := f.convert()
-		require.Len(t, certs, len(tc.entries), tc.name)
+		want := len(tc.entries)
+		if tc.cut {
+			want = 0 // W2 Ruling 18: a site binding Alice could not read may use any entry: no foreign_app verdict
+		}
+		require.Len(t, certs, want, tc.name)
 		var used []string
 		for _, c := range certs {
 			if len(c.Location.Servers) == 0 {
@@ -428,7 +432,7 @@ func TestDiscoverDroppedCertificateIsNotMissing(t *testing.T) {
 	assert.Equal(t, providers.CertProblemLeafUnreadable, dropped.Location.Problem)
 	assert.Equal(t, providers.UnsupportedFile, dropped.Location.Unsupported)
 	assert.Nil(t, dropped.PEMChain)
-	assert.Equal(t, ProblemCertMissing, m["http.sys/ipport/0.0.0.0:8443"].Location.Problem)
+	assert.NotContains(t, m, "http.sys/ipport/0.0.0.0:8443", "W2 Ruling 18: in a cut dump a certificate not listed proves nothing")
 	assert.Contains(t, codes(warns), providers.WarnLocationsDropped, "a cut dump still marks nothing missing")
 }
 
@@ -776,4 +780,64 @@ func TestWriteLocatorCanonicalEqualsDiscovery(t *testing.T) {
 		_, ok = wl.Canonical()
 		assert.False(t, ok, b)
 	}
+}
+
+// W2 Ruling 18: a cut dump relabels nothing. A verdict that rests on what the cut may have left out
+// (win_foreign_app for want of a site, cert_missing for a certificate or an entry not listed) is not
+// reported; the location is dropped with locations_dropped, so inventory keeps its stored row. The same
+// bindings in an uncut dump read as in W1; a certificate the dump names as dropped keeps leaf_unreadable.
+func TestCutDumpDropsUnprovableVerdicts(t *testing.T) {
+	build := func(cut bool) *dumpFixture {
+		f := newDump(t)
+		f.ipport("0.0.0.0", 443)
+		f.site("Web", "*:443:", 0)
+		f.ipport("0.0.0.0", 8443) // no site in the dump: foreign_app, unless the sites were cut
+		f.bind(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 9443, AppID: winproto.AppIDIIS, CertSHA1: strings.Repeat("ab", 20), Store: "My"})
+		f.site("Gone", "*:9443:", 0) // a certificate the dump does not list: cert_missing, unless the list was cut
+		big := strings.Repeat("cd", 20)
+		f.bind(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 10443, AppID: winproto.AppIDIIS, CertSHA1: big, Store: "My"})
+		f.site("Big", "*:10443:", 0)
+		f.d.DroppedCertificates = []winproto.CertificateRef{{Store: "My", SHA1: big}}
+		f.site("NoEntry", "*:11443:", 0) // an IIS binding without an entry: cert_missing, unless the entries were cut
+		if cut {
+			f.d.Truncated, f.d.Warnings = true, []string{winproto.WarnListTruncated}
+		}
+		return f
+	}
+	certs, warns, _ := build(false).convert()
+	m := byPath(certs)
+	require.Len(t, m, 5)
+	assert.Equal(t, UnsupportedForeignApp, m["http.sys/ipport/0.0.0.0:8443"].Location.Unsupported)
+	assert.Equal(t, ProblemCertMissing, m["http.sys/ipport/0.0.0.0:9443"].Location.Problem)
+	assert.Equal(t, ProblemCertMissing, m["http.sys/ipport/0.0.0.0:11443"].Location.Problem)
+	assert.Equal(t, providers.CertProblemLeafUnreadable, m["http.sys/ipport/0.0.0.0:10443"].Location.Problem)
+	assert.Empty(t, codes(warns))
+
+	certs, warns, _ = build(true).convert()
+	m = byPath(certs)
+	assert.Len(t, m, 2)
+	assert.True(t, m["http.sys/ipport/0.0.0.0:443"].Location.Supported, "a proven location stays")
+	assert.Equal(t, providers.CertProblemLeafUnreadable, m["http.sys/ipport/0.0.0.0:10443"].Location.Problem, "W1 M3 holds")
+	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
+
+	// list_truncated alone is the same cut.
+	f := build(true)
+	f.d.Truncated = false
+	certs, _, _ = f.convert()
+	assert.Len(t, certs, 2)
+
+	// A site binding Alice cannot read cuts only the sites; an entry Alice cannot read cuts only the
+	// entries.
+	f = build(false)
+	f.site("Odd", "garbage", 0)
+	m = byPath(must3(f.convert()))
+	assert.NotContains(t, m, "http.sys/ipport/0.0.0.0:8443", "no foreign_app verdict when a site binding was unreadable")
+	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:9443", "the certificates were not cut")
+	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:11443", "the entries were not cut")
+	f = build(false)
+	f.bind(winproto.SSLBinding{Type: "ipport", IP: "0.0.0.0", Port: 12443, AppID: "{BAD}"})
+	m = byPath(must3(f.convert()))
+	assert.NotContains(t, m, "http.sys/ipport/0.0.0.0:11443", "the missing entry may be the one Alice could not read")
+	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:8443")
+	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:9443")
 }

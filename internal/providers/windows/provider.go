@@ -3,17 +3,21 @@ package windows
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"alice/internal/platform/clock"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows/winproto"
 )
 
@@ -25,6 +29,11 @@ type Options struct {
 	// AllowUnverifiedHelper lets a development build offer a setup script that cannot check
 	// alice-helper.exe (the setup guide of a later task).
 	AllowUnverifiedHelper bool
+	// Prober is Alice's own TLS probe of a deployment's endpoints (nil = tlsverify.TLSProber{}).
+	Prober tlsverify.Prober
+	// RetryWait is the wait between verification attempts (0 = 2 s); Attempts the attempts per endpoint (0 = 5).
+	RetryWait time.Duration
+	Attempts  int
 }
 
 // Provider is the Windows server provider (design 2026-10-21 §8, R60): OpenSSH on the server forces
@@ -33,6 +42,13 @@ type Provider struct {
 	pool            *linuxssh.Pool
 	caps            providers.CapabilitySet
 	allowUnverified bool
+	prober          tlsverify.Prober
+	retryWait       time.Duration
+	attempts        int
+	// The inline rollback's iis-restore is sent again while the helper answers BUSY: restoreAttempts
+	// sends in all, restoreWait apart (3 and 10 s, as Nginx; tests lower the wait).
+	restoreAttempts int
+	restoreWait     time.Duration
 }
 
 var (
@@ -54,11 +70,24 @@ func (p *Provider) RollbackTraits() providers.RollbackTraits {
 	return providers.RollbackTraits{Backup: providers.BackupOnTarget, SelfRestores: true}
 }
 
-// New returns the provider. W1 advertises the connection test and certificate discovery only
-// (Ruling 14); W2 adds deployment and verification.
+// New returns the provider. It advertises what it implements: the connection test and certificate
+// discovery (W1), deployment (DeployCertificate, RollbackDeployment, DeploymentStatus, FenceDeployment)
+// and verification (W2, R61).
 func New(o Options) *Provider {
-	return &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts),
-		allowUnverified: o.AllowUnverifiedHelper}
+	p := &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts,
+		providers.CapDeployCertificate, providers.CapVerifyDeployment),
+		allowUnverified: o.AllowUnverifiedHelper, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
+		restoreAttempts: 3, restoreWait: 10 * time.Second}
+	if p.prober == nil {
+		p.prober = tlsverify.TLSProber{}
+	}
+	if p.retryWait <= 0 {
+		p.retryWait = 2 * time.Second
+	}
+	if p.attempts <= 0 {
+		p.attempts = 5
+	}
+	return p
 }
 
 // Kind implements providers.Provider.
@@ -101,12 +130,22 @@ func (p *Provider) ForgetTarget(target uuid.UUID) { p.pool.ForgetTarget(target) 
 // (design §8, W0: Windows OpenSSH hands every later session on a connection the first session's
 // command), so env.FreshConnection needs nothing of its own: every call already sees the host key
 // the server presents now. The pool's dialer holds the host-key store, so env.HostKeys is not used.
-func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, _ providers.Env) (providers.Session, error) {
+// The session keeps env.Clock (the real one when none) for the waits of a verification and of the
+// inline rollback, and env.Log (none: discarded) for the verification's one warning.
+func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
 	cfg, errs := ParseConfig(t.Config)
 	if len(errs) > 0 {
 		return nil, providers.NewError("target.invalid_config", false, validate.Errors(errs), nil)
 	}
-	s := &session{pool: p.pool, cfg: cfg, cred: cred, target: t.ID, caps: p.caps}
+	clk := env.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	log := env.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	s := &session{p: p, pool: p.pool, cfg: cfg, cred: cred, target: t.ID, caps: p.caps, clock: clk, log: log}
 	v, _, err := call[winproto.VersionResponse](ctx, s, winproto.SubVersion)
 	if err != nil {
 		return nil, err
@@ -124,6 +163,7 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 // session is the scope of one Windows target. It holds no connection: each helper call dials.
 type session struct {
 	providers.UnsupportedSession
+	p       *Provider
 	pool    *linuxssh.Pool
 	cfg     linuxssh.Config // Host is also the address of later probes
 	cred    providers.CredentialSource
@@ -131,9 +171,8 @@ type session struct {
 	caps    providers.CapabilitySet
 	version winproto.VersionResponse
 	closed  atomic.Bool
-	// verify, when set, replaces VerifyDeployment for the verification of the previous certificate
-	// after a restore (a test seam; nil in production).
-	verify func(context.Context, providers.VerifyRequest) (providers.VerifyResult, error)
+	clock   clock.Clock
+	log     *slog.Logger
 }
 
 // writeReady refuses a helper older than winproto.WriteMinVersion before any write subcommand is sent

@@ -374,12 +374,12 @@ func TestWindowsTargetIsNoKeyServer(t *testing.T) {
 func TestSyncCapabilitiesCoversWindows(t *testing.T) {
 	h := newHarness(t, withWindowsProvider())
 	id := h.seedTarget("iis-01", "windows", "iis-01.corp.example")
-	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET capabilities = '{deploy_certificate,test_connection}' WHERE id = $1", id)
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET capabilities = '{test_connection}' WHERE id = $1", id)
 	require.NoError(t, err)
 	n, err := h.svc.SyncCapabilities(h.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	var caps []string
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT capabilities FROM targets WHERE id = $1", id).Scan(&caps))
-	assert.Equal(t, []string{"discover_certificates", "test_connection"}, caps)
+	assert.Equal(t, []string{"deploy_certificate", "discover_certificates", "test_connection", "verify_deployment"}, caps)
 }

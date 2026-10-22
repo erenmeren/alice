@@ -3,7 +3,6 @@ package windows
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 
@@ -90,15 +89,24 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, guard providers.Rol
 	return restoreResult{phase: a.Phase, failedStep: a.FailedStep, causeStep: a.CauseStep, class: a.Error, steps: steps}, nil
 }
 
-// backupParams are a rollback failure's params (W2 Ruling 17): where the previous certificate is, from
-// the location's details as discovery read them (store, cert_sha1), each only when known. Alice's own
-// values, never text from this call's answer.
-func backupParams(loc providers.CertLocation) map[string]string {
+// backupParams are a rollback failure's params (W2 Ruling 17): where the previous certificate is, each
+// only when known and well-formed (a store name of the protocol's vocabulary, a 40-hex thumbprint).
+// They come from the backup the deployment's start record wrote before the first change (b); only a
+// zero b (no Windows field: a caller that has none) falls back to the location's details as discovery
+// read them (store, cert_sha1), which may already show the new certificate. Alice's own values, never
+// text from this call's answer.
+func backupParams(b providers.BackupRef, loc providers.CertLocation) map[string]string {
+	store, sha1 := b.Store, b.PreviousSHA1
+	if store == "" && sha1 == "" && b.PreviousSHA256 == "" {
+		store, _ = loc.Details["store"].(string)
+		sha1, _ = loc.Details["cert_sha1"].(string)
+	}
 	out := map[string]string{}
-	for key, name := range map[string]string{"store": "store", "cert_sha1": "previous_sha1"} {
-		if v, ok := loc.Details[key].(string); ok && v != "" {
-			out[name] = cleanValue(v, maxStoreLength)
-		}
+	if winproto.ValidStore(store) {
+		out["store"] = store
+	}
+	if winproto.ValidSHA1(sha1) {
+		out["previous_sha1"] = sha1
 	}
 	return out
 }
@@ -157,7 +165,7 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 		return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: providers.StepNameRestore,
 			CauseStep: r.causeStep, Error: providers.DeployErrForbidden, Steps: r.steps, Reason: providers.ReasonRollbackForbidden, Params: map[string]string{}}, nil
 	}
-	backup := backupParams(req.Location)
+	backup := backupParams(providers.BackupRef{}, req.Location)
 	if r.refusal != nil {
 		if r.code == winproto.CodeBackupMissing {
 			return providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: providers.StepNameRestore,
@@ -190,28 +198,22 @@ type oldCheck struct {
 	mode string // Verified: "remote", "local", "skipped" or "" (not checked)
 }
 
-// verifyDeployment is the session's verification (VerifyDeployment), or the test seam.
-func (s *session) verifyDeployment(ctx context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
-	if s.verify != nil {
-		return s.verify(ctx, req)
-	}
-	return s.VerifyDeployment(ctx, req)
-}
-
-// checkOld verifies the previous certificate (step verify_old), as the Nginx provider does. ok is false
-// only when the website serves another certificate; nothing to compare (no previous fingerprint), a
-// skipped verification and a website that cannot be checked (also a verification that errs) are ok
-// with mode "skipped" or "".
+// checkOld verifies the previous certificate (step verify_old), exactly as the Nginx provider does. ok
+// is false only when the website serves another certificate; nothing to compare (no previous
+// fingerprint), a skipped verification and a website that cannot be checked are ok with mode
+// "skipped" or "". A verification that errs (the SSH connection failed during the helper's probe, the
+// context ended) is a website that cannot be checked (unverifiable: the port of the first endpoint):
+// the restore itself was answered restored, so the outcome stays rolled_back with verify_old failed
+// and no Verified, as on Nginx.
 func (s *session) checkOld(ctx context.Context, log providers.StepLogger, vreq providers.VerifyRequest) (oldCheck, bool) {
 	if vreq.Fingerprint == "" {
 		step(log, providers.StepNameVerifyOld, providers.StepSkipped, nil)
 		return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepSkipped}}, true
 	}
 	step(log, providers.StepNameVerifyOld, providers.StepStarted, nil)
-	vr, err := s.verifyDeployment(ctx, vreq)
+	vr, err := s.VerifyDeployment(ctx, vreq)
 	if err != nil {
-		vr = providers.VerifyResult{Reason: reasonVerifyUnreachable, Params: map[string]string{"port": locatorPort(vreq.Location)},
-			Failure: providers.VerifyFailureNetwork}
+		vr = unverifiable(vreq.Location, vreq.Verify, vreq.SANs)
 	}
 	failed := oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepFailed}}
 	switch {
@@ -227,19 +229,4 @@ func (s *session) checkOld(ctx context.Context, log providers.StepLogger, vreq p
 	}
 	step(log, providers.StepNameVerifyOld, providers.StepOK, map[string]string{"mode": vr.Mode})
 	return oldCheck{step: providers.DeployStep{Name: providers.StepNameVerifyOld, Status: providers.StepOK}, mode: vr.Mode}, true
-}
-
-// locatorPort is the port a location's locator names ("" when it names none).
-func locatorPort(loc providers.CertLocation) string {
-	switch p := loc.Locator["port"].(type) {
-	case int:
-		return fmt.Sprint(p)
-	case int64:
-		return fmt.Sprint(p)
-	case float64:
-		if p == float64(int64(p)) {
-			return fmt.Sprint(int64(p))
-		}
-	}
-	return ""
 }
