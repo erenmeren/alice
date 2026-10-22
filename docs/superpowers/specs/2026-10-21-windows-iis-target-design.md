@@ -133,6 +133,13 @@ Match User alice
 validators (no shell, no `cmd.exe` parsing), refuses anything else (`UNKNOWN_SUBCOMMAND`), and checks that its token is
 elevated (`NOT_ELEVATED` otherwise; UAC remote restrictions on local accounts are the usual cause, §11).
 
+W0 (§14.1) on 2022 and 2025: a key logon of a local `Administrators` member through this block gets a full token
+(elevated, elevation type *default*, high integrity, Administrators enabled) with `LocalAccountTokenFilterPolicy`
+absent, so the policy is not needed for sshd; the block, the quoted `ForceCommand` path with spaces and the `restrict`
+key option are accepted by sshd 8.1p1 and 9.5p2; password sign-in is refused. The token carries NETWORK (S-1-5-2) and
+*Local account and member of Administrators group* (S-1-5-114), which is why the hardened-baseline deny right blocks
+the local account and the domain-account setup exists (not testable on a runner).
+
 ## 5. Data model
 
 All changes ride on the shared groundwork of the roadmap (location kinds with a locator, TLS pinning, backup models).
@@ -163,7 +170,8 @@ Windows-specific:
 
 New location problems (`CertProblem*`): `cert_missing` (the binding names a hash not in the store), `key_missing`,
 `key_inaccessible` (the store has the certificate but http.sys cannot use its key). New unsupported reasons
-(`Unsupported*`): `win_foreign_app` (an http.sys binding of another application: WinRM, AD FS, SSTP...), `win_ccs` (a
+(`Unsupported*`): `win_foreign_app` (an http.sys binding of another application: WinRM, AD FS, SSTP...; named for the
+application ids W0 observed, §14 F8, the raw id otherwise), `win_ccs` (a
 `ccs` binding, until Phase W5), `win_store_unsupported` (a store other than `My` and `WebHosting`), `win_ctl` (a binding
 with a certificate trust list or client certificate mapping Alice does not model; deployable, warned).
 
@@ -190,7 +198,11 @@ The helper reads, in this order, with a budget (the Linux `HelperBudget` rule):
 
 1. Every http.sys SSL binding (`HttpQueryServiceConfiguration` for `HttpServiceConfigSslCertInfo`,
    `HttpServiceConfigSslSniCertInfo`, `HttpServiceConfigSslCcsCertInfo`): type, address or name, port, hash, store,
-   application id and the flags Alice must preserve.
+   application id and the flags Alice must preserve. Shapes seen in W0 (§14.1): an `ipport` address may be IPv6
+   (`[::]:443`, SSTP); a NULL store name means `MY`, and the name's case varies (`MY` from netsh-style writers, `My`
+   from IIS Manager), so stores compare case-insensitively; a `ccs` record carries an application id and flags but no
+   hash and a NULL store; a host can hold 100+ records of other applications (the IIS Express range
+   `0.0.0.0:44300-44399` on the GitHub images), which the budget and `WarnListTruncated` must absorb.
 2. For each hash, the certificate from the named store: DER, the chain Windows builds for it in the machine context
    (`CertGetCertificateChain`, excluding the root), the private key's presence, provider, exportability, and whether the
    SYSTEM account can open it.
@@ -224,9 +236,22 @@ and nothing else. The helper:
    `PFXImportCertStore` (`CRYPT_MACHINE_KEYSET`, CNG "Microsoft Software Key Storage Provider", **not exportable**),
    then adds the certificate to the target store. When the same certificate is already in the store (imported by
    someone else), it is used as is and recorded as *not* Alice-imported. The in-memory PFX and password are zeroed.
+   W0 measured the flags `CRYPT_MACHINE_KEYSET | PKCS12_ALWAYS_CNG_KSP` (without `CRYPT_EXPORTABLE`, never
+   `PKCS12_NO_PERSIST_KEY`, which leaves no persisted key for http.sys), and that a standard-library PFX (one data
+   ContentInfo, a PBES2/AES-256-CBC `pkcs8ShroudedKeyBag` and a certBag sharing a localKeyId, HMAC-SHA256 MAC) imports
+   on both images, so no PKCS #12 module is needed; an equivalent route without a PFX, `NCryptImportKey` of the PKCS #8
+   blob as a named machine key with export policy 0 plus `CERT_KEY_PROV_INFO_PROP_ID` on the stored certificate, also
+   works (`tools/winspike` on the `windows-w0-spike` branch is the reference for both).
 7. Journal `writing`. Step `bind`: `HttpUpdateServiceConfiguration` with the entry read in step 3, only the hash and
    store changed: one call, no moment without a certificate, every other setting (client certificate negotiation,
-   revocation checks, TLS 1.3 and legacy TLS flags, CTL) preserved.
+   revocation checks, TLS 1.3 and legacy TLS flags, CTL) preserved. The call **replaces** the whole record (W0: an
+   update carrying only key, hash and application id reset the store, check mode, revocation values and flags of an
+   `ipport` record, and was refused with `ERROR_INVALID_PARAMETER` for a `hostnameport` one), so the helper always
+   sends the full record it read. http.sys refuses a hash whose certificate has no usable private key in the store
+   (`ERROR_NO_SUCH_LOGON_SESSION`, 1312, record unchanged) and an absent record (`ERROR_FILE_NOT_FOUND`, mapped to
+   `BINDING_NOT_FOUND`). When step 5 added an intermediate, the bind is written even if the binding already names the
+   new certificate (an update with the same hash), because schannel serves the chain it built when the record was last
+   written (§6.4).
 8. Reads the entry back; a mismatch restores the previous entry itself (with the guard, §6.5) and answers
    `rolled_back` with failed step `bind`.
 9. Journal `committed`; an Application event (id 1001, no key material: operation, binding, old and new SHA-256).
@@ -250,6 +275,12 @@ differ from what Alice deployed (a cross-signed intermediate already in the stor
 the served chain length with the chain the helper reported for the new certificate after the import (step 6), not
 with Alice's chain; when the two differ, the deployment carries the warning `win.chain_differs` (params: deployed and
 built lengths) and the R51 trust check decides as usual.
+
+W0 (§14.1) showed schannel sends the leaf and the intermediates it finds in `CA`, never the root, also when the root
+is in no store of the server; and that it caches that chain per binding: an intermediate added to or removed from
+`CA` after the record was written changes nothing served until the record is written again (an update with the same
+hash is enough). Hence the import-before-bind order of §6.3 and the same-hash write when only intermediates changed;
+the helper builds the chain it reports after its imports, which is the chain the next write makes schannel serve.
 
 ### 6.5 Rollback and recovery
 
@@ -313,8 +344,12 @@ never deleted. Expired certificates Alice did not import are only counted (`win.
 ## 8. Provider (`internal/providers/windows`)
 
 - Kind `windows`, capabilities: `test_connection`, `discover_certificates`, `deploy_certificate`, `verify_deployment`.
-- `Open` reuses `linuxssh`'s pool and dial (host key pinning, budgets, `FreshConnection`); the command line sent is the
-  bare subcommand and its arguments (no `sudo`), which the forced command receives as `SSH_ORIGINAL_COMMAND`.
+- `Open` reuses `linuxssh`'s dial (host key pinning, budgets) but **one fresh SSH connection per helper call**, never a
+  pooled connection with several sessions: on Windows OpenSSH (8.1p1 on 2022, 9.5p2 on 2025, W0 §14.1) every session
+  after the first on a connection receives the *first* session's `SSH_ORIGINAL_COMMAND` (standard input stays per
+  session), so a second command on a reused connection would run the first one again. The emulator models this and a
+  provider test asserts one connection per call. The command line sent is the bare subcommand and its arguments (no
+  `sudo`), which the forced command receives as `SSH_ORIGINAL_COMMAND`, byte for byte on a fresh connection.
 - `ConfigSchema`: `address`, `port` (22), `os_user`, `discovery_interval`. `CredentialSchema`: the platform key.
 - `SetupGuide`: profile `windows`, the PowerShell snippet of §6.1, `HelperInfo` = path and `winproto.Protocol`.
 - Every outcome rule of `providers` (`CheckDeployReturn`, `CheckRollbackReturn`, `DeploymentState.Validate`) applies; the
@@ -353,7 +388,7 @@ never deleted. Expired certificates Alice did not import are only counted (`win.
 |---|---|
 | sshd unreachable, timeout, host key changed | As Linux: `ssh.*` codes, target status; a deploy send that may have arrived is uncertain and recovered through `iis-status` and the fence. |
 | Helper missing or too old | `windows.helper_missing`, `windows.helper_outdated`: nothing sent. |
-| Token not elevated (UAC remote restrictions on a local account) | `windows.not_elevated` with the fix (the domain-account setup, or `LocalAccountTokenFilterPolicy` as a documented last resort). |
+| Token not elevated (UAC remote restrictions on a local account) | `windows.not_elevated` with the fix (the domain-account setup, or `LocalAccountTokenFilterPolicy` as a documented last resort). W0 never saw it: sshd key logons of a local administrator were elevated on 2022 and 2025 without the policy. |
 | IIS not installed | Facts say so; locations of other applications still listed; nothing deployable. |
 | Binding changed since discovery | `HASH_MISMATCH`: no change, the engine's precondition failure (`deployment.precondition`), a new discovery is queued. |
 | Binding removed since discovery | `BINDING_NOT_FOUND`: no change. |
@@ -386,9 +421,17 @@ never deleted. Expired certificates Alice did not import are only counted (`win.
    Windows paths): install IIS (`Install-WindowsFeature Web-Server`), create sites with SNI and IP bindings, run
    `go test ./cmd/alice-winhelper/... ./internal/providers/windows/...` natively (real stores, real http.sys, real
    schannel), and the **fidelity test**: the same scenario list run against the emulator and against the real helper,
-   answers compared field by field (like `emulator_fidelity_test.go`).
-5. **Real Windows, provider level** (same runners): install OpenSSH Server (pinned Win32-OpenSSH MSI by SHA-256 if the
-   capability install is slow or unavailable on the image), run the setup script, and run the provider's tests (tag
+   answers compared field by field (like `emulator_fidelity_test.go`). W0 facts for these jobs: `actions/setup-go`
+   with `go-version-file: go.mod` works on both images and `go test` runs natively against the real stores and
+   http.sys; a full checkout fails on Windows because `internal/api/nul.go` is a reserved device name (rename it before
+   W4, or keep `core.protectNTFS false` with a sparse checkout as the spike does); the images already have part of
+   `Web-Server`, a WinRM HTTPS listener on 5986 and 100 IIS Express records, so tests use their own ports and never
+   assume an empty table; Defender real-time protection is off on the images, so antivirus interference is untested.
+5. **Real Windows, provider level** (same runners): install OpenSSH Server (the capability: 25-33 s on 2022, already
+   installed on 2025; the pinned fallback is
+   `https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64-v10.0.0.0.msi`,
+   SHA-256 `ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9`, checked in W0 against a download and
+   GitHub's release digest but never installed on a runner, since the capability worked), run the setup script, and run the provider's tests (tag
    `windows_integration`) dialing `localhost`: providers have no database, so no Postgres is needed on Windows.
 6. **Manual matrix before release** (owner, §15): Windows Server 2019 (no GitHub image any more), a domain-joined
    server with the security baseline, Server Core.
@@ -483,16 +526,44 @@ negotiation (new probe mode). Key ACLs are the new risk and get their own review
 
 ## 14. Facts to confirm in Phase W0
 
-| # | Fact the design relies on | If it is wrong |
-|---|---|---|
-| F1 | IIS keeps an HTTPS binding's certificate only in the http.sys SSL configuration; changing it there is what IIS Manager does, and IIS picks it up without a restart or `applicationHost.config` change. | Write the binding through `appcmd` as well; re-review. |
-| F2 | `HttpUpdateServiceConfiguration` updates an `ipport` and a `hostnameport` entry in one call on 2019, 2022, 2025. | Delete and set in two calls inside the journal (a short window without a certificate, recorded as a known risk). |
-| F3 | A key-based OpenSSH logon of an administrator account gets an elevated token (domain account; local account without UAC filtering). | Recommend the domain account only; document `LocalAccountTokenFilterPolicy`. |
-| F4 | `PFXImportCertStore` with `CRYPT_MACHINE_KEYSET` and the CNG provider gives a non-exportable key http.sys can use without extra ACLs. | Set the key's ACL explicitly (SYSTEM read). |
-| F5 | Schannel sends the chain Windows builds from `CA` and does not send the root. | Adjust the chain-length rule of §6.4. |
-| F6 | `appcmd list site /config /xml` resolves shared configuration and is available on Server Core. | Read `applicationHost.config` with redirection handled by the helper. |
-| F7 | OpenSSH Server installs on the GitHub Windows images in reasonable time. | Pinned Win32-OpenSSH MSI. |
-| F8 | The application ids of WinRM, AD FS and SSTP bindings, for the `win_foreign_app` names. | Show the raw id. |
+Images measured in W0 (§14.1): `windows-2022` = Windows Server 2022 Datacenter 10.0.20348.5622 (21H2), `windows-2025`
+= Windows Server 2025 Datacenter 10.0.26100.33438 (24H2), both Desktop Experience. Same results on both unless stated.
+
+| # | Fact the design relies on | If it is wrong | Result (W0, 2026-10-22) |
+|---|---|---|---|
+| F1 | IIS keeps an HTTPS binding's certificate only in the http.sys SSL configuration; changing it there is what IIS Manager does, and IIS picks it up without a restart or `applicationHost.config` change. | Write the binding through `appcmd` as well; re-review. | **Confirmed** (2022, 2025). Site `spike` with `https *:8443:` and `*:8444:sni.spike.test` (`sslFlags=1`) made by appcmd; cert A bound, then the `ipport` and `hostnameport` records re-pointed to B with one update each: the next fresh handshake served B (HTTP 200), still B after `iisreset /restart`; `applicationHost.config` SHA-256 identical before and after every step and holding no `certificateHash`. Bindings added the IIS Manager way (`Microsoft.Web.Administration` `Bindings.Add(info, hash, "My"[, Sni])`) wrote only `protocol`/`bindingInformation`/`sslFlags` to the file and the hash to http.sys; that API reads the hash back from http.sys (it showed B after the re-point). |
+| F2 | `HttpUpdateServiceConfiguration` updates an `ipport` and a `hostnameport` entry in one call on 2019, 2022, 2025. | Delete and set in two calls inside the journal (a short window without a certificate, recorded as a known risk). | **Confirmed on 2022 and 2025, with a precision; 2019 not measured.** Exported on both images; one call per record changed only the hash, and the read-back kept store, app id, `DefaultCertCheckMode` 1, freshness 600, URL timeout 7000 and `DefaultFlags` 0x42 (`NEGOTIATE_CLIENT_CERT`, `DISABLE_TLS13`). 40 flips A↔B under 4 handshake loops: 0 failed handshakes of 1,471-1,804 with the update, 2,410-3,000 failed of 3,627-4,452 with delete+set. Precision (amended §6.3 step 7): the call replaces the whole record. CTL fields not exercised (a set naming a CTL that does not exist is refused with 1312). Microsoft documents the call from Windows 10 1703 and lists no server minimum; 2019 (build 17763) needs the owner's manual check (`winspike osinfo` prints the export). |
+| F3 | A key-based OpenSSH logon of an administrator account gets an elevated token (domain account; local account without UAC filtering). | Recommend the domain account only; document `LocalAccountTokenFilterPolicy`. | **Confirmed for a local account; domain account not testable on a runner.** Local `alicespike` in Administrators, key in `administrators_authorized_keys` (ACL SYSTEM and Administrators only, `restrict`), the §4.3 `Match` block: elevated, type default, S-1-16-12288, Administrators enabled (not deny-only), `LocalMachine\My` opens for write, a real http.sys set and delete succeed, with `LocalAccountTokenFilterPolicy` absent and with 1 (the images ship it as 1; W0 deleted it for the first case). `SSH_ORIGINAL_COMMAND` arrives byte for byte (`iis-deploy "a b" -- --x`, single quotes, `x & whoami \| more %USERNAME%`, not interpreted) **on a fresh connection only**: later sessions on the same connection get the first session's command (changed §8). |
+| F4 | `PFXImportCertStore` with `CRYPT_MACHINE_KEYSET` and the CNG provider gives a non-exportable key http.sys can use without extra ACLs. | Set the key's ACL explicitly (SYSTEM read). | **Confirmed** (2022, 2025). With `CRYPT_MACHINE_KEYSET \| PKCS12_ALWAYS_CNG_KSP` (also with `CRYPT_MACHINE_KEYSET` alone or `PKCS12_PREFER_CNG_KSP`) for a PowerShell-exported PFX, a standard-library Go PFX (PBES2 shrouded or plain keyBag) and RSA 2048 and ECDSA P-256, and with `NCryptImportKey` PKCS #8: provider Microsoft Software Key Storage Provider, machine key, export policy 0, `NCryptExportKey` refused (0x80090029), key DACL `O:BAD:P(A;OICI;0xd01f01ff;;;SY)(A;OICI;0xd01f01ff;;;BA)`; http.sys served every one at the first handshake with no ACL change. Deleting the key (`NCryptDeleteKey`) and the certificate leaves the key unopenable (0x80090016). |
+| F5 | Schannel sends the chain Windows builds from `CA` and does not send the root. | Adjust the chain-length rule of §6.4. | **Confirmed, with a precision** (2022, 2025). Root in `Root`, intermediate in `CA`: served leaf + intermediate (2), `CertGetCertificateChain` 3 elements; root in no store: still leaf + intermediate; intermediate absent: leaf only. Precision (amended §6.3 step 7, §6.4): schannel keeps the chain of the last write of the record; adding or removing the intermediate changed the served chain only after the record was written again (a same-hash update sufficed). |
+| F6 | `appcmd list site /config /xml` resolves shared configuration and is available on Server Core. | Read `applicationHost.config` with redirection handled by the helper. | **Confirmed on Desktop Experience; Server Core not testable on a hosted runner.** Exit 0 in ~0.04 s, `<appcmd><SITE SITE.NAME SITE.ID bindings state><site><bindings><binding protocol bindingInformation sslFlags/>` parsed with `encoding/xml`; unknown site: exit 1 and an empty `<appcmd>`. With `redirection.config` pointed at a local copy, appcmd listed the copy's sites (not a site added only to the local file) and wrote a new site to the copy only. `appcmd.exe` is present with `Web-Server` and no `Web-Mgmt-*` feature installed (the images ship part of `Web-Server` already). |
+| F7 | OpenSSH Server installs on the GitHub Windows images in reasonable time. | Pinned Win32-OpenSSH MSI. | **Confirmed.** 2022: capability `NotPresent`, `Add-WindowsCapability` 25.5-32.5 s, no restart, sshd `OpenSSH_8.1p1 for Windows`. 2025: already `Installed` (1.2 s check), `OpenSSH_9.5p2 for Windows`. MSI fallback pinned in §12 item 5, not needed. |
+| F8 | The application ids of WinRM, AD FS and SSTP bindings, for the `win_foreign_app` names. | Show the raw id. | **WinRM and SSTP measured, AD FS raw id.** WinRM HTTPS listener (present on both images, its `CertificateThumbprint` equal to the record's hash): `0.0.0.0:5986`, `{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}`, NULL store. SSTP (`RemoteAccess` + `Install-RemoteAccess -VpnType Vpn`, 2025 build 26100 in 206 s; on 2022 the same steps left no SSTP record, and a first 2025 attempt asked for a restart): `0.0.0.0:443` and `[::]:443`, `{ba195980-cd49-458b-9e23-c84ee0adcd75}`, store `MY`. Also seen: IIS Express `{214124cd-d05b-4309-9af9-9caa44b2b74a}` (100 records). AD FS cannot be installed on a runner and no Microsoft page fetched in W0 states its id: unknown, the raw id is shown. |
+
+### 14.1 Spike results
+
+- Branch `windows-w0-spike` (never merged), program `tools/winspike` (one JSON object per subcommand), workflow
+  `.github/workflows/windows-spike.yml`; final spike code commit `beafd039`.
+- Runs: <https://github.com/erenmeren/alice/actions/runs/39742287996> and
+  <https://github.com/erenmeren/alice/actions/runs/39742418887> (checkout failed on `internal/api/nul.go`),
+  <https://github.com/erenmeren/alice/actions/runs/39742512340> (first full run),
+  <https://github.com/erenmeren/alice/actions/runs/39743969721> (final run; every result above holds in both full runs
+  unless the row names one). 4 of the 15 budgeted runs.
+- Timings (2022 / 2025): `Install-WindowsFeature Web-Server` 37.7-44.7 s / 129.8-132.7 s; OpenSSH 28.0-36.9 s / 1.2-1.4 s
+  (already installed); spike build 15.9-18.2 s cold, 1.3-1.4 s with the setup-go cache; whole job 4m58s-5m21s /
+  8m06s-9m39s, of which the time-boxed SSTP attempt 85-106 s / 115-217 s.
+- Amended in this document: §4.3 (token facts), §5 (`win_foreign_app` names), §6.2 step 1 (record shapes), §6.3
+  step 6 (import flags, PFX writer and PKCS #8 route) and step 7 (whole-record replace, errors, same-hash write), §6.4
+  (served chain and schannel's chain cache), §8 (one connection per helper call), §11 (not elevated), §12 items 4
+  and 5 (runner facts, MSI pin).
+- Not decided on a runner, by nature: a domain account (F3), Server Core (F6), Windows Server 2019 (F2), AD FS (F8),
+  antivirus interference (Defender real-time protection is off on the images). They stay in the owner's manual matrix
+  (§12 item 6).
+- For W1-W4: the httpapi layouts are in `tools/winspike/httpapi.go` (amd64 sizes: `SSL_PARAM` 80, `SSL_SET` 88,
+  `SSL_SNI_SET` 216, `SSL_CCS_SET` 208, `SSL_QUERY` 24, `SSL_SNI_QUERY` 152, `SSL_CCS_QUERY` 144; `HttpInitialize`
+  with version 2.0 and `HTTP_INITIALIZE_CONFIG`; the result is the ULONG return value, not `GetLastError`).
+  `x/sys/windows.CryptAcquireCertificatePrivateKey` declares the 4-byte BOOL out-parameter as `*bool`: bind it with a
+  `*uint32`. `netsh http show sslcert` and the API enumeration agreed record for record (108 records).
 
 ## 15. Open questions for the owner (the implementation proceeds on the default)
 
