@@ -434,13 +434,23 @@ func TestOnlyTheDirectoryPackageImportsTheLDAPClient(t *testing.T) {
 
 func goListDeps(t *testing.T, tags string, pkgs ...string) []string {
 	t.Helper()
+	return goListDepsFor(t, "linux", "", tags, pkgs...)
+}
+
+// goListDepsFor lists the dependencies of pkgs built for goos with CGO off, each printed through format
+// (go list's -f template) when it is not empty; empty lines are dropped.
+func goListDepsFor(t *testing.T, goos, format, tags string, pkgs ...string) []string {
+	t.Helper()
 	args := []string{"list", "-deps"}
+	if format != "" {
+		args = append(args, "-f", format)
+	}
 	if tags != "" {
 		args = append(args, "-tags", tags)
 	}
 	cmd := exec.Command("go", append(args, pkgs...)...) //nolint:gosec // fixed arguments
 	cmd.Dir = moduleRoot(t)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+goos)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -452,6 +462,14 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 	for _, dep := range goListDeps(t, "", "./cmd/alice", "./cmd/alice-helper", "./cmd/licensectl", "./cmd/vendor-console", "./cmd/vendor-web") {
 		for _, bad := range testOnlyImports {
 			assert.False(t, covers(bad, dep), "a release binary links %s", dep)
+		}
+	}
+	// The Windows helper is built for Windows only (every file of it is tagged windows, R60).
+	winDeps := goListDepsFor(t, "windows", "", "", "./cmd/alice-winhelper")
+	require.Contains(t, winDeps, "alice/internal/providers/windows/winhelper", "positive control: the Windows build sees the helper's files")
+	for _, dep := range winDeps {
+		for _, bad := range testOnlyImports {
+			assert.False(t, covers(bad, dep), "the Windows helper links %s", dep)
 		}
 	}
 	// Positive control: the e2e build does link a test-only package, so the check can see one.
@@ -480,6 +498,25 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakesmtp"), "alice/internal/testutil/fakesmtp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeidp"), "alice/internal/testutil/fakeidp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeacme"), "alice/internal/testutil/fakeacme", "the fake ACME tool is where the fake is linked")
+}
+
+// TestWindowsHelperLinksOnlyItsProtocol: alice-helper.exe (design 2026-10-21 §7, R60) links, besides the
+// standard library, only x/sys's Windows bindings and the helper's own protocol and core packages, so no
+// provider, store or server code of Alice reaches a managed Windows server.
+func TestWindowsHelperLinksOnlyItsProtocol(t *testing.T) {
+	allowed := []string{"golang.org/x/sys/windows", "golang.org/x/sys/windows/registry", "golang.org/x/sys/internal/...",
+		"golang.org/x/sys/windows/internal/...", "alice/internal/providers/windows/winproto",
+		"alice/internal/providers/windows/winhelper", "alice/internal/providers/linuxssh/helperproto", "alice/cmd/alice-winhelper"}
+	deps := goListDepsFor(t, "windows", "{{if not .Standard}}{{.ImportPath}}{{end}}", "", "./cmd/alice-winhelper")
+	require.Contains(t, deps, "alice/internal/providers/windows/winproto", "positive control: the list holds the helper's own packages")
+	require.Contains(t, deps, "golang.org/x/sys/windows", "positive control: the helper binds Windows through x/sys")
+	for _, dep := range deps {
+		ok := false
+		for _, a := range allowed {
+			ok = ok || covers(a, dep)
+		}
+		assert.True(t, ok, "the Windows helper links %s", dep)
+	}
 }
 
 func TestRequires(t *testing.T) {
