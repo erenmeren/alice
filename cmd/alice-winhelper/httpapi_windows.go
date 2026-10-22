@@ -135,10 +135,11 @@ func ulongResult(r uintptr) error {
 
 // sslBindings lists every http.sys SSL record: the ipport, hostnameport (SNI) and ccs tables, each
 // read with HttpServiceConfigQueryNext and dwToken 0, 1, 2, ... until ERROR_NO_MORE_ITEMS, at most
-// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated), and
-// the extended parameters of every ipport and hostnameport record (F9). A record that cannot be
-// decoded, or whose extended parameters cannot be read back, is returned without a type, so winhelper
-// drops it and marks the dump truncated rather than reporting the binding as gone.
+// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated). A
+// record that cannot be decoded is returned without a type, so winhelper drops it and marks the dump
+// truncated rather than reporting the binding as gone. The dump carries no extended parameters (W2
+// Task 6 ruling after runner run 1): iis-deploy reads them live by the record's key, and reading them
+// for every record dropped readable bindings from discovery on both images.
 func sslBindings() ([]winproto.SSLBinding, error) {
 	out := []winproto.SSLBinding{}
 	err := withHTTP(func() error {
@@ -151,7 +152,7 @@ func sslBindings() ([]winproto.SSLBinding, error) {
 				if err != nil {
 					return err
 				}
-				out = append(out, withExtended(decodeRecord(id, rec)))
+				out = append(out, decodeRecord(id, rec))
 			}
 		}
 		return nil
@@ -160,22 +161,6 @@ func sslBindings() ([]winproto.SSLBinding, error) {
 		return nil, err
 	}
 	return out, nil
-}
-
-// withExtended adds the extended parameters to a decoded ipport or hostnameport record (inside
-// withHTTP); a record whose parameters cannot be read is returned without a type.
-func withExtended(b winproto.SSLBinding) winproto.SSLBinding {
-	if b.Type != winproto.BindingIPPort && b.Type != winproto.BindingHostnamePort {
-		return b
-	}
-	k, err := keyOf(b.Type, b.IP, b.Host, b.Port)
-	if err != nil {
-		return winproto.SSLBinding{}
-	}
-	if b.Extended, err = readExtended(k); err != nil {
-		return winproto.SSLBinding{}
-	}
-	return b
 }
 
 // queryRecord reads record token of table id (QueryNext).

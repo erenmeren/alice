@@ -19,6 +19,7 @@ package main
 //	   ExParamTypeHttp2Window          HTTP2_WINDOW_SIZE_PARAM        {DWORD Http2ReceiveWindowSize}
 //	   ExParamTypeHttp2SettingsLimits  HTTP2_SETTINGS_LIMITS_PARAM    {DWORD Http2MaxSettingsPerFrame; DWORD Http2MaxSettingsPerMinute}
 //	   ExParamTypeHttpPerformance      HTTP_PERFORMANCE_PARAM         {Type @16; ULONG BufferSize @20; PVOID Buffer @24}
+//	                                   (Type PerformanceParamMax: Buffer is an array of the six, see perfParamMax)
 //	   ExParamTypeTlsRestrictions      HTTP_TLS_RESTRICTIONS_PARAM    {ULONG RestrictionCount @16; PVOID TlsRestrictions @24 (reserved)}
 //	   ExParamTypeErrorHeaders         HTTP_ERROR_HEADERS_PARAM       {USHORT StatusCode @16; USHORT HeaderCount @18; PHTTP_UNKNOWN_HEADER Headers @24}
 //	   ExParamTypeTlsSessionTicketKeys HTTP_TLS_SESSION_TICKET_KEYS_PARAM {ULONG SessionTicketKeyCount @16; PVOID SessionTicketKeys @24 (reserved)}
@@ -44,7 +45,13 @@ const (
 	exTLSSessionTicketKeys = 5
 	exTypeCount            = 6
 
-	paramExSize       = 32 // HTTP_SERVICE_CONFIG_SSL_PARAM_EX
+	paramExSize = 32 // HTTP_SERVICE_CONFIG_SSL_PARAM_EX
+	// perfParamMax is PerformanceParamMax: a performance parameter of that Type is the aggregate
+	// Windows Server 2025 answers a query with (run 1): its Buffer holds perfParamMax
+	// HTTP_PERFORMANCE_PARAMs (Type 0..5, each with its own BufferSize and Buffer into the same
+	// buffer), then their values.
+	perfParamMax      = 6
+	perfParamSize     = 16 // HTTP_PERFORMANCE_PARAM
 	unknownHeaderSize = 24 // HTTP_UNKNOWN_HEADER
 	exPointerOff      = 24 // the pointer member of every union member that has one
 )
@@ -94,8 +101,33 @@ func flattenEx(rec []byte, base uint64, off int) ([]byte, error) {
 	switch binary.LittleEndian.Uint32(out[0:]) {
 	case exHTTP2Window, exHTTP2SettingsLimits:
 	case exHTTPPerformance:
-		if err := pointer(exPointerOff, int(binary.LittleEndian.Uint32(out[20:]))); err != nil {
+		size := int(binary.LittleEndian.Uint32(out[20:]))
+		outer := binary.LittleEndian.Uint64(out[exPointerOff:])
+		if err := pointer(exPointerOff, size); err != nil {
 			return nil, err
+		}
+		if binary.LittleEndian.Uint32(out[16:]) == perfParamMax && outer != 0 {
+			// The aggregate: its buffer is an array of perfParamMax HTTP_PERFORMANCE_PARAMs whose own
+			// Buffers point into the same buffer; they become offsets from the start of Data too.
+			first := int(binary.LittleEndian.Uint64(out[exPointerOff:])) //nolint:gosec // G115: an offset into out
+			if size < perfParamMax*perfParamSize {
+				return nil, errBadValue
+			}
+			for i := range perfParamMax {
+				e := first + i*perfParamSize
+				q := binary.LittleEndian.Uint64(out[e+8:])
+				n := uint64(binary.LittleEndian.Uint32(out[e+4:]))
+				if q == 0 {
+					if n != 0 {
+						return nil, errBadValue
+					}
+					continue
+				}
+				if q < outer || q-outer > uint64(size) || n > uint64(size)-(q-outer) {
+					return nil, errBadValue
+				}
+				binary.LittleEndian.PutUint64(out[e+8:], uint64(first)+(q-outer)) //nolint:gosec // G115: first >= 0
+			}
 		}
 	case exTLSRestrictions, exTLSSessionTicketKeys:
 		if binary.LittleEndian.Uint64(out[exPointerOff:]) != 0 {
@@ -158,7 +190,32 @@ func relocateEx(data []byte, at uint64) ([]byte, error) {
 	switch binary.LittleEndian.Uint32(data[0:]) {
 	case exHTTP2Window, exHTTP2SettingsLimits:
 	case exHTTPPerformance:
-		if err := reloc(exPointerOff, int(binary.LittleEndian.Uint32(data[20:]))); err != nil {
+		size := int(binary.LittleEndian.Uint32(data[20:]))
+		if binary.LittleEndian.Uint32(data[16:]) == perfParamMax {
+			first, ok := target(exPointerOff, size)
+			if !ok || first != 0 && size < perfParamMax*perfParamSize {
+				return nil, errBadValue
+			}
+			for i := range perfParamMax {
+				if first == 0 {
+					break
+				}
+				e := first + i*perfParamSize
+				w := binary.LittleEndian.Uint64(data[e+8:])
+				n := uint64(binary.LittleEndian.Uint32(data[e+4:]))
+				if w == 0 {
+					if n != 0 {
+						return nil, errBadValue
+					}
+					continue
+				}
+				if w < uint64(first) || w-uint64(first) > uint64(size) || n > uint64(size)-(w-uint64(first)) { //nolint:gosec // G115: first >= 0
+					return nil, errBadValue
+				}
+				binary.LittleEndian.PutUint64(out[e+8:], at+w)
+			}
+		}
+		if err := reloc(exPointerOff, size); err != nil {
 			return nil, err
 		}
 	case exTLSRestrictions, exTLSSessionTicketKeys:

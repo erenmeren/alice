@@ -139,6 +139,55 @@ func TestExParamPortableForm(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 0x1234_0000+32, binary.LittleEndian.Uint64(placed[24:]))
 	})
+	t.Run("performance aggregate", func(t *testing.T) {
+		// As Windows Server 2025 answered (run 1): Type PerformanceParamMax, a buffer of six
+		// HTTP_PERFORMANCE_PARAMs with their values after them, every pointer into that buffer.
+		r := exRecord{b: make([]byte, 512), base: base}
+		binary.LittleEndian.PutUint32(r.b[off:], exHTTPPerformance)
+		binary.LittleEndian.PutUint32(r.b[off+16:], perfParamMax)
+		const buf = 200
+		sizes := []int{8, 1, 4, 4, 4, 1}
+		pos := buf + perfParamMax*perfParamSize
+		for i, n := range sizes {
+			e := buf + i*perfParamSize
+			binary.LittleEndian.PutUint32(r.b[e:], uint32(i))   //nolint:gosec // G115: test
+			binary.LittleEndian.PutUint32(r.b[e+4:], uint32(n)) //nolint:gosec // G115: test
+			binary.LittleEndian.PutUint64(r.b[e+8:], r.at(pos))
+			r.b[pos] = byte(0x10 + i)
+			pos += (n + 3) &^ 3
+		}
+		total := pos - buf
+		binary.LittleEndian.PutUint32(r.b[off+20:], uint32(total)) //nolint:gosec // G115: test
+		binary.LittleEndian.PutUint64(r.b[off+24:], r.at(buf))
+		data, err := flattenEx(r.b, r.base, off)
+		require.NoError(t, err)
+		// Another buffer with the same values gives the same portable form.
+		r2 := exRecord{b: make([]byte, 512), base: base + 0x5000}
+		copy(r2.b, r.b)
+		for i := range perfParamMax {
+			e := buf + i*perfParamSize
+			binary.LittleEndian.PutUint64(r2.b[e+8:], binary.LittleEndian.Uint64(r.b[e+8:])+0x5000)
+		}
+		binary.LittleEndian.PutUint64(r2.b[off+24:], r2.at(buf))
+		data2, err := flattenEx(r2.b, r2.base, off)
+		require.NoError(t, err)
+		assert.Equal(t, data, data2, "no absolute address left in the portable form")
+		const at = 0x3000_0000
+		placed, err := relocateEx(data, at)
+		require.NoError(t, err)
+		first := binary.LittleEndian.Uint64(placed[24:]) - at
+		for i := range perfParamMax {
+			e := int(first) + i*perfParamSize //nolint:gosec // G115: test
+			p := binary.LittleEndian.Uint64(placed[e+8:]) - at
+			assert.Equal(t, byte(0x10+i), placed[p], "value %d", i)
+		}
+		again, err := flattenEx(placed, at, 0)
+		require.NoError(t, err)
+		assert.Equal(t, data, again)
+		binary.LittleEndian.PutUint64(r.b[buf+8:], r.at(500)) // an inner pointer outside the buffer
+		_, err = flattenEx(r.b, r.base, off)
+		require.ErrorIs(t, err, errBadValue)
+	})
 	t.Run("error headers", func(t *testing.T) {
 		r := exRecord{b: make([]byte, 512), base: base}
 		binary.LittleEndian.PutUint32(r.b[off:], exErrorHeaders)
@@ -279,7 +328,7 @@ func windowParam(size uint32) winproto.ExtendedParam {
 // TestRealUpdateKeepsTheRecordAndExParams measures F9 and proves UpdateBinding keeps every setting.
 func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 	requireReal(t)
-	require.Equal(t, exRewrite, exStrategy, "the shipped strategy")
+	require.Equal(t, exRepair, exStrategy, "the shipped strategy")
 	now := time.Now()
 	thumbA := importLeafWithKey(t, pki.SelfSigned("alice-w2-f9-a.test", pki.RSA2048, now))
 	thumbB := importLeafWithKey(t, pki.SelfSigned("alice-w2-f9-b.test", pki.ECDSA256, now))
@@ -305,12 +354,16 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 				t.Errorf("F9: the Ex write of an HTTP/2 window failed: %v", err)
 			}
 			var detail []exResult
-			require.NoError(t, withHTTP(func() error {
+			err = withHTTP(func() error {
 				var err error
 				_, detail, err = readExtendedDetail(k)
 				return err
-			}))
-			t.Logf("F9: Ex query answers per type: %+v", detail)
+			})
+			t.Logf("F9: Ex query answers per type (%s): %+v", loc.Type, detail)
+			if err != nil {
+				logRawEx(t, k)
+			}
+			require.NoError(t, err)
 			// Diagnostic only (never written): do these images know Ex types past the six the helper
 			// reads? A type that is set there would be lost if a base update resets Ex parameters.
 			require.NoError(t, withHTTP(func() error {
@@ -327,9 +380,7 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 			t.Logf("record read: %+v", before)
 			assert.Equal(t, thumbA, before.CertSHA1)
 			assert.NotZero(t, before.Flags&0x2, "NEGOTIATE_CLIENT_CERT read")
-			if assert.Len(t, before.Extended, 1, "the Ex parameter set above is read back") {
-				assert.Equal(t, want, before.Extended[0])
-			}
+			assert.Contains(t, before.Extended, want, "the Ex parameter set above is read back")
 
 			// F9: does a base update alone keep the extended parameters?
 			moved := before
@@ -345,8 +396,10 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 			}
 
 			// The shipped strategy: back to A with everything, then to B; the read-back equals the
-			// record before except the hash.
-			t.Logf("strategy %q ran, %d Ex parameters rewritten after each base update", exStrategy, len(before.Extended))
+			// record before except the hash. The window is changed behind the helper's back first, so
+			// the repair writes it back in either F9 world.
+			require.NoError(t, withHTTP(func() error { return writeEx(k, windowParam(2<<20)) }), "the window changed")
+			t.Logf("strategy %q ran (%d Ex parameters read before)", exStrategy, len(before.Extended))
 			require.NoError(t, h.UpdateBinding(ctx, before))
 			back, _, err := h.Binding(ctx, loc)
 			require.NoError(t, err)
@@ -369,6 +422,33 @@ func TestRealUpdateKeepsTheRecordAndExParams(t *testing.T) {
 }
 
 var procNCryptExportKey = modncrypt.NewProc("NCryptExportKey")
+
+// logRawEx logs the raw output of every Ex query of a record (runner diagnostics when a read fails).
+func logRawEx(t *testing.T, k key) {
+	t.Helper()
+	_ = withHTTP(func() error {
+		for typ := uint32(0); typ < exTypeCount; typ++ {
+			a := newArena(stringBytes(k.host))
+			var id uint32
+			var in unsafe.Pointer
+			var inLen uintptr
+			if k.typ == winproto.BindingIPPort {
+				q := &sslQueryEx{QueryDesc: queryExact, IPPort: k.addr, ParamType: typ}
+				id, in, inLen = configSSLCertInfoEx, unsafe.Pointer(q), unsafe.Sizeof(*q)
+			} else {
+				q := &sslSniQueryEx{QueryDesc: queryExact, IPPort: k.addr, Host: a.putString(k.host), ParamType: typ}
+				id, in, inLen = configSSLSniCertInfoEx, unsafe.Pointer(q), unsafe.Sizeof(*q)
+			}
+			rec, err := queryConfig(id, in, inLen)
+			if err != nil {
+				t.Logf("raw Ex type %d: %v", typ, err)
+				continue
+			}
+			t.Logf("raw Ex type %d: %d bytes at 0x%x: %s", typ, len(rec), recordBase(rec), hex.EncodeToString(rec))
+		}
+		return nil
+	})
+}
 
 var arenaSink uintptr
 

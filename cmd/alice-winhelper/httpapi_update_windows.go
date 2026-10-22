@@ -19,6 +19,12 @@ package main
 // W0 F2: an update replaces the whole record, so the record sent is always the full record read, with
 // only hash and store changed by winhelper. F9 (not measured yet): whether a base update keeps the
 // record's extended parameters. exStrategy decides what the helper does about it.
+//
+// Runner run 1 (windows.yml 39853315055): Windows Server 2025 answers an Ex query of every known type
+// with the record's value or the default (types 0-4 "set", type 5 ERROR_INVALID_PARAMETER), the
+// performance type as an aggregate of all six performance values (perfParamMax), and kept the HTTP/2
+// window a test set across a base update; writing every value read back failed with
+// ERROR_INVALID_PARAMETER. Windows Server 2022 answers ERROR_NOT_FOUND (1168) for a type not set.
 
 import (
 	"context"
@@ -26,8 +32,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"unicode/utf16"
 	"unsafe"
 
@@ -117,16 +125,18 @@ type sslSniQueryEx struct {
 	ParamType uint32
 }
 
-// The F9 strategies (W2 Task 6 ruling): exRewrite sends the base update and then one update per
-// extended parameter read (correct whether or not a base update keeps them); exBaseOnly trusts the
-// base update to keep them. Task 9's runner measurement decides whether exBaseOnly may become the
-// default.
+// The F9 strategies (W2 Task 6 rulings): exRepair (the default) sends the base update, reads the
+// extended parameters back and writes again only those that the base update changed or dropped, so a
+// world where the base update keeps them makes no Ex call at all and one where it resets them gets
+// them back; exRewrite writes every parameter read after the base update (run 1 on 2025: refused for
+// the defaults); exBaseOnly trusts the base update.
 const (
+	exRepair   = "repair"
 	exRewrite  = "rewrite"
 	exBaseOnly = "base-only"
 )
 
-var exStrategy = exRewrite
+var exStrategy = exRepair
 
 var errHTTPAPIMissing = errors.New("httpapi.dll lacks a configuration call")
 
@@ -310,8 +320,23 @@ func readBase(k key) (winproto.SSLBinding, bool, error) {
 // exResult is what the query of one extended parameter type answered (TestReal* logs it for F9).
 type exResult struct {
 	Type   uint32
-	Status string // "set", "not_set" (ERROR_FILE_NOT_FOUND), "unsupported" (ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED)
+	Status string // "set", "not_set" (ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND), "unsupported" (ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED)
+	Err    string // the query's answer when not "set" (diagnostics only, never in a helper answer)
 }
+
+// exReadError says which type and stage of an Ex read failed (diagnostics for the runner logs; the
+// helper's answers never carry error text). It unwraps to the cause.
+type exReadError struct {
+	Type  uint32
+	Stage string // "query", "decode", "type"
+	Err   error
+}
+
+func (e *exReadError) Error() string {
+	return "ex type " + strconv.FormatUint(uint64(e.Type), 10) + " " + e.Stage + ": " + e.Err.Error()
+}
+
+func (e *exReadError) Unwrap() error { return e.Err }
 
 // readExtended reads every extended parameter type of a record, in type order.
 func readExtended(k key) ([]winproto.ExtendedParam, error) {
@@ -319,7 +344,8 @@ func readExtended(k key) ([]winproto.ExtendedParam, error) {
 	return params, err
 }
 
-// readExtendedDetail is readExtended with each type's answer. ERROR_FILE_NOT_FOUND is a type not set;
+// readExtendedDetail is readExtended with each type's answer. ERROR_FILE_NOT_FOUND or ERROR_NOT_FOUND
+// (Windows Server 2022, run 1) is a type not set;
 // ERROR_INVALID_PARAMETER (or ERROR_NOT_SUPPORTED) is a type, or the Ex tables, this build does not
 // know: not set either.
 func readExtendedDetail(k key) ([]winproto.ExtendedParam, []exResult, error) {
@@ -328,11 +354,12 @@ func readExtendedDetail(k key) ([]winproto.ExtendedParam, []exResult, error) {
 	for t := uint32(0); t < exTypeCount; t++ {
 		data, err := readEx(k, t)
 		switch {
-		case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_NO_MORE_ITEMS):
-			results = append(results, exResult{Type: t, Status: "not_set"})
+		case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_NOT_FOUND),
+			errors.Is(err, windows.ERROR_NO_MORE_ITEMS):
+			results = append(results, exResult{Type: t, Status: "not_set", Err: err.Error()})
 			continue
 		case errors.Is(err, windows.ERROR_INVALID_PARAMETER), errors.Is(err, windows.ERROR_NOT_SUPPORTED):
-			results = append(results, exResult{Type: t, Status: "unsupported"})
+			results = append(results, exResult{Type: t, Status: "unsupported", Err: err.Error()})
 			continue
 		case err != nil:
 			return nil, results, err
@@ -361,20 +388,20 @@ func readEx(k key, t uint32) ([]byte, error) {
 	rec, err := queryConfig(id, in, inLen)
 	runtime.KeepAlive(a)
 	if err != nil {
-		return nil, err
+		return nil, &exReadError{Type: t, Stage: "query", Err: err}
 	}
 	data, err := flattenEx(rec, uint64(recordBase(rec)), paramOff)
 	if err != nil {
-		return nil, err
+		return nil, &exReadError{Type: t, Stage: "decode", Err: err}
 	}
-	if binary.LittleEndian.Uint32(data[0:]) != t {
-		return nil, errBadValue
+	if got := binary.LittleEndian.Uint32(data[0:]); got != t {
+		return nil, &exReadError{Type: t, Stage: "type", Err: errBadValue}
 	}
 	return data, nil
 }
 
-// updateRecord sends one HttpUpdateServiceConfiguration of the whole base record b, then (exRewrite)
-// one update of each extended parameter b carries. 1312 is winhelper.ErrKeyUnusable and 2
+// updateRecord sends one HttpUpdateServiceConfiguration of the whole base record b, then (exRepair)
+// one write of each extended parameter b carries that the record no longer holds as b has it. 1312 is winhelper.ErrKeyUnusable and 2
 // winhelper.ErrBindingNotFound, both from the base update, which then changed nothing. An error after
 // the base update leaves the record changed: winhelper reads it back either way.
 func updateRecord(b winproto.SSLBinding) error {
@@ -389,12 +416,25 @@ func updateRecord(b winproto.SSLBinding) error {
 		if err := updateBase(k, b); err != nil {
 			return err
 		}
-		if exStrategy == exBaseOnly {
+		if exStrategy == exBaseOnly || len(b.Extended) == 0 {
 			return nil
 		}
+		held := map[uint32]string{}
+		if exStrategy == exRepair {
+			now, err := readExtended(k)
+			if err != nil {
+				return fmt.Errorf("ex read after the base update: %w", err)
+			}
+			for _, p := range now {
+				held[p.Type] = p.Data
+			}
+		}
 		for _, p := range b.Extended {
+			if d, ok := held[p.Type]; ok && d == p.Data {
+				continue // kept by the base update
+			}
 			if err := writeEx(k, p); err != nil {
-				return err
+				return fmt.Errorf("ex write of type %d: %w", p.Type, err)
 			}
 		}
 		return nil
@@ -415,8 +455,10 @@ func updateBase(k key, b winproto.SSLBinding) error {
 		return winhelper.ErrKeyUnusable
 	case errors.Is(err, windows.ERROR_FILE_NOT_FOUND):
 		return winhelper.ErrBindingNotFound
+	case err != nil:
+		return fmt.Errorf("base update: %w", err)
 	}
-	return err
+	return nil
 }
 
 // encodeBase builds the HTTP_SERVICE_CONFIG_SSL_SET or _SNI_SET of b in one arena.
@@ -478,7 +520,7 @@ func writeEx(k key, p winproto.ExtendedParam) error {
 	}
 	r, _, _ := procHttpUpdateServiceConfiguration.Call(0, uintptr(id), in, inLen, 0)
 	err = ulongResult(r)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_NOT_FOUND) {
 		r, _, _ = procHttpSetServiceConfiguration.Call(0, uintptr(id), in, inLen, 0)
 		err = ulongResult(r)
 	}
