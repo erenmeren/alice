@@ -28,6 +28,18 @@ type ServerType = 'linux' | WebServerType | 'windows';
 const LINUX_USER = 'alice-svc';
 const WINDOWS_USER = 'alice';
 
+// WINDOWS_USER_RE is the server's Windows account rule (R60 Ruling 1, internal/providers/windows/config.go): an
+// optional NetBIOS domain of at most 15 characters and a backslash, then a SAM name of at most 20. It holds no quote,
+// so the name can stand inside the script's single quotes.
+const WINDOWS_USER_RE = /^([A-Za-z0-9][A-Za-z0-9-]{0,14}\\)?[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
+
+// withWindowsAccount sets the script's $AliceUser line to the account when the account passes the rule; otherwise
+// the script keeps its default (the server refuses such a name when the form is sent).
+function withWindowsAccount(script: string, account: string): string {
+  if (!WINDOWS_USER_RE.test(account)) return script;
+  return script.replace(/^\$AliceUser = '[^'\r\n]*'$/m, () => `$AliceUser = '${account}'`);
+}
+
 // AddServerModal creates a Linux or an Nginx server, waits for the first connection test and, when the server
 // presented a fingerprint nobody confirmed yet, asks the Administrator to compare and confirm it.
 // The server counts toward the license as soon as it is created (spec §7.3), so after the create
@@ -189,7 +201,7 @@ export function AddServerModal({
                 { value: 'windows', label: t('targets.form.typeWindows') },
               ]}
             />
-            <ProfileScript type={type} />
+            <ProfileScript type={type} account={username} />
             <TextInput label={t('targets.form.name')} value={name} onChange={(e) => setName(e.currentTarget.value)} required maxLength={100} data-autofocus />
             <TextInput
               label={t('targets.form.host')}
@@ -247,12 +259,14 @@ export function AddServerModal({
 }
 
 // ProfileScript shows the commands that prepare a server of the chosen type (the profile's setup
-// script from Alice, the same text the Servers page shows). The script is not secret.
-function ProfileScript({ type }: { type: ServerType }) {
+// script from Alice, the same text the Servers page shows). The script is not secret. The Windows script names the
+// account typed in the form (final review I1).
+function ProfileScript({ type, account }: { type: ServerType; account: string }) {
   const { t } = useTranslation();
   const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
-  const script = key.data?.profiles[type]?.script;
   const windows = type === 'windows';
+  const shown = key.data?.profiles[type]?.script;
+  const script = shown && windows ? withWindowsAccount(shown, account.trim()) : shown;
   if (!script) return <ErrorAlert error={key.error} />;
   return (
     <Stack gap={4}>

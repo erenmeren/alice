@@ -1125,7 +1125,7 @@
       "usernameWindows": "Windows hesabı",
       "usernameWindowsHelp": "Yerel bir hesap (alice) ya da ALANADI\\hesap biçiminde yazılmış bir etki alanı hesabı.",
       "scriptWindows": "PowerShell kurulum betiği",
-      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın."
+      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır."
     },
     "connecting": "Sunucuya bağlanılıyor…",
     "stillWorking": "Alice bu iş üzerinde çalışmaya devam ediyor. Sonucu görmek için bir dakika sonra sunucunun sayfasını açın.",
@@ -1841,6 +1841,7 @@
       "help": "Alice web sitelerini en son {{time}} tarihinde okuduğu haliyle gösteriyor. Sorun giderildikten sonra Keşfet düğmesini yeniden seçin.",
       "neverScanned": "Alice bu sunucudan henüz hiçbir web sitesi okumadı."
     },
+    "iisNotInstalled": "Bu sunucuda IIS kurulu değil; Alice diğer uygulamaların bağlamalarını listeler.",
     "deployUnavailable": "Dağıtım şu anda yapılamıyor.",
     "unavailable": {
       "status": "Sunucuyla şu anda bağlantı yok (yukarıdaki durumuna bakın).",
@@ -1916,6 +1917,7 @@
       "unknown_keyword": "Bu sertifika, Alice'in tanımadığı bir seçenek içeren bir bind satırında; Alice bu satırın hangi dosyaları kullandığını bilemez.",
       "win_foreign_app": "Bu bağlama başka bir uygulamaya ait ({{application}}). Alice onu değiştirmez.",
       "win_foreign_app_unknown": "Bu bağlama {{app_id}} kimlikli başka bir uygulamaya ait. Alice onu değiştirmez.",
+      "win_foreign_app_iis_unused": "Bu bağlamayı hiçbir IIS sitesi kullanmıyor.",
       "win_ccs": "Bu bir Merkezi Sertifika Deposu (CCS) bağlamasıdır. Alice bunları henüz desteklemiyor.",
       "win_store_unsupported": "Sertifika My veya WebHosting dışında bir depoda. Alice bu depoyu desteklemiyor.",
       "file_problem_windows": "Alice bu bağlamanın sertifikasını veya anahtarını kullanamıyor."

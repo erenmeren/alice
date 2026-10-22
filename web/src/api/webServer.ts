@@ -34,6 +34,9 @@ export interface WebServerState {
   stale: boolean;
   // configInvalid: the web server reports an error in its configuration (facts.web_server or the scan's warning).
   configInvalid: boolean;
+  // iisMissing: a Windows server without IIS. Its scan is current (it lists the other applications' bindings), so it
+  // is a plain fact, not a stale scan (final review I2).
+  iisMissing: boolean;
 }
 
 // webServerState reads the server's status, its scan warnings and its web-server facts. discoveryFailed is
@@ -43,15 +46,17 @@ export function webServerState(target: Target, discoveryFailed = false): WebServ
   const codes = new Set(target.facts.warnings.map((w) => w.code));
   const ws = target.facts.web_server;
   const configInvalid = (ws?.found === true && !ws.config_valid) || codes.has('web_server_config_invalid');
+  const notFound = codes.has('web_server_not_found') || (ws !== undefined && !ws.found && ws.version === '');
+  const iisMissing = isWindows(target.type) && notFound;
   let block: DeployBlock | null = null;
   if (target.status !== 'ok') block = 'status';
   else if (codes.has('web_server_profile_missing')) block = 'profile_missing';
   else if (codes.has('web_server_helper_too_old')) block = 'helper_too_old';
-  else if (codes.has('web_server_not_found') || (ws !== undefined && !ws.found && ws.version === '')) block = 'server_not_found';
+  else if (notFound && !iisMissing) block = 'server_not_found';
   else if (configInvalid) block = 'config_invalid';
   else if (target.last_error) block = 'last_error';
   else if (discoveryFailed) block = 'discovery_failed';
-  return { block, configInvalid, stale: block !== null && !(block === 'status' && target.status === 'checking') };
+  return { block, configInvalid, iisMissing, stale: block !== null && !(block === 'status' && target.status === 'checking') };
 }
 
 // firstServerName is the website's name: the first server name of its first server that has one

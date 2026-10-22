@@ -510,7 +510,7 @@ describe('TargetsPage', () => {
         await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
         expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# windows setup script');
         expect(within(dialog).getByText('PowerShell setup script')).toBeInTheDocument();
-        expect(within(dialog).getByText('Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe.')).toBeInTheDocument();
+        expect(within(dialog).getByText('Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above.')).toBeInTheDocument();
         expect(within(dialog).getByLabelText(/^Windows account/)).toHaveValue('alice');
         expect(within(dialog).getByLabelText(/^Windows account/)).toHaveAttribute('maxlength', '36');
         await userEvent.type(within(dialog).getByLabelText(/^Name/), 'iis-01');
@@ -521,6 +521,30 @@ describe('TargetsPage', () => {
         await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
         await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
         expect(body).toEqual({ name: 'iis-01', type: 'windows', host: 'iis-01.example.com', port: 22, username: 'CORP\\alice-svc' });
+      });
+
+      // The script names the account typed above (final review I1); a name outside the Windows rule keeps alice.
+      it('puts the typed account into the shown and copied script', async () => {
+        withTargets('admin', []);
+        const user = userEvent.setup(); // provides the clipboard Mantine's CopyButton writes to
+        await renderRoute('/servers');
+        await user.click(await screen.findByRole('button', { name: 'Add server' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+        await user.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
+        const script = await within(dialog).findByTestId('add-server-script');
+        expect(script).toHaveTextContent("$AliceUser = 'alice'");
+        expect(within(dialog).getByText(/uses the Windows account you enter above/)).toBeInTheDocument();
+        const account = within(dialog).getByLabelText(/^Windows account/);
+        await user.clear(account);
+        await user.type(account, 'CORP\\alice-svc');
+        expect(script).toHaveTextContent("$AliceUser = 'CORP\\alice-svc'");
+        expect(script).not.toHaveTextContent("$AliceUser = 'alice'");
+        await user.click(within(dialog).getByRole('button', { name: 'Copy commands' }));
+        expect(await navigator.clipboard.readText()).toContain("$AliceUser = 'CORP\\alice-svc'\n");
+        await user.clear(account);
+        await user.type(account, "bad'name");
+        expect(script).toHaveTextContent("$AliceUser = 'alice'");
+        expect(script).not.toHaveTextContent('bad');
       });
 
       it('restores the Linux default when switching back, but keeps a name the person typed', async () => {

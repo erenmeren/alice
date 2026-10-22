@@ -113,6 +113,12 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
           </Alert>
         )}
 
+        {state.iisMissing && (
+          <Alert color="gray" role="status" data-testid="iis-not-installed">
+            {t('locations.iisNotInstalled')}
+          </Alert>
+        )}
+
         <Switch label={t('locations.showMissing')} checked={showMissing} onChange={(e) => setShowMissing(e.currentTarget.checked)} />
         <ErrorAlert error={locs.error} />
         {items.length > 0 && <DriftSummaryLine observations={items.map((l) => l.observation)} />}
@@ -164,14 +170,22 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   );
 }
 
+// APPLICATION_NAMES are the proper names of the applications the helper's table knows (details.application); they
+// are names, not words, so they are the same in every language.
+const APPLICATION_NAMES: Record<string, string> = { iis: 'IIS', iisexpress: 'IIS Express', winrm: 'WinRM', sstp: 'SSTP' };
+
 // unsupportedText words why a place cannot be used. A Windows binding that belongs to another application names it
 // (details.application from the helper's table: iis, iisexpress, winrm, sstp), or shows the raw application id when
-// Alice does not know it (AD FS, for one); a file_problem there is about the store, not about files.
+// Alice does not know it (AD FS, for one); iis_unused is an IIS binding no site uses; a file_problem there is about
+// the store, not about files.
 function unsupportedText(t: TFunction, target: Target, l: CertificateLocation): string {
   if (l.unsupported_reason === 'win_foreign_app') {
     const application = typeof l.details?.application === 'string' ? l.details.application : '';
     const appId = typeof l.details?.app_id === 'string' ? l.details.app_id : '';
-    return application !== '' ? t('locations.unsupported.win_foreign_app', { application }) : t('locations.unsupported.win_foreign_app_unknown', { app_id: appId });
+    if (application === 'iis_unused') return t('locations.unsupported.win_foreign_app_iis_unused');
+    return application !== ''
+      ? t('locations.unsupported.win_foreign_app', { application: APPLICATION_NAMES[application] ?? application })
+      : t('locations.unsupported.win_foreign_app_unknown', { app_id: appId });
   }
   if (l.unsupported_reason === 'file_problem' && isWindows(target.type)) return t('locations.unsupported.file_problem_windows');
   return t(capabilityText(target, unsupportedReasonKey(l.unsupported_reason)));

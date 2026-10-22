@@ -363,11 +363,11 @@ export interface SSHDSettings {
 }
 
 // WebServerFacts are what the last scan or test learned about the web server software on a web server
-// (absent on other servers and before the first scan). software equals the target type; config_error
+// (absent on other servers and before the first scan). software equals the target type (iis on a Windows server); config_error
 // and config_error_reason are codes (see CONFIG_ERRORS and CONFIG_REASONS); config_error_file is text
 // from the server.
 export interface WebServerFacts {
-  software: WebServerType;
+  software: WebServerType | 'iis';
   version: string;
   conf_path: string;
   config_valid: boolean;

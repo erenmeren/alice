@@ -624,7 +624,7 @@ describe('TargetDetailPage', () => {
         expect(within(first).getByText('Default Web Site')).toBeInTheDocument();
         expect(within(first).getByText('www.example.test')).toBeInTheDocument();
         expect(within(first).getByText('www.example.test:443', { selector: 'code' })).toBeInTheDocument();
-        expect(screen.getByText('This binding belongs to another application (winrm). Alice does not change it.')).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application (WinRM). Alice does not change it.')).toBeInTheDocument();
         expect(screen.getByText('This binding belongs to another application with the id {11111111-2222-3333-4444-555555555555}. Alice does not change it.')).toBeInTheDocument();
         expect(screen.getByText('http.sys/ccs/443')).toBeInTheDocument();
         expect(screen.getByText('This is a Centralized Certificate Store binding. Alice does not support these yet.')).toBeInTheDocument();
@@ -646,11 +646,48 @@ describe('TargetDetailPage', () => {
         expect((await screen.findByText('Elevated', { selector: 'dt' })).nextElementSibling).toHaveTextContent('No');
       });
 
+      // A Windows server without IIS is a plain Windows server: its scan is current, so there is no stale alert,
+      // only a neutral note (final review I2).
+      it('without IIS shows a neutral note, not the stale-websites alert', async () => {
+        const target = {
+          ...windowsTargetFixture,
+          facts: {
+            ...windowsTargetFixture.facts,
+            windows: windowsFacts({ iis_installed: false, iis_version: '' }),
+            web_server: webServerFacts({ software: 'iis', version: '', conf_path: '', found: false }),
+            warnings: [{ code: 'web_server_not_found', params: {} }],
+          },
+        };
+        await open(target, 'en', 'en-US', [foreign]);
+        expect(await screen.findByText('IIS is not installed on this server; Alice lists the bindings of other applications.')).toBeInTheDocument();
+        expect(screen.queryByTestId('stale-websites')).not.toBeInTheDocument();
+        expect(screen.queryByText(/may be out of date/i)).not.toBeInTheDocument();
+        expect(await screen.findByText('This binding belongs to another application (WinRM). Alice does not change it.')).toBeInTheDocument();
+      });
+
+      it('names an unused IIS binding and the known applications by their names', async () => {
+        const unused = windowsBindingFixture({
+          id: 'loc-unused',
+          cert_path: 'http.sys/ipport/0.0.0.0:8444',
+          supported: false,
+          unsupported_reason: 'win_foreign_app',
+          servers: [],
+          details: { app_id: '{4dc3e181-e14b-4a21-b022-59fc669b0914}', application: 'iis_unused' },
+        });
+        const app = (id: string, application: string) =>
+          windowsBindingFixture({ id: `loc-${application}`, cert_path: `http.sys/ipport/0.0.0.0:${id}`, supported: false, unsupported_reason: 'win_foreign_app', servers: [], details: { app_id: '{x}', application } });
+        await open(windowsTargetFixture, 'en', 'en-US', [unused, app('44300', 'iisexpress'), app('443', 'sstp'), app('8445', 'iis')]);
+        expect(await screen.findByText('No IIS site uses this binding.')).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application (IIS Express). Alice does not change it.')).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application (SSTP). Alice does not change it.')).toBeInTheDocument();
+        expect(screen.getByText('This binding belongs to another application (IIS). Alice does not change it.')).toBeInTheDocument();
+      });
+
       it('words the same page in Turkish', async () => {
         await open(windowsTargetFixture, 'tr', 'tr-TR');
         expect((await screen.findByText('Windows sürümü', { selector: 'dt' })).nextElementSibling).toHaveTextContent('Windows Server 2022 Datacenter');
         expect(screen.getByRole('columnheader', { name: 'IIS sitesi' })).toBeInTheDocument();
-        expect(screen.getByText('Bu bağlama başka bir uygulamaya ait (winrm). Alice onu değiştirmez.')).toBeInTheDocument();
+        expect(screen.getByText('Bu bağlama başka bir uygulamaya ait (WinRM). Alice onu değiştirmez.')).toBeInTheDocument();
         const deploy = screen.getAllByRole('button', { name: /^Sertifika dağıt/ });
         expect(deploy[0]).toHaveAccessibleDescription('IIS sunucularında henüz kullanılamıyor');
       });

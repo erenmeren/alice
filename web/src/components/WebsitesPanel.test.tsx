@@ -97,6 +97,17 @@ describe('WebsitesPanel on an Nginx server', () => {
     expect(screen.queryByRole('button', { name: /Deploy certificate/ })).not.toBeInTheDocument();
   });
 
+  // A key-only problem (no certificate problem) on a Linux web server is still worded as a key file (W1 review).
+  it('words a key-only file problem as the key file', async () => {
+    onNginx('admin', [locationFixture({ id: 'k', supported: false, unsupported_reason: 'file_problem', problem: '', key_problem: 'hard_linked' })]);
+    await renderRoute(path);
+    const row = (await screen.findAllByTestId('location-row'))[0];
+    expect(within(row).getByText('Alice cannot use the files at this place.')).toBeInTheDocument();
+    expect(within(row).getByText('Key file: The file has more than one name (hard link).')).toBeInTheDocument();
+    expect(within(row).queryByText(/^Certificate file:/)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/^Private key:/)).not.toBeInTheDocument();
+  });
+
   it('shows location warnings in words with their parameters', async () => {
     onNginx('operator', [
       locationFixture({ warnings: ['symlinked', 'custom_location', 'key_mode_open', 'key_group_open', 'certificate_block_dropped', 'certificate_expired', 'san_mismatch', 'list_truncated', 'made_up'], key_mode: '0644' }),

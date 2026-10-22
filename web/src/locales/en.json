@@ -1125,7 +1125,7 @@
       "usernameWindows": "Windows account",
       "usernameWindowsHelp": "A local account (alice) or a domain account written as DOMAIN\\account.",
       "scriptWindows": "PowerShell setup script",
-      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe."
+      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above."
     },
     "connecting": "Connecting to the server…",
     "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
@@ -1841,6 +1841,7 @@
       "help": "Alice shows the websites as it last read them, on {{time}}. Choose Discover again after the problem is fixed.",
       "neverScanned": "Alice has not read any website from this server yet."
     },
+    "iisNotInstalled": "IIS is not installed on this server; Alice lists the bindings of other applications.",
     "deployUnavailable": "Deploying is unavailable for now.",
     "unavailable": {
       "status": "The server is not connected right now (see its status above).",
@@ -1916,6 +1917,7 @@
       "unknown_keyword": "This certificate is on a bind line with an option Alice does not know, so Alice cannot tell which files that line uses.",
       "win_foreign_app": "This binding belongs to another application ({{application}}). Alice does not change it.",
       "win_foreign_app_unknown": "This binding belongs to another application with the id {{app_id}}. Alice does not change it.",
+      "win_foreign_app_iis_unused": "No IIS site uses this binding.",
       "win_ccs": "This is a Centralized Certificate Store binding. Alice does not support these yet.",
       "win_store_unsupported": "The certificate is in a store other than My or WebHosting. Alice does not support that store.",
       "file_problem_windows": "Alice cannot use the certificate or key of this binding."

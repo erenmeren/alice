@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { can } from './capabilities';
 import { WEB_SERVER_TYPES, isServerType, isWebServer, webServerState } from './webServer';
-import { nginxTargetFixture, nginxTargetWith, webServerFacts } from '../test/fixtures';
+import { nginxTargetFixture, nginxTargetWith, webServerFacts, windowsTargetFixture } from '../test/fixtures';
 
 describe('isWebServer / isServerType', () => {
   it('knows the web-server types', () => {
@@ -21,7 +21,7 @@ describe('isWebServer / isServerType', () => {
 
 describe('webServerState', () => {
   it('has no block for a healthy server', () => {
-    expect(webServerState(nginxTargetFixture)).toEqual({ block: null, stale: false, configInvalid: false });
+    expect(webServerState(nginxTargetFixture)).toEqual({ block: null, stale: false, configInvalid: false, iisMissing: false });
   });
   it('blocks on status, profile, not found, config, last error and a failed scan, in that order', () => {
     expect(webServerState(nginxTargetWith({ status: 'unreachable' })).block).toBe('status');
@@ -37,6 +37,13 @@ describe('webServerState', () => {
     expect(bad).toMatchObject({ block: 'config_invalid', configInvalid: true, stale: true });
     expect(webServerState(nginxTargetWith({ last_error: { code: 'X', reason: 'y' } })).block).toBe('last_error');
     expect(webServerState(nginxTargetFixture, true).block).toBe('discovery_failed');
+  });
+  // A Windows server without IIS is not a stale scan (final review I2).
+  it('takes IIS missing on a Windows server as a fact, not a block', () => {
+    const facts = { ...windowsTargetFixture.facts, web_server: webServerFacts({ software: 'iis', found: false, version: '' }), warnings: [{ code: 'web_server_not_found', params: {} }] };
+    expect(webServerState({ ...windowsTargetFixture, facts })).toEqual({ block: null, stale: false, configInvalid: false, iisMissing: true });
+    expect(webServerState({ ...windowsTargetFixture, facts, status: 'unreachable' })).toMatchObject({ block: 'status', iisMissing: true });
+    expect(webServerState(windowsTargetFixture).iisMissing).toBe(false);
   });
 });
 
