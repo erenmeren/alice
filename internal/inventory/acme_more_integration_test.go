@@ -547,7 +547,8 @@ func TestListACMEBindingsCarriesTheLocationKind(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, providers.LocationServerFile, list[0].LocationKind)
 
-	_, err = w.h.db.Owner.Exec(w.h.ctx, "UPDATE certificate_locations SET kind = 'win_sslbinding' WHERE id = $1", w.loc1)
+	_, err = w.h.db.Owner.Exec(w.h.ctx, `UPDATE certificate_locations SET kind = 'win_sslbinding', locator = '{"type":"ipport","ip":"0.0.0.0","port":443}'::jsonb,
+    key_path = '', resolved_cert_path = '', key_mode = '', key_owner = '', key_group = '', symlinked = false WHERE id = $1`, w.loc1)
 	require.NoError(t, err)
 	list, err = w.h.svc.ListACMEBindings(w.h.ctx, c.ID)
 	require.NoError(t, err)

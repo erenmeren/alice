@@ -888,7 +888,7 @@ describe('what each website should have, what Alice last deployed and what is ob
     expectNoRawKeys();
   });
 
-  it('speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R62)', async () => {
+  it('speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)', async () => {
     base({
       session: sessionFor('operator'),
       cert: issued(),
