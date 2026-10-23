@@ -906,3 +906,346 @@ and Review Focus 1-6 hold end to end). Its minors:
 - When a slow-host fault is added to the emulator, the wintest handler must mark its host dead on `o.Abandoned`: an
   in-process abandoned call can write for up to `WriteGrace` (8 s) after `OUTCOME_UNKNOWN`, which a real helper
   cannot (Ruling 7, final review Minor 1).
+
+# W3 (R62)
+
+Phase W3 (drift and cleanup) was built on branch `windows-w3` from the plan
+`docs/superpowers/plans/2026-10-23-windows-w3-drift-and-cleanup.md` (13 tasks), on the owner's approval of W0-W4 with
+the §15 defaults (2026-10-22). Spec: R62 in `docs/superpowers/specs/alice-v1/00-decisions.md`, `02-architecture.md`
+("Windows servers"), `03-integrations.md` §13A.12-§13A.14, `04-security.md` §14.4 (WN-12 amended, WN-14..WN-17),
+`06-quality.md` §24.7 (WIN-29..WIN-38), design §14 (F11, F12) and §18. **One migration, `00032`** (the plan said none;
+amended by the coordinator, Ruling 1). None of the rulings below is a pricing decision; the security-relevant ones the
+owner should confirm are listed under [Owner items (W3)](#owner-items-w3).
+
+## The plan's rulings as built (W3)
+
+The plan's 24 rulings stand as written, except where an entry says "Amended".
+
+1. **Decision R62.** Amended (coordinator, Task 10 rework `f5fb07f7`): **one migration, `00032`**: a dedicated column
+   `targets.certificate_cleanup boolean NOT NULL DEFAULT true` and `GRANT UPDATE (certificate_cleanup) ON targets TO
+   alice_app` (that column only). Why: `alice_app` may not update `targets.config` (`00005`), so a switch kept in the
+   config could only be set when a server is added. Refused alternative: `GRANT UPDATE (config) ON targets`, because
+   the config holds the connection (host, port, account) and the application would gain write access to all of it.
+   Down revokes the grant and drops the column (an off switch is lost on a downgrade, accepted). As written otherwise:
+   drift uses the existing columns (`changed_outside_at`, `problem`, `key_problem`, `location_observations`), the
+   import inventory and journals are server files, no new `alerts.kind` (the Q7 notice's dedupe is Ruling 9's);
+   error codes `ALC-WIN-0013`, `ALC-WIN-0014`; test IDs `WIN-29`..`WIN-38`; STRIDE `WN-14`..`WN-17`.
+2. **Protocol 1, helper 0.3.0, `CleanupMinVersion` 0.3.0.** As written. Amended (Task 6): Alice's own cut of an
+   `iis-cleanup` call is `linuxssh.LongCommandTimeout` (60 s, above the helper's 50 s budget, as `iis-dump`: an equal
+   cut would race the helper's `OUTCOME_UNKNOWN`); the W2 provider tests that probed "a subcommand without a budget"
+   with `iis-cleanup` now probe `rdp-deploy`, as W1's fidelity test does.
+3. **Command line and standard input; no operation id.** As written. Amended (Task 3): the input is decoded strictly
+   (a member twice, a member name outside the exact list, encoding/json's case-insensitive match and trailing data are
+   `BAD_CONTENT`; a bad ref or item, a reason `forced`, 0 or more than `MaxCleanupItems` items, more than
+   `MaxForbidden` watch refs are `INVALID_ARGUMENT`); `--apply` reads the bindings, the listeners and the journals
+   once per call under the lock, not again before each item.
+4. **Two judges, both must agree.** As written.
+5. **Alice imported (rule 1).** As written. Amended (Tasks 2, 3): (b) also needs the journal's own `alice_imported`
+   true (after the existing-copy race a journal has `existed:false`, `alice_imported:false`); a journal with
+   `existed:true` and `alice_imported:true` is invalid; in (a) and (b) the entry's SHA-256 must equal the store copy's
+   DER SHA-256; a certificate that only a 0.3.0 journal names is **adopted** into `imports.json` by the plan when rule
+   1 holds (else the fence's tombstone would erase the only evidence and the certificate could never be cleaned).
+6. **In use (rule 2).** As written; F12 confirmed (below). Amended (Task 5): an RDP value that is not 20 bytes, a
+   WinRM `certThumbprint` that is not 40 hex digits after removing spaces, or more than 1024 listener keys is an
+   error, so that server's plan and apply refuse (`IO_ERROR`) and remove nothing until it is fixed.
+7. **Live journals (rule 3, helper half).** As written. Amended (Task 3): an unreadable journal also **clears every
+   `unbound_since` stamp** of that run (it counts as "in use"), so the wait restarts after it is pruned; the helper
+   reads at most 4096 journals per run and an unread one counts as unreadable; files not named `<op>.json` (a `.tmp`,
+   a README) are neither read nor pruned.
+8. **Age (rule 4) and the rollback window (§15 Q6).** As written (`winproto.CleanupMinAge` and
+   `inventory.CleanupRollbackWindow` 7 days); candidates are listed oldest stamp first.
+9. **Incident rule (§15 Q7).** Amended (Task 7 fix rounds `1d9588e2`, `552763b4`, controller and coordinator
+   rulings): **every final state** of an incident place on a Windows server with the `cleanup_certificates`
+   capability (verified, unverified, failed, skipped; skipped ones when the incident starts) queues its **own**
+   `windows.cleanup` with `incident_id` (dedupe `windows.cleanup:<target>:incident:<incident>:<location>`, queued in
+   the transaction that settles the place); the job sends `windows.compromised_in_store` only when **no place of that
+   incident on that server is still pending or deploying**, and at most once per incident and certificate (it looks
+   for an outbox row of that template with the same `incident_id` and `thumbprint`, as `sshkeys.lastPreviewMail`
+   does); "compromised" is `certificates.compromised_at` on the certificate itself (a certificate that only shares a
+   compromised key is not watched); a compromised candidate is removed even when a location still names it (the
+   helper's rule 2 still protects a bound one). Coordinator fix: the incident engine and the impact view now decide
+   deployability with the deployment engine's own rule (`deployLocation.deployable()`, `deployableColumns`), not a
+   Unix-path regex, so an IIS binding is an incident place at all (without it Q7 could never fire).
+10. **Removal.** Amended (Task 3 fix `483950cf`): per certificate the CNG key, then the certificate, then the `chain`
+    of every binding record naming its DER SHA-256 is cleared, **then** its `imports.json` entry is dropped, then event
+    1003; the next plan heals an interrupted removal (for an entry whose certificate no store holds it clears the
+    chains first, then drops the entry). F11 confirmed (below): the key is deleted through
+    `CryptAcquireCertificatePrivateKey(ONLY_NCRYPT|SILENT)` and `NCryptDeleteKey`; the container-name route was not
+    built. A key already gone removes the certificate alone; any other key error, or a key handle the context owns,
+    leaves the certificate in place (never an orphan key). As written: intermediates are never removed.
+11. **Journal and tombstone bounds.** As written. Amended (Task 3 fix): while any binding record cannot be listed, read
+    or decoded nothing is pruned and the plan warns `binding_record_unreadable`; "a journal a binding record still
+    needs" follows the latest operation through prepared, unchanged and fenced journals to their `prev_record`; an
+    unread journal is never pruned.
+12. **Bounds.** As written. Amended (Task 3 fix): once the budget has ended no new removal starts (`OUTCOME_UNKNOWN`);
+    the step under way finishes its bookkeeping. A cleanup apply ending `OUTCOME_UNKNOWN` records no Alice audit row
+    for what the helper may have removed (event 1003 on the server is the trace; owner item).
+13. **The job.** Amended (coordinator, `f5fb07f7`): the switch is the column `targets.certificate_cleanup` (Ruling 1),
+    shown and changed on the server's page and with `PATCH /targets/{id}` (`certificate_cleanup`, boolean) only for a
+    server with the `cleanup_certificates` capability (`validation.pattern` otherwise, as `poll_interval_minutes` on a
+    server), audited `target.updated`; it is not a field of the Windows config schema. Amended (Task 7): `windows.cleanup`
+    has one attempt and raises no `job.dead` e-mail when exhausted (a server that is down would mail daily); the job
+    refuses a server without the capability before dialling (`internal.unexpected`). As written otherwise: off, the
+    job still plans and applies nothing; `windows.cleanup_schedule` hourly (never on the wall clock in the e2e build);
+    each removal audited `windows.certificate_removed`.
+14. **Drift: one Windows scan rule.** As written. Precision (Task 8): "bound" is R52's `boundLocationWhere` (an ACME
+    or Key Vault binding); "had none before" means both stored problems empty (a binding that stays broken is marked
+    once); the `location.changed_outside` audit row carries the cause under `problem` (the audit's secret-key check
+    refuses a `key_problem` key). Assumption: an Alice deployment never leaves a binding with an unusable key, else the
+    "changed outside Alice" mail would misattribute it (owner item).
+15. **Drift cause, derived.** As written. Amended (Task 10 review): `autocertrebind` is true only on a drifted Windows
+    binding with a known cause on a server running the task (the hint explains a drift).
+16. **Windows drift e-mails.** As written; `windows_note=autocertrebind` rides on all seven texts.
+17. **Lost connection for Windows.** As written.
+18. **`location_kind` on the Deployment DTO.** As written.
+19. **The dump shows `alice_imported`.** As written; reading the journals for it is now partial (one unreadable
+    journal no longer drops the others).
+20. **UI.** As written, except that the switch is a setting of the server's page (Ruling 13), not a provider config
+    field.
+21. **e2e.** As written; the switch is saved off and on through the server's page (Task 11).
+22. **Runner hygiene.** As written: ports 45390 (F11), 45391 and 45392 (fidelity), 45398 (plain http of the fixture
+    sites); `TestRealRunnerIsClean` checks 45330-45398, `alice-w3-` certificates and sites and
+    `inetpub\alice-w3-fidelity`; the clock offset lives in `now_alicetest_windows.go` and archtest proves neither test
+    hook file nor its environment variable ships.
+23. **W2 items deferred to W3, settled.** As written.
+24. **Test IDs.** As written: `WIN-29`..`WIN-38`, `WN-14`..`WN-17`, WN-12 amended.
+
+## W3 facts measured on real runners
+
+Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
+2025 Datacenter, Desktop Experience).
+
+- **F11: CONFIRMED on windows-2022 and windows-2025** (run 1,
+  <https://github.com/erenmeren/alice/actions/runs/39912110730>, head `efb5c13f`; `TestRealCleanupRemovesKeyAndCertificate`
+  passed, not skipped). `CryptAcquireCertificatePrivateKey(CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG |
+  CRYPT_ACQUIRE_SILENT_FLAG)` then `NCryptDeleteKey` removed the imported certificate's key file (exactly one machine
+  key file gone, none created; `NCryptOpenKey` of its container then 0x80090016), and
+  `CertDeleteCertificateFromStore` of a duplicated context removed the certificate; the other certificates kept their
+  keys and the binding kept serving. The fallback route (the `CERT_KEY_PROV_INFO_PROP_ID` container through
+  `NCryptOpenKey`) was not needed.
+- **F12: CONFIRMED on both images** (the same run; `TestRealProtectedThumbprints` passed). The WinRM HTTPS listener's
+  `WSMAN\Listener\*+HTTPS` value `certThumbprint` equals the hash of the http.sys record `0.0.0.0:5986`, and the
+  helper's readings equal PowerShell's. `RDP-Tcp` `SSLCertificateSHA1Hash` is **absent on both images** (RDP uses its
+  self-signed certificate), so the RDP route is proven only for "absent"; a set value is covered by unit tests and the
+  emulator. The http.sys-only fallback for WinRM was not needed.
+- `TestFidelityCleanup` (the emulator and the real helper side by side, the age through the `alicetest` clock offset)
+  passed on both images in run 1.
+
+### Runner runs used (2 of 10)
+
+| Run | Head | Result | What it found |
+|---|---|---|---|
+| 1 <https://github.com/erenmeren/alice/actions/runs/39912110730> | `efb5c13f` | **green** on both images | F11 and F12 confirmed; `TestRealCleanupRemovesKeyAndCertificate`, `TestRealProtectedThumbprints` and `TestFidelityCleanup` passed (not skipped), `TestRealRunnerIsClean` included |
+| 2 <https://github.com/erenmeren/alice/actions/runs/39926856807> | `f5fb07f7` | pending (filled in Task 13) | Every test of the branch after Tasks 7-10 (filled in Task 13) |
+
+The `ci.yml` runs of the branch: 39912110868 at `efb5c13f` failed only in the web job (`enums.test.ts` counted the
+cleanup plan's warnings as dump warnings: fixed in `37574e52`, plus the web's `cleanup_certificates` capability in
+`c86aaadd`); 39926856788 at `f5fb07f7`: (filled in Task 13).
+
+Final gates (Task 13): (filled in Task 13: local `make ci`, e2e totals, gitleaks over `e21e1ba3..HEAD`, the real
+Windows run of the branch head, the final review, final CI on origin).
+
+## Rulings made during execution (W3)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- Commit trailers name the model of the session that wrote the commit (`Claude Opus 5.5` for the controller, the
+  subagent's own attribution, for example `Claude Sonnet 5.5` on `16b11acb`), not the plan's "Fable 5.1": W2's
+  precedent, the session attribution rule yields only to the owner's instructions (cost: the coordinator normalises
+  unpushed trailers).
+- Task 4 also exposes `Model.RemoveCertificate` (it already existed; it now drops the key too): Task 9 must remove a
+  bound certificate outside Alice.
+- `winjobs.Inventory` holds the four cleanup methods plus `TargetRef`, `Credentials`, `HostKeyStore`,
+  `RecordConnectionFailure`: Task 7's "five methods" was a miscount.
+- Tasks 7 and 8 ran one after the other in the plan's intent but overlapped in time with disjoint commits (`commit
+  --only`); they share `notify.go` and the common locales (cost: wall-clock only).
+- Tasks 4, 6, 5 ran in that order with Task 5's runner wait; Task 2 started during Task 1's review, Task 4 during Task
+  3's review, Tasks 9 and 10 in parallel, Task 12 in parallel with Task 11: disjoint files in each pair.
+- No `-tags integration` or Docker run while main's `make ci` (alice-e2e-main) ran; integration evidence of earlier
+  tasks was taken by the next implementer once the machine was free (cost: later failure discovery).
+- Task 3's choices accepted, all on the safe side: journal-only certificates adopted, an unreadable journal clears
+  the stamps, one watched verdict per store, partial journal reading capped at 4096 (cost: up to 7 more days of waiting
+  after a transient unreadable journal).
+- Task 3's review minors 1-3 fixed at once, not deferred (no removal after the budget, `binding_record_unreadable`,
+  chains before the inventory entry): they make the real host's behaviour concrete before Tasks 4-5.
+- `providers.CleanupPlan` carries `Warnings` (the brief omitted it), so the job records `journal_unreadable` and
+  `binding_record_unreadable`.
+- `windows-w3` pushed at `efb5c13f` for runner run 1 right after Task 5: F11 and F12 measured with Task 5's own tests
+  before the code that depends on them was claimed done.
+- The web's enum test excludes the cleanup plan's warnings by an explicit pinned list (no UI labels): they never reach
+  a location or a server (ci.yml run 39912110868).
+- The incident cleanup is queued for every final place state, the notice waits until no place of the incident on the
+  server is open (Ruling 9): a second place still deploying would otherwise raise a false "still in store" alarm, and a
+  last place ending failed must still report (cost: one extra cleanup job per failed place).
+- The incident hook queues only for a server with `cleanup_certificates`, and `winjobs` checks it before opening a
+  session: a W2 helper's job would otherwise fail `internal.unexpected`.
+- A cleanup apply ending `OUTCOME_UNKNOWN` records no audit rows (Ruling 12): accepted gap, owner item.
+- The `location.changed_outside` audit detail for a broken binding is named `problem` (Ruling 14).
+- Ruling 14's scan rule assumes an Alice deployment never leaves an unusable key; not guarded in code (owner item).
+- Task 9 re-points a binding with `Host().UpdateBinding`, not `AddBinding` (which adds a second record that loses).
+- The observation's `autocertrebind` only on a drifted Windows binding with a known cause (Ruling 15), pinned by test.
+
+### Coordinator
+
+- The incident deployability is fixed in W3 by reusing the deployment engine's deployable-location rule (no second
+  rule): Q7 cannot work otherwise (Ruling 9).
+- The `windows.compromised_in_store` notice is deduped per incident and certificate through the outbox (no notifier
+  dedupe exists, an `alerts.kind` needs a migration); the gaps are owner items.
+- Only a certificate itself marked compromised is removed at once (Ruling 9).
+- The switch is a column of its own (migration `00032`), changed with `PATCH /targets/{id}`; this supersedes Task 10's
+  create-only switch (`a3eeb628`, reverted in `f5fb07f7`) and the refused `GRANT UPDATE (config)` (Rulings 1, 13).
+- Proceed through Tasks 7-13 without stopping; report only after Task 13.
+
+### Task 1 (winproto)
+
+- `winproto.ValidSHA256` (lower-case 64 hex) added beside `ValidSHA1`, as W2's final review minor 5 anticipated.
+- The package comment says protocol 1 spans W1-W3 and `1.0.0` is W4's.
+
+### Task 2 (winhelper core)
+
+- `StateFile.Name` is relative to the listed directory; `RemoveState` takes the full state name (`journal/<op>.json`),
+  as `ReadState` does.
+- A stamp `unbound_since` is exactly RFC 3339 UTC with whole seconds (`stamp(t)`); anything else makes the inventory
+  invalid. Recording an import again keeps its stamp (duplicates compared without it).
+- After the existing-copy race (`ImportPFX` answers `existed`) the deployment commits, sets `alice_imported` false and
+  records no inventory entry.
+- The dump marks `alice_imported` best effort: an unreadable `imports.json` marks none, journals are read only when an
+  inventory match is missing.
+
+### Task 3 (iis-cleanup)
+
+- A certificate read error before the gate is a refusal (`STORE_ERROR` or `IO_ERROR`); after it `OUTCOME_UNKNOWN`.
+- An `imports.json` that cannot be decoded refuses plan and apply (`IO_ERROR`): rewriting it would destroy the
+  inventory.
+- A `RemoveCertificate` that answers "not removed" (someone else removed it after the judgement) still runs the
+  bookkeeping and answers `absent` without an event.
+- The plan's watch looks in `My` and `WebHosting` and answers one verdict per store holding the certificate.
+
+### Task 4 (wintest cleanup half)
+
+- The model's clock is the system clock plus a skew (`SetNow`, `Advance`); state files carry model-clock times.
+- `FailProtected` fails the whole `ProtectedThumbprints`, as the real helper errors on any unreadable value;
+  `FailAfterKey` fails the next removal once between the key and the certificate.
+
+### Task 5 (cmd/alice-winhelper)
+
+- `RemoveCertificate` refuses (error, certificate kept) when the key handle is owned by the certificate context or the
+  delete fails, rather than falling back to the container route; it states that the key container belongs to this
+  certificate alone (every Alice import makes a fresh container, `CERT_STORE_ADD_NEW` never replaces a third party's
+  copy).
+- `ListState` lists only `journal/` and `bindings/`, skips directories, reparse points and devices, at most 65536
+  entries; `RemoveState` refuses a directory, reparse point or device and treats an absent file as removed.
+- Only the helper's `Now` moves with the test clock offset; store reads and lock deadlines keep the real clock.
+- The F11 and F12 verdict lines are logged last and only when the test did not fail (review fix `b6311da2`);
+  `TestRealProtectedThumbprints` uses a private data directory.
+
+### Task 6 (providers, Windows cleanup)
+
+- `CheckProvider` cannot see the session, so the "a `cleanup_certificates` session must be a `CertificateCleaner`"
+  check lives in `providertest.CheckSession` and `CheckUnsupported` (type check only: a plan writes on the target).
+- The cleanup value constants live in `providers` (equal to winproto's, pinned by test), because archtest forbids
+  inventory from importing `providers/windows/...`.
+- Only `OUTCOME_UNKNOWN` maps to `windows.cleanup_outcome_unknown`; a transport error after the send keeps its mapped
+  reason; the next plan settles either way.
+- Answer validation is strict (closed sets of stores, states, reasons and warnings); a future helper adding one needs
+  Alice to learn it (protocol 1 contract).
+
+### Task 7 (inventory and winjobs)
+
+- The cleanup switch helper moved to `providers` and later to the column (Ruling 13).
+- `RecordCleanup` refuses an apply result whose SHA-256s do not match its items in order.
+- The cleanup is queued in the same transaction as the incident place update: a failed queue rolls the update back
+  and the next tick retries.
+- `ScheduleWindowsCleanup` takes Windows servers with status ok and the capability and no `windows.cleanup` job of any
+  kind in the last 24 hours, at most 500 per run, `FOR UPDATE SKIP LOCKED`.
+
+### Task 8 (drift rule, cause, e-mails)
+
+- `driftCause` treats any key problem as `key_unusable`; the scan rule's `bindingBroken` uses only `cert_missing`,
+  `key_missing` and `key_inaccessible` (Rulings 14, 15).
+- An approve-mode drift with an unrepairable cause gets the detected text of its cause; `auto` mails it once after
+  `DriftAutoNoticeAfter` (unchanged engine).
+- Turkish says "{{cert_path}} bağlaması" so no suffix touches the binding text.
+
+### Task 9 (engine and jobs on the emulator)
+
+- The renewal in the cleanup test uses a 90-day leaf renewed when due, so 6 days later the old certificate is not yet
+  expired and `too_young` and `rollback_window` can be shown.
+- `too_young` is shown as the helper's own verdict through a direct `ApplyCleanup` (the job never asks Alice about a
+  candidate the helper is still waiting on).
+- `cleanupNow` queues the job directly with a unique dedupe key (the helper-only clock step does not pass the
+  schedule's 24-hour gap); the schedule is covered by winjobs' tests.
+
+### Task 10 (API)
+
+- `repair_available` is false for `cert_removed` and `key_unusable`; `ErrDriftNotRepairable` maps to `ALC-WIN-0013`
+  (409), `windows.cleanup_outcome_unknown` to `ALC-WIN-0014` (502, retryable).
+- The target DTO shows `certificate_cleanup` only for a server with the capability; a non-boolean in the PATCH is 400.
+- The `windows.compromised_in_store` text also names "a deployment to the server is still running with it" (Task 7
+  review minor), and the `cert_removed` drift text covers a binding with no http.sys record (Task 8 review minor).
+
+## Final review fixes (W3)
+
+(filled in Task 13)
+
+## Acceptance (design §13 W3)
+
+- A binding re-pointed outside Alice is `drifted`, `auto` repairs it, flapping backs off: Tasks 8
+  (`TestBrokenBindingIsDriftedNotRepaired`), 9 (`TestWindowsDriftObservedIsReported`, `TestWindowsDriftAutoIsRepaired`,
+  `TestWindowsDriftFlappingBacksOff`); a removed certificate or unusable key is reported and never repaired: Task 9
+  (`TestWindowsDriftCertRemovedIsReportedNotRepaired`), Task 10 (`TestObservationDriftCause`).
+- Cleanup removes only Alice-imported, unreferenced, aged certificates: Tasks 3 (`TestUnboundSinceRules`,
+  `TestApplyRemovesAndRecords`), 7 (`TestJudgeCleanupRules`), 9 (`TestWindowsCleanupAfterRenewal`); a certificate bound
+  by a foreign application, RDP, WinRM or a live journal is kept (table test on the emulator): Tasks 3
+  (`TestCleanupKeepsEveryUsedCertificate`, `TestApplyJudgesAgainUnderTheLock`), 4, 9 (`TestWindowsCleanupKeepsRows`);
+  one real-runner case: Task 5 (`TestFidelityCleanup`, `TestRealCleanupRemovesKeyAndCertificate`, run 1 green on both
+  images).
+- Q7: Tasks 7 (`TestIncidentQueuesWindowsCleanup`, `TestRecordCleanupAuditsAndNotifiesOnce`), 9
+  (`TestWindowsIncidentRemovesTheCompromisedCertificate`).
+- Final gates evidence: (filled in Task 13).
+
+## Owner items (W3)
+
+- **Confirm the security-relevant rulings**: the two judges, both of which must agree before a removal (Ruling 4);
+  the removal order key, certificate, chains, inventory entry (Ruling 10); the incident rule, removal at once with no
+  age and no rollback window, and the notice when a compromised certificate stays (Ruling 9); the switch **on by
+  default** for every Windows server, existing ones included (Rulings 1, 13); the dedicated column with its
+  column-only grant instead of `UPDATE (config)` (Ruling 1).
+- **Accepted gaps** (confirm or ask for a fix):
+  - A cleanup apply that ends `OUTCOME_UNKNOWN` records no Alice audit row for a certificate the helper may have
+    removed; the server's event 1003 is the trace and the next plan sees it absent.
+  - `windows.compromised_in_store` dedupe: a notice with no recipients writes no outbox row, so a later job tries
+    again; once outbox retention prunes the row, a repeat can send again.
+  - An incident cancelled while places on the server are still open queues no later cleanup, so no store notice is
+    sent (the daily cleanup still removes Alice's copy once it is eligible, but no longer at once).
+  - A copy of Alice's certificate in another store that names the same key container (made by hand, for example a
+    store-to-store copy) loses its key when Alice removes its own copy, if that copy is not bound (Ruling 10; bound
+    copies are protected by rule 2).
+  - Ruling 14 assumes an Alice deployment never leaves a binding with an unusable key; if a W2 verify or rollback gap
+    ever did, the "changed outside Alice" e-mail would be misleading.
+- **RDP with its own certificate**: F12's RDP half was measured only as "absent" on the runners; a server whose RDP
+  listener uses a CA certificate should be checked in the W4 manual matrix (the certificate must be kept `rdp`).
+- **Defender on**: the W4 manual matrix now includes a cleanup run with Defender (or the customer's EDR) on.
+- **Commit trailers**: the W3 commits carry the writing model's trailer (controller ruling), not the plan's.
+- **Downgrade**: migration `00032`'s Down drops the column, so a server whose switch was off is on again after an
+  upgrade that follows a downgrade.
+
+## Deferred to W4
+
+- **W4**: `windows.yml` required for the Windows paths; the helper in the release bundle and `SHA256SUMS`; helper
+  version `1.0.0`; the owner's manual matrix (2019, a domain account, Server Core, Defender on), now including a cleanup
+  run with Defender on and an RDP listener with its own certificate.
+- **W5-W7**: CCS (`win_ccs_file`), RDP deployment (`win_rdp`; W3 only reads the RDP listener's thumbprint to keep its
+  certificate), WinRM transport.
+- Carried from W2, not decided in W3: a third party's intermediate added after Alice's commit makes a redeploy answer
+  `unchanged` with `win.chain_differs`; the emulator's slow-host fault and the abandoned-call marking it needs (Ruling
+  23); deploying to a binding whose only problem is its key (W2 Ruling 14); IDN host headers in their U-label form (W2
+  Ruling 5); a manual "roll back this deployment" action.
+- Not built: removing intermediates Alice added to `CA` (design §6.7: never); counting or removing expired
+  certificates Alice did not import beyond `win.expired_in_store`; a cleanup history page.
+- Minors deferred during W3: the plan's heal step may clear a chain for a DER still present in another store (benign:
+  the next deployment rewrites it); no test of the `maxImports` trim of adopted entries; `cleanup.go` (725 lines) not
+  split; the provider's plan check does not reject duplicate candidates; `UpdateTarget` writes `certificate_cleanup`
+  back on every edit (harmless); a skipped incident place queues a cleanup at incident start (one extra dial).

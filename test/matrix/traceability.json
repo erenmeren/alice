@@ -2394,6 +2394,95 @@
   ]
  },
  {
+  "id": "WIN-29",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsDriftObservedIsReported",
+   "internal/inventory:TestBrokenBindingIsDriftedNotRepaired"
+  ]
+ },
+ {
+  "id": "WIN-30",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsDriftAutoIsRepaired",
+   "internal/jobs/deployjobs:TestWindowsDriftFlappingBacksOff"
+  ]
+ },
+ {
+  "id": "WIN-31",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsDriftCertRemovedIsReportedNotRepaired",
+   "internal/inventory:TestBrokenBindingIsDriftedNotRepaired",
+   "internal/api:TestObservationDriftCause"
+  ]
+ },
+ {
+  "id": "WIN-32",
+  "status": "test",
+  "tests": [
+   "internal/notify:TestWindowsDriftTemplatesRenderInBothLanguages",
+   "internal/inventory:TestWindowsNeedsAttentionLostConnection",
+   "internal/jobs/deployjobs:TestWindowsDriftAutoCertRebind"
+  ]
+ },
+ {
+  "id": "WIN-33",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestUnboundSinceRules",
+   "internal/inventory:TestJudgeCleanupRules",
+   "internal/jobs/deployjobs:TestWindowsCleanupAfterRenewal"
+  ]
+ },
+ {
+  "id": "WIN-34",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestCleanupKeepsEveryUsedCertificate",
+   "internal/providers/windows/winhelper:TestApplyJudgesAgainUnderTheLock",
+   "internal/jobs/deployjobs:TestWindowsCleanupKeepsRows",
+   "internal/providers/windows/winhelper:TestAliceImportedRules"
+  ]
+ },
+ {
+  "id": "WIN-35",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsIncidentRemovesTheCompromisedCertificate",
+   "internal/inventory:TestRecordCleanupAuditsAndNotifiesOnce",
+   "internal/inventory:TestIncidentQueuesWindowsCleanup"
+  ]
+ },
+ {
+  "id": "WIN-36",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRemovalOrderSurvivesAKill",
+   "internal/providers/windows/wintest:TestModelKillBetweenKeyAndCertificate",
+   "internal/providers/windows:TestCleanupNeedsHelper030"
+  ]
+ },
+ {
+  "id": "WIN-37",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestPrune",
+   "internal/providers/windows/wintest:TestModelPrunesStateFiles"
+  ]
+ },
+ {
+  "id": "WIN-38",
+  "status": "test",
+  "tests": [
+   "cmd/alice-winhelper:TestFidelityCleanup",
+   "cmd/alice-winhelper:TestRealCleanupRemovesKeyAndCertificate",
+   "cmd/alice-winhelper:TestRealProtectedThumbprints",
+   "cmd/alice-winhelper:TestRealRunnerIsClean"
+  ]
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [

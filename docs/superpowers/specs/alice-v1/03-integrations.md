@@ -480,12 +480,12 @@ Details:
 - No API-token download of private keys.
 - No Windows or macOS targets.
 
-## 13A. Windows servers and IIS over SSH (amendment, R60, R61)
+## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62)
 
 (Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
 rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
 target, connection and discovery. Amendment R61 (phase W2): deployment, verification, rollback and recovery
-(13A.8-13A.11). Drift and cleanup (W3) follow.
+(13A.8-13A.11). Amendment R62 (phase W3): drift and cleanup (13A.12-13A.14).
 
 ### 13A.1 Supported systems
 
@@ -547,7 +547,7 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 
 | Subcommand | Elevation | Answer |
 |---|---|---|
-| `version` | not needed | helper version (`0.2.0` since W2; W1's was `0.1.0`), protocol 1, `MinProtocol` 1 |
+| `version` | not needed | helper version (`0.3.0` since W3; W2's was `0.2.0`, W1's `0.1.0`), protocol 1, `MinProtocol` 1 |
 | `win-facts` | not needed | OS product, build, installation type; IIS installed and version; elevated or not; stores; OpenSSH version |
 | `iis-dump` | required (`NOT_ELEVATED`, exit 2) | http.sys SSL bindings, their certificates, IIS sites, warning facts (13A.5) |
 | `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa>` | not needed | the chain served on that address, as the Linux helper's probe |
@@ -555,11 +555,13 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 | `iis-restore --op <uuid>` (W2) | required | `winproto.RestoreInput` on standard input (both lists, at most 32 KiB); answers `restored`, `restore_failed` or `restore_forbidden` (13A.9) |
 | `iis-status --op <uuid>` (W2) | required | the operation's journal phase and whether another process holds the helper lock now |
 | `iis-fence --op <uuid>` (W2) | required | a `fenced` tombstone for an operation that never wrote, or the phase it reached |
+| `iis-cleanup --plan` / `--apply` (W3) | required | `winproto.CleanupPlanInput` / `CleanupApplyInput` on standard input (at most 64 KiB); the plan answers candidates, watched certificates, warnings and how many state files it pruned, the apply one result per item (13A.13) |
 
 Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 added `iis-deploy`, `iis-restore`,
 `iis-status`, `iis-fence` to protocol 1 (helper `0.2.0`); W1's helper answers `UNKNOWN_SUBCOMMAND` for them, and Alice
-refuses before sending to a helper older than `0.2.0` (`windows.helper_outdated`). `iis-cleanup` is W3: a `0.2.0`
-helper answers it `UNKNOWN_SUBCOMMAND`. Every answer is bounded by the 50 s budget and the output caps: a read
+refuses before sending to a helper older than `0.2.0` (`windows.helper_outdated`). W3 added `iis-cleanup` (helper
+`0.3.0`): a `0.2.0` helper answers it `UNKNOWN_SUBCOMMAND`, and Alice refuses before sending it to a helper older than
+`0.3.0` (`windows.helper_outdated`; that helper still deploys). Every answer is bounded by the 50 s budget and the output caps: a read
 subcommand answers `IO_ERROR` when it ends; a write subcommand answers `IO_ERROR` only before its first durable write
 and `OUTCOME_UNKNOWN` (exit 4, uncertain) after it (13A.8).
 
@@ -719,10 +721,89 @@ self-restore within 8 s. A killed helper answers nothing; the engine recovers. S
 ### 13A.11 Explicit W2 limits
 
 - No drift observation for Windows locations, no `iis-cleanup`: imported certificates, their keys and intermediates
-  stay in the stores (W3).
+  stay in the stores (built in W3, 13A.12-13A.14; intermediates stay for good).
 - A location whose only problem is its key (`key_missing`, `key_inaccessible`) stays unsupported; IDN host headers
   are not deployed in their U-label form.
 - The Ex records' extended parameters are read on the deploy and restore paths only (types 0-5); a type the helper
   cannot decode is left out and never written (safe while a base update keeps them, design §14 F9).
 - There is no manual "roll back this deployment" action (as for every target).
+- The real-Windows workflow is not yet a required check and the helper is not yet in the release bundle (W4).
+
+### 13A.12 Drift (amendment R62)
+
+A `win_sslbinding` location bound to an ACME or Key Vault certificate is observed like a file (R52): `drift.observe`
+scans the server (`Discover` + `Reconcile`: the binding's certificate is the file fact) and probes it through the
+provider's `VerifyDeployment` (the TLS fact); `drift.repair` deploys the desired certificate with trigger
+`drift_repair` under every deployment guard, and flapping backs off as for a file.
+
+- **Re-pointed binding**: another tool points the binding to another certificate; both facts disagree, the location
+  is `drifted` with cause `binding_repointed`, and `auto` repairs it.
+- **Certificate removed or key unusable**: a bound binding found newly with `cert_missing`, `key_missing` or
+  `key_inaccessible` (none stored before) gets `changed_outside_at` (Alice never removes a bound certificate nor
+  changes a key's ACL) and is drifted with cause `cert_removed` or `key_unusable` even when it names the desired
+  certificate. It is unsupported, so it is never repaired into a failure loop: the planner skips it without counting
+  a failure or backing off, `repair_available` is false, and a manual repair answers `windows.drift_not_repairable`
+  (`ALC-WIN-0013`, 409). It is mailed once in its cause's text.
+- **Notices**: `location.drift_detected_windows` (and `_cert_removed`, `_key_unusable`),
+  `location.drift_repair_ready_windows`, `location.drift_repaired_windows`, `location.drift_flapping_windows`,
+  `location.drift_repair_failing_windows` speak of the binding and the store; on a server whose facts carry
+  `win_autocertrebind` the e-mail adds that Windows' `IIS-AutoCertRebind` task re-points bindings on autoenrolment
+  renewal (`windows_note`), and the observation carries `autocertrebind`. The API's observation carries
+  `drift_cause`.
+- A Windows deployment whose SSH session ended without an answer (`deployment.interrupted`, `windows.helper_missing`)
+  gets the lost-connection needs-attention text.
+
+### 13A.13 Cleanup (`iis-cleanup`, `windows.cleanup`, amendment R62)
+
+The daily job `windows.cleanup` (one attempt; queued by the hourly `windows.cleanup_schedule` for every Windows server
+with status ok, the `cleanup_certificates` capability and no cleanup in 24 hours, and by incidents) plans, judges and
+applies on one fresh connection per helper call:
+
+1. `iis-cleanup --plan` with the watched certificates (compromised certificates the server ever held, at most
+   `MaxForbidden`). Under the helper lock the helper stamps `unbound_since` on every certificate Alice imported that it
+   finds unused (clears it on a used one, resets one in its future), prunes old journals and tombstones, and answers
+   the candidates (`eligible` `aged` after 7 days unused, `expired` after `NotAfter`, oldest first, at most 256,
+   `truncated` beyond), the verdict on each watched certificate per store (`removable`, `kept` with a reason,
+   `absent`) and the warnings `journal_unreadable`, `binding_record_unreadable`.
+2. Alice keeps a candidate when a deployment of the server finished less than 7 days ago with it as new or previous
+   certificate (`rollback_window`), an unfinished deployment names it (`deployment_running`), a location of the server
+   holds it (`location_holds`) or the server's switch is off (`cleanup_off`). A compromised certificate (§15 Q7) is
+   removed with reason `incident` at once, unless an unfinished deployment names it.
+3. `iis-cleanup --apply` with at most 256 items (`aged`, `expired`, `incident`): the helper judges every rule again
+   under the lock and answers `removed`, `kept` with its reason, or `absent`.
+
+The helper's rules: Alice imported it (`imports.json`, or a 0.3.0 journal naming it as new whose "existed" record is
+false; in both cases Alice's friendly name ending in that operation and the same DER SHA-256); no http.sys record of
+any application names it, nor the RDP listener (`HKLM\SYSTEM\CurrentControlSet\Control\Terminal
+Server\WinStations\RDP-Tcp` `SSLCertificateSHA1Hash`) nor a WinRM HTTPS listener
+(`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener\*+HTTPS` `certThumbprint`), read and never written;
+no journal in `prepared`, `writing`, `restoring` or `restore_failed` names it (an unreadable journal keeps every
+candidate); and the age. Removal: the CNG key, the certificate, the chains of binding records naming it, its
+inventory entry, then event 1003 (`removed store <store> sha1 <sha1> sha256 <sha256> reason <reason>`). Intermediates
+are never removed. Each removal is audited `windows.certificate_removed`. Pruning: final journals and fence tombstones
+older than 7 days, `restore_failed` or undecodable ones older than 30 days, at most 1000 per plan, never `writing`,
+`restoring` or a journal a binding record still needs. The switch `targets.certificate_cleanup` (default on) is
+changed with `PATCH /targets/{id}`; off, the job still plans (stamps, pruning, the Q7 notice) and removes nothing.
+
+When an incident place on a Windows server reaches a final state, the incident engine queues that server's cleanup with
+the incident; when a watched compromised certificate stays in a store (not Alice's, or still used), one
+`windows.compromised_in_store` notice per incident and certificate goes to the server's and the certificate's
+services, naming store and thumbprint, once no place of the incident on the server is still open.
+
+### 13A.14 Failure and edge cases covered in W3; explicit W3 limits
+
+| Case | Outcome |
+|---|---|
+| A W2 helper (0.2.0) | `windows.helper_outdated` before `iis-cleanup` is sent; deployments keep working |
+| The bindings or a listener value cannot be read | The plan and the apply refuse (`IO_ERROR`) and remove nothing |
+| A binding re-points to a candidate between plan and apply | The apply keeps it (`bound`): every rule is judged again under the lock |
+| The helper is killed between the key and the certificate, or before the bookkeeping | A keyless certificate is left and removed by the next run; the next plan clears the chains and drops the entry |
+| The budget ends after the first removal | `OUTCOME_UNKNOWN` (`windows.cleanup_outcome_unknown`, `ALC-WIN-0014`, retryable); no new removal starts; the next run settles it |
+| A clock that jumps back | An `unbound_since` in the future is reset: the wait never shortens |
+| A third party's identical copy | It keeps its own friendly name, so it is never Alice's |
+
+- Intermediates Alice added to `CA` are never removed; expired certificates Alice did not import are only counted
+  (`win.expired_in_store`).
+- A cleanup apply that ends `OUTCOME_UNKNOWN` records no audit row for what the helper may have removed (event 1003 is
+  the trace).
 - The real-Windows workflow is not yet a required check and the helper is not yet in the release bundle (W4).

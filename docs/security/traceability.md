@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-271 IDs: 262 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+281 IDs: 272 test, 7 partial, 0 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -191,6 +191,16 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | WIN-26 | An ACME and a Key Vault binding reach a Windows binding; a certificate of another service | test | `internal/jobs/deployjobs:TestWindowsACMEAutomaticDeployment`<br>`internal/jobs/deployjobs:TestWindowsKeyVaultAutomaticDeployment`<br>`internal/jobs/deployjobs:TestWindowsCrossServiceNeedsTrust` |
 | WIN-27 | The private key on its way to the server | test | `internal/providers/windows/winhelper:TestNoKeyMaterialOutsideStdin`<br>`internal/providers/windows:TestDeployKeyIsNeverOutsideStdin`<br>`internal/providers/windows/winproto:TestDeployInputIsRedacted` |
 | WIN-28 | The emulator and the real helper answer the write subcommands (iis-deploy, iis-restore, iis-status, iis-fence, their ref... | test | `cmd/alice-winhelper:TestFidelityDeploySNIAndIP`<br>`cmd/alice-winhelper:TestFidelityDeployRefusals`<br>`cmd/alice-winhelper:TestFidelityStatusAndFence`<br>`cmd/alice-winhelper:TestRealRunnerIsClean` |
+| WIN-29 | Another tool re-points a bound (ACME or Key Vault) http.sys binding to another certificate | test | `internal/jobs/deployjobs:TestWindowsDriftObservedIsReported`<br>`internal/inventory:TestBrokenBindingIsDriftedNotRepaired` |
+| WIN-30 | The same binding in auto mode; then re-pointed again after every repair | test | `internal/jobs/deployjobs:TestWindowsDriftAutoIsRepaired`<br>`internal/jobs/deployjobs:TestWindowsDriftFlappingBacksOff` |
+| WIN-31 | The bound certificate is removed from its store, or its key goes missing or becomes unusable for SYSTEM | test | `internal/jobs/deployjobs:TestWindowsDriftCertRemovedIsReportedNotRepaired`<br>`internal/inventory:TestBrokenBindingIsDriftedNotRepaired`<br>`internal/api:TestObservationDriftCause` |
+| WIN-32 | A Windows drift, repair, flapping or failing repair e-mail; a Windows deployment whose connection ended without an answe... | test | `internal/notify:TestWindowsDriftTemplatesRenderInBothLanguages`<br>`internal/inventory:TestWindowsNeedsAttentionLostConnection`<br>`internal/jobs/deployjobs:TestWindowsDriftAutoCertRebind` |
+| WIN-33 | A certificate Alice imported stops being used (renewal replaced it); days pass on the helper's and Alice's clocks; a clo... | test | `internal/providers/windows/winhelper:TestUnboundSinceRules`<br>`internal/inventory:TestJudgeCleanupRules`<br>`internal/jobs/deployjobs:TestWindowsCleanupAfterRenewal` |
+| WIN-34 | A candidate is bound by another application's http.sys record, the RDP or a WinRM HTTPS listener, named by a live journa... | test | `internal/providers/windows/winhelper:TestCleanupKeepsEveryUsedCertificate`<br>`internal/providers/windows/winhelper:TestApplyJudgesAgainUnderTheLock`<br>`internal/jobs/deployjobs:TestWindowsCleanupKeepsRows`<br>`internal/providers/windows/winhelper:TestAliceImportedRules` |
+| WIN-35 | An incident replaces a compromised certificate on an IIS binding (verified or unverified); a copy of it stays in a store... | test | `internal/jobs/deployjobs:TestWindowsIncidentRemovesTheCompromisedCertificate`<br>`internal/inventory:TestRecordCleanupAuditsAndNotifiesOnce`<br>`internal/inventory:TestIncidentQueuesWindowsCleanup` |
+| WIN-36 | The helper is killed between the key's removal and the certificate's, or after the removal before its bookkeeping; a W2... | test | `internal/providers/windows/winhelper:TestRemovalOrderSurvivesAKill`<br>`internal/providers/windows/wintest:TestModelKillBetweenKeyAndCertificate`<br>`internal/providers/windows:TestCleanupNeedsHelper030` |
+| WIN-37 | Journals and fence tombstones accumulate | test | `internal/providers/windows/winhelper:TestPrune`<br>`internal/providers/windows/wintest:TestModelPrunesStateFiles` |
+| WIN-38 | The emulator and the real helper run iis-cleanup side by side; a real removal; the listeners' registry values; the runne... | test | `cmd/alice-winhelper:TestFidelityCleanup`<br>`cmd/alice-winhelper:TestRealCleanupRemovesKeyAndCertificate`<br>`cmd/alice-winhelper:TestRealProtectedThumbprints`<br>`cmd/alice-winhelper:TestRealRunnerIsClean` |
 | S-01 | Run the full integration suite and the E2E suite with log capture (zap/slog handler wrapping a buffer, plus container st... | test | `internal/api:TestPlatformKeyNeverLeaks`<br>`internal/api:TestSecretLeakSuiteWithGeneratedKeys`<br>`internal/api:TestSecretsNeverLeak` |
 | S-02 | Response scanner middleware in test builds: every HTTP response body, header, and cookie is scanned for canaries and PEM... | test | `internal/api:TestSecretsNeverLeak` |
 | S-03 | Error paths: force failures (invalid key upload, wrong password for PFX, SSH failure, KV 403 echoing a body containing a... | test | `internal/api:TestSecretsNeverLeak` |

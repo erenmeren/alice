@@ -192,8 +192,43 @@ A deployment changes only the binding it names and the machine certificate store
   certificate (never a key).
 
 When the check after the change fails, the helper points the binding back to the previous certificate, which stays in
-its store. The previous certificate, the imported certificates and their keys stay in the stores in this release (a
-later release removes the ones Alice imported, after a waiting time).
+its store. The previous certificate stays at least 7 days; after that the daily cleanup removes it if Alice imported
+it and nothing uses it (below).
+
+## What the cleanup removes
+
+Once a day (helper 0.3.0 or later) Alice asks the helper which certificates it imported are no longer used, and the
+helper removes them from `LocalMachine\My` or `LocalMachine\WebHosting` with their private keys. Every rule is checked
+again on the server, under the helper's lock, at the moment of the removal:
+
+- **Only what Alice imported**: the certificate is listed in `imports.json` (or in a journal of a deployment that found
+  the store without it), and its friendly name is Alice's `Alice <name> <expiry date> <operation>` for that operation.
+  A certificate you or another tool imported is never removed, even an identical copy of one Alice deployed.
+- **Only what nothing uses**: no http.sys binding of any application (IIS, WinRM, SSTP, any other) names it, the
+  Remote Desktop listener does not use it and no WinRM HTTPS listener names it, and no unfinished change of the helper
+  names it. The helper reads these registry values and never writes them:
+  - `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`, value `SSLCertificateSHA1Hash`
+    (absent when Remote Desktop uses its self-signed certificate);
+  - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener\*+HTTPS`, value `certThumbprint`.
+
+  If the bindings or one of these values cannot be read (or a value is malformed), nothing is removed that day.
+- **Only after a waiting time**: unused for 7 days as the server's own clock counts them (a clock set back never
+  shortens the wait), or expired; and Alice keeps it while a deployment of the server finished less than 7 days ago
+  with it, a deployment is running with it or a binding it knows holds it. A certificate replaced after a
+  key-compromise incident is removed at once.
+
+The private key is deleted first (the CNG key file under `C:\ProgramData\Microsoft\Crypto\Keys`), then the
+certificate; Alice also forgets it in `imports.json`. Each removal writes event **1003** to the Application log
+(source `Alice Helper`): `removed store <store> sha1 <thumbprint> sha256 <hash> reason <reason>`, where the reason is
+`aged`, `expired` or `incident`. Intermediate certificates in `LocalMachine\CA` are never removed.
+
+The same run removes the helper's old files under `C:\ProgramData\Alice\helper\journal`: journals of finished
+changes older than 7 days, and of failed ones older than 30 days; never one of a change still under way.
+
+A copy of an Alice certificate that you made in another store by hand and that shares its key loses its key when
+Alice removes its own copy, unless that copy is bound. To keep a certificate Alice imported, bind it, or switch
+**Remove certificates Alice imported once nothing uses them** off on the server's page in Alice (off, Alice removes
+nothing on that server).
 
 ## Troubleshooting
 
@@ -209,7 +244,8 @@ setup script again in an elevated PowerShell, with `$AliceUser` set to the accou
 
 ### ALC-WIN-0002: the helper is outdated
 
-The helper on the server does not know what this Alice version asks for. Repeat steps 1 to 3 of [Steps](#steps)
+The helper on the server does not know what this Alice version asks for (a helper older than 0.3.0 still deploys,
+but Alice cleans up nothing on it). Repeat steps 1 to 3 of [Steps](#steps)
 with the `alice-helper.exe` of this Alice version, then choose **Test connection** on the server's page. **Update the
 helpers first, then Alice**: a new helper works with the previous Alice release.
 

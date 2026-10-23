@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — Windows servers (drift and cleanup, R62)
+
+**Added**
+- Windows servers (drift and cleanup): a Windows binding bound to an ACME or Key Vault certificate is watched like a
+  certificate file. When another tool points it to another certificate, Alice shows it as drifted and, in automatic
+  mode, deploys the right certificate again (a binding that keeps changing back is left alone, as for a file). When
+  the certificate is removed from its store or Windows can no longer use its key, Alice reports it with that cause
+  once and does not try to repair it (`ALC-WIN-0013`). Drift e-mails speak of bindings and the certificate store, and
+  mention Windows' `IIS-AutoCertRebind` task when the server runs it.
+- A daily cleanup removes from a Windows server the certificates Alice imported, with their private keys, once
+  nothing uses them: no binding of any application, not the Remote Desktop or a WinRM listener, no unfinished change
+  of the helper, no deployment that may still roll back to them, and not before 7 days unused (or once expired). A
+  certificate replaced after a key-compromise incident is removed at once; when a compromised certificate stays in a
+  store (Alice did not import it, or something still uses it), its owners get one notice naming the store and
+  thumbprint. Intermediate certificates are never removed. Each removal is in the audit log
+  (`windows.certificate_removed`) and the server's Application log (event 1003). The helper also removes its own old
+  journals.
+- A server setting **Remove certificates Alice imported once nothing uses them** (on by default), and the label
+  **Imported by Alice** on the certificates of a binding. Code `ALC-WIN-0014` (Alice could not tell whether the
+  cleanup finished; the next run settles it). English and Turkish.
+
+**Changed**
+- `alice-helper.exe` 0.3.0: copy it from this release to each Windows server (see
+  [windows-host-preparation.md](docs/windows-host-preparation.md)); a 0.2.0 helper keeps deploying, but Alice cleans up
+  nothing on it until it is updated. Migration `00032` adds the cleanup setting to servers (on for every server).
+  Rulings: `docs/superpowers/rulings/windows-iis.md` "W3 (R62)".
+
 ## Unreleased — Windows servers (deployment, R61)
 
 **Added**

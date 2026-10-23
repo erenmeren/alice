@@ -1480,14 +1480,48 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   certificate is put back: it stays in the store, so the binding is simply pointed back to it. The page names it as
   **Previous certificate: `<store>` \ `<SHA-1 thumbprint>`**. A revoked or compromised previous certificate is never
   put back (the helper checks it on the server too); the deployment then ends **rollback failed** and names it so you
-  can choose another certificate. Imported certificates, their keys and the intermediates stay in the stores in this
-  release (cleanup follows in a later release).
+  can choose another certificate. The previous certificate stays in its store at least 7 days, so a rollback can
+  always find it (see **Cleanup** below).
 - **Event Log.** Each change is written to the server's Application log, source **Alice Helper**: event **1001** after
-  a deployment and **1002** after a restore, with the operation, the binding and the old and new SHA-256 (never a
-  key). The helper also keeps a journal of each change under `C:\ProgramData\Alice\helper`; an interrupted
-  deployment (Alice or the server restarted) is finished or undone from it automatically.
-- Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment (see [troubleshooting.md](troubleshooting.md)).
-  A helper from before this release cannot deploy: Alice names it outdated (`ALC-WIN-0002`) before changing anything.
+  a deployment, **1002** after a restore and **1003** after the cleanup removed a certificate, with the operation, the
+  binding and the old and new SHA-256, or for 1003 the store, the SHA-1 and SHA-256 and the reason (never a key). The
+  helper also keeps a journal of each change under `C:\ProgramData\Alice\helper`; an interrupted deployment (Alice or
+  the server restarted) is finished or undone from it automatically.
+- **Drift.** A binding bound to an ACME or Key Vault certificate is watched like a certificate file (see [Drift: what
+  should be there and what is there](#drift-what-should-be-there-and-what-is-there)). When another tool points it to
+  another certificate, Alice shows it as drifted (cause "binding re-pointed"); in **automatic** mode it deploys the
+  right certificate again, in **approve** mode it offers **Repair**, and a binding that keeps changing back is set to
+  observe only and reported. When the certificate is removed from its store, or Windows can no longer use its private
+  key, Alice shows the binding as drifted with that cause and e-mails it once, but offers no **Repair** and never
+  redeploys on its own (`ALC-WIN-0013`): import the certificate again, or bind another one, then **Scan now**. The
+  binding's observation reads **Binding (last scan)**. On a server that runs Windows' `IIS-AutoCertRebind` task
+  (Active Directory Certificate Services autoenrolment), the drift page and e-mail say that this task may have
+  re-pointed the binding after a renewal.
+- **Cleanup.** Once a day Alice asks the helper which certificates it imported are no longer used, and removes them
+  from the store with their private keys. A certificate is removed only when all of these hold: Alice imported it
+  (certificates Alice imported carry the label **Imported by Alice** and the friendly name `Alice <name> <expiry date>
+  <operation>`); no http.sys binding of any application, not the Remote Desktop listener and no WinRM HTTPS listener
+  uses it; no unfinished change of the helper names it; no deployment of the server finished less than 7 days ago with
+  it as the new or previous certificate, none is running with it, and no binding Alice knows holds it; and it has been
+  unused for 7 days (as the server's own clock counts them) or it is expired. Alice keeps everything else:
+  certificates it did not import (also identical copies someone else imported), intermediate certificates in `CA`
+  (never removed), and anything still in use. Each removal is in the audit log (**Certificate Alice imported removed
+  from a Windows server**, with the store, the thumbprints and the reason) and in the server's event 1003. The helper
+  also removes its own journals of finished changes after 7 days (30 days for one that failed).
+- **The cleanup setting.** **Remove certificates Alice imported once nothing uses them**, under **Settings** on the
+  Windows server's page, is on by default. Off, Alice still checks the server daily (and still reports a compromised
+  certificate) but removes nothing. A helper older than 0.3.0 keeps deploying, but Alice cleans up nothing on it
+  until it is updated.
+- **After a key-compromise incident** (see [Key compromise: replace a certificate
+  everywhere](#key-compromise-replace-a-certificate-everywhere)): when the incident replaced a compromised certificate
+  on a Windows binding, Alice removes the compromised certificate from the store at once (no 7-day wait, since it may
+  never be rolled back to), if Alice imported it and nothing else uses it. If a compromised certificate stays in a
+  store (Alice did not import it, something still uses it, or the setting is off), the server's and the certificate's
+  services get one e-mail naming the store and the thumbprint, so an administrator can replace it there and delete it.
+- Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair
+  and `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it) (see
+  [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
+  (`ALC-WIN-0002`) before changing anything.
 - Alice does not manage the SSH keys of a Windows server. Not deployable in this release: Centralized Certificate
   Store bindings, bindings of other applications or other stores, a binding whose only problem is its key, and a host
   name written with non-ASCII letters (use its `xn--` form in IIS).
