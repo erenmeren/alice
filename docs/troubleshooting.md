@@ -2225,6 +2225,22 @@ None of these files holds key material.
 
 **What to do.** Scan the server again and try again. If it keeps happening, check that `alice-helper.exe` comes from the current Alice bundle, and contact support with the helper code and the request ID.
 
+## ALC-WIN-0013: Alice cannot repair this binding
+
+**Meaning.** The binding names a certificate that its store no longer holds (or no certificate at all), or a certificate whose private key http.sys cannot use. Alice shows the location as drifted with the cause `cert_removed` or `key_unusable`, mails it once, and does not deploy to it: a repair is refused, and automatic repair skips it without counting a failure. Alice never removes a certificate that a binding uses. (HTTP 409, reason `windows.drift_not_repairable`.)
+
+**Likely cause.** Someone or another tool (a cleanup script, a certificate management tool, a restore of the server) deleted the certificate from the store, or changed the permissions or the provider of its private key.
+
+**What to do.** Find out what removed the certificate or changed the key, import the certificate again with its private key (or bind another certificate) on the server, then use **Scan now** on the server. Once the scan shows the binding without a problem, Alice can deploy to it again.
+
+## ALC-WIN-0014: Alice could not tell whether the certificate cleanup finished
+
+**Meaning.** The connection to the Windows server ended while the helper was removing certificates that Alice had imported, so Alice does not know how far the removal got. Nothing a binding, the Remote Desktop listener or a WinRM listener uses is ever removed. The next cleanup run reads the server again and settles it. (HTTP 502, reason `windows.cleanup_outcome_unknown`.)
+
+**Likely cause.** A network interruption, a restart of the server or of its SSH service, or a very busy server while the removal ran.
+
+**What to do.** Usually nothing: the next run of the cleanup finishes the work. If it keeps failing, check that Alice can reach the server and that `alice-helper.exe` comes from the current Alice bundle.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

@@ -280,6 +280,9 @@ type deploymentDTO struct {
 	CauseStep              string       `json:"cause_step"`
 	HelperError            string       `json:"helper_error"`
 	BackupDir              string       `json:"backup_dir"`
+	// LocationKind is the kind of the deployment's location (R62 Ruling 18): server_file, win_sslbinding, ...; always
+	// present, server_file for a file.
+	LocationKind string `json:"location_kind"`
 	// A Windows deployment (R61 Ruling 17): the store and SHA-1 of the previous certificate, which stays in its store
 	// (backup_dir is ""); left out for every other deployment, whose JSON is unchanged.
 	BackupStore      string     `json:"backup_store,omitempty"`
@@ -497,7 +500,8 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 		PreviousFingerprint: d.PreviousFingerprint, ConfirmIncompleteChain: d.ConfirmIncompleteChain, Verified: verified,
 		VerifyFailed: verifyFailedJSON(d), Error: deploymentError(d), FailedStep: codeOrBlank(d.FailedStep),
 		CauseStep: codeOrBlank(d.CauseStep), HelperError: codeOrBlank(d.HelperError), BackupDir: backupDir(d.Backup),
-		BackupStore: backupStore, BackupSHA1: backupSHA1, RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
+		LocationKind: string(d.LocationKind.OrFile()),
+		BackupStore:  backupStore, BackupSHA1: backupSHA1, RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
 		RecoverAfter: utcPtr(d.RecoverAfter), CreatedAt: d.CreatedAt.UTC(), StartedAt: utcPtr(d.StartedAt), FinishedAt: utcPtr(d.FinishedAt),
 		Source: deploymentSource(d), BindingID: idPtr(d.BindingID), KVVersion: versionOrBlank(d.KVVersion), VaultName: d.VaultName,
 		Verification: verificationJSON(d),

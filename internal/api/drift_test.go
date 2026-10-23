@@ -91,3 +91,37 @@ func TestDriftRoutes(t *testing.T) {
 	assert.Equal(t, "ALC-DEP-0030", decodeErr(t, rec).Error.Code)
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, path+"/actions/repair", "auditor-stepup", "").Code)
 }
+
+// R62 Rulings 14 and 15: a drifted Windows binding shows its cause and whether the AutoCertRebind task is on; a
+// removed certificate or an unusable key cannot be repaired from Alice (repair_available false, the repair refused
+// with ALC-WIN-0013); every other observation has no cause.
+func TestObservationDriftCause(t *testing.T) {
+	for _, tc := range []struct {
+		cause      string
+		repairable bool
+	}{{inventory.DriftCauseRepointed, true}, {inventory.DriftCauseCertRemoved, false}, {inventory.DriftCauseKeyUnusable, false}} {
+		d := observationJSON(&inventory.LocationObservation{Health: inventory.HealthDrifted, Cause: tc.cause, AutoCertRebind: true})
+		assert.Equal(t, tc.cause, d.DriftCause, tc.cause)
+		assert.True(t, d.AutoCertRebind, tc.cause)
+		assert.Equal(t, tc.repairable, d.RepairAvailable, tc.cause)
+	}
+	d := observationJSON(&inventory.LocationObservation{Health: inventory.HealthDrifted})
+	assert.Equal(t, "", d.DriftCause)
+	assert.False(t, d.AutoCertRebind)
+	assert.True(t, d.RepairAvailable, "a file: as before")
+	assert.Equal(t, "", observationJSON(&inventory.LocationObservation{Health: inventory.HealthInSync, Cause: "invented"}).DriftCause,
+		"a cause outside the closed list, or without a drift, is not shown")
+	assert.Equal(t, "", observationJSON(&inventory.LocationObservation{Health: inventory.HealthDrifted, Cause: "invented"}).DriftCause)
+	raw, err := json.Marshal(observationJSON(&inventory.LocationObservation{Health: inventory.HealthDrifted, Cause: inventory.DriftCauseCertRemoved}))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"drift_cause":"cert_removed"`)
+	assert.Contains(t, string(raw), `"autocertrebind":false`)
+
+	dp, inv := inventoryDeps(t)
+	inv.RepairDriftFn = func(context.Context, inventory.Actor, uuid.UUID, bool) ([]inventory.RequestedDeployment, error) {
+		return nil, inventory.ErrDriftNotRepairable
+	}
+	rec := call(NewHandler(dp), http.MethodPost, "/api/v1/locations/"+locationID.String()+"/actions/repair", "operator", "")
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Equal(t, "ALC-WIN-0013", decodeErr(t, rec).Error.Code)
+}

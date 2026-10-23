@@ -7910,6 +7910,7 @@ components:
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
         username: { type: string, maxLength: 36, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
+        config: { type: object, additionalProperties: false, properties: { certificate_cleanup: { type: [boolean, "null"] } }, description: 'R62. The provider''s settings beyond the connection, validated by the provider''s schema; read back in the target''s config. A Windows server takes certificate_cleanup (boolean, default true: remove certificates Alice imported once nothing uses them); any other key, or the key on another type, is 422 validation.pattern on config.<key>, a value that is not a boolean is 422 validation.one_of on config.certificate_cleanup.' }
     TargetPatch:
       type: object
       additionalProperties: false
@@ -8022,6 +8023,13 @@ components:
         capabilities: { type: array, items: { type: string } }
         facts: { $ref: "#/components/schemas/TargetFacts" }
         vault: { $ref: "#/components/schemas/Vault" }
+        config:
+          type: object
+          properties:
+            certificate_cleanup: { type: boolean }
+          description: >-
+            R62. A Windows server only (absent for every other type): its provider settings beyond the connection.
+            certificate_cleanup is the effective value of the per-server switch, true when it was never set.
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -8512,8 +8520,11 @@ components:
           description: >-
             Known values: test_connection, discover_certificates, discover_ssh_keys, discover_kv_keys,
             discover_kv_secret_metadata, deploy_certificate, import_certificate, authorized_keys, verify_deployment,
-            read_certificate_secret, key_login, http01_challenge; a newer server may add others. windows has test_connection,
-            discover_certificates, deploy_certificate and verify_deployment (R61); apache and haproxy do not deploy certificates.
+            read_certificate_secret, key_login, http01_challenge, cleanup_certificates; a newer server may add others. windows has
+            test_connection, discover_certificates, deploy_certificate and verify_deployment (R61) and cleanup_certificates (R62);
+            apache and haproxy do not deploy certificates. The config_schema of windows lists host, port, username and
+            certificate_cleanup (bool, default true: remove certificates Alice imported once nothing uses them), the last one
+            saved through the config of POST /targets.
           items: { type: string }
         config_schema:
           type: object
@@ -8737,7 +8748,7 @@ components:
           oneOf:
             - { type: object, additionalProperties: { type: [string, integer, boolean] } }
             - { type: "null" }
-        details: { type: object, description: 'R59. Facts of the location''s kind shown as they are; {} for a certificate file' }
+        details: { type: object, description: 'R59. Facts of the location''s kind shown as they are; {} for a certificate file. A Windows binding carries alice_imported (R62: true when Alice imported the certificate the binding names, so the cleanup may remove it once nothing uses it)' }
         verify_address:
           type: string
           description: 'R59. Where Alice''s probe reaches the endpoints (a DNS name or an IP literal); "" when not set, always "" for a file' 
@@ -8780,7 +8791,7 @@ components:
         stale (nothing newer than 24 hours says what the location holds), unmanaged (nothing is desired).
       required: [health, source, source_id, desired, last_deployment, file, tls, tls_attempted_at, tls_error, mode, mode_setting,
         default_mode, drift_since, drift_fingerprint, drift_source, backoff_reason, backed_off_at, active_deployment_id,
-        next_observe_at, repair_available]
+        next_observe_at, repair_available, drift_cause, autocertrebind]
       properties:
         health: { type: string, enum: [in_sync, drifted, pending, unreachable, stale, unmanaged] }
         source: { type: string, enum: [acme, key_vault, ""] }
@@ -8834,7 +8845,15 @@ components:
         backed_off_at: { type: [string, "null"], format: date-time }
         active_deployment_id: { type: [string, "null"], format: uuid }
         next_observe_at: { type: [string, "null"], format: date-time }
-        repair_available: { type: boolean, description: 'The location is drifted; POST /locations/{id}/actions/repair repairs it' }
+        repair_available: { type: boolean, description: 'The location is drifted and can be repaired; POST /locations/{id}/actions/repair repairs it. False for a Windows binding whose drift cause is cert_removed or key_unusable (the repair answers 409 ALC-WIN-0013)' }
+        drift_cause:
+          type: string
+          enum: [binding_repointed, cert_removed, key_unusable, ""]
+          description: >-
+            R62. Why a drifted Windows binding is drifted: binding_repointed (it names another certificate), cert_removed
+            (its store no longer holds the certificate, or the binding has none), key_unusable (the certificate has no
+            private key http.sys can use). "" for a certificate file and for a location that is not drifted.
+        autocertrebind: { type: boolean, description: 'R62. A Windows binding: the server runs the AutoCertRebind task, which can bind a certificate by itself (design §6.2)' }
     FileProblem:
       type: string
       description: >-
@@ -8957,7 +8976,7 @@ components:
         reach the server to finish it and keeps trying.
       required: [id, certificate_id, certificate_name, location_id, target_id, target_name, cert_path, key_path, job_id, job_status,
         trigger, state, status, result, phase, new_fingerprint, previous_fingerprint, confirm_incomplete_chain, verified,
-        verify_failed, error, failed_step, cause_step, helper_error, backup_dir, requested_by, requested_by_name, recovery_attempts,
+        verify_failed, error, failed_step, cause_step, helper_error, backup_dir, location_kind, requested_by, requested_by_name, recovery_attempts,
         recover_after, created_at, started_at, finished_at, source, binding_id, kv_version, vault_name, verification]
       properties:
         id: { type: string, format: uuid }
@@ -9003,6 +9022,7 @@ components:
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change and always "" for a Windows binding' }
+        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret], description: 'R62. The kind of the deployment''s location, always present: server_file for a certificate file, win_sslbinding for an IIS binding' }
         backup_store: { type: string, pattern: '^([Mm][Yy]|[Ww][Ee][Bb][Hh][Oo][Ss][Tt][Ii][Nn][Gg])$', description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate, My or WebHosting in any letter case (a binding without a store name reads MY)' }
         backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
         requested_by: { type: [string, "null"], format: uuid }

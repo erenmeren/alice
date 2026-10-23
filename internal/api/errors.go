@@ -307,6 +307,11 @@ var (
 	ErrWINLocationUnsupported = ErrorCode{Code: "ALC-WIN-0011", Reason: "windows.location_unsupported", Status: http.StatusConflict}
 	ErrWINHelperRefused       = ErrorCode{Code: "ALC-WIN-0012", Reason: "windows.helper_refused", Status: http.StatusBadGateway}
 
+	// R62: a drifted binding whose certificate left its store or whose key is unusable cannot be repaired from Alice
+	// (Ruling 14); a cleanup whose outcome the helper could not tell is settled by the next run (Ruling 12).
+	ErrWINDriftNotRepairable    = ErrorCode{Code: "ALC-WIN-0013", Reason: "windows.drift_not_repairable", Status: http.StatusConflict}
+	ErrWINCleanupOutcomeUnknown = ErrorCode{Code: "ALC-WIN-0014", Reason: "windows.cleanup_outcome_unknown", Status: http.StatusBadGateway, Retryable: true}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -640,6 +645,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrHAProxyNotFound, ErrHAProxyConfigInvalid, ErrHAProxyProfileMissing, ErrHAProxyHelperTooOld,
 		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated, ErrWINBindingChanged, ErrWINBindingNotFound, ErrWINBusy,
 		ErrWINIOError, ErrWINStoreError, ErrWINKeyUnusable, ErrWINBackupMissing, ErrWINLocationUnsupported, ErrWINHelperRefused,
+		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
@@ -828,6 +834,7 @@ var errorMap = []struct {
 	{inventory.ErrDriftRepairOff, ErrDeployDriftRepairOff, nil},
 	{inventory.ErrDriftNotBound, ErrDeployDriftNotBound, nil},
 	{inventory.ErrDriftNotDrifted, ErrDeployNotDrifted, nil},
+	{inventory.ErrDriftNotRepairable, ErrWINDriftNotRepairable, nil}, // R62 Ruling 14
 	// Phase 5. *inventory.ImportConfirmError is matched in classify with its certificate_name; the bare
 	// sentinel still gets its code. ErrNotAVault and ErrNotAServer name a target of the wrong kind on
 	// a route of the other: the route does not exist for it (404). ErrAdminRequired is a matter of

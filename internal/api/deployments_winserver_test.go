@@ -19,7 +19,7 @@ import (
 // exactly these (its JSON is unchanged by the Windows fields).
 var deploymentKeys = []string{"backup_dir", "binding_id", "cause_step", "cert_path", "certificate_id", "certificate_name",
 	"confirm_incomplete_chain", "created_at", "error", "failed_step", "finished_at", "helper_error", "id", "job_id", "job_status",
-	"key_path", "kv_version", "location_id", "new_fingerprint", "phase", "previous_fingerprint", "recover_after",
+	"key_path", "kv_version", "location_id", "location_kind", "new_fingerprint", "phase", "previous_fingerprint", "recover_after",
 	"recovery_attempts", "requested_by", "requested_by_name", "result", "source", "started_at", "state", "status", "target_id",
 	"target_name", "trigger", "vault_name", "verification", "verified", "verify_failed"}
 
@@ -99,4 +99,16 @@ func TestWindowsVerifyStepParams(t *testing.T) {
 	require.Len(t, out.Steps, 2)
 	assert.Equal(t, map[string]string{"chain_differs": "true", "deployed_chain": "2", "built_chain": "3", "mode": "remote"}, out.Steps[0].Params)
 	assert.Equal(t, map[string]string{}, out.Steps[1].Params)
+}
+
+// R62 Ruling 18: a deployment always names the kind of its location: win_sslbinding for an IIS binding, server_file
+// for a certificate file (and for a record that names none).
+func TestDeploymentDTOHasLocationKind(t *testing.T) {
+	m := deploymentMap(t, deploymentJSON(inventory.Deployment{ID: uuid.New(), CertPath: "http.sys/ipport/0.0.0.0:443",
+		LocationKind: providers.LocationWinSSLBinding}))
+	assert.Equal(t, "win_sslbinding", m["location_kind"])
+	m = deploymentMap(t, deploymentJSON(inventory.Deployment{ID: uuid.New(), CertPath: "/etc/nginx/a.pem", LocationKind: providers.LocationServerFile}))
+	assert.Equal(t, "server_file", m["location_kind"])
+	m = deploymentMap(t, deploymentJSON(inventory.Deployment{ID: uuid.New(), CertPath: "/etc/nginx/a.pem"}))
+	assert.Equal(t, "server_file", m["location_kind"], "no kind recorded: a file")
 }

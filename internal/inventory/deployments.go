@@ -222,7 +222,8 @@ type Deployment struct {
 	CreatedAt              time.Time
 	StartedAt              *time.Time
 	FinishedAt             *time.Time
-	Steps                  []DeploymentStep // Deployment(...) only
+	Steps                  []DeploymentStep       // Deployment(...) only
+	LocationKind           providers.LocationKind // the kind of its location as recorded (R62 Ruling 18)
 
 	// Recorded values and outcome details (Task 15 additions).
 	Result              string     // providers.DeployResult as last known ("" none, "uncertain" in recovery)
@@ -680,7 +681,7 @@ d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomple
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
 d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source,
-d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced
+d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced, d.location_kind
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
@@ -702,7 +703,7 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
 		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource,
-		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced)
+		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced, &d.LocationKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}

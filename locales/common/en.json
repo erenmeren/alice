@@ -1146,6 +1146,16 @@
         "title": "The Alice helper on the Windows server refused the request.",
         "cause": "The helper checks every request and refused this one with a code Alice has no message of its own for (the error names it as helper_code).",
         "action": "Scan the server again and try again. If it keeps happening, contact support and quote the helper code and the request ID."
+      },
+      "drift_not_repairable": {
+        "title": "Alice cannot repair this binding: its certificate or key is gone from the server.",
+        "cause": "The binding names a certificate that its store no longer holds, or a certificate whose private key http.sys cannot use. Alice does not deploy to a binding in this state and never removes a certificate that a binding uses.",
+        "action": "Find out what removed the certificate or changed the key, import the certificate again (or bind another one) on the server, then scan the server again in Alice."
+      },
+      "cleanup_outcome_unknown": {
+        "title": "Alice could not tell whether the certificate cleanup finished.",
+        "cause": "The connection to the server ended while the helper was removing certificates Alice had imported, so Alice does not know how far it got. Nothing a binding uses is ever removed.",
+        "action": "Nothing, usually: the next cleanup run looks at the server again and settles it. If it keeps failing, check the connection to the server and the helper."
       }
     },
     "certificate": {
@@ -2210,7 +2220,7 @@
       },
       "drift_detected_windows_cert_removed": {
         "subject": "Certificate removed from the store on {{target_name}}: {{cert_path}}",
-        "body": "The binding {{cert_path}} on the Windows server {{target_name}} names a certificate that is no longer in the server's certificate store. The binding should have {{certificate_name}}, and Alice deployed it there before: someone or another tool deleted the certificate from the store. Without it, the website on this binding cannot complete a TLS handshake.\n\nAlice does not deploy to a binding in this state, so it does not put the certificate back by itself. Alice never deletes a certificate that a binding uses.\n\nWhat to do: find out who removed the certificate (for example a cleanup script or a certificate management tool), then import {{certificate_name}} into the store again or bind another certificate. Once the next scan of the server in Alice shows the binding without a problem, Alice can deploy to it again."
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} names a certificate that the server's certificate store no longer holds, or no certificate at all. The binding should have {{certificate_name}}, and Alice deployed it there before: someone or another tool deleted the certificate from the store. Without it, the website on this binding cannot complete a TLS handshake.\n\nAlice does not deploy to a binding in this state, so it does not put the certificate back by itself. Alice never deletes a certificate that a binding uses.\n\nWhat to do: find out who removed the certificate (for example a cleanup script or a certificate management tool), then import {{certificate_name}} into the store again or bind another certificate. Once the next scan of the server in Alice shows the binding without a problem, Alice can deploy to it again."
       },
       "drift_detected_windows_key_unusable": {
         "subject": "Certificate key unusable on {{target_name}}: {{cert_path}}",
@@ -2482,7 +2492,7 @@
     "windows": {
       "compromised_in_store": {
         "subject": "A compromised certificate is still on {{target_name}}",
-        "body": "After the key-compromise incident of the certificate {{certificate_name}}, Alice took it out of the bindings, but the certificate is still in a certificate store of the Windows server {{target_name}}.\n\nStore: {{store}}. Thumbprint: {{thumbprint}}.\n\nAlice removes only certificates it imported itself and that nothing on the server uses. This one was not imported by Alice, or a binding, the Remote Desktop listener or a WinRM listener still uses it, or the server's certificate cleanup is switched off. Its private key is no longer secret: find what still uses it, replace it there, then delete the certificate and its key from the store."
+        "body": "After the key-compromise incident of the certificate {{certificate_name}}, Alice took it out of the bindings, but the certificate is still in a certificate store of the Windows server {{target_name}}.\n\nStore: {{store}}. Thumbprint: {{thumbprint}}.\n\nAlice removes only certificates it imported itself and that nothing on the server uses. This one was not imported by Alice, or a binding, the Remote Desktop listener or a WinRM listener still uses it, a deployment to the server is still running with it, or the server's certificate cleanup is switched off. Its private key is no longer secret: find what still uses it, replace it there, then delete the certificate and its key from the store."
       }
     }
   },

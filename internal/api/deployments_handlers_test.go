@@ -44,7 +44,7 @@ func sampleDeployment() inventory.Deployment {
 }
 
 func TestDeploymentDTOHasTheDocumentedFields(t *testing.T) {
-	listFields := []string{"id", "certificate_id", "certificate_name", "location_id", "target_id", "target_name", "cert_path", "key_path",
+	listFields := []string{"id", "certificate_id", "certificate_name", "location_id", "location_kind", "target_id", "target_name", "cert_path", "key_path",
 		"job_id", "job_status", "trigger", "state", "status", "result", "phase", "new_fingerprint", "previous_fingerprint",
 		"confirm_incomplete_chain", "verified", "verify_failed", "error", "failed_step", "cause_step", "helper_error", "backup_dir",
 		"requested_by", "requested_by_name", "recovery_attempts", "recover_after", "created_at", "started_at", "finished_at",

@@ -1146,6 +1146,16 @@
         "title": "Windows sunucusundaki Alice yardımcısı isteği reddetti.",
         "cause": "Yardımcı her isteği denetler ve bunu Alice'in kendine ait bir iletisi olmayan bir kodla reddetti (hata bu kodu helper_code olarak gösterir).",
         "action": "Sunucuyu yeniden tarayıp yeniden deneyin. Sorun sürerse destek ekibine başvurun ve yardımcı kodunu ve istek kimliğini belirtin."
+      },
+      "drift_not_repairable": {
+        "title": "Alice bu bağlamayı onaramaz: sertifikası ya da anahtarı sunucuda yok.",
+        "cause": "Bağlama, deposunun artık barındırmadığı bir sertifikayı ya da özel anahtarını http.sys'in kullanamadığı bir sertifikayı gösteriyor. Alice bu durumdaki bir bağlamaya dağıtım yapmaz ve bir bağlamanın kullandığı sertifikayı hiçbir zaman silmez.",
+        "action": "Sertifikayı neyin kaldırdığını ya da anahtarı neyin değiştirdiğini bulun, sertifikayı sunucuya yeniden aktarın (ya da başka bir sertifika bağlayın), ardından sunucuyu Alice'te yeniden tarayın."
+      },
+      "cleanup_outcome_unknown": {
+        "title": "Alice sertifika temizliğinin bitip bitmediğini öğrenemedi.",
+        "cause": "Yardımcı, Alice'in içe aktardığı sertifikaları kaldırırken sunucuyla bağlantı kesildi; bu yüzden Alice işin nereye kadar geldiğini bilmiyor. Bir bağlamanın kullandığı hiçbir şey kaldırılmaz.",
+        "action": "Genellikle yapılacak bir şey yok: sonraki temizlik çalıştırması sunucuya yeniden bakar ve durumu kesinleştirir. Sürekli başarısız olursa sunucuyla bağlantıyı ve yardımcıyı denetleyin."
       }
     },
     "certificate": {
@@ -2210,7 +2220,7 @@
       },
       "drift_detected_windows_cert_removed": {
         "subject": "{{target_name}} üzerinde sertifika depodan kaldırıldı: {{cert_path}}",
-        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlaması, sunucunun sertifika deposunda artık bulunmayan bir sertifikayı gösteriyor. Bağlamada {{certificate_name}} olmalı ve Alice onu daha önce oraya dağıtmıştı: biri ya da başka bir araç sertifikayı depodan sildi. Sertifika olmadan bu bağlamadaki web sitesi TLS el sıkışmasını tamamlayamaz.\n\nAlice bu durumdaki bir bağlamaya dağıtım yapmaz, bu yüzden sertifikayı kendiliğinden geri koymaz. Alice bir bağlamanın kullandığı sertifikayı hiçbir zaman silmez.\n\nNe yapmalı: sertifikayı kimin kaldırdığını bulun (örneğin bir temizlik betiği ya da bir sertifika yönetim aracı), sonra {{certificate_name}} sertifikasını depoya yeniden aktarın ya da başka bir sertifika bağlayın. Alice'teki bir sonraki tarama bağlamayı sorunsuz gösterdiğinde Alice ona yeniden dağıtım yapabilir."
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlaması, sunucunun sertifika deposunda artık bulunmayan bir sertifikayı gösteriyor ya da hiçbir sertifika göstermiyor. Bağlamada {{certificate_name}} olmalı ve Alice onu daha önce oraya dağıtmıştı: biri ya da başka bir araç sertifikayı depodan sildi. Sertifika olmadan bu bağlamadaki web sitesi TLS el sıkışmasını tamamlayamaz.\n\nAlice bu durumdaki bir bağlamaya dağıtım yapmaz, bu yüzden sertifikayı kendiliğinden geri koymaz. Alice bir bağlamanın kullandığı sertifikayı hiçbir zaman silmez.\n\nNe yapmalı: sertifikayı kimin kaldırdığını bulun (örneğin bir temizlik betiği ya da bir sertifika yönetim aracı), sonra {{certificate_name}} sertifikasını depoya yeniden aktarın ya da başka bir sertifika bağlayın. Alice'teki bir sonraki tarama bağlamayı sorunsuz gösterdiğinde Alice ona yeniden dağıtım yapabilir."
       },
       "drift_detected_windows_key_unusable": {
         "subject": "{{target_name}} üzerinde sertifika anahtarı kullanılamıyor: {{cert_path}}",
@@ -2482,7 +2492,7 @@
     "windows": {
       "compromised_in_store": {
         "subject": "Ele geçirilmiş bir sertifika hâlâ sunucuda: {{target_name}}",
-        "body": "{{certificate_name}} sertifikasının anahtar ele geçirilmesi olayından sonra Alice sertifikayı bağlamalardan çıkardı, ancak sertifika hâlâ şu Windows sunucusunun bir sertifika deposunda: {{target_name}}.\n\nDepo: {{store}}. Parmak izi: {{thumbprint}}.\n\nAlice yalnızca kendi içe aktardığı ve sunucuda hiçbir şeyin kullanmadığı sertifikaları kaldırır. Bu sertifikayı Alice içe aktarmadı ya da bir bağlama, Uzak Masaüstü dinleyicisi veya bir WinRM dinleyicisi onu hâlâ kullanıyor ya da sunucunun sertifika temizliği kapalı. Özel anahtarı artık gizli değil: onu hâlâ neyin kullandığını bulun, orada değiştirin, ardından sertifikayı ve anahtarını depodan silin."
+        "body": "{{certificate_name}} sertifikasının anahtar ele geçirilmesi olayından sonra Alice sertifikayı bağlamalardan çıkardı, ancak sertifika hâlâ şu Windows sunucusunun bir sertifika deposunda: {{target_name}}.\n\nDepo: {{store}}. Parmak izi: {{thumbprint}}.\n\nAlice yalnızca kendi içe aktardığı ve sunucuda hiçbir şeyin kullanmadığı sertifikaları kaldırır. Bu sertifikayı Alice içe aktarmadı ya da bir bağlama, Uzak Masaüstü dinleyicisi veya bir WinRM dinleyicisi onu hâlâ kullanıyor, sunucuya yapılan bir dağıtım hâlâ onunla sürüyor ya da sunucunun sertifika temizliği kapalı. Özel anahtarı artık gizli değil: onu hâlâ neyin kullandığını bulun, orada değiştirin, ardından sertifikayı ve anahtarını depodan silin."
       }
     }
   },

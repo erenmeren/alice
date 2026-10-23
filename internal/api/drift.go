@@ -91,7 +91,15 @@ type locationObservationDTO struct {
 	ActiveDeploymentID *string             `json:"active_deployment_id"`
 	NextObserveAt      *time.Time          `json:"next_observe_at"`
 	RepairAvailable    bool                `json:"repair_available"`
+	// A drifted Windows binding (R62 Ruling 15): why ("binding_repointed", "cert_removed" or "key_unusable"; "" for a
+	// file or a binding that is not drifted) and whether the server's AutoCertRebind task is on. cert_removed and
+	// key_unusable cannot be repaired from Alice (repair_available false).
+	DriftCause     string `json:"drift_cause"`
+	AutoCertRebind bool   `json:"autocertrebind"`
 }
+
+// driftCauses are the closed list of drift_cause values.
+var driftCauses = []string{inventory.DriftCauseRepointed, inventory.DriftCauseCertRemoved, inventory.DriftCauseKeyUnusable}
 
 func observedCertJSON(c inventory.ObservedCertificate) observedCertDTO {
 	return observedCertDTO{CertificateID: idPtr(c.CertificateID), Fingerprint: c.Fingerprint, NotAfter: utcPtr(c.NotAfter)}
@@ -109,6 +117,10 @@ func observationJSON(o *inventory.LocationObservation) *locationObservationDTO {
 		NextObserveAt: utcPtr(o.NextObserveAt), RepairAvailable: o.Health == inventory.HealthDrifted}
 	if !slices.Contains(inventory.HealthStates, d.Health) {
 		d.Health = inventory.HealthStale
+	}
+	if d.Health == inventory.HealthDrifted && slices.Contains(driftCauses, o.Cause) {
+		d.DriftCause, d.AutoCertRebind = o.Cause, o.AutoCertRebind
+		d.RepairAvailable = o.Cause == inventory.DriftCauseRepointed
 	}
 	if d.ModeSetting == "" {
 		d.ModeSetting = inventory.DriftModeDefault
