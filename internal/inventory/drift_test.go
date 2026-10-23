@@ -114,10 +114,10 @@ func TestLocationHealthBrokenFile(t *testing.T) {
 func TestDriftCauseOf(t *testing.T) {
 	win := providers.LocationWinSSLBinding
 	for name, tc := range map[string]struct {
-		kind               providers.LocationKind
-		health             string
-		problem, keyProblm string
-		want               string
+		kind                providers.LocationKind
+		health              string
+		problem, keyProblem string
+		want                string
 	}{
 		"re-pointed":                  {win, HealthDrifted, "", "", DriftCauseRepointed},
 		"certificate removed":         {win, HealthDrifted, "cert_missing", "", DriftCauseCertRemoved},
@@ -129,7 +129,7 @@ func TestDriftCauseOf(t *testing.T) {
 		"a file without a kind":       {"", HealthDrifted, "", "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tc.want, driftCause(tc.kind, tc.health, tc.problem, tc.keyProblm))
+			assert.Equal(t, tc.want, driftCause(tc.kind, tc.health, tc.problem, tc.keyProblem))
 		})
 	}
 	assert.True(t, bindingBroken(win, "cert_missing", ""))
