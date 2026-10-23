@@ -305,10 +305,6 @@ func TestRealCleanupRemovesKeyAndCertificate(t *testing.T) {
 	t.Logf("F11: key files removed by the cleanup: %v; created by it: %v", gone, added)
 	assert.Len(t, gone, 1, "F11: exactly one key file (A's) is removed")
 	assert.Empty(t, added, "the cleanup creates no key")
-	if len(gone) == 1 && status == ntBadKeyset && !found {
-		t.Logf("F11 verdict: confirmed: CryptAcquireCertificatePrivateKey(ONLY_NCRYPT|SILENT) then NCryptDeleteKey removed the key file " +
-			"and CertDeleteCertificateFromStore of a duplicated context removed the certificate; no other key was touched")
-	}
 
 	// B and the previous certificate keep their keys; B still binds and serves.
 	for _, c := range []*x509.Certificate{b.Cert, old.Cert} {
@@ -325,6 +321,10 @@ func TestRealCleanupRemovesKeyAndCertificate(t *testing.T) {
 	res = results(t, got)
 	require.Len(t, res, 1, "%v", got)
 	assert.Equal(t, winproto.CleanupAbsent, res[0]["result"], "a second apply finds nothing to remove")
+	if !t.Failed() {
+		t.Logf("F11 verdict: confirmed: CryptAcquireCertificatePrivateKey(ONLY_NCRYPT|SILENT) then NCryptDeleteKey removed the key file " +
+			"and CertDeleteCertificateFromStore of a duplicated context removed the certificate; no other key was touched")
+	}
 }
 
 // TestRealProtectedThumbprints measures F12: the RDP listener's SSLCertificateSHA1Hash and the WinRM
@@ -333,7 +333,7 @@ func TestRealCleanupRemovesKeyAndCertificate(t *testing.T) {
 // 0.0.0.0:5986 (W0 F8). Nothing is written.
 func TestRealProtectedThumbprints(t *testing.T) {
 	requireReal(t)
-	p, err := newHost(winproto.DataDir).ProtectedThumbprints(context.Background())
+	p, err := newHost(newTestDataDir(t)).ProtectedThumbprints(context.Background())
 	require.NoError(t, err, "F12: the listeners' registry values are read")
 	t.Logf("F12: the helper reads RDP %v, WinRM %v", p.RDP, p.WinRM)
 	assert.LessOrEqual(t, len(p.RDP), 1, "one RDP listener value")
@@ -393,7 +393,7 @@ if (Test-Path -LiteralPath $base) {
 	t.Logf("F12: the http.sys record 0.0.0.0:5986 names %q", record)
 	require.NotEmpty(t, record, "W0 F8: the image has the WinRM listener's http.sys record 0.0.0.0:5986")
 	assert.Contains(t, p.WinRM, record, "F12: the WinRM listener's registry value is the hash of its http.sys record")
-	if slices.Contains(p.WinRM, record) {
+	if !t.Failed() {
 		t.Logf("F12 verdict: confirmed: WSMAN\\Listener\\*+HTTPS certThumbprint equals the http.sys record 0.0.0.0:5986; RDP-Tcp SSLCertificateSHA1Hash %s",
 			map[bool]string{true: "absent (RDP uses its self-signed certificate)", false: "present: " + ind.RDP}[ind.RDP == ""])
 	}

@@ -53,6 +53,13 @@ var errKeyDelete = errors.New("the certificate's key could not be deleted")
 // two steps), is removed alone. A key that exists but cannot be opened or deleted leaves the
 // certificate in place (an error): removing it would leave an orphan key no listing finds (W3 Ruling
 // 10).
+//
+// The key container is assumed to be this certificate's alone: every import of Alice's makes a fresh
+// container (PFXImportCertStore with PKCS12_ALWAYS_CNG_KSP, from a PFX naming none, import_windows.go)
+// and CERT_STORE_ADD_NEW never replaces a third party's copy, so winhelper only ever asks to remove a
+// certificate whose container it created. A copy of the certificate in another store that names the
+// same container loses its key too; it is protected only while it is bound (W3 Ruling 6: any http.sys
+// record naming the SHA-1, in any store, keeps the certificate).
 func (host) RemoveCertificate(ctx context.Context, store, sha1Hex string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
