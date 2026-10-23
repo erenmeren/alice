@@ -1364,8 +1364,10 @@ The plan's 22 rulings stand as written, except where an entry says "Amended" or 
    existed but were not in `$required` were added so the exact-set test holds; run 1 showed all pass on both images.
 8. **Concurrency.** Amended (controller rulings 2 and 3): `cancel-in-progress` is true only for a `push` or
    `pull_request` that is neither a tag ref (a called workflow sees the caller's event `push`, and a release call is
-   never cancelled) nor the default branch (a cancelled default-branch run would leave its change untested). As
-   written otherwise: the literal `windows-` prefix and the `nightly` group.
+   never cancelled) nor the default branch (a cancelled default-branch run would leave its change untested). Amended
+   (final review I-1): a push to the default branch has a group of its own per commit, `windows-main-<sha>`, because
+   GitHub keeps one pending run per group and cancels it when a newer one queues, whatever `cancel-in-progress` says.
+   As written otherwise: the literal `windows-` prefix and the `nightly` group.
 9. **Nightly stays in `windows.yml`.** As written (cron `41 2 * * *`, both legs; the 60-day pause is in
    `docs/dev/windows-ci.md`).
 10. **Cross-host reproducibility (F13) and one set of build flags.** As written; F13 confirmed (below), so the
@@ -1435,7 +1437,8 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - `cancel-in-progress` also requires `!startsWith(github.ref, 'refs/tags/')`: a called workflow sees the caller's
   event `push`, and Ruling 8 says a release call is never cancelled.
 - Plan Ruling 5 amended (Task 3 review I-1): a push to a branch other than the default branch diffs the whole branch
-  from the merge base, a push to the default branch keeps `before` and is never cancelled, and on the default branch
+  from the merge base, a push to the default branch keeps `before` and is never cancelled (and, after the final
+  review's I-1, never displaced while pending: its concurrency group is per commit), and on the default branch
   an unusable `before` answers true: with `before`, a Windows push superseded (cancelled) by a docs-only push left the
   head green without testing the Windows change (cost if wrong: every push of a branch carrying any Windows change
   runs both legs, more runner minutes).
@@ -1497,7 +1500,7 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - `GOAMD64: v1` and `GOARM64: v8.0` are both set in the one build step's `env:`: Go reads only `GO$GOARCH`, so each
   applies to its own architecture and the bytes stay those of `make winhelper`.
 - `${ALL:-false}` guards the `inputs.all` value, empty on events other than a call; `${WINDOWS:-false}` in the gate
-  step.
+  step (superseded by the final review's m-1: the gate passes `$WINDOWS` as is).
 - `linux-build` validates each SHA-256 as 64 hex digits before it outputs it, and the compare step fails on an empty
   or malformed Linux value: an error, never a silent pass.
 - `TestWindowsWorkflowGate` reads the cron through a YAML re-marshal of `on.schedule` with a substring check: good
@@ -1538,6 +1541,38 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - The `go test ./internal/providers/windows/ -run Docs` step of the brief matches no test (the guide's test is
   `TestPreparationGuideQuotesTheMatchBlock`); the whole package was run instead.
 
+## Final review fixes (W4)
+
+The final review of `2ec69c8c..4e786c29` (verdict "ready after fixes") and its fixes:
+
+- **Important I-1**: GitHub keeps one pending run per concurrency group and cancels it when a newer one queues,
+  whatever `cancel-in-progress` says, so a queued default-branch push could be displaced and the next push, diffing
+  from it, left its Windows change untested. A default-branch push now has a group per commit (`windows-main-<sha>`;
+  schedule keeps `nightly`, everything else its ref), `TestWindowsWorkflowGate` requires `github.sha` in the group
+  (`1437a3bb`); `docs/dev/windows-ci.md` (including the false "a push cancels a manual run" on the default branch),
+  design §19 and Ruling 8 above say so (`022a0ee9`, this commit).
+- **Important I-2**: the guides, `SECURITY-REPORT.md`, `CHANGELOG.md`, release-checklist row 1.46, WN-18, design F13
+  and §19 no longer say every real test runs the shipped helper: the legs build the shipped bytes and compare them with
+  the Linux release build, `TestRealSetupScript` installs them and calls the helper over SSH, the other real tests and
+  the fidelity tests run the same source built by the test (`022a0ee9`; the docscheck pin of row 1.46 follows the
+  corrected text, `9a5f9322`). No test change.
+- **Important I-3**: the operator guide's helper update starts with checking the package's signature
+  (`install-guide.md` section 3) and says its two checks are the only ones on that path; WN-18's and KI-42's residuals
+  name that hand copy, which bypasses the setup script's embedded-hash check; the admin guide's "Helper versions"
+  links the operator guide's Updates (`022a0ee9`).
+- **Minor**: m-1 the gate passes `$WINDOWS` as is, m-2 the `helper` job's checkout has `persist-credentials: false`
+  and is in the archtest loop (`1437a3bb`); m-5 ARM64 and AD FS are checked "when available; otherwise the release
+  notes say so" in the security overview, admin guide and host guide, m-6 KI-42's mitigation names the ruleset of row
+  1.47 (`022a0ee9`); the OpenAPI `location_kind` of the ACME binding names R63 (`aa190a56`).
+- **Declined** m-3 (the stage does not compare its helper hashes with the Windows legs' Linux build): F13 proved the
+  builds byte-identical across hosts with the `go.mod` Go, `release.yml`'s stage uses setup-go from `go.mod` as
+  `linux-build` does, and release-checklist row 3.4 (`make reproducible-check`) compares the CI stage with the release
+  machine (cost if wrong: a toolchain drift between jobs of one release run goes unnoticed until reproducible-check).
+- **Declined** m-4 (`helperSetEntries` accepts extra or duplicate lines) for W4: pre-existing logic shared with the
+  Linux set, and a listed binary still must match; carried to [Deferred to W5+](#deferred-to-w5).
+- **Declined**: `buildHelper` taking the shipped bytes from `ALICE_WIN_HELPER_DIR` for the real tests: no test change
+  in W4; the docs now say precisely which test runs the shipped bytes.
+
 ## Acceptance (design §13 W4)
 
 - The jobs are required for changes under the Windows paths: the one check `windows-required` passes only on green
@@ -1546,8 +1581,10 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   every real test is required (`TestWindowsWorkflowWatchesEveryDependency`, `TestWindowsWorkflowRequiresEveryRealTest`);
   the repository setting that makes it required is the owner's (row 1.47, `docs/dev/windows-ci.md`).
 - The helper in the release artifacts and `SHA256SUMS`: Task 4 (`TestStageLayout`, `TestStageRefusesAMissingInput`,
-  `TestStageListsTheWindowsHelpersInSHA256SUMS`, `TestReleaseWorkflowWaitsForWindows`); the tested bytes are the
-  shipped bytes: Task 3 (`TestWindowsHelperBuildFlagsAgree`, the legs' "Compare with the Linux build", F13).
+  `TestStageListsTheWindowsHelpersInSHA256SUMS`, `TestReleaseWorkflowWaitsForWindows`); the legs build the shipped
+  bytes and compare them with the Linux release build: Task 3 (`TestWindowsHelperBuildFlagsAgree`, the legs' "Compare
+  with the Linux build", F13), and `TestRealSetupScript` installs those bytes and calls the helper over SSH (the other
+  real tests and the fidelity tests run the same source built by the test).
 - Helper 1.0.0: Task 1 (`TestReleasedHelperVersion`, `TestCleanupNeedsHelper030`).
 - The ACME bindings panel: Task 5 (`TestACMEBindingDTOHasLocationKind`, `TestListACMEBindingsCarriesTheLocationKind`,
   the web test "speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)").
@@ -1611,7 +1648,8 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   against 0.9.0); the dependency test's `_test` suffix strip would also strip a real directory ending in `_test` (none
   exists); the Dockerfile subtest of `TestWindowsHelperBuildFlagsAgree` matches an exact indented string; no
   releasebuild row for a checksum file missing one `.exe` line (the logic refuses it); the `refusalNames` table is
-  keyed by subtest names; ShellCheck of the workflow's `run:` scripts.
+  keyed by subtest names; ShellCheck of the workflow's `run:` scripts; `helperSetEntries` accepts extra or duplicate
+  lines in a checksum file (pre-existing, shared with the Linux set; final review m-4).
 - **Not built**: a real-Windows ARM64 leg (no hosted Windows Server ARM64 runner); `ci.yml` checks made required (the
   owner's choice); a Windows gate in `make release-gates`; a `merge_group` trigger (add it if a merge queue is enabled);
   removing intermediates Alice added to `CA` (design §6.7: never); a cleanup history page.
