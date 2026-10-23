@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"alice/internal/providers/windows/winproto"
 )
@@ -237,7 +239,9 @@ func TestJournalHoldsNoKeyMaterial(t *testing.T) {
 				}
 				walk(t, path+"."+f.Name, f.Type)
 			}
-		case reflect.Map, reflect.Interface, reflect.Pointer:
+		case reflect.Pointer: // journal.Existed (*bool): what it points to is checked
+			walk(t, path+"*", typ.Elem())
+		case reflect.Map, reflect.Interface:
 			t.Errorf("%s: %s cannot be checked", path, typ.Kind())
 		}
 	}
@@ -471,5 +475,137 @@ func TestRecoveryPendingNamesTheOperation(t *testing.T) {
 	_ = reply(&out, nil, refused(winproto.CodeUsage, "x"))
 	if strings.Contains(out.String(), "pending_op") {
 		t.Fatal(out.String())
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// listsGone is a host whose journal listing names a file that is gone by the time it is read.
+type listsGone struct{ *fakeWriteHost }
+
+func (l listsGone) ListState(dir string) ([]StateFile, error) {
+	files, err := l.fakeWriteHost.ListState(dir)
+	return append(files, StateFile{Name: op3 + ".json"}), err
+}
+
+// TestReadJournals: every file of journal/, the good ones decoded, the others named (W3 Ruling 7).
+func TestReadJournals(t *testing.T) {
+	h := newWriteHost()
+	mustWrite(t, h, sampleJournal(op2))
+	mustWrite(t, h, journal{Op: op1, Phase: winproto.PhaseFenced})
+	h.state[journalDir+"README"] = []byte("x")
+	h.state[journalDir+"not-an-op.json"] = []byte("{}")
+	h.state[journalName(op3)] = []byte("{")
+	h.state[bindingRecordName(canon443)] = []byte("{}") // another directory
+	h.modTimes = map[string]time.Time{journalName(op2): testNow}
+	files, err := readJournals(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range files {
+		got = append(got, fmt.Sprintf("%s %v %s", f.File.Name, f.OK, f.J.Op))
+	}
+	want := []string{op1 + ".json true " + op1, op2 + ".json true " + op2, op3 + ".json false ", "README false ", "not-an-op.json false "}
+	if !reflect.DeepEqual(got, want) || !files[1].File.ModTime.Equal(testNow) {
+		t.Fatalf("%q", got)
+	}
+	// A file listed and then removed is left out.
+	delete(h.state, journalName(op3))
+	if files, err := readJournals(listsGone{h}); err != nil || len(files) != 4 {
+		t.Fatalf("%v %+v", err, files)
+	}
+	h.readStateErr = errors.New("disk")
+	if _, err := readJournals(h); err == nil || errors.Is(err, errBadJournal) {
+		t.Fatal(err)
+	}
+	h.listStateErr = errors.New("disk")
+	if _, err := readJournals(h); err == nil {
+		t.Fatal("listed")
+	}
+}
+
+// TestJournalExistedRecord: a 0.3.0 journal keeps whether the store held the certificate (Ruling 5); a
+// W2 journal has no such record and still reads.
+func TestJournalExistedRecord(t *testing.T) {
+	h := newWriteHost()
+	for _, existed := range []bool{true, false} {
+		j := sampleJournal(op1)
+		j.Existed, j.AliceImported = boolPtr(existed), !existed
+		mustWrite(t, h, j)
+		if !strings.Contains(string(h.state[journalName(op1)]), fmt.Sprintf(`"existed":%v`, existed)) {
+			t.Fatal(string(h.state[journalName(op1)]))
+		}
+		got, found, err := readJournal(h, op1)
+		if err != nil || !found || got.Existed == nil || *got.Existed != existed || !reflect.DeepEqual(got, j) {
+			t.Fatalf("%v %v %+v", err, found, got)
+		}
+	}
+	// A W2 journal (no "existed" member) decodes with Existed nil.
+	w2 := sampleJournal(op2)
+	raw, _ := json.Marshal(w2)
+	if strings.Contains(string(raw), "existed") {
+		t.Fatal(string(raw))
+	}
+	h.state[journalName(op2)] = raw
+	got, found, err := readJournal(h, op2)
+	if err != nil || !found || got.Existed != nil {
+		t.Fatalf("%v %v %+v", err, found, got.Existed)
+	}
+	// "existed" true and alice_imported true contradict each other: refused.
+	bad := sampleJournal(op3)
+	bad.Existed = boolPtr(true)
+	if err := writeJournal(h, bad); !errors.Is(err, errBadJournal) {
+		t.Fatal(err)
+	}
+}
+
+// TestImportEntryUnboundSince: the import inventory's age stamp (Ruling 8).
+func TestImportEntryUnboundSince(t *testing.T) {
+	h := newWriteHost()
+	e := importEntry{Op: op1, Store: "My", SHA1: h1, SHA256: s256a, UnboundSince: "2026-10-20T08:00:00Z"}
+	if err := writeImports(h, importsFile{Imports: []importEntry{e}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(h.state[importsName]), `"unbound_since":"2026-10-20T08:00:00Z"`) {
+		t.Fatal(string(h.state[importsName]))
+	}
+	f, err := readImports(h)
+	if err != nil || len(f.Imports) != 1 || f.Imports[0] != e {
+		t.Fatalf("%v %+v", err, f)
+	}
+	// Recording the same certificate again keeps the entry and its stamp.
+	if err := recordImport(h, importEntry{Op: op1, Store: "My", SHA1: h1, SHA256: s256a}); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := readImports(h); err != nil || len(f.Imports) != 1 || f.Imports[0] != e {
+		t.Fatalf("%v %+v", err, f)
+	}
+	for _, stamp := range []string{"yesterday", "2026-10-20T08:00:00+02:00", "2026-10-20", "2026-13-01T00:00:00Z", "2026-10-20T08:00:00.5Z"} {
+		h.state[importsName] = []byte(`{"imports":[{"op":"` + op1 + `","store":"My","sha1":"` + h1 + `","sha256":"` + s256a +
+			`","unbound_since":"` + stamp + `"}]}`)
+		if _, err := readImports(h); !errors.Is(err, errBadJournal) {
+			t.Fatalf("%s: %v", stamp, err)
+		}
+		bad := importEntry{Op: op1, Store: "My", SHA1: h1, SHA256: s256a, UnboundSince: stamp}
+		if err := writeImports(h, importsFile{Imports: []importEntry{bad}}); !errors.Is(err, errBadJournal) {
+			t.Fatal(err)
+		}
+	}
+	if err := writeImports(h, importsFile{Imports: make([]importEntry, maxImports+1)}); !errors.Is(err, errBadJournal) {
+		t.Fatal(err)
+	}
+	// No list at all reads and writes as an empty one.
+	if err := writeImports(h, importsFile{}); err != nil || string(h.state[importsName]) != `{"imports":[]}` {
+		t.Fatal(err, string(h.state[importsName]))
+	}
+	h.state[importsName] = []byte(`{"imports":null}`)
+	if f, err := readImports(h); err != nil || f.Imports == nil || len(f.Imports) != 0 {
+		t.Fatalf("%v %+v", err, f)
+	}
+	// A W2 imports.json (no unbound_since) reads.
+	h.state[importsName] = []byte(`{"imports":[{"op":"` + op1 + `","store":"My","sha1":"` + h1 + `","sha256":"` + s256a + `"}]}`)
+	if f, err := readImports(h); err != nil || len(f.Imports) != 1 || f.Imports[0].UnboundSince != "" {
+		t.Fatalf("%v %+v", err, f)
 	}
 }

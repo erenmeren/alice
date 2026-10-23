@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"alice/internal/providers/windows/winproto"
 )
@@ -131,6 +132,7 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 		}
 		d.Certificates = append(d.Certificates, cc)
 	}
+	markAliceImported(h, d.Certificates)
 
 	if installed {
 		if err := stop(); err != nil {
@@ -185,6 +187,81 @@ func BuildDump(ctx context.Context, h Host) (winproto.IISDumpResponse, error) {
 		return d, failed(winproto.CodeOutputTooLarge, "the answer is too large")
 	}
 	return d, nil
+}
+
+// markAliceImported sets AliceImported on each certificate rule 1 holds for (W3 Rulings 5 and 19),
+// best effort: a host that cannot change the machine, or an import inventory that cannot be read,
+// marks none; journals that cannot be listed or read are left out. The dump never fails for it.
+func markAliceImported(h Host, certs []winproto.StoreCertificate) {
+	wh, ok := h.(WriteHost)
+	if !ok || len(certs) == 0 {
+		return
+	}
+	imports, err := readImports(wh)
+	if err != nil {
+		return
+	}
+	var journals []journal
+	listed := false
+	for i := range certs {
+		if aliceImported(wh, certs[i], imports, nil) {
+			certs[i].AliceImported = true
+			continue
+		}
+		if !listed {
+			listed = true
+			files, _ := readJournals(wh) // best effort
+			for _, f := range files {
+				if f.OK {
+					journals = append(journals, f.J)
+				}
+			}
+		}
+		certs[i].AliceImported = aliceImported(wh, certs[i], importsFile{}, journals)
+	}
+}
+
+// aliceImported is rule 1 (W3 Ruling 5): the certificate counts as Alice's when (a) the import
+// inventory lists it (its store, ASCII case folded, and SHA-1), or (b) a journal written by a 0.3.0
+// helper names it as new_sha1 in its store with the "existed" record false and an import that was
+// Alice's (alice_imported: ImportPFX did not meet a copy); and in both cases the store copy's friendly
+// name is Alice's form ending in that entry's operation. A W2 journal (no "existed" record) never
+// counts. The host is not read: everything rule 1 needs is passed.
+func aliceImported(_ WriteHost, c winproto.StoreCertificate, imports importsFile, journals []journal) bool {
+	store := asciiLower(c.Store)
+	for _, e := range imports.Imports {
+		if e.SHA1 == c.SHA1 && asciiLower(e.Store) == store && aliceFriendlyName(c.FriendlyName, e.Op) {
+			return true
+		}
+	}
+	for _, j := range journals {
+		if j.Existed != nil && !*j.Existed && j.AliceImported && j.NewSHA1 == c.SHA1 && asciiLower(j.Store) == store &&
+			aliceFriendlyName(c.FriendlyName, j.Op) {
+			return true
+		}
+	}
+	return false
+}
+
+// aliceFriendlyName reports a friendly name of the form friendlyName gives an import of operation op:
+// "Alice <name> <yyyy-mm-dd> <op8>", the name not empty and the date a date.
+func aliceFriendlyName(name, op string) bool {
+	if len(op) < 8 {
+		return false
+	}
+	rest, ok := strings.CutPrefix(name, "Alice ")
+	if !ok {
+		return false
+	}
+	if rest, ok = strings.CutSuffix(rest, " "+op[:8]); !ok || len(rest) < len(" 2006-01-02")+1 {
+		return false
+	}
+	date := rest[len(rest)-len("2006-01-02"):]
+	subject, ok := strings.CutSuffix(rest[:len(rest)-len(date)], " ")
+	if _, err := time.Parse("2006-01-02", date); err != nil || !ok || strings.TrimSpace(subject) == "" {
+		return false
+	}
+	return true
 }
 
 // cleanBinding validates and normalises one http.sys record from the host; false drops it. Nothing

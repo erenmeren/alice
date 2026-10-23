@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
+	"time"
 
 	"alice/internal/providers/windows/winproto"
 )
@@ -70,11 +72,16 @@ type journal struct {
 	Store string `json:"store"`
 	// Intermediates are the certificates this operation added to LocalMachine\CA (never removed).
 	Intermediates []certRef `json:"intermediates_added"`
-	// AliceImported is false when the new certificate was in the store with a usable key already.
-	AliceImported bool   `json:"alice_imported"`
-	FailedStep    string `json:"failed_step"`
-	CauseStep     string `json:"cause_step"`
-	Error         string `json:"error"`
+	// AliceImported is false when the new certificate was in the store with a usable key already, or
+	// when ImportPFX met a copy someone added after that check (W3 Ruling 5).
+	AliceImported bool `json:"alice_imported"`
+	// Existed is the "existed" record (W3 Ruling 5), written with the prepared journal before any
+	// import: true when the store held the new certificate with a usable key. nil only in a journal a
+	// W2 helper wrote, which never makes a certificate count as Alice's.
+	Existed    *bool  `json:"existed,omitempty"`
+	FailedStep string `json:"failed_step"`
+	CauseStep  string `json:"cause_step"`
+	Error      string `json:"error"`
 	// CauseError is the class of the failure that made the operation restore (CauseStep's), kept
 	// apart from Error, which a failed restore overwrites: a later successful restore answers it.
 	CauseError string `json:"cause_error"`
@@ -180,7 +187,8 @@ func (j journal) valid(op string) bool {
 			return false
 		}
 	}
-	if (j.ForbiddenFinal && j.Phase != winproto.PhaseRestoreForbidden) || (j.CauseError != "" && j.CauseStep == "") {
+	if (j.ForbiddenFinal && j.Phase != winproto.PhaseRestoreForbidden) || (j.CauseError != "" && j.CauseStep == "") ||
+		(j.Existed != nil && *j.Existed && j.AliceImported) {
 		return false
 	}
 	return (j.Error == "" || slices.Contains(errorClasses, j.Error)) && (j.CauseError == "" || slices.Contains(errorClasses, j.CauseError)) &&
@@ -391,12 +399,15 @@ func recoveryPending(op string) error {
 		message: "an interrupted operation on this binding must be recovered first", pendingOp: op}
 }
 
-// importEntry is one certificate Alice imported (imports.json; W3's cleanup reads it).
+// importEntry is one certificate Alice imported (imports.json; W3's cleanup reads it). UnboundSince is
+// when a cleanup plan first found it unused (RFC 3339 UTC, the helper's clock; W3 Ruling 8), "" while
+// it is used or was never planned (and in a W2 inventory).
 type importEntry struct {
-	Op     string `json:"op"`
-	Store  string `json:"store"`
-	SHA1   string `json:"sha1"`
-	SHA256 string `json:"sha256"`
+	Op           string `json:"op"`
+	Store        string `json:"store"`
+	SHA1         string `json:"sha1"`
+	SHA256       string `json:"sha256"`
+	UnboundSince string `json:"unbound_since,omitempty"`
 }
 
 type importsFile struct {
@@ -404,7 +415,25 @@ type importsFile struct {
 }
 
 func (e importEntry) valid() bool {
-	return winproto.ValidOpID(e.Op) && winproto.ValidStore(e.Store) && winproto.ValidSHA1(e.SHA1) && validSHA256(e.SHA256)
+	return winproto.ValidOpID(e.Op) && winproto.ValidStore(e.Store) && winproto.ValidSHA1(e.SHA1) && validSHA256(e.SHA256) &&
+		(e.UnboundSince == "" || validStamp(e.UnboundSince))
+}
+
+// sameImport reports two entries that record one import (the age stamp aside).
+func (e importEntry) sameImport(o importEntry) bool {
+	return e.Op == o.Op && e.Store == o.Store && e.SHA1 == o.SHA1 && e.SHA256 == o.SHA256
+}
+
+// stampLayout is the form of a time the helper keeps in a state file: RFC 3339 in UTC, whole seconds.
+const stampLayout = time.RFC3339
+
+// stamp writes t as a state file keeps it.
+func stamp(t time.Time) string { return t.UTC().Truncate(time.Second).Format(stampLayout) }
+
+// validStamp reports a time written by stamp (exactly that text: UTC, "Z", whole seconds).
+func validStamp(s string) bool {
+	t, err := time.Parse(stampLayout, s)
+	return err == nil && stamp(t) == s
 }
 
 // readImports reads the import inventory (empty when there is none).
@@ -414,18 +443,46 @@ func readImports(h WriteHost) (importsFile, error) {
 	if err != nil || !found {
 		return importsFile{Imports: []importEntry{}}, err
 	}
-	if err := decodeState(data, &f); err != nil || len(f.Imports) > maxImports {
+	if err := decodeState(data, &f); err != nil || !f.valid() {
 		return importsFile{}, errBadJournal
 	}
-	for _, e := range f.Imports {
-		if !e.valid() {
-			return importsFile{}, errBadJournal
-		}
+	if f.Imports == nil {
+		f.Imports = []importEntry{}
 	}
 	return f, nil
 }
 
-// recordImport adds a certificate to the import inventory once; past maxImports the oldest go.
+// valid: at most maxImports entries, each valid.
+func (f importsFile) valid() bool {
+	if len(f.Imports) > maxImports {
+		return false
+	}
+	for _, e := range f.Imports {
+		if !e.valid() {
+			return false
+		}
+	}
+	return true
+}
+
+// writeImports replaces the import inventory durably. An inventory readImports would refuse is never
+// written: errBadJournal, and the previous one stays.
+func writeImports(h WriteHost, f importsFile) error {
+	if !f.valid() {
+		return errBadJournal
+	}
+	if f.Imports == nil {
+		f.Imports = []importEntry{}
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	return h.WriteState(importsName, raw)
+}
+
+// recordImport adds a certificate to the import inventory once (an entry recording the same import
+// keeps its age stamp); past maxImports the oldest go.
 func recordImport(h WriteHost, e importEntry) error {
 	if !e.valid() {
 		return errBadJournal
@@ -434,16 +491,49 @@ func recordImport(h WriteHost, e importEntry) error {
 	if err != nil {
 		return err
 	}
-	if slices.Contains(f.Imports, e) {
+	if slices.ContainsFunc(f.Imports, e.sameImport) {
 		return nil
 	}
 	f.Imports = append(f.Imports, e)
 	if len(f.Imports) > maxImports {
 		f.Imports = slices.Clone(f.Imports[len(f.Imports)-maxImports:])
 	}
-	raw, err := json.Marshal(f)
+	return writeImports(h, f)
+}
+
+// journalFile is a file of journalDir as readJournals found it: J is its journal when OK.
+type journalFile struct {
+	File StateFile
+	J    journal
+	OK   bool
+}
+
+// readJournals reads every file of journalDir (ListState). A file that is not named "<op>.json" or
+// whose journal readJournal refuses is listed with OK false (W3 Ruling 7: an unreadable journal keeps
+// every candidate until pruning removes it). A listing failure or a read failure is returned as it is.
+// The order is the files' names.
+func readJournals(h WriteHost) ([]journalFile, error) {
+	files, err := h.ListState(journalDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return h.WriteState(importsName, raw)
+	slices.SortFunc(files, func(a, b StateFile) int { return strings.Compare(a.Name, b.Name) })
+	out := make([]journalFile, 0, len(files))
+	for _, f := range files {
+		jf := journalFile{File: f}
+		if op, ok := strings.CutSuffix(f.Name, ".json"); ok && winproto.ValidOpID(op) {
+			j, found, err := readJournal(h, op)
+			switch {
+			case errors.Is(err, errBadJournal):
+			case err != nil:
+				return nil, err
+			case found:
+				jf.J, jf.OK = j, true
+			default:
+				continue // removed since the listing
+			}
+		}
+		out = append(out, jf)
+	}
+	return out, nil
 }

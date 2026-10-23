@@ -1038,8 +1038,8 @@ type otherImport struct {
 	der []byte
 }
 
-func (o *otherImport) ImportPFX(_ context.Context, store string, _, _ []byte, _ string) (string, error) {
-	return o.addCert(store, o.der, true), nil
+func (o *otherImport) ImportPFX(_ context.Context, store string, _, _ []byte, _ string) (string, bool, error) {
+	return o.addCert(store, o.der, true), false, nil
 }
 
 // failPhase makes the WriteState of a journal in that phase fail.
@@ -1291,4 +1291,95 @@ func certDERFor(f *fixture, sha string) []byte {
 		return f.nw.Cert.Raw
 	}
 	return f.old.Cert.Raw
+}
+
+// preparedJournal is op's first journal write (the prepared one) and its index in the write log.
+func (f *fixture) preparedJournal(op string) (journal, int) {
+	f.t.Helper()
+	f.h.wmu.Lock()
+	defer f.h.wmu.Unlock()
+	for _, w := range f.h.stateLog {
+		if w.name != journalName(op) {
+			continue
+		}
+		var j journal
+		if err := json.Unmarshal(w.data, &j); err != nil || j.Phase != winproto.PhasePrepared {
+			f.t.Fatalf("first journal write: %v %s", err, w.data)
+		}
+		return j, slices.Index(f.h.log, "state "+journalName(op))
+	}
+	f.t.Fatal("no journal written")
+	return journal{}, -1
+}
+
+// TestDeployRecordsWhetherTheCertificateExisted: the prepared journal records, before any import,
+// whether the store held the certificate (Ruling 5).
+func TestDeployRecordsWhetherTheCertificateExisted(t *testing.T) {
+	t.Run("absent: existed false, written before import_certificate", func(t *testing.T) {
+		f := newFixture(t)
+		f.reset()
+		r := f.committed(op1)
+		j, at := f.preparedJournal(op1)
+		imported := slices.Index(f.h.writes(), "import MY "+f.newSHA1)
+		if j.Existed == nil || *j.Existed || at < 0 || imported < 0 || at > imported {
+			t.Fatalf("existed %v, journal at %d, import at %d: %v", j.Existed, at, imported, f.h.writes())
+		}
+		if got := f.journal(op1); got.Existed == nil || *got.Existed || !got.AliceImported || !r.AliceImported {
+			t.Fatalf("%+v %+v", got, r)
+		}
+	})
+	t.Run("a usable copy: existed true, alice_imported false", func(t *testing.T) {
+		f := newFixture(t)
+		f.h.addCert("MY", f.nw.Cert.Raw, true)
+		f.reset()
+		r := f.committed(op1)
+		j, _ := f.preparedJournal(op1)
+		if j.Existed == nil || !*j.Existed || j.AliceImported || r.AliceImported || len(f.h.pfxs) != 0 {
+			t.Fatalf("%+v %+v", j, r)
+		}
+		if got := f.journal(op1); got.Existed == nil || !*got.Existed || got.AliceImported {
+			t.Fatalf("%+v", got)
+		}
+		if imports, err := readImports(f.h); err != nil || len(imports.Imports) != 0 {
+			t.Fatalf("%v %+v", err, imports)
+		}
+	})
+}
+
+// TestImportRaceIsNotRecorded: a third party adds the certificate between the check and the import;
+// ImportPFX answers existed, so the deployment records it as not Alice's (Ruling 5).
+func TestImportRaceIsNotRecorded(t *testing.T) {
+	f := newFixture(t)
+	f.h.pointErr = func(name string) error {
+		if name == "deploy.import_chain" {
+			f.h.addCert("MY", f.nw.Cert.Raw, true)
+			f.h.mu.Lock()
+			c := f.h.certs[[2]string{"MY", f.newSHA1}]
+			c.FriendlyName = "third party"
+			f.h.certs[[2]string{"MY", f.newSHA1}] = c
+			f.h.mu.Unlock()
+		}
+		return nil
+	}
+	f.reset()
+	r := f.committed(op1)
+	if r.AliceImported || len(f.h.pfxs) != 1 {
+		t.Fatalf("%+v pfxs %d", r, len(f.h.pfxs))
+	}
+	j := f.journal(op1)
+	if j.AliceImported || j.Existed == nil || *j.Existed {
+		t.Fatalf("%+v", j)
+	}
+	if imports, err := readImports(f.h); err != nil || len(imports.Imports) != 0 {
+		t.Fatalf("%v %+v", err, imports)
+	}
+	if _, found := f.h.state[importsName]; found {
+		t.Fatal("imports.json written")
+	}
+	if c := f.h.certs[[2]string{"MY", f.newSHA1}]; c.FriendlyName != "third party" {
+		t.Fatalf("the existing copy was renamed: %q", c.FriendlyName)
+	}
+	if got := f.current(); got.CertSHA1 != f.newSHA1 {
+		t.Fatalf("%+v", got)
+	}
 }

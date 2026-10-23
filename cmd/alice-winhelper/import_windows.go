@@ -92,22 +92,23 @@ func (host) AddIntermediate(ctx context.Context, der []byte) (bool, error) {
 }
 
 // ImportPFX imports a PFX of one leaf with its key into a machine store and returns the leaf's SHA-1.
-// When the store already holds that certificate, the existing copy is reported (its SHA-1, nil) and left
-// as it is: not renamed, its key untouched, and the key this import persisted deleted again. A stored
-// copy that cannot reach its key is removed with that key (winhelper.ErrKeyUnusable). The UTF-16 copy
-// of the password is cleared here; the caller clears pfx and password.
-func (host) ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (string, error) {
+// When the store already holds that certificate (CERT_STORE_ADD_NEW answers CRYPT_E_EXISTS), the
+// existing copy is reported (its SHA-1, existed true, nil) and left as it is: not renamed, its key
+// untouched, and the key this import persisted deleted again (W3 Ruling 5: never recorded as Alice's).
+// A stored copy that cannot reach its key is removed with that key (winhelper.ErrKeyUnusable). The
+// UTF-16 copy of the password is cleared here; the caller clears pfx and password.
+func (host) ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(pfx) == 0 || len(password) == 0 {
-		return "", errBadValue
+		return "", false, errBadValue
 	}
 	pw := make([]uint16, len(password)+1)
 	defer clear(pw)
 	for i, c := range password {
 		if c == 0 || c >= 0x80 {
-			return "", errBadValue // BuildPFX's passwords are printable ASCII
+			return "", false, errBadValue // BuildPFX's passwords are printable ASCII
 		}
 		pw[i] = uint16(c)
 	}
@@ -116,12 +117,12 @@ func (host) ImportPFX(ctx context.Context, store string, pfx, password []byte, f
 	clear(pw)
 	runtime.KeepAlive(pfx)
 	if err != nil {
-		return "", errImport
+		return "", false, errImport
 	}
 	defer func() { _ = windows.CertCloseStore(tmp, 0) }()
 	leaf, err := keyedCertificate(tmp)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer func() { _ = windows.CertFreeCertificateContext(leaf) }()
 	// From here the import has persisted a key: it is deleted again unless a stored copy uses it.
@@ -138,37 +139,37 @@ func (host) ImportPFX(ctx context.Context, store string, pfx, password []byte, f
 	}()
 	der := contextDER(leaf)
 	if der == nil {
-		return "", errBadValue
+		return "", false, errBadValue
 	}
 	sum := sha1.Sum(der) //nolint:gosec // G401: the thumbprint, see the import
 	thumb := hex.EncodeToString(sum[:])
 	if friendlyName != "" {
 		if err := setFriendlyName(leaf, friendlyName); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	dst, err := openWritableStore(store)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer func() { _ = windows.CertCloseStore(dst, 0) }()
 	var stored *windows.CertContext
 	err = windows.CertAddCertificateContextToStore(dst, leaf, windows.CERT_STORE_ADD_NEW, &stored)
 	if hresult(err, codeCryptExists) {
-		return thumb, nil // the existing copy (W2 Ruling 9: used as is, not Alice-imported)
+		return thumb, true, nil // the existing copy (W2 Ruling 9, W3 Ruling 5: used as is, not Alice-imported)
 	}
 	if err != nil || stored == nil {
-		return "", errImport
+		return "", false, errImport
 	}
 	defer func() { _ = windows.CertFreeCertificateContext(stored) }()
 	if !keyReachable(stored) {
 		// CertDeleteCertificateFromStore frees the context it is given: a duplicate, so the deferred
 		// free above stays valid.
 		_ = windows.CertDeleteCertificateFromStore(windows.CertDuplicateCertificateContext(stored))
-		return "", winhelper.ErrKeyUnusable
+		return "", false, winhelper.ErrKeyUnusable
 	}
 	keep = true
-	return thumb, nil
+	return thumb, false, nil
 }
 
 // keyedCertificate returns (a duplicate of) the one certificate of a PFX store that has a key; a store

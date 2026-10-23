@@ -48,6 +48,28 @@ const maxFactFile = 1 << 20
 
 func (host) Elevated() (bool, error) { return tokenElevated() }
 
+// Now is the helper's clock (W3 Ruling 8).
+func (h host) Now() time.Time { return h.now() }
+
+// errNotImplemented is the answer of the W3 cleanup methods until W3 Task 5 implements them.
+var errNotImplemented = errors.New("alice-winhelper: not implemented yet")
+
+// ListState is W3 Task 5's.
+func (host) ListState(string) ([]winhelper.StateFile, error) { return nil, errNotImplemented }
+
+// RemoveState is W3 Task 5's.
+func (host) RemoveState(string) error { return errNotImplemented }
+
+// RemoveCertificate is W3 Task 5's (F11).
+func (host) RemoveCertificate(context.Context, string, string) (bool, error) {
+	return false, errNotImplemented
+}
+
+// ProtectedThumbprints is W3 Task 5's (F12).
+func (host) ProtectedThumbprints(context.Context) (winhelper.Protected, error) {
+	return winhelper.Protected{}, errNotImplemented
+}
+
 // Registry locations of the facts.
 const (
 	keyCurrentVersion = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"software.sslmate.com/src/go-pkcs12"
 
@@ -186,6 +187,16 @@ type fakeWriteHost struct {
 	addIntermediateErr error
 	// pointErr, when set, decides each Point (a non-nil answer is a kill there).
 	pointErr func(name string) error
+
+	// W3: the helper's clock (testNow when zero), the state files' times by name, the listeners'
+	// thumbprints and the faults of the cleanup methods.
+	now            time.Time
+	modTimes       map[string]time.Time
+	listStateErr   error
+	removeStateErr func(name string) error
+	removeCertErr  error
+	protected      Protected
+	protectedErr   error
 }
 
 func newWriteHost() *fakeWriteHost {
@@ -403,7 +414,7 @@ func (f *fakeWriteHost) AddIntermediate(_ context.Context, der []byte) (bool, er
 	return true, nil
 }
 
-func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password []byte, friendlyName string) (string, error) {
+func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password []byte, friendlyName string) (string, bool, error) {
 	f.calls.Add(1)
 	f.wmu.Lock()
 	f.pfxs = append(f.pfxs, pfx)
@@ -412,11 +423,18 @@ func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password
 	f.friendlyNames = append(f.friendlyNames, friendlyName)
 	f.wmu.Unlock()
 	if f.importErr != nil {
-		return "", f.importErr
+		return "", false, f.importErr
 	}
 	_, leaf, _, err := pkcs12.DecodeChain(pfx, string(password))
 	if err != nil {
-		return "", ErrStore
+		return "", false, ErrStore
+	}
+	f.mu.Lock()
+	_, existed := f.certs[[2]string{store, sum1(leaf.Raw)}]
+	f.mu.Unlock()
+	if existed {
+		// CERT_STORE_ADD_NEW: the copy there is left as it is.
+		return sum1(leaf.Raw), true, nil
 	}
 	sha := f.addCert(store, leaf.Raw, true)
 	chain := f.builtChain(leaf)
@@ -426,7 +444,83 @@ func (f *fakeWriteHost) ImportPFX(_ context.Context, store string, pfx, password
 	f.certs[[2]string{store, sha}] = c
 	f.mu.Unlock()
 	f.logf("import " + store + " " + sha)
-	return sha, nil
+	return sha, false, nil
+}
+
+func (f *fakeWriteHost) Now() time.Time {
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.now.IsZero() {
+		return testNow
+	}
+	return f.now
+}
+
+// ListState lists the state files under dir; every file's time is modTimes[name] (the zero time when
+// unset).
+func (f *fakeWriteHost) ListState(dir string) ([]StateFile, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.listStateErr != nil {
+		return nil, f.listStateErr
+	}
+	out := []StateFile{}
+	for name := range f.state {
+		if rest, ok := strings.CutPrefix(name, dir); ok && !strings.Contains(rest, "/") {
+			out = append(out, StateFile{Name: rest, ModTime: f.modTimes[name]})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeWriteHost) RemoveState(name string) error {
+	f.calls.Add(1)
+	if f.removeStateErr != nil {
+		if err := f.removeStateErr(name); err != nil {
+			return err
+		}
+	}
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if _, ok := f.state[name]; ok {
+		delete(f.state, name)
+		f.log = append(f.log, "unlink "+name)
+	}
+	return nil
+}
+
+// RemoveCertificate removes a certificate and its key (key first, as the log shows).
+func (f *fakeWriteHost) RemoveCertificate(_ context.Context, store, sha1 string) (bool, error) {
+	f.calls.Add(1)
+	if f.removeCertErr != nil {
+		return false, f.removeCertErr
+	}
+	f.mu.Lock()
+	k := [2]string{store, sha1}
+	c, ok := f.certs[k]
+	if ok {
+		delete(f.certs, k)
+	}
+	f.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	if c.HasKey {
+		f.logf("remove-key " + store + " " + sha1)
+	}
+	f.logf("remove " + store + " " + sha1)
+	return true, nil
+}
+
+func (f *fakeWriteHost) ProtectedThumbprints(context.Context) (Protected, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.protectedErr != nil {
+		return Protected{}, f.protectedErr
+	}
+	return Protected{RDP: slices.Clone(f.protected.RDP), WinRM: slices.Clone(f.protected.WinRM)}, nil
 }
 
 // builtChain is CertGetCertificateChain's answer for leaf over LocalMachine\CA as it is now: the

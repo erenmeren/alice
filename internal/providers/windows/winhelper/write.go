@@ -41,13 +41,48 @@ type WriteHost interface {
 	// false when it was there already.
 	AddIntermediate(ctx context.Context, der []byte) (added bool, err error)
 	// ImportPFX imports a PFX (BuildPFX) into a machine store with a non-exportable machine key and
-	// returns the certificate's SHA-1. The caller clears pfx and password afterwards.
-	ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (sha1 string, err error)
+	// returns the certificate's SHA-1. existed is true when the store held that certificate already
+	// (CERT_STORE_ADD_NEW met it): the existing copy is left as it is (its friendly name and key
+	// untouched) and the import is not Alice's (W3 Ruling 5). The caller clears pfx and password
+	// afterwards.
+	ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (sha1 string, existed bool, err error)
 	// Event writes an Application event of source "Alice Helper", best effort.
 	Event(id uint32, text string)
 	// Point is a crash point between journal phases: a non-nil answer kills the operation there (tests
 	// and the emulator); nil on the real host.
 	Point(name string) error
+
+	// Now is the helper's clock (W3 Ruling 8: the import inventory's unbound_since and the age of a
+	// certificate are the helper's, never Alice's).
+	Now() time.Time
+	// ListState lists the state files of a directory under the data directory, journalDir or
+	// bindingsDir: regular files only (a reparse point, a directory or anything else is left out, never
+	// followed), by their names within dir and their modification times, in no particular order. A
+	// directory that does not exist lists nothing.
+	ListState(dir string) ([]StateFile, error)
+	// RemoveState removes a state file (the names of ReadState); one that is absent is nil.
+	RemoveState(name string) error
+	// RemoveCertificate removes a certificate from a machine store, its CNG key first, then the
+	// certificate (F11, W3 Ruling 10: a kill between leaves a keyless certificate the next plan
+	// removes, never an orphan key). removed is false when the store does not hold it.
+	RemoveCertificate(ctx context.Context, store, sha1 string) (removed bool, err error)
+	// ProtectedThumbprints reads the certificates the RDP listener and the WinRM HTTPS listeners name
+	// (F12). A value that is absent is no thumbprint; one that cannot be read is an error.
+	ProtectedThumbprints(ctx context.Context) (Protected, error)
+}
+
+// StateFile is one file ListState found: its name within the directory listed and its modification
+// time.
+type StateFile struct {
+	Name    string
+	ModTime time.Time
+}
+
+// Protected are the SHA-1s (lower-case hex) of the certificates the RDP listener (its
+// SSLCertificateSHA1Hash) and the WinRM HTTPS listeners (each certThumbprint) name (F12, W3 Ruling 6).
+type Protected struct {
+	RDP   []string
+	WinRM []string
 }
 
 // The WriteHost errors the helper decides on. A host returns them (wrapped or not); any other error is

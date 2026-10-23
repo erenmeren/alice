@@ -494,3 +494,153 @@ func TestBuildDumpReadsExtendedParams(t *testing.T) {
 		t.Fatalf("an empty extended list is sent: %s", b)
 	}
 }
+
+// aliceName is the friendly name deploy gives a certificate imported by operation op.
+func aliceName(op string) string { return "Alice www.example.test 2030-01-01 " + op[:8] }
+
+// importedJournal is a 0.3.0 journal of op that imported sha (existed false) into store.
+func importedJournal(op, store, sha string) journal {
+	j := sampleJournal(op)
+	j.NewSHA1, j.Store, j.Existed, j.AliceImported = sha, store, boolPtr(false), true
+	return j
+}
+
+// TestDumpShowsAliceImported is Ruling 19.
+func TestDumpShowsAliceImported(t *testing.T) {
+	setup := func(t *testing.T) *fakeWriteHost {
+		h := newWriteHost()
+		h.appcmd, h.iis = []byte(`<appcmd/>`), winproto.IISFacts{Installed: true, Version: "10.0"}
+		names := map[string]string{h1: aliceName(op1), h2: aliceName(op2), h3: "renamed by another tool"}
+		for _, sha := range []string{h1, h2, h3} {
+			h.setRecord(ipb(443+len(h.records), "My", sha))
+			c := cert("My", sha)
+			c.FriendlyName = names[sha]
+			h.certs[[2]string{"My", sha}] = c
+		}
+		// h1 and h3 are in imports.json, h2 only in a 0.3.0 journal that imported it.
+		mustWrite(t, h, importedJournal(op2, "MY", h2))
+		if err := writeImports(h, importsFile{Imports: []importEntry{
+			{Op: op1, Store: "MY", SHA1: h1, SHA256: s256a}, {Op: op3, Store: "My", SHA1: h3, SHA256: s256c}}}); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	shown := func(t *testing.T, h *fakeWriteHost) map[string]bool {
+		t.Helper()
+		d, err := BuildDump(context.Background(), h)
+		if err != nil || len(d.Certificates) != 3 {
+			t.Fatalf("%v %+v", err, d)
+		}
+		out := map[string]bool{}
+		for _, c := range d.Certificates {
+			out[c.SHA1] = c.AliceImported
+		}
+		return out
+	}
+	t.Run("rule 1 for each certificate", func(t *testing.T) {
+		h := setup(t)
+		if got := shown(t, h); !got[h1] || !got[h2] || got[h3] {
+			t.Fatalf("%v", got)
+		}
+	})
+	t.Run("an unreadable imports.json reads false", func(t *testing.T) {
+		h := setup(t)
+		h.state[importsName] = []byte("{")
+		if got := shown(t, h); got[h1] || got[h2] || got[h3] {
+			t.Fatalf("%v", got)
+		}
+	})
+	t.Run("an unreadable state reads false", func(t *testing.T) {
+		h := setup(t)
+		h.readStateErr = errors.New("disk")
+		if got := shown(t, h); got[h1] || got[h2] || got[h3] {
+			t.Fatalf("%v", got)
+		}
+	})
+	t.Run("journals that cannot be listed or read are left out", func(t *testing.T) {
+		h := setup(t)
+		h.listStateErr = errors.New("disk")
+		if got := shown(t, h); !got[h1] || got[h2] || got[h3] {
+			t.Fatalf("%v", got)
+		}
+		h = setup(t)
+		h.state[journalName(op2)] = []byte("{")
+		h.state[journalDir+"not-an-op.json"] = []byte("{}")
+		h.state[journalDir+"README"] = []byte("x")
+		if got := shown(t, h); !got[h1] || got[h2] || got[h3] {
+			t.Fatalf("%v", got)
+		}
+	})
+	t.Run("a host that cannot change the machine shows none", func(t *testing.T) {
+		h := setup(t)
+		d, err := BuildDump(context.Background(), readOnly{h})
+		if err != nil || len(d.Certificates) != 3 {
+			t.Fatal(err)
+		}
+		for _, c := range d.Certificates {
+			if c.AliceImported {
+				t.Fatalf("%+v", c)
+			}
+		}
+	})
+}
+
+// readOnly hides a fakeWriteHost's write half: only Host.
+type readOnly struct{ Host }
+
+// TestAliceImportedRules is Ruling 5.
+func TestAliceImportedRules(t *testing.T) {
+	h := newWriteHost()
+	c := cert("My", h2)
+	none := importsFile{Imports: []importEntry{}}
+	listed := importsFile{Imports: []importEntry{{Op: op1, Store: "MY", SHA1: h2, SHA256: s256b}}}
+	w2 := sampleJournal(op1) // names h2 as new_sha1, no "existed" record
+	existed := importedJournal(op1, "MY", h2)
+	existed.Existed, existed.AliceImported = boolPtr(true), false
+	raced := importedJournal(op1, "MY", h2)
+	raced.AliceImported = false // ImportPFX answered existed after the check
+	asPrevious := importedJournal(op1, "MY", h1)
+	asPrevious.Previous.CertSHA1, asPrevious.PreviousSHA1 = h2, h2
+	otherStore := importedJournal(op1, "WebHosting", h2)
+	for _, tc := range []struct {
+		name     string
+		friendly string
+		imports  importsFile
+		journals []journal
+		want     bool
+	}{
+		{"listed in imports.json", aliceName(op1), listed, nil, true},
+		{"listed, the store spelled otherwise", aliceName(op1), importsFile{Imports: []importEntry{{Op: op1, Store: "my", SHA1: h2, SHA256: s256b}}}, nil, true},
+		{"listed in another store", aliceName(op1), importsFile{Imports: []importEntry{{Op: op1, Store: "WebHosting", SHA1: h2, SHA256: s256b}}}, nil, false},
+		{"listed for another certificate", aliceName(op1), importsFile{Imports: []importEntry{{Op: op1, Store: "MY", SHA1: h3, SHA256: s256b}}}, nil, false},
+		{"a 0.3.0 journal that imported it", aliceName(op1), none, []journal{importedJournal(op1, "MY", h2)}, true},
+		{"a W2 journal has no existed record", aliceName(op1), none, []journal{w2}, false},
+		{"existed true", aliceName(op1), none, []journal{existed}, false},
+		{"an import that met a copy", aliceName(op1), none, []journal{raced}, false},
+		{"named only as previous", aliceName(op1), none, []journal{asPrevious}, false},
+		{"a journal of another store", aliceName(op1), none, []journal{otherStore}, false},
+		{"a fence tombstone", aliceName(op1), none, []journal{{Op: op1, Phase: winproto.PhaseFenced}}, false},
+		{"friendly name with another op8", aliceName(op2), listed, []journal{importedJournal(op1, "MY", h2)}, false},
+		{"friendly name changed", "Default Web Site", listed, nil, false},
+		{"no friendly name", "", listed, nil, false},
+		{"Alice but no date", "Alice www.example.test " + op1[:8], listed, nil, false},
+		{"Alice but a bad date", "Alice www.example.test 2030-13-01 " + op1[:8], listed, nil, false},
+		{"Alice but no name", "Alice  2030-01-01 " + op1[:8], listed, nil, false},
+		{"Alice only", "Alice " + op1[:8], listed, nil, false},
+		{"Alicex", "Alicex www.example.test 2030-01-01 " + op1[:8], listed, nil, false},
+		{"lower-case alice", "alice www.example.test 2030-01-01 " + op1[:8], listed, nil, false},
+		{"a shorter op8", "Alice www.example.test 2030-01-01 1111111", listed, nil, false},
+		{"trailing text", aliceName(op1) + " copy", listed, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := c
+			cc.FriendlyName = tc.friendly
+			if got := aliceImported(h, cc, tc.imports, tc.journals); got != tc.want {
+				t.Fatalf("got %v", got)
+			}
+		})
+	}
+	if aliceFriendlyName("Alice www.example.test 2030-01-01 1111", "1111") {
+		t.Fatal("an operation shorter than 8")
+	}
+}

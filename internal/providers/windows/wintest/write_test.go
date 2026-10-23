@@ -603,7 +603,7 @@ func TestModelImportPFX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.ImportPFX(ctx, "WebHosting", pfx, []byte("wrong"), "x"); !errors.Is(err, winhelper.ErrStore) {
+	if _, _, err := h.ImportPFX(ctx, "WebHosting", pfx, []byte("wrong"), "x"); !errors.Is(err, winhelper.ErrStore) {
 		t.Fatalf("a wrong password: %v", err)
 	}
 	// Another PKCS #12 writer's file (a CA certificate in it) is not what BuildPFX writes.
@@ -611,20 +611,23 @@ func TestModelImportPFX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.ImportPFX(ctx, "WebHosting", other, []byte("pw"), "x"); !errors.Is(err, winhelper.ErrStore) {
+	if _, _, err := h.ImportPFX(ctx, "WebHosting", other, []byte("pw"), "x"); !errors.Is(err, winhelper.ErrStore) {
 		t.Fatalf("a foreign PFX: %v", err)
 	}
-	sha, err := h.ImportPFX(ctx, "WebHosting", pfx, password, "Alice pfx")
-	if err != nil || sha != thumbprint(l.Cert.Raw) {
-		t.Fatalf("%s %v", sha, err)
+	sha, existed, err := h.ImportPFX(ctx, "WebHosting", pfx, password, "Alice pfx")
+	if err != nil || sha != thumbprint(l.Cert.Raw) || existed {
+		t.Fatalf("%s %v %v", sha, existed, err)
 	}
 	c, ok, _ := h.Certificate(ctx, "webhosting", sha)
 	if !ok || !c.HasKey || c.KeyExportable || c.KeyProvider != defaultKeyProvider || c.FriendlyName != "Alice pfx" || c.KeyProblem != "" {
 		t.Fatalf("%+v", c)
 	}
-	// A second import of the same certificate returns its thumbprint and adds nothing.
-	if again, err := h.ImportPFX(ctx, "WebHosting", pfx, password, "y"); err != nil || again != sha {
-		t.Fatalf("%s %v", again, err)
+	// A second import of the same certificate returns its thumbprint, answers existed and adds nothing.
+	if again, existed, err := h.ImportPFX(ctx, "WebHosting", pfx, password, "y"); err != nil || again != sha || !existed {
+		t.Fatalf("%s %v %v", again, existed, err)
+	}
+	if c, _, _ := h.Certificate(ctx, "WebHosting", sha); c.FriendlyName != "Alice pfx" {
+		t.Fatalf("the existing copy was renamed: %q", c.FriendlyName)
 	}
 	if got := m.Imported(); !slices.Equal(got, []string{sha}) {
 		t.Fatalf("%v", got)

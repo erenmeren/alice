@@ -229,7 +229,7 @@ func cmdIISDeploy(ctx context.Context, c *call) (any, error) {
 	}
 	t := &deployTx{ctx: wctx, h: h, j: journal{Op: op, Phase: winproto.PhasePrepared, Binding: req.canonical, Locator: req.loc,
 		Previous: cloneRecord(b), PreviousSHA1: b.CertSHA1, PreviousSHA256: req.expect, NewSHA1: newSHA1, NewSHA256: newSHA256,
-		Store: store, Intermediates: []certRef{}, AliceImported: !exists, PrevRecord: prevRecord, Steps: []winproto.Step{},
+		Store: store, Intermediates: []certRef{}, AliceImported: !exists, Existed: &exists, PrevRecord: prevRecord, Steps: []winproto.Step{},
 		ForbiddenSPKI: req.spki, ForbiddenLeaf: req.leaf}, served: rec.Chain, chain: chainOf(in)}
 	return t.run(in, sec)
 }
@@ -331,23 +331,31 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 			return t.failUnbound(winproto.StepImportCertificate, winproto.ErrStore)
 		}
 		sec.keep(pfx)
-		sha, err := h.ImportPFX(t.ctx, j.Store, pfx, password, friendlyName(in.leaf, j.Op))
+		sha, existed, err := h.ImportPFX(t.ctx, j.Store, pfx, password, friendlyName(in.leaf, j.Op))
 		clear(pfx)
 		clear(password)
 		if err != nil {
 			return t.failUnbound(winproto.StepImportCertificate, storeClass(err))
 		}
+		if existed {
+			// Someone added the certificate after the check (W2's existing-copy race, W3 Ruling 5): the
+			// store's copy is theirs, kept as it is and never recorded as Alice's. The "existed" record
+			// stays what the check found; alice_imported false says the import was not Alice's.
+			j.AliceImported = false
+		}
 		if sha != j.NewSHA1 {
 			// A host that imported something else: record what it answered, so W3's cleanup finds it.
-			if c, found, err := h.Certificate(t.ctx, j.Store, sha); err == nil && found {
+			if c, found, err := h.Certificate(t.ctx, j.Store, sha); err == nil && found && !existed {
 				if der, err := base64.StdEncoding.DecodeString(c.DER); err == nil {
 					_ = recordImport(h, importEntry{Op: j.Op, Store: j.Store, SHA1: sha, SHA256: sum256(der)})
 				}
 			}
 			return t.failUnbound(winproto.StepImportCertificate, winproto.ErrStore)
 		}
-		// Best effort: an entry missing only means W3's cleanup leaves the certificate alone.
-		_ = recordImport(h, importEntry{Op: j.Op, Store: j.Store, SHA1: j.NewSHA1, SHA256: j.NewSHA256})
+		if j.AliceImported {
+			// Best effort: an entry missing only means W3's cleanup leaves the certificate alone.
+			_ = recordImport(h, importEntry{Op: j.Op, Store: j.Store, SHA1: j.NewSHA1, SHA256: j.NewSHA256})
+		}
 	}
 	sec.clear() // nothing of the key is needed any more
 	j.Steps = append(j.Steps, stepOK(winproto.StepImportCertificate))

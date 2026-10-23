@@ -384,42 +384,66 @@ func (h host) AddIntermediate(_ context.Context, der []byte) (bool, error) {
 
 // ImportPFX imports what winhelper.BuildPFX writes (one leaf with its RSA or ECDSA key, no other
 // certificate; decoded with go-pkcs12) into a machine store: the key non-exportable, in the software
-// KSP, usable by SYSTEM. A certificate the store holds already is left as it is. Anything else is
-// ErrStore.
-func (h host) ImportPFX(_ context.Context, storeName string, pfx, password []byte, friendlyName string) (string, error) {
+// KSP, usable by SYSTEM. A certificate the store holds already is left as it is and answered existed
+// (CERT_STORE_ADD_NEW). Anything else is ErrStore.
+func (h host) ImportPFX(_ context.Context, storeName string, pfx, password []byte, friendlyName string) (string, bool, error) {
 	h.m.mu.Lock()
 	fail := h.m.failImport
 	h.m.mu.Unlock()
 	if fail {
-		return "", winhelper.ErrStore
+		return "", false, winhelper.ErrStore
 	}
 	key, leaf, cas, err := pkcs12.DecodeChain(pfx, string(password))
 	if err != nil || len(cas) != 0 {
-		return "", winhelper.ErrStore
+		return "", false, winhelper.ErrStore
 	}
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
 		if !k.PublicKey.Equal(leaf.PublicKey) {
-			return "", winhelper.ErrStore
+			return "", false, winhelper.ErrStore
 		}
 	case *ecdsa.PrivateKey:
 		if !k.PublicKey.Equal(leaf.PublicKey) {
-			return "", winhelper.ErrStore
+			return "", false, winhelper.ErrStore
 		}
 	default:
-		return "", winhelper.ErrStore
+		return "", false, winhelper.ErrStore
 	}
 	sha := thumbprint(leaf.Raw)
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
 	if h.m.certLocked(storeName, sha) != nil {
-		return sha, nil
+		return sha, true, nil
 	}
 	usable := true
 	s := h.m.storeLocked(storeName)
 	s.certs = append(s.certs, &certEntry{leaf: leaf, sha1: sha, key: key, friendly: friendlyName, provider: defaultKeyProvider, usable: &usable})
 	h.m.imported = append(h.m.imported, sha)
-	return sha, nil
+	return sha, false, nil
+}
+
+// errNotModelled is the answer of the W3 cleanup methods until the emulator models them (W3 Task 4).
+var errNotModelled = errors.New("wintest: not modelled yet")
+
+// Now is the helper's clock (W3 Task 4 gives the model its own).
+func (h host) Now() time.Time {
+	return time.Now() //nolint:forbidigo // the emulated helper's clock until W3 Task 4 gives the model one
+}
+
+// ListState is not modelled yet (W3 Task 4).
+func (h host) ListState(string) ([]winhelper.StateFile, error) { return nil, errNotModelled }
+
+// RemoveState is not modelled yet (W3 Task 4).
+func (h host) RemoveState(string) error { return errNotModelled }
+
+// RemoveCertificate is not modelled yet (W3 Task 4).
+func (h host) RemoveCertificate(context.Context, string, string) (bool, error) {
+	return false, errNotModelled
+}
+
+// ProtectedThumbprints is not modelled yet (W3 Task 4).
+func (h host) ProtectedThumbprints(context.Context) (winhelper.Protected, error) {
+	return winhelper.Protected{}, errNotModelled
 }
 
 // Event records an Application log entry.
