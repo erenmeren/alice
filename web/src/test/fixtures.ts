@@ -1273,6 +1273,7 @@ export function acmeBindingFixture(o: Partial<ACMEBinding> = {}): ACMEBinding {
     target_id: nginxTargetFixture.id,
     target_name: 'web-nginx',
     cert_path: '/etc/nginx/ssl/www.crt',
+    location_kind: 'server_file',
     auto_deploy: false,
     state: 'current',
     attention_at: null,

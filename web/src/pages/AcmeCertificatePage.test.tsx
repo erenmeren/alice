@@ -888,6 +888,23 @@ describe('what each website should have, what Alice last deployed and what is ob
     expectNoRawKeys();
   });
 
+  it('speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R62)', async () => {
+    base({
+      session: sessionFor('operator'),
+      cert: issued(),
+      bindings: [
+        acmeBindingFixture({ location_kind: 'win_sslbinding', cert_path: 'http.sys/ipport/0.0.0.0:443', observation: driftedObservationFixture({ mode: 'observe', mode_setting: 'observe' }) }),
+        acmeBindingFixture({ location_id: 'l2', observation: driftedObservationFixture({ mode: 'observe', mode_setting: 'observe' }) }),
+      ],
+    });
+    await open();
+    const rows = await screen.findAllByTestId('acme-binding');
+    expect(within(rows[0]).getByTestId('fact-file')).toHaveTextContent(/^Binding \(last scan\): /);
+    expect(within(rows[0]).getByTestId('fact-file')).not.toHaveTextContent('The file held');
+    expect(within(rows[1]).getByTestId('fact-file')).toHaveTextContent(/^The file held /);
+    expectNoRawKeys();
+  });
+
   it('repairs a drifted website with one action, and lets an Operator choose observe or approve but not automatic repair', async () => {
     const calls: unknown[] = [];
     base({

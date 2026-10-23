@@ -17,6 +17,7 @@ import (
 
 	"alice/internal/inventory"
 	"alice/internal/license"
+	"alice/internal/providers"
 	"alice/internal/rbac"
 )
 
@@ -1371,4 +1372,19 @@ func TestACMEProviderPreviewIsRateLimited(t *testing.T) {
 	assert.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin2-stepup", "").Code, "another Administrator has their own budget")
 	rec = call(h, http.MethodPost, path, "alice_operate_admin", "")
 	assert.Equal(t, http.StatusForbidden, rec.Code, "a token is refused by the permission, never by the limit")
+}
+
+// R62 Ruling 17: an ACME binding always names the kind of its location: win_sslbinding for an IIS binding,
+// server_file for a certificate file (and for a record that names none).
+func TestACMEBindingDTOHasLocationKind(t *testing.T) {
+	kind := func(b inventory.ACMEBinding) any {
+		raw, err := json.Marshal(acmeBindingJSON(b))
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		return m["location_kind"]
+	}
+	assert.Equal(t, "win_sslbinding", kind(inventory.ACMEBinding{CertPath: "http.sys/ipport/0.0.0.0:443", LocationKind: providers.LocationWinSSLBinding}))
+	assert.Equal(t, "server_file", kind(inventory.ACMEBinding{CertPath: "/etc/nginx/a.pem", LocationKind: providers.LocationServerFile}))
+	assert.Equal(t, "server_file", kind(inventory.ACMEBinding{CertPath: "/etc/nginx/a.pem"}), "no kind recorded: a file")
 }

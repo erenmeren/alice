@@ -533,3 +533,24 @@ func TestImpactAndIncidentOfAKeyVaultCertificate(t *testing.T) {
 	require.NotNil(t, imp.OpenIncidentID)
 	assert.Equal(t, i.ID, *imp.OpenIncidentID)
 }
+
+// R62 Ruling 17: a listed ACME binding carries the kind of its location: server_file for a certificate file,
+// win_sslbinding for an IIS binding.
+func TestListACMEBindingsCarriesTheLocationKind(t *testing.T) {
+	w := newACMEDeployWorld(t)
+	require.NoError(t, w.h.lic.Tick(w.h.ctx))
+	c, cur := w.issued("www.example.test")
+	w.serves(w.loc1, cur)
+	w.bind(w.get(c.ID), false, w.loc1)
+	list, err := w.h.svc.ListACMEBindings(w.h.ctx, c.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, providers.LocationServerFile, list[0].LocationKind)
+
+	_, err = w.h.db.Owner.Exec(w.h.ctx, "UPDATE certificate_locations SET kind = 'win_sslbinding' WHERE id = $1", w.loc1)
+	require.NoError(t, err)
+	list, err = w.h.svc.ListACMEBindings(w.h.ctx, c.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, providers.LocationWinSSLBinding, list[0].LocationKind)
+}

@@ -7028,7 +7028,7 @@ components:
         auto_deploy: { type: boolean, default: false }
     ACMEBinding:
       type: object
-      required: [acme_certificate_id, location_id, target_id, target_name, cert_path, auto_deploy, state, attention_at, attention,
+      required: [acme_certificate_id, location_id, target_id, target_name, cert_path, location_kind, auto_deploy, state, attention_at, attention,
         served_certificate_id, created_at]
       properties:
         acme_certificate_id: { type: string, format: uuid }
@@ -7036,6 +7036,7 @@ components:
         target_id: { type: string, format: uuid }
         target_name: { type: string }
         cert_path: { type: string }
+        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret], description: 'R62. The kind of the bound location, always present: server_file for a certificate file, win_sslbinding for an IIS binding' }
         auto_deploy: { type: boolean }
         state: { type: string, enum: [current, pending, attention, drifted], description: 'attention: the last automatic deployment of the current certificate failed. current (since R52): the location got the current certificate and no observation newer than that deployment disagrees; a past success alone no longer makes it current. drifted (R52): it had the current certificate and a newer observation found another one. observation.health says how the location is observed today.' }
         attention_at: { type: [string, "null"], format: date-time }

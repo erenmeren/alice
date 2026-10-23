@@ -261,6 +261,7 @@ type acmeBindingDTO struct {
 	TargetID            string       `json:"target_id"`
 	TargetName          string       `json:"target_name"`
 	CertPath            string       `json:"cert_path"`
+	LocationKind        string       `json:"location_kind"` // R62 Ruling 17: server_file, win_sslbinding, ...; always present
 	AutoDeploy          bool         `json:"auto_deploy"`
 	State               string       `json:"state"`
 	AttentionAt         *time.Time   `json:"attention_at"`
@@ -278,7 +279,7 @@ var acmeBindingStates = []string{inventory.ACMEBindingCurrent, inventory.ACMEBin
 
 func acmeBindingJSON(b inventory.ACMEBinding) acmeBindingDTO {
 	d := acmeBindingDTO{ACMECertificateID: b.ACMECertificateID.String(), LocationID: b.LocationID.String(), TargetID: b.TargetID.String(),
-		TargetName: b.TargetName, CertPath: b.CertPath, AutoDeploy: b.AutoDeploy, State: b.State, AttentionAt: utcPtr(b.AttentionAt),
+		TargetName: b.TargetName, CertPath: b.CertPath, LocationKind: string(b.LocationKind.OrFile()), AutoDeploy: b.AutoDeploy, State: b.State, AttentionAt: utcPtr(b.AttentionAt),
 		Attention: errorRef(b.AttentionCode, nil), ServedCertificateID: idPtr(b.ServedCertificateID), CreatedAt: b.CreatedAt.UTC(),
 		Observation: observationJSON(b.Observation)}
 	if !slices.Contains(acmeBindingStates, d.State) {

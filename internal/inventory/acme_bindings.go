@@ -34,6 +34,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
 	"alice/internal/rbac"
 )
 
@@ -65,18 +66,20 @@ const (
 
 // ACMEBinding is the view of a binding.
 type ACMEBinding struct {
-	ACMECertificateID   uuid.UUID  `json:"acme_certificate_id"`
-	LocationID          uuid.UUID  `json:"location_id"`
-	TargetID            uuid.UUID  `json:"target_id"`
-	TargetName          string     `json:"target_name"`
-	CertPath            string     `json:"cert_path"`
-	AutoDeploy          bool       `json:"auto_deploy"`
-	State               string     `json:"state"`
-	AttentionAt         *time.Time `json:"attention_at,omitempty"`
-	AttentionCode       string     `json:"attention_code"`
-	ServedCertificateID *uuid.UUID `json:"served_certificate_id,omitempty"`
-	CreatedBy           *uuid.UUID `json:"created_by,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
+	ACMECertificateID uuid.UUID `json:"acme_certificate_id"`
+	LocationID        uuid.UUID `json:"location_id"`
+	TargetID          uuid.UUID `json:"target_id"`
+	TargetName        string    `json:"target_name"`
+	CertPath          string    `json:"cert_path"`
+	// LocationKind is the kind of the bound location (certificate_locations.kind; server_file when none is recorded).
+	LocationKind        providers.LocationKind `json:"location_kind"`
+	AutoDeploy          bool                   `json:"auto_deploy"`
+	State               string                 `json:"state"`
+	AttentionAt         *time.Time             `json:"attention_at,omitempty"`
+	AttentionCode       string                 `json:"attention_code"`
+	ServedCertificateID *uuid.UUID             `json:"served_certificate_id,omitempty"`
+	CreatedBy           *uuid.UUID             `json:"created_by,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
 	// Observation is the location's observation model and health (R52).
 	Observation *LocationObservation `json:"-"`
 }
@@ -88,7 +91,7 @@ type ACMEDeployInput struct {
 	ConfirmIncompleteChain bool
 }
 
-const acmeBindingSelect = `SELECT b.acme_certificate_id, b.location_id, l.target_id, t.name::text, l.cert_path, b.auto_deploy, b.attention_at,
+const acmeBindingSelect = `SELECT b.acme_certificate_id, b.location_id, l.target_id, t.name::text, l.cert_path, l.kind, b.auto_deploy, b.attention_at,
 b.attention_code, l.certificate_id, b.created_by, b.created_at,
 l.certificate_id IS NOT DISTINCT FROM c.current_certificate_id OR EXISTS (SELECT 1 FROM deployments d WHERE d.location_id = l.id
     AND d.certificate_id = c.current_certificate_id AND d.status IN ('succeeded', 'unchanged'))
@@ -100,7 +103,7 @@ func scanACMEBinding(row pgx.Row) (ACMEBinding, error) {
 		b       ACMEBinding
 		current bool
 	)
-	err := row.Scan(&b.ACMECertificateID, &b.LocationID, &b.TargetID, &b.TargetName, &b.CertPath, &b.AutoDeploy, &b.AttentionAt, &b.AttentionCode,
+	err := row.Scan(&b.ACMECertificateID, &b.LocationID, &b.TargetID, &b.TargetName, &b.CertPath, &b.LocationKind, &b.AutoDeploy, &b.AttentionAt, &b.AttentionCode,
 		&b.ServedCertificateID, &b.CreatedBy, &b.CreatedAt, &current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ACMEBinding{}, ErrNotFound
@@ -108,6 +111,7 @@ func scanACMEBinding(row pgx.Row) (ACMEBinding, error) {
 	if err != nil {
 		return ACMEBinding{}, fmt.Errorf("inventory: read an ACME binding: %w", err)
 	}
+	b.LocationKind = b.LocationKind.OrFile()
 	b.CreatedAt, b.AttentionAt = b.CreatedAt.UTC(), utcPtr(b.AttentionAt)
 	switch {
 	case b.AttentionAt != nil:

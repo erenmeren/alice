@@ -1,6 +1,6 @@
 import { apiFetch } from './client';
 import type { LocationObservation } from './drift';
-import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, OwnerService } from './types';
+import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, OwnerService, LocationKind } from './types';
 
 // ACME certificate issuance (api/openapi.yaml, /api/v1/acme). The names follow the API's snake_case schemas. No type
 // here carries a secret the server keeps: the EAB HMAC key and the DNS hook secret are write-only request fields
@@ -181,6 +181,8 @@ export interface ACMEBinding {
   target_id: string;
   target_name: string;
   cert_path: string;
+  // location_kind (R62): what the bound location is; always present (server_file for a certificate file).
+  location_kind: LocationKind;
   auto_deploy: boolean;
   state: ACMEBindingState;
   attention_at: string | null;

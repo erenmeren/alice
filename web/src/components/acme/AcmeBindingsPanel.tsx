@@ -158,8 +158,7 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
                       {b.observation && (
                         <Stack gap={4} align="flex-start">
                           <HealthBadge observation={b.observation} />
-                          {/* The ACME binding carries no location kind in the API, so a Windows binding here gets the file wording (W3 known limitation, carried to W4). */}
-                          <ObservationFacts observation={b.observation} />
+                          <ObservationFacts observation={b.observation} windows={b.location_kind === 'win_sslbinding'} />
                         </Stack>
                       )}
                     </Table.Td>
