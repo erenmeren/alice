@@ -135,9 +135,10 @@ func ulongResult(r uintptr) error {
 
 // sslBindings lists every http.sys SSL record: the ipport, hostnameport (SNI) and ccs tables, each
 // read with HttpServiceConfigQueryNext and dwToken 0, 1, 2, ... until ERROR_NO_MORE_ITEMS, at most
-// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated). A
-// record that cannot be decoded is returned without a type, so winhelper drops it and marks the dump
-// truncated rather than reporting the binding as gone. The dump carries no extended parameters (W2
+// MaxBindings+1 records per table (winhelper cuts the list at MaxBindings and marks it truncated;
+// iis-cleanup refuses a table of more than MaxBindings records). A record that cannot be decoded is
+// returned without a type, so winhelper drops it and marks the dump truncated rather than reporting
+// the binding as gone, and iis-cleanup refuses rather than count its certificate as unused. The dump carries no extended parameters (W2
 // Task 6 ruling after runner run 1): iis-deploy reads them live by the record's key, and reading them
 // for every record dropped readable bindings from discovery on both images.
 func sslBindings() ([]winproto.SSLBinding, error) {

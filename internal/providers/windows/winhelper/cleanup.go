@@ -177,7 +177,18 @@ func readCleanupState(ctx context.Context, h WriteHost) (*cleanupState, error) {
 	if err != nil {
 		return nil, failed(winproto.CodeIOError, "the http.sys bindings could not be read")
 	}
+	// The list must be whole: a certificate missing from it would count as unused (Rulings 6 and 12,
+	// an unreadable list removes nothing). The two marks the dump also reads as truncated: a record
+	// the helper could not decode comes without a type (its certificate is unknown), and a table the
+	// helper stopped reading holds more than MaxBindings records (it reads at most MaxBindings+1).
+	perType := map[string]int{}
 	for _, b := range records {
+		if b.Type == "" {
+			return nil, failed(winproto.CodeIOError, "an http.sys binding could not be read")
+		}
+		if perType[b.Type]++; perType[b.Type] > winproto.MaxBindings {
+			return nil, failed(winproto.CodeIOError, "the http.sys bindings could not be read in full")
+		}
 		if b.CertSHA1 != "" {
 			s.bound[asciiLower(b.CertSHA1)] = true
 		}

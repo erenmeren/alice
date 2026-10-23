@@ -980,6 +980,14 @@ func TestCleanupRefusals(t *testing.T) {
 		{"unreadable registry", []string{winproto.ArgPlan}, nil, func(f *cleanupFixture) { f.h.protectedErr = errors.New("registry") }, 4, winproto.CodeIOError},
 		{"unreadable registry (apply)", []string{winproto.ArgApply}, nil, func(f *cleanupFixture) { f.h.protectedErr = errors.New("registry") }, 4, winproto.CodeIOError},
 		{"unreadable bindings", []string{winproto.ArgApply}, nil, func(f *cleanupFixture) { f.h.bindingsErr = errors.New("http.sys") }, 4, winproto.CodeIOError},
+		{"an undecodable binding", []string{winproto.ArgPlan}, nil, func(f *cleanupFixture) {
+			f.h.records["undecodable"] = winproto.SSLBinding{}
+		}, 4, winproto.CodeIOError},
+		{"an undecodable binding (apply)", []string{winproto.ArgApply}, nil, func(f *cleanupFixture) {
+			f.h.records["undecodable"] = winproto.SSLBinding{}
+		}, 4, winproto.CodeIOError},
+		{"a truncated binding table", []string{winproto.ArgPlan}, nil, func(f *cleanupFixture) { f.h.records = fullTable() }, 4, winproto.CodeIOError},
+		{"a truncated binding table (apply)", []string{winproto.ArgApply}, nil, func(f *cleanupFixture) { f.h.records = fullTable() }, 4, winproto.CodeIOError},
 		{"journals cannot be listed", []string{winproto.ArgPlan}, nil, func(f *cleanupFixture) { f.h.listStateErr = errors.New("disk") }, 4, winproto.CodeIOError},
 		{"inventory cannot be read", []string{winproto.ArgPlan}, nil, func(f *cleanupFixture) { f.h.state[importsName] = []byte("{") }, 4, winproto.CodeIOError},
 		{"inventory cannot be read (apply)", []string{winproto.ArgApply}, nil, func(f *cleanupFixture) { f.h.state[importsName] = []byte("{") }, 4, winproto.CodeIOError},
@@ -1020,6 +1028,17 @@ func TestCleanupRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fullTable is MaxBindings+1 ipport records, the most the helper reads of one table: the listing may
+// be cut, so iis-cleanup must refuse it.
+func fullTable() map[string]winproto.SSLBinding {
+	out := map[string]winproto.SSLBinding{}
+	for i := range winproto.MaxBindings + 1 {
+		out[fmt.Sprintf("0.0.0.0:%d", 1+i)] = winproto.SSLBinding{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 1 + i,
+			AppID: "{00000000-0000-0000-0000-000000000000}", CertSHA1: strings.Repeat("0", 40)}
+	}
+	return out
 }
 
 // TestCleanupGate is Ruling 12: once the first change is made, every failure is OUTCOME_UNKNOWN.
