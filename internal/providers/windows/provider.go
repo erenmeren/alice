@@ -101,8 +101,7 @@ func (p *Provider) DisplayNameKey() string { return "provider.windows.name" }
 func (p *Provider) Capabilities() providers.CapabilitySet { return p.caps.Clone() }
 
 // ConfigSchema implements providers.Provider: the Linux path's names (Ruling 1); username is the
-// Windows account, a local name or DOMAIN\name; certificate_cleanup is the cleanup's switch (R62 W3
-// Ruling 13, on by default).
+// Windows account, a local name or DOMAIN\name.
 func (p *Provider) ConfigSchema() providers.ConfigSchema {
 	return providers.ConfigSchema{Fields: []providers.Field{
 		{Name: "host", Type: providers.FieldHost, Required: true, Min: 1, Max: 253,
@@ -111,8 +110,6 @@ func (p *Provider) ConfigSchema() providers.ConfigSchema {
 			LabelKey: "provider.windows.fields.port.label", HelpKey: "provider.windows.fields.port.help"},
 		{Name: "username", Type: providers.FieldString, Default: DefaultUser, Pattern: userRE.String(), Min: 1, Max: 36,
 			LabelKey: "provider.windows.fields.username.label", HelpKey: "provider.windows.fields.username.help"},
-		{Name: ConfigCertificateCleanup, Type: providers.FieldBool, Default: true,
-			LabelKey: "provider.windows.fields.certificate_cleanup.label", HelpKey: "provider.windows.fields.certificate_cleanup.help"},
 	}}
 }
 

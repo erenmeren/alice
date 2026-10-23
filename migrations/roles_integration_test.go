@@ -172,7 +172,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// Phase 5 adds credential_id (a vault's credential moves to its replacement; a trigger refuses it
 	// for any other kind of target) and poll_failures (it delays the next poll).
 	// 00026 adds service_id here and on the other owned tables (moving a resource to another service, R49).
-	"public.targets": {"UPDATE": {"capabilities", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
+	"public.targets": {"UPDATE": {"capabilities", "certificate_cleanup", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
 		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "service_id", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	// Phase 6 adds retired_at (a rotation retires its old key; a key found live again is un-retired).
@@ -315,6 +315,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	drift := hasColumn(t, d, "certificate_locations", "file_observed_at")
 	dnsProviders := hasColumn(t, d, "acme_hooks", "settings")
 	groundwork := hasColumn(t, d, "certificate_locations", "locator")
+	cleanupSwitch := hasColumn(t, d, "targets", "certificate_cleanup")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -392,6 +393,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00030 a DNS publisher has no provider settings.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "settings"
+			})}
+		}
+		if name == "public.targets" && !cleanupSwitch {
+			// Below 00032 a server has no cleanup switch.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "certificate_cleanup"
 			})}
 		}
 		if name == "public.certificate_locations" && !groundwork {

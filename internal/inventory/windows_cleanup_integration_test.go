@@ -171,8 +171,13 @@ func TestJudgeCleanupRules(t *testing.T) {
 	assert.Empty(t, d.Kept)
 
 	// The switch off: every candidate and every compromised watched certificate stays.
-	_, err = h.db.Owner.Exec(h.ctx, `UPDATE targets SET config = config || '{"certificate_cleanup": false}' WHERE id = $1`, f.win)
+	off := false
+	swt, err := h.svc.GetTarget(h.ctx, f.win)
 	require.NoError(t, err)
+	assert.True(t, swt.CertificateCleanup, "on by default")
+	swt, err = h.svc.UpdateTarget(h.ctx, f.admin, f.win, swt.Version, inventory.TargetPatch{CertificateCleanup: &off})
+	require.NoError(t, err)
+	assert.False(t, swt.CertificateCleanup)
 	d, err = h.svc.JudgeCleanup(h.ctx, f.win, plan)
 	require.NoError(t, err)
 	assert.Empty(t, d.Remove)

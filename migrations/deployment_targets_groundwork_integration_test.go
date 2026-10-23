@@ -214,7 +214,7 @@ func TestMigration00031Down(t *testing.T) {
 	ctx := context.Background()
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
-	before := pgtest.PreviousVersion(t)
+	before := int64(30) // the version before 00031 (00032, the cleanup switch, is applied above it and goes down with it)
 	w := seedWorld(t, d)
 	cluster, err := insertOwnTarget(t, d.App, "kubernetes", "kubernetes_cluster", "k8s_token", "k8s.example.test")
 	require.NoError(t, err)

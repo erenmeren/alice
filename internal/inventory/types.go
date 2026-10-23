@@ -131,7 +131,7 @@ type Target struct {
 	Facts                Facts
 	Vault                *VaultInfo // set for a Key Vault (Type TypeAzureKeyVault), nil for a server
 	Capabilities         []string
-	CertificateCleanup   *bool     // a Windows server's cleanup switch; nil: not set, which reads as on (R62 Ruling 13)
+	CertificateCleanup   bool      // the cleanup switch (targets.certificate_cleanup, on by default); meaningful for a server with the cleanup_certificates capability (R62 Ruling 13)
 	ServiceID            uuid.UUID // the owning service (R49)
 	Version              int
 	CreatedAt, UpdatedAt time.Time
@@ -188,9 +188,6 @@ type NewTarget struct {
 	Username string // "" = alice-svc
 	// ServiceID is the service the server goes to (R49); uuid.Nil = the Default service.
 	ServiceID uuid.UUID
-	// Config is the provider's settings beyond the connection (R62 Ruling 13: certificate_cleanup of a Windows server),
-	// validated by the provider; nil keeps the defaults.
-	Config map[string]any
 }
 
 // TargetPatch is the input of UpdateTarget; nil fields stay unchanged (R37 item 10).
@@ -198,6 +195,9 @@ type TargetPatch struct {
 	Name                   *string
 	DiscoveryIntervalHours *int // 1..720, servers only
 	PollIntervalMinutes    *int // 5..1440, vaults only
+	// CertificateCleanup is the per-server cleanup switch (R62 Ruling 13); only a server whose provider can clean up
+	// takes it.
+	CertificateCleanup *bool
 }
 
 // targetConfig is targets.config.
@@ -206,6 +206,4 @@ type targetConfig struct {
 	Port     int    `json:"port"`
 	Username string `json:"username,omitempty"`
 	VaultURL string `json:"vault_url,omitempty"` // a Key Vault only (host is its host name, port 443)
-	// CertificateCleanup is a Windows server's cleanup switch (R62 Ruling 13); nil: absent, which reads as on.
-	CertificateCleanup *bool `json:"certificate_cleanup,omitempty"`
 }

@@ -1168,7 +1168,7 @@ paths:
         If-Match must be a single strong validator with the current version, for example "3". A missing or
         malformed If-Match, a weak validator (W/"3"), a list or * answers 412 ALC-SYS-0008, as does a version
         that is no longer current. 404 when the server does not exist; 409 ALC-TGT-0001 when the new name is
-        taken (ALC-AKV-0028 for a vault). poll_interval_minutes is for vaults only. Refused with 403 ALC-LIC-0001 while the license is locked.
+        taken (ALC-AKV-0028 for a vault). poll_interval_minutes is for vaults only. certificate_cleanup is for servers that can clean up certificates only (422 validation.pattern otherwise). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       x-scope: resource
       parameters:
@@ -7910,7 +7910,6 @@ components:
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
         username: { type: string, maxLength: 36, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
-        config: { type: object, additionalProperties: false, properties: { certificate_cleanup: { type: [boolean, "null"] } }, description: 'R62. The provider''s settings beyond the connection, validated by the provider''s schema; read back in the target''s config. A Windows server takes certificate_cleanup (boolean, default true: remove certificates Alice imported once nothing uses them); any other key, or the key on another type, is 422 validation.pattern on config.<key>, a value that is not a boolean is 422 validation.one_of on config.certificate_cleanup.' }
     TargetPatch:
       type: object
       additionalProperties: false
@@ -7918,6 +7917,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 100 }
         discovery_interval_hours: { type: integer, minimum: 1, maximum: 720 }
         poll_interval_minutes: { type: integer, minimum: 5, maximum: 1440, description: Key Vaults only }
+        certificate_cleanup: { type: boolean, description: 'R62. Servers whose provider can clean up certificates (capability cleanup_certificates) only; any other target is 422 validation.pattern on certificate_cleanup. A value that is not a boolean is 400. Audited as target.updated (fields certificate_cleanup).' }
     TargetFacts:
       type: object
       required: [os, helper_version, helper_protocol, sshd, host_keys, warnings, unreadable]
@@ -8023,13 +8023,12 @@ components:
         capabilities: { type: array, items: { type: string } }
         facts: { $ref: "#/components/schemas/TargetFacts" }
         vault: { $ref: "#/components/schemas/Vault" }
-        config:
-          type: object
-          properties:
-            certificate_cleanup: { type: boolean }
+        certificate_cleanup:
+          type: boolean
           description: >-
-            R62. A Windows server only (absent for every other type): its provider settings beyond the connection.
-            certificate_cleanup is the effective value of the per-server switch, true when it was never set.
+            R62. Only for a server whose provider can clean up certificates (capability cleanup_certificates; absent
+            otherwise): the per-server switch "remove certificates Alice imported once nothing uses them", true by
+            default. Change it with PATCH.
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -8522,9 +8521,8 @@ components:
             discover_kv_secret_metadata, deploy_certificate, import_certificate, authorized_keys, verify_deployment,
             read_certificate_secret, key_login, http01_challenge, cleanup_certificates; a newer server may add others. windows has
             test_connection, discover_certificates, deploy_certificate and verify_deployment (R61) and cleanup_certificates (R62);
-            apache and haproxy do not deploy certificates. The config_schema of windows lists host, port, username and
-            certificate_cleanup (bool, default true: remove certificates Alice imported once nothing uses them), the last one
-            saved through the config of POST /targets.
+            apache and haproxy do not deploy certificates. A target whose provider has cleanup_certificates takes the
+            certificate_cleanup switch (PATCH /targets/{id}); it is not part of config_schema.
           items: { type: string }
         config_schema:
           type: object

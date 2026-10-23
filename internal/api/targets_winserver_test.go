@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
+	"alice/internal/platform/validate"
 	"alice/internal/providers"
 )
 
@@ -69,42 +70,53 @@ func TestTargetJSONOmitsWindowsFactsForOtherTypes(t *testing.T) {
 	assert.NotContains(t, string(raw), `"windows"`)
 }
 
-// R62 Ruling 13: the provider's schema field certificate_cleanup travels through the target's create body as "config"
-// (an update does not take it: alice_app has no UPDATE on targets.config) and is read back in the target's "config" (a Windows server shows the effective value, true by default;
-// another type shows none).
-func TestWindowsTargetCertificateCleanupSwitch(t *testing.T) {
+// R62 Ruling 13: PATCH /targets/{id} takes the cleanup switch certificate_cleanup (a boolean) for a server whose provider
+// can clean up certificates; the target shows it for those servers only; a target it does not apply to is refused with
+// the validation error, and a value that is not a boolean is a malformed body.
+func TestTargetCertificateCleanupSwitch(t *testing.T) {
 	d, inv := inventoryDeps(t)
-	var gotIn inventory.NewTarget
+	var gotPatch inventory.TargetPatch
 	win := sampleTarget()
-	win.Type, win.Username = inventory.TypeWindows, "alice"
-	off := false
-	inv.CreateTargetFn = func(_ context.Context, _ inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
-		gotIn = in
+	win.Type, win.Username, win.CertificateCleanup = inventory.TypeWindows, "alice", true
+	win.Capabilities = []string{"cleanup_certificates", "deploy_certificate"}
+	inv.UpdateTargetFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, v int, p inventory.TargetPatch) (inventory.Target, error) {
+		gotPatch = p
 		w := win
-		w.CertificateCleanup = &off
-		return w, jobID, nil
+		if p.CertificateCleanup != nil {
+			w.CertificateCleanup = *p.CertificateCleanup
+		}
+		w.Version = v + 1
+		return w, nil
 	}
 	h := NewHandler(d)
-	rec := call(h, http.MethodPost, "/api/v1/targets", "admin",
-		`{"name":"iis-01","type":"windows","host":"iis-01.example.com","config":{"certificate_cleanup":false}}`)
-	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Equal(t, map[string]any{"certificate_cleanup": false}, gotIn.Config)
-	assert.Equal(t, map[string]any{"certificate_cleanup": false}, decodeMap(t, rec.Body.Bytes())["target"].(map[string]any)["config"])
-
 	path := "/api/v1/targets/" + targetID.String()
+	hdr := map[string]string{"If-Match": `"7"`}
+
+	rec := callWith(h, http.MethodPatch, path, "admin", `{"certificate_cleanup":false}`, hdr)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, gotPatch.CertificateCleanup)
+	assert.False(t, *gotPatch.CertificateCleanup)
+	assert.Equal(t, false, decodeMap(t, rec.Body.Bytes())["certificate_cleanup"])
+	rec = callWith(h, http.MethodPatch, path, "admin", `{"certificate_cleanup":true}`, hdr)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, true, decodeMap(t, rec.Body.Bytes())["certificate_cleanup"])
+
 	inv.GetTargetFn = func(context.Context, uuid.UUID) (inventory.Target, error) { return win, nil }
 	rec = call(h, http.MethodGet, path, "admin", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, map[string]any{"certificate_cleanup": true}, decodeMap(t, rec.Body.Bytes())["config"], "absent reads true")
-
-	rec = callWith(h, http.MethodPatch, path, "admin", `{"config":{"certificate_cleanup":true}}`, map[string]string{"If-Match": `"7"`})
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "an update does not take config (alice_app cannot write targets.config)")
-
+	assert.Equal(t, true, decodeMap(t, rec.Body.Bytes())["certificate_cleanup"], "a Windows server shows its switch, on by default")
 	inv.GetTargetFn = func(context.Context, uuid.UUID) (inventory.Target, error) { return sampleTarget(), nil }
 	rec = call(h, http.MethodGet, path, "admin", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.NotContains(t, decodeMap(t, rec.Body.Bytes()), "config", "a Linux server has no provider switch")
+	assert.NotContains(t, decodeMap(t, rec.Body.Bytes()), "certificate_cleanup", "a server that cannot clean up has no switch")
 
-	rec = call(h, http.MethodPost, "/api/v1/targets", "admin", `{"name":"x","type":"windows","host":"h.example.com","config":"nope"}`)
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "config is an object")
+	for _, body := range []string{`{"certificate_cleanup":"no"}`, `{"certificate_cleanup":1}`} {
+		rec = callWith(h, http.MethodPatch, path, "admin", body, hdr)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+	}
+	inv.UpdateTargetFn = func(context.Context, inventory.Actor, uuid.UUID, int, inventory.TargetPatch) (inventory.Target, error) {
+		var errs validate.Errors
+		errs.Add("certificate_cleanup", validate.Pattern, nil)
+		return inventory.Target{}, errs
+	}
+	rec = callWith(h, http.MethodPatch, path, "admin", `{"certificate_cleanup":false}`, hdr)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "a field that does not apply to the target")
 }

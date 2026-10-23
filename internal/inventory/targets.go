@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,14 +28,14 @@ import (
 // every query that uses the list reads FROM targets without an alias.
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
 discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at, service_id,
-coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb)`
+certificate_cleanup, coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb)`
 
 func scanTarget(row pgx.Row) (Target, error) {
 	var t Target
 	var cfg, facts, vaultInfoRaw []byte
 	var interval int
 	err := row.Scan(&t.ID, &t.Name, &t.Type, &cfg, &t.Status, &t.LastErrorCode, &t.LastSuccessAt, &t.LastDiscoveryAt,
-		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &vaultInfoRaw)
+		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &t.CertificateCleanup, &vaultInfoRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
@@ -49,7 +50,6 @@ func scanTarget(row pgx.Row) (Target, error) {
 		return Target{}, fmt.Errorf("inventory: decode target facts: %w", err)
 	}
 	t.Host, t.Port, t.Username = c.Host, c.Port, c.Username
-	t.CertificateCleanup = c.CertificateCleanup
 	t.DiscoveryInterval = time.Duration(interval) * time.Second
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	t.LastSuccessAt, t.LastDiscoveryAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt)
@@ -146,13 +146,6 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	cfg := targetConfig{Host: n.Host, Port: n.Port, Username: n.Username}
 	if fes := p.ValidateConfig(providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}); len(fes) > 0 {
 		return Target{}, uuid.Nil, validate.Errors(fes)
-	}
-	if in.Config != nil {
-		sw, _, errs := validateProviderSettings(p, providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}, in.Config)
-		if len(errs) > 0 {
-			return Target{}, uuid.Nil, errs
-		}
-		cfg.CertificateCleanup = sw
 	}
 	pk, err := s.EnsurePlatformKey(ctx)
 	if err != nil {
@@ -333,7 +326,7 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		}
 		name = n
 	}
-	if p.Name == nil && p.DiscoveryIntervalHours == nil && p.PollIntervalMinutes == nil {
+	if p.Name == nil && p.DiscoveryIntervalHours == nil && p.PollIntervalMinutes == nil && p.CertificateCleanup == nil {
 		// Nothing to change: refused, so an empty edit neither bumps the version nor is audited.
 		errs.Add("name", validate.Required, nil)
 		errs.Add("discovery_interval_hours", validate.Required, nil)
@@ -366,6 +359,10 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		if p.PollIntervalMinutes != nil && cur.Type != TypeAzureKeyVault {
 			kindErrs.Add("poll_interval_minutes", validate.Pattern, nil)
 		}
+		// The cleanup switch belongs to a server whose provider can clean up (R62 Ruling 13).
+		if p.CertificateCleanup != nil && !slices.Contains(cur.Capabilities, string(providers.CapCleanupCertificates)) {
+			kindErrs.Add("certificate_cleanup", validate.Pattern, nil)
+		}
 		if len(kindErrs) > 0 {
 			return kindErrs
 		}
@@ -384,9 +381,14 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 			cur.DiscoveryInterval = time.Duration(*p.PollIntervalMinutes) * time.Minute
 			fields = append(fields, "poll_interval")
 		}
+		if p.CertificateCleanup != nil {
+			cur.CertificateCleanup = *p.CertificateCleanup
+			fields = append(fields, "certificate_cleanup")
+			details["certificate_cleanup"] = strconv.FormatBool(cur.CertificateCleanup)
+		}
 		details["fields"] = strings.Join(fields, ",")
-		_, err = tx.Exec(ctx, `UPDATE targets SET name = $2, discovery_interval_seconds = $3, version = version + 1, updated_at = $4
-WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.Now().UTC())
+		_, err = tx.Exec(ctx, `UPDATE targets SET name = $2, discovery_interval_seconds = $3, certificate_cleanup = $5, version = version + 1,
+updated_at = $4 WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.Now().UTC(), cur.CertificateCleanup)
 		if e, ok := closedTargetWriteError(err); ok {
 			return e
 		}
@@ -404,42 +406,6 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 		return Target{}, err
 	}
 	return updated, nil
-}
-
-// validateProviderSettings checks the provider settings beyond the connection (R62 Ruling 13) that a create
-// body carries (an update cannot: alice_app has no UPDATE on targets.config): only the cleanup switch, and only when the provider's schema declares it; the provider's own
-// ParseConfig judges the value (base is the connection settings it is judged with). It returns the switch (nil when
-// the body gives null) and whether the body named it.
-func validateProviderSettings(p providers.Provider, base providers.TargetConfig, in map[string]any) (sw *bool, named bool, errs validate.Errors) {
-	declared := map[string]bool{}
-	for _, f := range p.ConfigSchema().Fields {
-		declared[f.Name] = true
-	}
-	cfg := providers.TargetConfig{}
-	for k, v := range base {
-		cfg[k] = v
-	}
-	for k, v := range in {
-		if k != providers.ConfigCertificateCleanup || !declared[k] {
-			errs.Add("config."+k, validate.Pattern, nil)
-			continue
-		}
-		cfg[k] = v
-		named = true
-	}
-	if len(errs) > 0 {
-		return nil, false, errs
-	}
-	for _, fe := range p.ValidateConfig(cfg) {
-		errs = append(errs, validate.FieldError{Field: "config." + fe.Field, Code: fe.Code, Params: fe.Params})
-	}
-	if len(errs) > 0 {
-		return nil, false, errs
-	}
-	if b, ok := cfg[providers.ConfigCertificateCleanup].(bool); ok {
-		sw = &b
-	}
-	return sw, named, nil
 }
 
 // DeleteTarget soft-deletes a server: its license slot is free at once and nothing is changed on

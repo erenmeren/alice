@@ -385,42 +385,43 @@ func TestSyncCapabilitiesCoversWindows(t *testing.T) {
 	assert.Equal(t, []string{"cleanup_certificates", "deploy_certificate", "discover_certificates", "test_connection", "verify_deployment"}, caps)
 }
 
-// R62 Ruling 13: the per-server switch is saved through the create input, validated by the provider, read back
-// (nil: absent, which reads as on), and kept when other fields change. (An update cannot set it: alice_app has no
-// UPDATE on targets.config and a grant needs a migration.)
-func TestWindowsTargetCertificateCleanupSwitchIsSaved(t *testing.T) {
+// R62 Ruling 13: the per-server cleanup switch is the column targets.certificate_cleanup (on for every new Windows server),
+// changed through UpdateTarget for a server with the cleanup capability, audited like another target edit, read back, kept
+// when other fields change, and refused for a target that cannot clean up or for a patch that changes nothing.
+func TestTargetCertificateCleanupSwitchIsSaved(t *testing.T) {
 	h := newHarness(t, withWindowsProvider())
 	admin := h.user("ada", rbac.Admin, "")
-	tg, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-01", Type: "windows", Host: "iis-01.corp.example",
-		Config: map[string]any{"certificate_cleanup": false}})
-	require.NoError(t, err)
-	require.NotNil(t, tg.CertificateCleanup)
-	assert.False(t, *tg.CertificateCleanup)
-	var stored string
-	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT config->>'certificate_cleanup' FROM targets WHERE id = $1", tg.ID).Scan(&stored))
-	assert.Equal(t, "false", stored)
+	tg := winTarget(t, h, admin, "iis-01")
+	assert.True(t, tg.CertificateCleanup, "on by default")
 
-	plain, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-02", Type: "windows", Host: "iis-02.corp.example"})
+	off, on := false, true
+	up, err := h.svc.UpdateTarget(h.ctx, admin, tg.ID, tg.Version, inventory.TargetPatch{CertificateCleanup: &off})
 	require.NoError(t, err)
-	assert.Nil(t, plain.CertificateCleanup, "absent: the default (on)")
+	assert.False(t, up.CertificateCleanup)
+	assert.Equal(t, tg.Version+1, up.Version)
+	var stored bool
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT certificate_cleanup FROM targets WHERE id = $1", tg.ID).Scan(&stored))
+	assert.False(t, stored)
+	assert.Equal(t, []map[string]string{{"fields": "certificate_cleanup", "certificate_cleanup": "false"}}, h.auditDetails("target.updated"))
 
-	name := "iis-02b"
-	up, err := h.svc.UpdateTarget(h.ctx, admin, tg.ID, tg.Version, inventory.TargetPatch{Name: &name})
+	name := "iis-01b"
+	up, err = h.svc.UpdateTarget(h.ctx, admin, tg.ID, up.Version, inventory.TargetPatch{Name: &name})
 	require.NoError(t, err)
-	require.NotNil(t, up.CertificateCleanup, "another change keeps the switch")
-	assert.False(t, *up.CertificateCleanup)
-	got, err := h.svc.GetTarget(h.ctx, up.ID)
+	assert.False(t, up.CertificateCleanup, "another change keeps the switch")
+	got, err := h.svc.GetTarget(h.ctx, tg.ID)
 	require.NoError(t, err)
 	assert.Equal(t, up, got)
+	up, err = h.svc.UpdateTarget(h.ctx, admin, tg.ID, up.Version, inventory.TargetPatch{CertificateCleanup: &on})
+	require.NoError(t, err)
+	assert.True(t, up.CertificateCleanup)
 
-	for name, cfg := range map[string]map[string]any{"a string": {"certificate_cleanup": "yes"}, "a number": {"certificate_cleanup": 1.0},
-		"an unknown key": {"retention": true}, "a connection key": {"host": "evil.example"}} {
-		var errs validate.Errors
-		_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "bad", Type: "windows", Host: "bad.corp.example", Config: cfg})
-		require.ErrorAs(t, err, &errs, name)
-	}
 	var errs validate.Errors
-	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "lin", Type: "linux", Host: "lin.corp.example",
-		Config: map[string]any{"certificate_cleanup": false}})
-	require.ErrorAs(t, err, &errs, "a Linux server has no such switch")
+	linux := h.add(admin, "web-01", "web-01.example.com")
+	_, err = h.svc.UpdateTarget(h.ctx, admin, linux.ID, linux.Version, inventory.TargetPatch{CertificateCleanup: &off})
+	require.ErrorAs(t, err, &errs, "a server that cannot clean up has no switch")
+	assert.Equal(t, "certificate_cleanup", errs[0].Field)
+	assert.Equal(t, validate.Pattern, errs[0].Code)
+	got, err = h.svc.GetTarget(h.ctx, linux.ID)
+	require.NoError(t, err)
+	assert.Equal(t, linux.Version, got.Version, "nothing changed")
 }

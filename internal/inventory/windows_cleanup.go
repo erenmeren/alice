@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // G505: a Windows thumbprint is the certificate's SHA-1, an identifier, not a security measure
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -173,19 +172,13 @@ func (s *Service) JudgeCleanup(ctx context.Context, target uuid.UUID, plan provi
 // cleanupFacts reads the server's switch and what Alice knows about the plan's certificates.
 func (s *Service) cleanupFacts(ctx context.Context, target uuid.UUID, plan providers.CleanupPlan) (cleanupFacts, error) {
 	f := cleanupFacts{compromised: map[string]bool{}, running: map[string]bool{}, recent: map[string]bool{}, held: map[string]bool{}}
-	var raw []byte
-	err := s.pool.QueryRow(ctx, "SELECT config FROM targets WHERE id = $1 AND deleted_at IS NULL", target).Scan(&raw)
+	err := s.pool.QueryRow(ctx, "SELECT certificate_cleanup FROM targets WHERE id = $1 AND deleted_at IS NULL", target).Scan(&f.enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return f, ErrNotFound
 	}
 	if err != nil {
-		return f, fmt.Errorf("inventory: read the server's configuration: %w", err)
+		return f, fmt.Errorf("inventory: read the server's cleanup switch: %w", err)
 	}
-	var cfg providers.TargetConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return f, fmt.Errorf("inventory: decode the server's configuration: %w", err)
-	}
-	f.enabled = providers.CertificateCleanupEnabled(cfg)
 	fps := make([]string, 0, len(plan.Candidates)+len(plan.Watched))
 	for _, c := range plan.Candidates {
 		fps = append(fps, c.SHA256)
