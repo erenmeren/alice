@@ -1223,7 +1223,7 @@
       "cleanup": {
         "title": "Ayarlar",
         "label": "Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır",
-        "help": "Alice, hâlâ kullanılan bir sertifikayı ya da kendisinin içe aktarmadığı bir sertifikayı hiçbir zaman kaldırmaz. Bir sertifika kullanılmaz olduktan sonra en az 7 gün bekler.",
+        "help": "Alice yalnızca kendi içe aktardığı sertifikaları kaldırır; hiçbir http.sys bağlaması, Uzak Masaüstü dinleyicisi veya WinRM dinleyicisi onu kullanmamalı ve yakın zamandaki bir dağıtım ona geri dönebilecek durumda olmamalıdır. Bir sertifika kullanılmaz olduktan sonra 7 gün bekler, ancak süresi dolmuş ya da ele geçirilmiş bir sertifikayı beklemeden kaldırır.",
         "saved": "Kaydedildi."
       }
     }

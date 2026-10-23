@@ -977,7 +977,7 @@ describe('TargetDetailPage cleanup switch', () => {
     await renderRoute(winPath);
     const sw = await screen.findByRole('switch', { name: label });
     expect(sw).toBeChecked();
-    expect(screen.getByText(/Alice never removes a certificate that anything still uses/)).toBeInTheDocument();
+    expect(screen.getByText(/Alice removes only certificates it imported itself/)).toBeInTheDocument();
   });
 
   it('saves it off and on with the version, and shows the saved value', async () => {
@@ -1007,7 +1007,7 @@ describe('TargetDetailPage cleanup switch', () => {
   it('describes the switch by its help text', async () => {
     onWindows('admin', windowsTargetFixture);
     await renderRoute(winPath);
-    expect(await screen.findByRole('switch', { name: label })).toHaveAccessibleDescription(/^Alice never removes a certificate that anything still uses/);
+    expect(await screen.findByRole('switch', { name: label })).toHaveAccessibleDescription(/^Alice removes only certificates it imported itself/);
   });
 
   it('is read only for a person who cannot manage the server', async () => {

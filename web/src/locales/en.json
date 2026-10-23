@@ -1223,7 +1223,7 @@
       "cleanup": {
         "title": "Settings",
         "label": "Remove certificates Alice imported once nothing uses them",
-        "help": "Alice never removes a certificate that anything still uses, or one it did not import itself. It waits at least 7 days after a certificate stopped being used.",
+        "help": "Alice removes only certificates it imported itself that no http.sys binding, Remote Desktop listener or WinRM listener uses and that no recent deployment may roll back to. It waits 7 days after a certificate stopped being used, but removes an expired or compromised one without waiting.",
         "saved": "Saved."
       }
     }
