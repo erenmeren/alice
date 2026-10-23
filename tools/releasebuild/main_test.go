@@ -127,6 +127,8 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		"bin/sbom/source-1.0.0.cdx.json":                   "{}\n",
 		"bin/helper/alice-helper-linux-amd64":              "amd64 binary",
 		"bin/helper/alice-helper-linux-arm64":              "arm64 binary",
+		"bin/helper/alice-winhelper-windows-amd64.exe":     "windows amd64 binary",
+		"bin/helper/alice-winhelper-windows-arm64.exe":     "windows arm64 binary",
 	} {
 		write(t, filepath.Join(root, name), content, 0o644)
 	}
@@ -139,6 +141,12 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		sums += hex.EncodeToString(sum[:]) + "  alice-helper-linux-" + a + "\n"
 	}
 	write(t, filepath.Join(root, "bin/helper/alice-helper.sha256"), sums, 0o644)
+	winSums := ""
+	for _, a := range []string{"amd64", "arm64"} {
+		sum := sha256.Sum256([]byte("windows " + a + " binary"))
+		winSums += hex.EncodeToString(sum[:]) + "  alice-winhelper-windows-" + a + ".exe\n"
+	}
+	write(t, filepath.Join(root, "bin/helper/alice-winhelper.sha256"), winSums, 0o644)
 	priv := releaseKey(t, filepath.Join(root, "deploy/release/keys"), "rk-2026-01")
 	return stageConfig{
 		Root: root, Out: filepath.Join(t.TempDir(), "alice-1.0.0"), Version: "1.0.0",
@@ -192,6 +200,7 @@ func TestStageLayout(t *testing.T) {
 		"docs/README.md", "docs/api.md", "docs/backup-restore.md", "docs/install-guide.md", "docs/operator-guide.md",
 		"docs/security-overview.md", "docs/upgrade.md",
 		"helper/alice-helper-linux-amd64", "helper/alice-helper-linux-arm64", "helper/alice-helper.sha256",
+		"helper/alice-winhelper-windows-amd64.exe", "helper/alice-winhelper-windows-arm64.exe", "helper/alice-winhelper.sha256",
 		"images/alice-1.0.0.tar", "images/images.sha256", "images/postgres-1.0.0.tar",
 		"install.sh", "lib/alice-lib.sh", "lib/initdb/10-alice-roles.sh",
 		"licenses/IMAGE_NOTICES.md", "licenses/LICENSE", "licenses/THIRD_PARTY_NOTICES.md",
@@ -359,6 +368,15 @@ func TestStageRefusesAMissingInput(t *testing.T) {
 		"helper checksum differs": func(t *testing.T, cfg *stageConfig) {
 			write(t, filepath.Join(cfg.Helper, "alice-helper-linux-amd64"), "changed", 0o644)
 		},
+		"no Windows arm64 helper": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-winhelper-windows-arm64.exe")))
+		},
+		"Windows helper checksum differs": func(t *testing.T, cfg *stageConfig) {
+			write(t, filepath.Join(cfg.Helper, "alice-winhelper-windows-amd64.exe"), "changed", 0o644)
+		},
+		"no Windows checksum file": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-winhelper.sha256")))
+		},
 		"no release key": func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Keys, "rk-2026-01.pem")))
 		},
@@ -386,8 +404,47 @@ func TestStageRefusesAMissingInput(t *testing.T) {
 			change(t, &cfg)
 			err := stage(cfg, &fakeImages{})
 			require.Error(t, err)
+			for _, want := range refusalNames[name] {
+				assert.ErrorContains(t, err, want)
+			}
 			assert.NoDirExists(t, cfg.Out, "a refused stage leaves nothing behind")
 		})
+	}
+}
+
+// refusalNames: what the refusal of a TestStageRefusesAMissingInput row must name.
+var refusalNames = map[string][]string{
+	"helper checksum differs":         {"alice-helper.sha256", "make helper"},
+	"Windows helper checksum differs": {"alice-winhelper.sha256", "make winhelper"},
+	"no Windows arm64 helper":         {"alice-winhelper-windows-arm64.exe"},
+	"no Windows checksum file":        {"alice-winhelper.sha256"},
+}
+
+// R63 Ruling 11: SHA256SUMS lists the Windows helpers and their checksum file with the hashes of the
+// staged files, and the .exe hashes are those alice-winhelper.sha256 lists.
+func TestStageListsTheWindowsHelpersInSHA256SUMS(t *testing.T) {
+	cfg, _ := fixture(t)
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	pkg := filepath.Join(cfg.Out, "alice")
+	sums := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(pkg, "SHA256SUMS")), "\n"), "\n") {
+		sum, name, ok := strings.Cut(line, "  ")
+		require.True(t, ok, line)
+		sums[name] = sum
+	}
+	winSums := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(cfg.Helper, "alice-winhelper.sha256")), "\n"), "\n") {
+		sum, name, ok := strings.Cut(line, "  ")
+		require.True(t, ok, line)
+		winSums[name] = sum
+	}
+	for _, name := range []string{"alice-winhelper-windows-amd64.exe", "alice-winhelper-windows-arm64.exe", "alice-winhelper.sha256"} {
+		rel := "helper/" + name
+		require.Contains(t, sums, rel)
+		assert.Equal(t, sumLine(t, pkg, rel, rel), sums[rel]+"  "+rel+"\n", rel)
+		if strings.HasSuffix(name, ".exe") {
+			assert.Equal(t, winSums[name], sums[rel], name)
+		}
 	}
 }
 

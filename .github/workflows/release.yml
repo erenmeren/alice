@@ -8,8 +8,10 @@ name: release
 # machine's build through make reproducible-check and is never what the offline key signs (S-26).
 #
 # GitHub-hosted jobs stop at 6 hours whatever timeout-minutes says (Task 15 review I-2), so the work
-# is split: gates, zap-full and one fuzz job per make target run in parallel, each under 6 hours;
-# stage runs make release with the gates log the gates job handed on, only when all of them passed.
+# is split: gates, zap-full and one fuzz job per make target run in parallel, each under 6 hours,
+# and windows calls windows.yml with all: true, so every real-Windows leg runs for the tag (R63
+# Ruling 12; make release-gates has no Windows gate). stage runs make release with the gates log the
+# gates job handed on, only when all of them passed.
 on:
   push:
     tags: ['v*']
@@ -94,8 +96,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: 'fuzz-corpus-${{ matrix.target }}', path: '**/testdata/fuzz/**' }
 
+  windows:
+    uses: ./.github/workflows/windows.yml
+    with: { all: true }
+    permissions:
+      contents: read
+
   stage:
-    needs: [gates, zap-full, fuzz]
+    needs: [gates, zap-full, fuzz, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

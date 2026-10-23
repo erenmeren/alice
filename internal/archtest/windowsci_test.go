@@ -608,3 +608,21 @@ func TestWindowsHelperBuildFlagsAgree(t *testing.T) {
 		}
 	})
 }
+
+// R63 Ruling 12: a version tag stages the release only after the real-Windows check: release.yml calls
+// windows.yml with all: true (every leg runs, whatever the change) and stage needs that job.
+func TestReleaseWorkflowWaitsForWindows(t *testing.T) {
+	doc := loadWorkflow(t, ".github/workflows/release.yml")
+	jobs := ymap(t, doc, "jobs")
+	win := ymap(t, jobs, "windows")
+	assert.Equal(t, "./.github/workflows/windows.yml", win["uses"])
+	with := ymap(t, win, "with")
+	assert.Equal(t, true, with["all"], "the release call runs every Windows leg")
+	assert.Equal(t, map[string]any{"contents": "read"}, win["permissions"])
+	stage := ymap(t, jobs, "stage")
+	needs := ystrings(stage["needs"])
+	assert.Contains(t, needs, "windows", "stage waits for the real-Windows check")
+	for _, j := range []string{"gates", "zap-full", "fuzz"} {
+		assert.Contains(t, needs, j)
+	}
+}

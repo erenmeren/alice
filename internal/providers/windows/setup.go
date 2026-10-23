@@ -86,7 +86,7 @@ function Test-Helper([string]$Path) {
     }
     $got = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($got -ne $HelperSHA256[$arch]) {
-        throw '.\alice-helper.exe is not the alice-helper.exe of this Alice version (its SHA-256 checksum differs). Copy alice-winhelper-windows-amd64.exe or alice-winhelper-windows-arm64.exe from the bundle of this Alice version as .\alice-helper.exe.'
+        throw '.\alice-helper.exe is not the alice-helper.exe of this Alice version (its SHA-256 checksum differs). Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version as .\alice-helper.exe.'
     }
 }
 `
@@ -321,7 +321,7 @@ if ($IsDomainAccount) { $QualifiedUser = $AliceUser } else { $QualifiedUser = "$
 # 2. The helper.
 __HELPER_CHECK__$HelperSource = Join-Path (Get-Location).ProviderPath 'alice-helper.exe'
 if (-not (Test-Path -LiteralPath $HelperSource -PathType Leaf)) {
-    throw 'Copy alice-winhelper-windows-amd64.exe or alice-winhelper-windows-arm64.exe from the Alice bundle into this directory as alice-helper.exe first.'
+    throw 'Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version into this directory as alice-helper.exe first.'
 }
 Test-Helper $HelperSource
 

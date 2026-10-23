@@ -139,7 +139,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&c.SBOM, "sbom", "", "directory with the three CycloneDX SBOMs")
 		fs.StringVar(&c.Notices, "notices", "", "THIRD_PARTY_NOTICES.md")
 		fs.StringVar(&c.ImageNotices, "image-notices", "", "IMAGE_NOTICES.md of the two images (go run ./tools/notices images)")
-		fs.StringVar(&c.Helper, "helper", "", "directory with the alice-helper binaries and alice-helper.sha256")
+		fs.StringVar(&c.Helper, "helper", "", "directory with the alice-helper and alice-winhelper binaries, alice-helper.sha256 and alice-winhelper.sha256")
 		fs.StringVar(&c.Commit, "commit", "", "40-hex commit")
 		fs.StringVar(&c.BuildTime, "build-time", "", "RFC 3339 build time")
 		fs.StringVar(&c.GatesLog, "gates-log", "", "bin/release-gates.log written by make release-gates")
@@ -704,14 +704,37 @@ func keyEntries(cfg stageConfig) ([]entry, string, error) {
 	return out, keys[len(keys)-1].id, nil
 }
 
-var helperFiles = []string{"alice-helper-linux-amd64", "alice-helper-linux-arm64"}
+// helperSets: each checksum file of bin/ and the binaries it must list, all bundled under helper/
+// (R63 Ruling 11: the Windows helpers next to the Linux ones), and the make target that writes them.
+var helperSets = []struct {
+	sums   string
+	files  []string
+	target string
+}{
+	{"alice-helper.sha256", []string{"alice-helper-linux-amd64", "alice-helper-linux-arm64"}, "helper"},
+	{"alice-winhelper.sha256", []string{"alice-winhelper-windows-amd64.exe", "alice-winhelper-windows-arm64.exe"}, "winhelper"},
+}
 
-// helperEntries returns helper/ after checking the binaries against alice-helper.sha256.
+// helperEntries returns helper/ after checking each set's binaries against its checksum file.
 func helperEntries(dir string) ([]entry, error) {
 	if err := directory(dir); err != nil {
 		return nil, err
 	}
-	sumsPath := filepath.Join(dir, "alice-helper.sha256")
+	var out []entry
+	for _, set := range helperSets {
+		entries, err := helperSetEntries(dir, set.sums, set.files, set.target)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, entries...)
+	}
+	return out, nil
+}
+
+// helperSetEntries returns the checksum file sums and the binaries it lists under helper/: every binary
+// must exist, be a regular file and match its line.
+func helperSetEntries(dir, sums string, files []string, target string) ([]entry, error) {
+	sumsPath := filepath.Join(dir, sums)
 	if err := regularFile(sumsPath); err != nil {
 		return nil, err
 	}
@@ -725,8 +748,8 @@ func helperEntries(dir string) ([]entry, error) {
 			want[name] = sum
 		}
 	}
-	out := []entry{{dst: "helper/alice-helper.sha256", src: sumsPath, mode: 0o644}}
-	for _, name := range helperFiles {
+	out := []entry{{dst: "helper/" + sums, src: sumsPath, mode: 0o644}}
+	for _, name := range files {
 		p := filepath.Join(dir, name)
 		if err := regularFile(p); err != nil {
 			return nil, err
@@ -736,7 +759,7 @@ func helperEntries(dir string) ([]entry, error) {
 			return nil, err
 		}
 		if want[name] != got {
-			return nil, fmt.Errorf("%s does not match alice-helper.sha256; run make helper", p)
+			return nil, fmt.Errorf("%s does not match %s; run make %s", p, sums, target)
 		}
 		out = append(out, entry{dst: "helper/" + name, src: p, mode: 0o644})
 	}

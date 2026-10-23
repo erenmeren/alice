@@ -79,7 +79,11 @@ func TestSetupScriptEmbedsTheHelperChecksums(t *testing.T) {
 	assert.Regexp(t, `'ARM64' = '`+arm+`'`, s)
 	assert.Contains(t, s, "Get-FileHash")
 	assert.Contains(t, s, "is not the alice-helper.exe of this Alice version (its SHA-256 checksum differs)")
-	assert.Contains(t, s, "alice-winhelper-windows-amd64.exe or alice-winhelper-windows-arm64.exe")
+	// R63 Ruling 14: both messages name the package folder the Windows helpers ship in.
+	assert.Contains(t, s, `Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version as .\alice-helper.exe.'`)
+	assert.Contains(t, s, `throw 'Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version into this directory as alice-helper.exe first.'`)
+	assert.NotContains(t, s, "from the Alice bundle into this directory")
+	assert.NotContains(t, s, "from the bundle of this Alice version")
 	assert.NotContains(t, s, "cannot verify alice-helper.exe")
 
 	assert.Contains(t, s, "$MatchUser = $AliceUser.ToLowerInvariant()")

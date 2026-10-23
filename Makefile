@@ -513,8 +513,8 @@ release-gates: ## Every release gate that runs on one machine (ยง22.7 stage 6, ย
 # exist (it never replaces a signed package); only make release-test removes them, and only those
 # of a test package (Task 12 review I-2). make release needs Docker: it builds alice:$(VERSION),
 # inspects it with make image-check (build tags, test key, /test routes, user, shell, and the
-# embedded helper checksums against bin/alice-helper.sha256, which the stage checks the bundled
-# helper against; I-6), and saves both images.
+# embedded helper checksums against bin/alice-helper.sha256 and bin/alice-winhelper.sha256, which the
+# stage checks the bundled Linux and Windows helpers against; I-6, R63 Ruling 11), and saves both images.
 RELEASE_DIR      ?= bin/release
 RELEASE_KEYS     ?= deploy/release/keys
 RELEASE_TEST_KEY ?= bin/release-test-key
@@ -537,7 +537,7 @@ release-preflight: # make release's first prerequisite: refuse before anything i
 .PHONY: release
 # One build time for the image and RELEASE (BUILD_TIME is a recursive ?= and would be re-evaluated per use).
 release: BUILD_TIME := $(BUILD_TIME)
-release: release-preflight helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; needs Docker; sign SHA256SUMS offline, then make release-pack)
+release: release-preflight helper winhelper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; needs Docker; sign SHA256SUMS offline, then make release-pack)
 	$(MAKE) image-check IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
 	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
