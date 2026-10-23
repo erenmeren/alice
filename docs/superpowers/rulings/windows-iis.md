@@ -1031,20 +1031,38 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 - `TestFidelityCleanup` (the emulator and the real helper side by side, the age through the `alicetest` clock offset)
   passed on both images in run 1.
 
-### Runner runs used (2 of 10)
+### Runner runs used (3 of 10)
 
 | Run | Head | Result | What it found |
 |---|---|---|---|
 | 1 <https://github.com/erenmeren/alice/actions/runs/39912110730> | `efb5c13f` | **green** on both images | F11 and F12 confirmed; `TestRealCleanupRemovesKeyAndCertificate`, `TestRealProtectedThumbprints` and `TestFidelityCleanup` passed (not skipped), `TestRealRunnerIsClean` included |
 | 2 <https://github.com/erenmeren/alice/actions/runs/39926856807> | `f5fb07f7` | **green** on both images | Every test of the branch at that head after Tasks 7-10, the F11 and F12 tests included |
+| 3 <https://github.com/erenmeren/alice/actions/runs/39941100782> | `f622cf6b` | **green** on both images | The final review's fixes, the listing refusal of `iis-cleanup` included: `TestRealCleanupRemovesKeyAndCertificate`, `TestRealProtectedThumbprints`, `TestFidelityCleanup` and `TestRealRunnerIsClean` passed, F11 and F12 confirmed again |
 
 The `ci.yml` runs of the branch: 39912110868 at `efb5c13f` failed only in the web job (`enums.test.ts` counted the
 cleanup plan's warnings as dump warnings: fixed in `37574e52`, plus the web's `cleanup_certificates` capability in
 `c86aaadd`); 39926856788 at `f5fb07f7`: go, coverage, web, secrets, ssh-matrix and licensectl green (the web fix
-`37574e52`/`c86aaadd` confirmed).
+`37574e52`/`c86aaadd` confirmed; the stack job green too); 39941100921 at `f622cf6b`: green (all jobs).
 
-Final gates (Task 13): (filled in Task 13: local `make ci`, e2e totals, gitleaks over `e21e1ba3..HEAD`, the real
-Windows run of the branch head, the final review, final CI on origin).
+Final gates (Task 13):
+
+- **Local `make ci`** at `f622cf6b` (`E2E_PROJECT=alice-e2e-w3 ALICE_E2E_PORT=9976`): exit 0 (lint, test, coverage with
+  every floor met: `winjobs` 100.0 (floor 95), `windows` 99.2, `winhelper` 97.4, `winproto` 100.0, `wintest` 97.4; perf,
+  backup cycle, ssh, build, release-symcheck, i18n, web lint and coverage, vuln, secrets and fs scans, e2e hardening,
+  e2e, image check and scan).
+- **e2e**: 158 passed, 4 skipped, 0 failed (52.4 min) in that `make ci`; Task 11's own full run had the same totals
+  (53.1 min), and its fix round re-ran `web/e2e/windows.spec.ts` (2 of 2, EN and TR).
+- **Windows build and vet** at `d84edb61` and again in `make ci`: amd64 and arm64 builds, `go vet` with and without
+  `alicetest`.
+- **gitleaks over the whole range** `e21e1ba3..d84edb61` (v8.30.1, the repository's rules): no leaks. The worktree's
+  own git-mode scan sees no commits, so the range was exported with `git log -p` and scanned in `dir` mode; the
+  remaining fix commits `2202e1c9..f622cf6b` were scanned by `ci.yml`'s secrets job (git mode, green in 39941100921).
+  `.gitleaksignore` needed no new fingerprint.
+- **Real Windows**: run 3 green on windows-2022 and windows-2025 at `f622cf6b`, the code head of the branch (the
+  rulings commit after it changes no file `windows.yml` watches).
+- **Final review** of `e21e1ba3..d84edb61`: "ready after fixes" (one Critical, two Important, minors); every finding
+  fixed in `2202e1c9..f622cf6b` and re-reviewed (approve). See [Final review fixes (W3)](#final-review-fixes-w3).
+- 3 of the 10 budgeted runner runs used.
 
 ## Rulings made during execution (W3)
 
@@ -1082,11 +1100,20 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   last place ending failed must still report (cost: one extra cleanup job per failed place).
 - The incident hook queues only for a server with `cleanup_certificates`, and `winjobs` checks it before opening a
   session: a W2 helper's job would otherwise fail `internal.unexpected`.
-- A cleanup apply ending `OUTCOME_UNKNOWN` records no audit rows (Ruling 12): accepted gap, owner item.
-- The `location.changed_outside` audit detail for a broken binding is named `problem` (Ruling 14).
-- Ruling 14's scan rule assumes an Alice deployment never leaves an unusable key; not guarded in code (owner item).
-- Task 9 re-points a binding with `Host().UpdateBinding`, not `AddBinding` (which adds a second record that loses).
-- The observation's `autocertrebind` only on a drifted Windows binding with a known cause (Ruling 15), pinned by test.
+- A cleanup apply ending `OUTCOME_UNKNOWN` records no audit rows (Ruling 12): Alice cannot know which items the helper
+  removed, the server's event 1003 is the trace and the next plan sees them absent; accepted gap, owner item.
+- The `location.changed_outside` audit detail for a broken binding is named `problem` (Ruling 14): the audit's
+  secret-key check refuses any detail key containing `key`.
+- Ruling 14's scan rule assumes an Alice deployment never leaves an unusable key; not guarded in code because Alice
+  never changes a key's ACL and verifies the binding after each write (cost: a misattributed "changed outside Alice" mail; owner item).
+- Task 9 re-points a binding with `Host().UpdateBinding`, not `AddBinding`: `AddBinding` adds a second record that
+  loses to the first, so nothing would be re-pointed.
+- The observation's `autocertrebind` is true only on a drifted Windows binding with a known cause (Ruling 15), pinned
+  by test: the hint explains a drift and has no meaning on a binding in sync.
+- The ACME bindings panel keeps the file wording for a Windows binding: the ACME binding DTO has no location kind;
+  carried to W4 (cost: a misleading "file" sentence on that page only).
+- The final review's fixes ran as one wave of eight commits and one re-review, and the local `make ci` was restarted
+  at the fixed head: a `make ci` of the reviewed head would not have tested the Critical fix.
 
 ### Coordinator
 
@@ -1094,10 +1121,12 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   rule): Q7 cannot work otherwise (Ruling 9).
 - The `windows.compromised_in_store` notice is deduped per incident and certificate through the outbox (no notifier
   dedupe exists, an `alerts.kind` needs a migration); the gaps are owner items.
-- Only a certificate itself marked compromised is removed at once (Ruling 9).
+- Only a certificate itself marked compromised is removed at once (Ruling 9): every certificate sharing the incident's
+  key is marked compromised by the incident, so none escapes, and nothing else is removed without its age.
 - The switch is a column of its own (migration `00032`), changed with `PATCH /targets/{id}`; this supersedes Task 10's
   create-only switch (`a3eeb628`, reverted in `f5fb07f7`) and the refused `GRANT UPDATE (config)` (Rulings 1, 13).
-- Proceed through Tasks 7-13 without stopping; report only after Task 13.
+- Proceed through Tasks 7-13 without stopping; report only after Task 13: the plan settles every open question by a
+  ruling, and the phase's evidence is complete only after Task 13's gates.
 
 ### Task 1 (winproto)
 
@@ -1208,7 +1237,20 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 
 ## Final review fixes (W3)
 
-(filled in Task 13)
+The final review of `e21e1ba3..d84edb61` (verdict "ready after fixes") and its fixes, re-reviewed together (approve):
+
+- **Critical**: `iis-cleanup` trusted an incomplete http.sys listing (the helper reads at most `MaxBindings`+1 records
+  per table, and an undecodable record became an empty binding), so a certificate bound in a missing record could look
+  unused. It now refuses with `IO_ERROR`, before anything is written, on a record with no type or a table with more
+  than `MaxBindings` records, for `--plan` and `--apply` (`2202e1c9`, `TestCleanupRefusals`); run 3 green.
+- **Important**: the `windows.compromised_in_store` text no longer says Alice took the certificate out of the bindings
+  (it is also sent after a failed or skipped place) (`d5babeaa`); run 2 and its `ci.yml` run filled in, every
+  execution ruling gives its reason (`55812041`).
+- **Minor**: the incident dedupe-key comment names the place (`e8b8befa`); an incident's notice tells only of
+  certificates of that incident's key (`04b084e3`); the switch's help text names what Alice checks and when it does
+  not wait (`d7741e0e`); owner notes for the shared key container, cleanup held in a licence lock and the duplicate
+  notice (`329e5aa6`); a test field typo (`f622cf6b`).
+- The deferred minors of the task reviews were triaged by the final review: none other must be fixed before merge.
 
 ## Acceptance (design §13 W3)
 
@@ -1224,7 +1266,9 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   images).
 - Q7: Tasks 7 (`TestIncidentQueuesWindowsCleanup`, `TestRecordCleanupAuditsAndNotifiesOnce`), 9
   (`TestWindowsIncidentRemovesTheCompromisedCertificate`).
-- Final gates evidence: (filled in Task 13).
+- Final gates evidence: local `make ci` exit 0 at `f622cf6b` (e2e 158 passed, 4 skipped, 0 failed), every coverage
+  floor met (`winjobs` 100.0), runner run 3 green on windows-2022 and windows-2025 at `f622cf6b`, `ci.yml` green at
+  `f622cf6b`, no secret in the range.
 
 ## Owner items (W3)
 
