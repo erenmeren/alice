@@ -16,4 +16,4 @@ docs/windows-host-preparation.md	Run it once in an elevated PowerShell
 docs/windows-host-preparation.md	## The sshd configuration
 docs/windows-host-preparation.md	The script never changes User Account Control and never sets `LocalAccountTokenFilterPolicy`.
 docs/windows-host-preparation.md	`alice-helper.exe` is not signed with Authenticode.
-docs/release-checklist.md	| 1.46 | Real Windows green on the release commit: the helper's real-host tests on windows-2022 and windows-2025 passed, with the helper built byte for byte as the package ships it |
+docs/release-checklist.md	| 1.46 | Real Windows green on the release commit: the helper's real-host tests on windows-2022 and windows-2025 passed, with the helper the package ships built on both images byte for byte equal to the Linux release build (the setup script test installs those bytes; the other real tests run the same source built by the test) |
