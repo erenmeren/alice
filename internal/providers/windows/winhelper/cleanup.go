@@ -319,7 +319,7 @@ func cleanupPlan(ctx context.Context, c *call, watch []winproto.CleanupRef) (any
 	if s.unreadable {
 		resp.Warnings = append(resp.Warnings, winproto.WarnJournalUnreadable)
 	}
-	next, changed, err := s.planImports(ctx, &resp)
+	next, gone, changed, err := s.planImports(ctx, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -334,19 +334,27 @@ func cleanupPlan(ctx context.Context, c *call, watch []winproto.CleanupRef) (any
 			return nil, err
 		}
 		entered = true
+		// An entry whose certificate is gone may be what a kill between a removal's steps left: its
+		// bookkeeping is finished first (the chains, then the entry; both idempotent).
+		for _, sum := range gone {
+			if err := s.clearChains(sum); err != nil {
+				return nil, err
+			}
+		}
 		if err := writeImports(s.h, next); err != nil {
 			return nil, failed(winproto.CodeIOError, "the import inventory could not be written")
 		}
 	}
-	if resp.Pruned, err = s.prune(c.gate, entered); err != nil {
+	if resp.Pruned, err = s.prune(c.gate, entered, &resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
 }
 
 // planImports judges every certificate Alice may have imported (inventory entries first, then 0.3.0
-// journals whose import was Alice's) and returns the inventory as it must be written.
-func (s *cleanupState) planImports(ctx context.Context, resp *winproto.CleanupPlanResponse) (importsFile, bool, error) {
+// journals whose import was Alice's) and returns the inventory as it must be written and the DER
+// SHA-256s of the entries it drops because no store holds their certificate.
+func (s *cleanupState) planImports(ctx context.Context, resp *winproto.CleanupPlanResponse) (importsFile, []string, bool, error) {
 	type key struct{ store, sha1 string }
 	type group struct {
 		store, sha1 string
@@ -376,17 +384,21 @@ func (s *cleanupState) planImports(ctx context.Context, resp *winproto.CleanupPl
 
 	entries := slices.Clone(s.imports.Imports)
 	drop := map[int]bool{}
+	var gone []string
 	var adopted []importEntry
 	changed := false
 	var candidates []winproto.CleanupCandidate
 	for _, g := range groups {
 		cp, found, err := s.readCopy(ctx, g.store, g.sha1)
 		if err != nil {
-			return importsFile{}, false, err
+			return importsFile{}, nil, false, err
 		}
 		if !found {
 			for _, i := range g.entries {
 				drop[i], changed = true, true
+				if !slices.Contains(gone, entries[i].SHA256) {
+					gone = append(gone, entries[i].SHA256)
+				}
 			}
 			continue
 		}
@@ -460,7 +472,7 @@ func (s *cleanupState) planImports(ctx context.Context, resp *winproto.CleanupPl
 	if len(out.Imports) > maxImports {
 		out.Imports = slices.Clone(out.Imports[len(out.Imports)-maxImports:]) // the oldest go: left alone, the safe side
 	}
-	return out, changed, nil
+	return out, gone, changed, nil
 }
 
 // judgeWatched adds the verdict on one watched certificate: one for each of watchStores holding it
@@ -499,10 +511,12 @@ type prunable struct {
 // prepared ones and fence tombstones older than JournalKeep, restore_failed and undecodable ones older
 // than JournalRetention; never writing or restoring, never one that was not read, never one a binding
 // record still needs; at most MaxPrunePerRun, the oldest first. When the binding records cannot all be
-// read nothing is pruned. The gate is entered before the first removal (unless the caller did).
-func (s *cleanupState) prune(g *gate, entered bool) (int, error) {
+// read nothing is pruned and the plan warns binding_record_unreadable. The gate is entered before the
+// first removal (unless the caller did).
+func (s *cleanupState) prune(g *gate, entered bool, resp *winproto.CleanupPlanResponse) (int, error) {
 	needed, ok := s.recordOps()
 	if !ok {
+		resp.Warnings = append(resp.Warnings, winproto.WarnBindingRecordUnreadable)
 		return 0, nil
 	}
 	var victims []prunable
@@ -598,8 +612,9 @@ func (s *cleanupState) recordOps() (map[string]bool, bool) {
 }
 
 // cleanupApply is --apply (W3 Rulings 3, 10): each item judged again now, under the lock; a removable
-// one is removed key first, then its inventory entry, the binding records' chains naming it, event
-// 1003.
+// one is removed key first, then the binding records' chains naming it, then its inventory entry,
+// event 1003. Once the budget has ended no further item is started: the write gate's grace finishes
+// the step under way, it never starts another (the answer is OUTCOME_UNKNOWN).
 func cleanupApply(ctx context.Context, c *call, items []winproto.CleanupItem) (any, error) {
 	s, release, err := openCleanup(ctx, c.host)
 	if err != nil {
@@ -609,6 +624,9 @@ func cleanupApply(ctx context.Context, c *call, items []winproto.CleanupItem) (a
 	resp := winproto.CleanupApplyResponse{OK: true, Results: make([]winproto.CleanupResult, 0, len(items))}
 	var wctx context.Context
 	for _, it := range items {
+		if wctx != nil && ctx.Err() != nil {
+			return nil, failed(winproto.CodeOutcomeUnknown, "the call took too long after the first change")
+		}
 		res, err := s.judgeItem(ctx, it)
 		if err != nil {
 			return nil, err
@@ -662,15 +680,19 @@ func (s *cleanupState) judgeItem(ctx context.Context, it winproto.CleanupItem) (
 	return res, nil // incident: no age (Ruling 9)
 }
 
-// remove removes one judged certificate after the gate (Ruling 10). Every error is answered
-// OUTCOME_UNKNOWN; a kill at the point leaves the inventory naming a certificate the next plan finds
-// absent.
+// remove removes one judged certificate after the gate (Ruling 10 as amended: the chains before the
+// entry). Every error is answered OUTCOME_UNKNOWN. A kill after the removal leaves the inventory
+// naming a certificate the next plan finds absent; that plan clears the chains naming it and drops
+// the entry (both idempotent).
 func (s *cleanupState) remove(ctx context.Context, it winproto.CleanupItem) (winproto.CleanupResult, error) {
 	removed, err := s.h.RemoveCertificate(ctx, it.Store, it.SHA1)
 	if err != nil {
 		return winproto.CleanupResult{}, failed(winproto.CodeIOError, "a certificate could not be removed")
 	}
 	if err := point(s.h, "cleanup.removed"); err != nil {
+		return winproto.CleanupResult{}, err
+	}
+	if err := s.clearChains(it.SHA256); err != nil {
 		return winproto.CleanupResult{}, err
 	}
 	kept := s.imports.Imports[:0:0]
@@ -684,9 +706,6 @@ func (s *cleanupState) remove(ctx context.Context, it winproto.CleanupItem) (win
 			return winproto.CleanupResult{}, failed(winproto.CodeIOError, "the import inventory could not be written")
 		}
 		s.imports.Imports = kept
-	}
-	if err := s.clearChains(it.SHA256); err != nil {
-		return winproto.CleanupResult{}, err
 	}
 	if !removed {
 		return winproto.CleanupResult{SHA256: it.SHA256, Result: winproto.CleanupAbsent}, nil

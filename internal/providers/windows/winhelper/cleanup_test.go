@@ -653,10 +653,10 @@ func TestApplyRemovesAndRecords(t *testing.T) {
 			t.Fatalf("%+v", e)
 		}
 	}
-	// The order of the writes: certificate, inventory, the chain, the event.
+	// The order of the writes: certificate, the chain, inventory, the event (Ruling 10 as amended).
 	log := f.h.writes()
 	idx := func(s string) int { return slices.Index(log, s) }
-	order := []int{idx("remove My " + a.sha1), idx("state " + importsName), idx("state " + bindingRecordName(canon443)), idx("event 1003")}
+	order := []int{idx("remove My " + a.sha1), idx("state " + bindingRecordName(canon443)), idx("state " + importsName), idx("event 1003")}
 	if order[0] < 0 || !slices.IsSorted(order) {
 		t.Fatalf("%v", log)
 	}
@@ -856,16 +856,16 @@ func TestPrune(t *testing.T) {
 		t.Fatal("a foreign file was removed")
 	}
 
-	t.Run("a binding record that cannot be read stops pruning", func(t *testing.T) {
+	t.Run("a binding record that cannot be read stops pruning, with a warning", func(t *testing.T) {
 		f := newCleanup(t)
 		mustWrite(t, f.h, sampleJournal(op1))
 		f.h.modTimes[journalName(op1)] = testNow.Add(-60 * day)
 		f.h.state[bindingsDir+strings.Repeat("d", 64)+".json"] = []byte("{")
-		if r := f.plan(); r.Pruned != 0 {
+		if r := f.plan(); r.Pruned != 0 || !slices.Equal(r.Warnings, []string{winproto.WarnBindingRecordUnreadable}) {
 			t.Fatalf("%+v", r)
 		}
 		f.h.state[bindingsDir+strings.Repeat("d", 64)+".json"] = []byte(`{"binding":"` + canon443 + `","op":""}`) // named for another binding
-		if r := f.plan(); r.Pruned != 0 {
+		if r := f.plan(); r.Pruned != 0 || !slices.Equal(r.Warnings, []string{winproto.WarnBindingRecordUnreadable}) {
 			t.Fatalf("%+v", r)
 		}
 		delete(f.h.state, bindingsDir+strings.Repeat("d", 64)+".json")
@@ -877,7 +877,7 @@ func TestPrune(t *testing.T) {
 			}
 			return nil
 		}
-		if r := f.plan(); r.Pruned != 0 {
+		if r := f.plan(); r.Pruned != 0 || !slices.Equal(r.Warnings, []string{winproto.WarnBindingRecordUnreadable}) {
 			t.Fatalf("%+v", r)
 		}
 		f.h.readStateFn = func(name string) error {
@@ -890,11 +890,11 @@ func TestPrune(t *testing.T) {
 		if err := writeBindingRecord(f.h, canon443, ""); err != nil {
 			t.Fatal(err)
 		}
-		if r := f.plan(); r.Pruned != 0 {
+		if r := f.plan(); r.Pruned != 0 || !slices.Equal(r.Warnings, []string{winproto.WarnBindingRecordUnreadable}) {
 			t.Fatalf("%+v", r)
 		}
 		f.h.readStateFn = nil
-		if r := f.plan(); r.Pruned != 1 {
+		if r := f.plan(); r.Pruned != 1 || len(r.Warnings) != 0 {
 			t.Fatalf("%+v", r)
 		}
 	})
@@ -1043,6 +1043,9 @@ func TestCleanupGate(t *testing.T) {
 			}
 			return nil
 		}
+		f.h.wmu.Lock()
+		base := f.h.releases
+		f.h.wmu.Unlock()
 		var out bytes.Buffer
 		go func() {
 			defer close(done)
@@ -1054,13 +1057,24 @@ func TestCleanupGate(t *testing.T) {
 		}()
 		<-done
 		wantError(t, winproto.ExitFailed, out.Bytes(), winproto.ExitFailed, winproto.CodeOutcomeUnknown)
-		// The handler finishes under the grace (the removal is recorded) before the test ends.
+		// The handler finishes a's step under the grace (the removal is recorded) and starts no other:
+		// b is still there when it released the lock.
 		deadline := time.Now().Add(5 * time.Second)
-		for f.present(b) || len(f.entries(b)) != 0 {
+		for {
+			f.h.wmu.Lock()
+			released := f.h.releases
+			f.h.wmu.Unlock()
+			if released == base+1 {
+				break
+			}
 			if time.Now().After(deadline) {
 				t.Fatal("the handler did not finish")
 			}
 			time.Sleep(10 * time.Millisecond)
+		}
+		if f.present(a) || len(f.entries(a)) != 0 || !f.present(b) || len(f.entries(b)) != 1 ||
+			len(removals(f.h.writes())) != 2 {
+			t.Fatalf("%v", f.h.writes())
 		}
 	})
 	t.Run("a budget that ends before the first change", func(t *testing.T) {
@@ -1226,4 +1240,89 @@ func TestApplyCertificateGoneAtRemoval(t *testing.T) {
 	if len(f.entries(c)) != 0 || len(f.h.events) != 0 {
 		t.Fatalf("%+v %+v", f.entries(c), f.h.events)
 	}
+}
+
+// TestRemovalBookkeepingSurvivesAFailure: a failure between clearing the chains and dropping the
+// inventory entry (Ruling 10 as amended) leaves the entry; the next plan settles it, and no binding
+// record's chain names the removed leaf.
+func TestRemovalBookkeepingSurvivesAFailure(t *testing.T) {
+	setup := func(t *testing.T) (*cleanupFixture, cref) {
+		f := newCleanup(t)
+		c := f.imported("My")
+		if err := writeBindingState(f.h, bindingRecord{Binding: canon443, Op: op1, Chain: []string{c.sha256}}); err != nil {
+			t.Fatal(err)
+		}
+		f.reset()
+		return f, c
+	}
+	noChain := func(t *testing.T, f *cleanupFixture) {
+		t.Helper()
+		if r, err := readBindingState(f.h, canon443); err != nil || r.Op != op1 || r.Chain != nil {
+			t.Fatalf("%+v %v", r, err)
+		}
+	}
+	t.Run("the inventory write fails after the chains", func(t *testing.T) {
+		f, c := setup(t)
+		f.h.writeStateErr = func(name string) error {
+			if name == importsName {
+				return errors.New("disk")
+			}
+			return nil
+		}
+		o, out := f.call(winproto.ArgApply, applyInput(c.item(winproto.CleanupIncident)))
+		wantError(t, o.Exit, out, winproto.ExitFailed, winproto.CodeOutcomeUnknown)
+		f.h.writeStateErr = nil
+		if f.present(c) || len(f.entries(c)) != 1 || len(f.h.events) != 0 {
+			t.Fatal("the entry went, or an event was written")
+		}
+		noChain(t, f)
+		r := f.plan(c)
+		if _, found := candidateOf(r, c); found || len(f.entries(c)) != 0 || watchedOf(r, c)[0].State != winproto.WatchAbsent {
+			t.Fatalf("%+v", r)
+		}
+		noChain(t, f)
+		if res := f.apply(c.item(winproto.CleanupIncident)); res.Results[0].Result != winproto.CleanupAbsent {
+			t.Fatalf("%+v", res)
+		}
+	})
+	t.Run("a kill before the chains: the next plan clears them", func(t *testing.T) {
+		f, c := setup(t)
+		f.h.pointErr = func(name string) error {
+			if name == "cleanup.removed" {
+				return errors.New("kill")
+			}
+			return nil
+		}
+		var out bytes.Buffer
+		if o := Execute(context.Background(), f.h, []string{winproto.SubIISCleanup, winproto.ArgApply},
+			bytes.NewReader(applyInput(c.item(winproto.CleanupIncident))), &out); !o.Killed {
+			t.Fatalf("%+v", o)
+		}
+		f.h.pointErr = nil
+		if r, _ := readBindingState(f.h, canon443); len(r.Chain) != 1 || len(f.entries(c)) != 1 {
+			t.Fatal("changed before the point")
+		}
+		f.plan()
+		noChain(t, f)
+		if len(f.entries(c)) != 0 {
+			t.Fatal("the entry stays")
+		}
+	})
+	t.Run("the plan's chain clearing fails: OUTCOME_UNKNOWN, the entry stays", func(t *testing.T) {
+		f, c := setup(t)
+		f.h.mu.Lock()
+		delete(f.h.certs, [2]string{c.store, c.sha1})
+		f.h.mu.Unlock()
+		f.h.writeStateErr = func(name string) error {
+			if strings.HasPrefix(name, bindingsDir) {
+				return errors.New("disk")
+			}
+			return nil
+		}
+		o, out := f.call(winproto.ArgPlan, planInput())
+		wantError(t, o.Exit, out, winproto.ExitFailed, winproto.CodeOutcomeUnknown)
+		if len(f.entries(c)) != 1 {
+			t.Fatal("the entry went before the chains")
+		}
+	})
 }

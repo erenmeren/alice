@@ -541,7 +541,7 @@ func TestCleanupVocabulary(t *testing.T) {
 		{winproto.KeptNotAlice, "not_alice"}, {winproto.KeptTooYoung, "too_young"}, {winproto.KeptJournalUnreadable, "journal_unreadable"},
 		{winproto.CleanupRemoved, "removed"}, {winproto.CleanupKept, "kept"}, {winproto.CleanupAbsent, "absent"},
 		{winproto.WatchRemovable, "removable"}, {winproto.WatchKept, "kept"}, {winproto.WatchAbsent, "absent"},
-		{winproto.WarnJournalUnreadable, "journal_unreadable"},
+		{winproto.WarnJournalUnreadable, "journal_unreadable"}, {winproto.WarnBindingRecordUnreadable, "binding_record_unreadable"},
 	} {
 		if c[0] != c[1] {
 			t.Errorf("%q != %q", c[0], c[1])

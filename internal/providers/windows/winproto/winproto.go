@@ -632,6 +632,10 @@ const (
 // WarnJournalUnreadable: a journal could not be read, so the certificates it may name are kept.
 const WarnJournalUnreadable = "journal_unreadable"
 
+// WarnBindingRecordUnreadable: a binding record could not be listed, read or decoded, so the plan
+// pruned no journal (which ones the record still needs is unknown).
+const WarnBindingRecordUnreadable = "binding_record_unreadable"
+
 // ValidSHA256 reports whether s is 64 lower-case hex digits.
 func ValidSHA256(s string) bool { return sha256RE.MatchString(s) }
 
