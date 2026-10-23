@@ -597,7 +597,11 @@ Final gates (Task 16):
 - **Real Windows**: run 7 green on windows-2022 and windows-2025.
 - **Final review** of `fc43d4db..fcf85df8`: ready to merge, no Critical or Important finding; its minors are under
   [Final review fixes (W2)](#final-review-fixes-w2).
-- Final CI on origin: <to be filled by the controller>
+- Final CI on origin at `b5afa7ce`: `ci.yml` green (all jobs, stack included),
+  <https://github.com/erenmeren/alice/actions/runs/39888002907>; `windows.yml` green on windows-2022 and
+  windows-2025, <https://github.com/erenmeren/alice/actions/runs/39888002949> (attempt 2: attempt 1 was green on
+  windows-2025 and timed out on windows-2022 inside W1's setup script, the OpenSSH capability install, a runner
+  flake outside W2 code). 9 of the 20 budgeted runs used.
 
 ## Rulings made during execution (W2)
 
