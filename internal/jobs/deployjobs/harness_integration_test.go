@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -26,7 +27,9 @@ import (
 	"alice/internal/audit"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/driftjobs"
 	"alice/internal/jobs/targetjobs"
+	"alice/internal/jobs/winjobs"
 	"alice/internal/license"
 	"alice/internal/license/licensetest"
 	"alice/internal/notify"
@@ -701,4 +704,115 @@ func (p winProber) Probe(ctx context.Context, _ string, port int, sni, keyType s
 	}
 	return tlsverify.Probe{LeafSHA256: pki.Fingerprint(cs.PeerCertificates[0]), ChainLength: len(chain), NotAfter: cs.PeerCertificates[0].NotAfter,
 		Chain: chain}, nil
+}
+
+// winDriftWorld is the Windows ACME world of TestWindowsACMEAutomaticDeployment (the ACME world with an emulated Windows
+// server whose IIS binding is the ACME certificate's location) with the drift work (driftjobs: the drift.observe handler,
+// the drift.schedule and drift.repair tasks) and the certificate cleanup (winjobs: the windows.cleanup handler) on the
+// same runner. The driftWorld it embeds watches the binding, so its observe, observation, repairNow, setMode and mails
+// are the binding's. The ACME certificate (C2) is issued and deployed to the binding by the planner and the engine; the
+// certificate the binding named before Alice (e.old, C1) is what another tool binds again. The fake CA's leaves live 90
+// days here, so a renewal (renewEarly) and the cleanup's week after it pass before C2 expires (the helper removes an
+// expired certificate without waiting). The helper's clock starts at Alice's.
+type winDriftWorld struct {
+	*driftWorld
+	win    *winServer
+	c2SHA1 string // C2's thumbprint, as the binding names it
+}
+
+func newWinDriftWorld(t *testing.T) *winDriftWorld {
+	t.Helper()
+	w := newACMEWorld(t)
+	require.NoError(t, w.fake.SetLeafLifetime(90*24*time.Hour))
+	driftjobs.Register(w.runner, driftjobs.Deps{Inventory: w.inv, Registry: w.reg, Clock: w.clock, Log: w.log()})
+	winjobs.Register(w.runner, winjobs.Deps{Inventory: w.inv, Registry: w.reg, Clock: w.clock, Log: w.log()})
+	s := w.addWinServer("iis-01")
+	s.model.SetNow(w.clock.Now())
+	w.loc = s.loc // the ACME world's location is the binding from here on
+	d := &driftWorld{acmeWorld: w, schedule: driftjobs.ScheduleTask(w.inv, time.Minute, w.log()),
+		repair: driftjobs.RepairTask(w.inv, time.Minute, w.log())}
+	d.acme, d.c2 = w.issueFirst()
+	require.Equal(t, d.c2, s.served(), "the binding serves C2")
+	return &winDriftWorld{driftWorld: d, win: s, c2SHA1: s.bound()}
+}
+
+// repoint is another tool binding the certificate sha1 (in My) to the binding, as netsh http update sslcert would.
+func (w *winDriftWorld) repoint(sha1 string) {
+	w.t.Helper()
+	b, ok := w.win.model.Binding(w.win.locator)
+	require.True(w.t, ok)
+	b.CertSHA1 = sha1
+	require.NoError(w.t, w.win.model.Host().UpdateBinding(context.Background(), b))
+}
+
+// renewEarly renews the ACME certificate as soon as it is due (a 90-day leaf is due 30 days before its end), lets the
+// planner and the engine deploy the renewal (C3) over C2, and sets the helper's clock to Alice's. It returns C3 and its
+// fingerprint.
+func (w *winDriftWorld) renewEarly() (uuid.UUID, string) {
+	w.t.Helper()
+	old, _ := w.current(w.acme.ID)
+	var na time.Time
+	require.NoError(w.t, w.db.Owner.QueryRow(w.ctx, "SELECT not_after FROM certificates WHERE id = $1", old).Scan(&na))
+	w.setClock(na.Add(-30*24*time.Hour + time.Hour))
+	require.NoError(w.t, w.acmeWorld.schedule.Run(w.ctx))
+	w.drain()
+	cur, fp := w.current(w.acme.ID)
+	require.NotEqual(w.t, old, cur, "renewed")
+	ids := w.planDeploy(cur)
+	require.Len(w.t, ids, 1)
+	w.drain()
+	d := w.deployment(ids[0])
+	require.Equal(w.t, inventory.DeployStatusSucceeded, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
+	require.Equal(w.t, inventory.TriggerACMERenewal, d.Trigger)
+	require.Equal(w.t, fp, w.win.served(), "C3 serves")
+	w.win.model.SetNow(w.clock.Now())
+	return cur, fp
+}
+
+// cleanupNow queues a windows.cleanup of the Windows server (as windows.cleanup_schedule does, without its once a day)
+// and runs it; it returns the job's status and result.
+func (e *env) cleanupNow(s *winServer) (string, map[string]any) {
+	e.t.Helper()
+	e.evaluate()
+	id, _, err := e.queue.Enqueue(e.ctx, jobs.Spec{Type: jobs.WindowsCleanup, TargetID: s.target, Payload: map[string]string{},
+		Kind: jobs.KindScheduled, DedupeKey: "windows.cleanup:test:" + uuid.NewString()})
+	require.NoError(e.t, err)
+	e.drain()
+	var status string
+	var raw []byte
+	require.NoError(e.t, e.db.Owner.QueryRow(e.ctx, "SELECT status, result FROM jobs WHERE id = $1", id).Scan(&status, &raw))
+	var out map[string]any
+	require.NoError(e.t, json.Unmarshal(raw, &out))
+	return status, out
+}
+
+// keptReasons maps the DER SHA-256 of every certificate a cleanup result keeps to its reason.
+func keptReasons(res map[string]any) map[string]string {
+	out := map[string]string{}
+	list, _ := res["kept"].([]any)
+	for _, k := range list {
+		m, _ := k.(map[string]any)
+		fp, _ := m["sha256"].(string)
+		reason, _ := m["reason"].(string)
+		out[fp] = reason
+	}
+	return out
+}
+
+// helperVerdict asks the helper itself, through a provider session of its own, to remove the certificate (reason aged)
+// and returns its answer: the helper judges every rule again under its lock, so a certificate in use, not Alice's or not
+// unused long enough is kept with the helper's reason (and one that may go is removed).
+func (e *env) helperVerdict(s *winServer, store, sha1, sha256 string) providers.CleanupItemResult {
+	e.t.Helper()
+	ref, _, err := e.inv.TargetRef(e.ctx, s.target)
+	require.NoError(e.t, err)
+	sess, err := e.win.Open(e.ctx, ref, e.inv.Credentials(), providers.Env{Clock: e.clock, HostKeys: e.inv.HostKeyStore(), Log: e.log()})
+	require.NoError(e.t, err)
+	defer func() { require.NoError(e.t, sess.Close()) }()
+	cleaner, ok := sess.(providers.CertificateCleaner)
+	require.True(e.t, ok)
+	res, err := cleaner.ApplyCleanup(e.ctx, []providers.CleanupItem{{Store: store, SHA1: sha1, SHA256: sha256, Reason: providers.CleanupAged}})
+	require.NoError(e.t, err)
+	require.Len(e.t, res.Results, 1)
+	return res.Results[0]
 }
