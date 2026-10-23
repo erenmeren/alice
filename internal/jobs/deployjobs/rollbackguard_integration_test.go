@@ -40,10 +40,16 @@ func (e *env) assertForbidden(d inventory.Deployment) {
 	assert.Equal(e.t, providers.ReasonRollbackForbidden, d.ErrorCode)
 	assert.Equal(e.t, providers.PhaseRestoreForbidden, d.Phase)
 	assert.Equal(e.t, providers.StepNameRestore, d.FailedStep)
-	// A Windows deployment's notice is queued in its Windows text (_windows, notify-windows 2db347aa).
-	assert.Equal(e.t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key IN ('deployment.rollback_forbidden', 'deployment.rollback_forbidden_windows')"))
-	assert.Zero(e.t, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key IN ('deployment.rollback_failed', 'deployment.rollback_failed_windows')"),
-		"never the e-mail that says to restore the backup")
+	// The notice is queued in the text of the deployment's location kind (a Windows one: _windows, 2db347aa).
+	forbidden, failed := inventory.TemplateDeploymentRollbackForbidden, inventory.TemplateDeploymentRollbackFailed
+	var kind string
+	require.NoError(e.t, e.db.Owner.QueryRow(e.ctx, "SELECT location_kind FROM deployments WHERE id = $1", d.ID).Scan(&kind))
+	if kind == string(providers.LocationWinSSLBinding) {
+		forbidden, failed = inventory.WindowsTemplate(forbidden), inventory.WindowsTemplate(failed)
+	}
+	assert.Equal(e.t, 1, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key = $1", forbidden), forbidden)
+	assert.Zero(e.t, e.count("SELECT count(*) FROM notifications_outbox WHERE template_key LIKE 'deployment.rollback_f%' AND template_key <> $1", forbidden),
+		"only the text of its kind; never the e-mail that says to restore the backup (%s)", failed)
 }
 
 // The controller path: the commit's answer is lost and the website does not serve the new certificate; the old key is

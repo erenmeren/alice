@@ -274,10 +274,13 @@ func TestWindowsFailedVerificationRollsBack(t *testing.T) {
 	e := newEnv(t)
 	s := e.addWinServer("iis-01")
 	s.model.StaleTLS(true)
+	before := e.winLocation(s).Details["cert_sha1"]
+	require.Equal(t, s.oldSHA1, before)
 	id := e.request(s.loc)[0]
 	e.drain()
 	d := e.deployment(id)
 	assert.Equal(t, inventory.DeployStateDone, d.State)
+	assert.Equal(t, before, e.winLocation(s).Details["cert_sha1"], "a rolled-back deployment leaves the recorded thumbprint as it was")
 	require.Equal(t, inventory.DeployStatusRolledBack, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
 	assert.Equal(t, "deployment.verify_failed", d.ErrorCode)
 	assert.Equal(t, providers.StepNameVerify, d.FailedStep)

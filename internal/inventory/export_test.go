@@ -291,3 +291,6 @@ func ValidBackupSHA1(s string) bool { return backupSHA1RE.MatchString(s) }
 func NewCertSHA256(kind providers.LocationKind, certPEM []byte) string {
 	return newCertSHA256(kind, certPEM)
 }
+
+// LeafThumbprint exposes leafThumbprint: the thumbprint a Windows location records after a deployment of chain.
+func LeafThumbprint(chain []byte, token string) string { return leafThumbprint(chain, token) }

@@ -1,6 +1,7 @@
 package inventory_test
 
 import (
+	"crypto/sha1" //nolint:gosec // G505: a Windows thumbprint is an identifier
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -181,4 +182,20 @@ func TestTheTokenAfterADeploymentIsTheProvidersForm(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(file[:]), inventory.NewCertSHA256("", leaf.FullchainPEM), "a file's material has no kind")
 	assert.Equal(t, pki.Fingerprint(leaf.Cert), inventory.NewCertSHA256(providers.LocationWinSSLBinding, leaf.FullchainPEM))
 	assert.Empty(t, inventory.NewCertSHA256(providers.LocationWinSSLBinding, []byte("not PEM")), "no leaf: no token")
+}
+
+// R61 Task 14 review: the thumbprint a Windows location records after a deployment names the certificate the token
+// names, or nothing: a chain whose first certificate is not the deployed leaf never pairs a wrong SHA-1 with the token.
+func TestTheRecordedThumbprintIsTheTokensCertificate(t *testing.T) {
+	now := time.Now()
+	ca := pki.NewCA("Thumb", pki.ECDSA256, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
+	sum := sha1.Sum(leaf.Cert.Raw) //nolint:gosec // G401: a Windows thumbprint is an identifier
+	token := pki.Fingerprint(leaf.Cert)
+	assert.Equal(t, hex.EncodeToString(sum[:]), inventory.LeafThumbprint(leaf.FullchainPEM, token))
+	assert.Empty(t, inventory.LeafThumbprint(leaf.FullchainPEM, pki.Fingerprint(ca.Intermediate)), "another token: nothing")
+	assert.Empty(t, inventory.LeafThumbprint(append(append([]byte(nil), ca.IntermediatePEM...), leaf.FullchainPEM...), token),
+		"a chain whose first certificate is not the leaf: nothing")
+	assert.Empty(t, inventory.LeafThumbprint(leaf.FullchainPEM, ""), "no token: nothing")
+	assert.Empty(t, inventory.LeafThumbprint([]byte("not PEM"), token))
 }

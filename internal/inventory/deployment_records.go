@@ -256,9 +256,9 @@ func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
 }
 
 // deployedThumbprint is the Windows thumbprint (the SHA-1 of the leaf's DER, lower-case hex) of certificate id's
-// stored chain, "" when it has none that parses. It is an identifier (what http.sys and the store name the
+// stored chain when that leaf is the one token names (leafThumbprint), else "". It is an identifier (what http.sys and the store name the
 // certificate by), never a security measure.
-func deployedThumbprint(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
+func deployedThumbprint(ctx context.Context, tx pgx.Tx, id uuid.UUID, token string) (string, error) {
 	var chain string
 	err := tx.QueryRow(ctx, `SELECT pem_chain FROM certificates WHERE id = $1`, id).Scan(&chain)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -267,17 +267,22 @@ func deployedThumbprint(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, e
 	if err != nil {
 		return "", fmt.Errorf("inventory: read the deployed certificate: %w", err)
 	}
-	return leafThumbprint([]byte(chain)), nil
+	return leafThumbprint([]byte(chain), token), nil
 }
 
-// leafThumbprint is the SHA-1 (lower-case hex) of the first CERTIFICATE block's DER in chain, "" without one.
-func leafThumbprint(chain []byte) string {
+// leafThumbprint is the SHA-1 (lower-case hex) of the first CERTIFICATE block's DER in chain, only when that DER's
+// SHA-256 is token (the leaf the deployment sent and the binding now names); "" otherwise, so a wrong thumbprint is
+// never paired with the token (the next discovery records the binding's own).
+func leafThumbprint(chain []byte, token string) string {
 	for rest := chain; ; {
 		var b *pem.Block
 		if b, rest = pem.Decode(rest); b == nil {
 			return ""
 		}
 		if b.Type == "CERTIFICATE" {
+			if token == "" || sha256Hex(b.Bytes) != token {
+				return ""
+			}
 			s := sha1.Sum(b.Bytes) //nolint:gosec // G401: a Windows thumbprint is an identifier, not a security hash
 			return hex.EncodeToString(s[:])
 		}
@@ -1065,7 +1070,7 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		// confirms it).
 		// An http.sys binding now names the deployed leaf: its thumbprint replaces the one the last discovery read, so
 		// the next deployment's rollback info (W2 Ruling 17) names this certificate as the previous one (R61 Task 14).
-		thumb, err := deployedThumbprint(ctx, tx, d.certificate)
+		thumb, err := deployedThumbprint(ctx, tx, d.certificate, fileSHA)
 		if err != nil {
 			return err
 		}
