@@ -2491,7 +2491,7 @@
     "windows": {
       "compromised_in_store": {
         "subject": "Ele geçirilmiş bir sertifika hâlâ sunucuda: {{target_name}}",
-        "body": "{{certificate_name}} sertifikasının anahtar ele geçirilmesi olayından sonra Alice sertifikayı bağlamalardan çıkardı, ancak sertifika hâlâ şu Windows sunucusunun bir sertifika deposunda: {{target_name}}.\n\nDepo: {{store}}. Parmak izi: {{thumbprint}}.\n\nAlice yalnızca kendi içe aktardığı ve sunucuda hiçbir şeyin kullanmadığı sertifikaları kaldırır. Bu sertifikayı Alice içe aktarmadı ya da bir bağlama, Uzak Masaüstü dinleyicisi veya bir WinRM dinleyicisi onu hâlâ kullanıyor, sunucuya yapılan bir dağıtım hâlâ onunla sürüyor ya da sunucunun sertifika temizliği kapalı. Özel anahtarı artık gizli değil: onu hâlâ neyin kullandığını bulun, orada değiştirin, ardından sertifikayı ve anahtarını depodan silin."
+        "body": "{{certificate_name}} sertifikasının anahtar ele geçirilmesi olayından sonra sertifika hâlâ şu Windows sunucusunun bir sertifika deposunda: {{target_name}}.\n\nDepo: {{store}}. Parmak izi: {{thumbprint}}.\n\nAlice yalnızca kendi içe aktardığı ve sunucuda hiçbir şeyin kullanmadığı sertifikaları kaldırır. Bu sertifikayı Alice içe aktarmadı ya da bir bağlama, Uzak Masaüstü dinleyicisi veya bir WinRM dinleyicisi onu hâlâ kullanıyor, sunucuya yapılan bir dağıtım hâlâ onunla sürüyor ya da sunucunun sertifika temizliği kapalı. Özel anahtarı artık gizli değil: onu hâlâ neyin kullandığını bulun, orada değiştirin, ardından sertifikayı ve anahtarını depodan silin."
       }
     }
   },
