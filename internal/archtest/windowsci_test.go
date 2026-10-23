@@ -313,6 +313,33 @@ func jobRun(t *testing.T, job map[string]any) string {
 	return b.String()
 }
 
+// stepEnvText returns the env: of the job's step with that exact name as YAML text; the step must exist.
+func stepEnvText(t *testing.T, job map[string]any, name string) string {
+	t.Helper()
+	for _, s := range ysteps(t, job) {
+		if s["name"] == name {
+			return yamlText(s["env"])
+		}
+	}
+	require.Failf(t, "no step", "no step named %q", name)
+	return ""
+}
+
+// checkoutWith returns the with: of the job's one actions/checkout step.
+func checkoutWith(t *testing.T, job map[string]any) map[string]any {
+	t.Helper()
+	var with map[string]any
+	found := 0
+	for _, s := range ysteps(t, job) {
+		if uses, _ := s["uses"].(string); strings.HasPrefix(uses, "actions/checkout@") {
+			found++
+			with, _ = s["with"].(map[string]any)
+		}
+	}
+	require.Equal(t, 1, found, "one actions/checkout step")
+	return with
+}
+
 func yamlText(v any) string {
 	out, err := yaml.Marshal(v)
 	if err != nil {
@@ -352,6 +379,7 @@ func TestWindowsWorkflowGate(t *testing.T) {
 	assert.NotContains(t, group, "github.workflow")
 	cancel, _ := conc["cancel-in-progress"].(string)
 	assert.Contains(t, cancel, "refs/tags/", "a release call is never cancelled")
+	assert.Contains(t, cancel, "github.event.repository.default_branch", "a push to the default branch is never cancelled")
 
 	jobs := ymap(t, doc, "jobs")
 	for _, j := range []string{"changes", "linux-build", "helper", "windows-required"} {
@@ -360,11 +388,23 @@ func TestWindowsWorkflowGate(t *testing.T) {
 
 	changes := ymap(t, jobs, "changes")
 	run := jobRun(t, changes)
-	for _, want := range []string{"--no-renames", "-z", "git diff --no-renames --name-only -z", "windows-ci.sh changed .github/windows-paths.txt", "git merge-base origin/main HEAD"} {
-		assert.Contains(t, run, want, "the changes step (Ruling 5)")
+	for _, want := range []string{
+		"git diff --no-renames --name-only -z",
+		"windows-ci.sh changed .github/windows-paths.txt",
+		`default=${DEFAULT_BRANCH:-main}`,
+		`git merge-base "origin/$default" HEAD`,
+		`if [[ $REF == "refs/heads/$default" ]]; then`,
+	} {
+		assert.Contains(t, run, want, "the changes step (Ruling 5, amended)")
 	}
+	assert.NotContains(t, run, "origin/main", "the default branch comes through env:, main only as its fallback")
+	assert.Contains(t, stepEnvText(t, changes, "Decide whether the Windows legs run"), "github.event.repository.default_branch")
 	outputs, _ := changes["outputs"].(map[string]any)
 	assert.Contains(t, outputs, "windows")
+	assert.Equal(t, 0, checkoutWith(t, changes)["fetch-depth"], "changes needs the history and origin/<default>")
+	for _, j := range []string{"changes", "linux-build", "windows-required"} {
+		assert.Equal(t, false, checkoutWith(t, ymap(t, jobs, j))["persist-credentials"], "%s keeps no token in the clone", j)
+	}
 
 	gate := ymap(t, jobs, "windows-required")
 	assert.Equal(t, "windows-required", gate["name"], "the context name branch protection requires")
@@ -373,6 +413,15 @@ func TestWindowsWorkflowGate(t *testing.T) {
 	slices.Sort(needs)
 	assert.Equal(t, []string{"changes", "helper", "linux-build"}, needs)
 	assert.Contains(t, jobRun(t, gate), "deploy/dev/windows-ci.sh gate")
+	gateEnv := stepEnvText(t, gate, "Decide")
+	for _, want := range []string{"needs.changes.result", "needs.changes.outputs.windows", "needs.linux-build.result", "needs.helper.result"} {
+		assert.Contains(t, gateEnv, want, "the gate step's env")
+	}
+
+	compareEnv := stepEnvText(t, ymap(t, jobs, "helper"), "Compare with the Linux build")
+	for _, want := range []string{"needs.linux-build.outputs.amd64", "needs.linux-build.outputs.arm64"} {
+		assert.Contains(t, compareEnv, want, "the F13 comparison (Ruling 10)")
+	}
 
 	for _, j := range []string{"linux-build", "helper"} {
 		cond, _ := ymap(t, jobs, j)["if"].(string)
@@ -499,6 +548,25 @@ func TestWindowsHelperBuildFlagsAgree(t *testing.T) {
 			}
 		}
 		checkLines(t, "reproducible-check.sh", builds)
+	})
+
+	// The image builds the helpers whose checksums its alice embeds: one loop over both architectures,
+	// both levels on the one line (Go reads only GO$GOARCH).
+	t.Run("deploy/Dockerfile", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(root, "deploy", "Dockerfile")) //nolint:gosec // repository file
+		require.NoError(t, err)
+		text := string(raw)
+		var builds []string
+		for _, l := range strings.Split(text, "\n") {
+			if strings.Contains(l, "GOOS=windows") && strings.Contains(l, "go build") {
+				builds = append(builds, l)
+			}
+		}
+		require.Len(t, builds, 1, "one Windows helper build line in the Dockerfile")
+		for _, f := range append([]string{"CGO_ENABLED=0", "GOARCH=$arch", "GOAMD64=v1", "GOARM64=v8.0"}, common...) {
+			assert.Contains(t, builds[0], f)
+		}
+		assert.Contains(t, text, "RUN for arch in amd64 arm64; do \\\n      CGO_ENABLED=0 GOOS=windows", "the loop covers both architectures")
 	})
 
 	t.Run("windows.yml", func(t *testing.T) {

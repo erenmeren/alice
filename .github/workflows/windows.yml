@@ -25,16 +25,24 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch (or pull request) cancels the run it supersedes. The nightly run and
-# a release call (a tag ref) are never cancelled. A literal prefix: a called workflow sees the caller's
-# github.workflow (Ruling 8).
+# A newer push to the same branch (or pull request) cancels the run it supersedes. The nightly run, a
+# release call (a tag ref) and a push to the default branch are never cancelled: a default-branch push
+# is diffed against its before commit, so a cancelled run would leave its Windows change untested. A
+# literal prefix: a called workflow sees the caller's github.workflow (Ruling 8).
 concurrency:
   group: windows-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
-  cancel-in-progress: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && !startsWith(github.ref, 'refs/tags/') && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 jobs:
-  # Ruling 5: windows=true for the nightly run, a manual run or a call with all: true, or when the
-  # diff names a watched path. An unknown base runs the legs; it never skips them.
+  # Ruling 5 (as amended by the W4 Task 3 review): windows=true for the nightly run, a manual run or a
+  # call with all: true, or when the diff names a watched path. The base:
+  #   pull request             its base commit;
+  #   push to another branch   the merge base with the default branch: the whole branch is diffed on
+  #                            every push, so a push that cancels (supersedes) an earlier one with a
+  #                            Windows change still runs the legs; a diff from before would leave that
+  #                            change untested;
+  #   push to the default one  its before commit (those runs are never cancelled), else the merge base.
+  # An unknown base runs the legs; it never skips them.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -50,6 +58,8 @@ jobs:
           ALL: ${{ inputs.all }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           answer() {
@@ -60,14 +70,22 @@ jobs:
             answer true "event $EVENT, all=${ALL:-false}"
             exit 0
           fi
+          default=${DEFAULT_BRANCH:-main}
           case $EVENT in
             pull_request) base=$PR_BASE ;;
-            push) base=$BEFORE ;;
+            push)
+              if [[ $REF == "refs/heads/$default" ]]; then
+                base=$BEFORE
+              elif ! base=$(git merge-base "origin/$default" HEAD); then
+                answer true "no merge base with origin/$default"
+                exit 0
+              fi
+              ;;
             *) base="" ;;
           esac
           if [[ -z $base || $base =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "base \"$base\" is no commit in the clone; using the merge base with origin/main"
-            if ! base=$(git merge-base origin/main HEAD); then
+            echo "base \"$base\" is no commit in the clone; using the merge base with origin/$default"
+            if ! base=$(git merge-base "origin/$default" HEAD); then
               answer true "no base to compare with"
               exit 0
             fi
