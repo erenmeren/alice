@@ -250,6 +250,29 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(main.getByText(t('deployments.bindingLabel'), { exact: true })).toBeVisible();
       await expectAccessible(page, 'windows deployment, verified');
 
+      // 8b. R62: the page of the deployment reads the location's kind (the binding, the Windows previous-certificate line
+      // and no backup folder); the server page names the certificate Alice imported, and its cleanup switch is on, saved
+      // off and on again, each read back after a reload.
+      await expect(page.getByTestId('windows-previous')).toBeVisible();
+      await expect(main.getByText(t('deployments.bindingLabel'), { exact: true })).toBeVisible();
+      await openServer(page, t);
+      await page.getByRole('button', { name: t('locations.discover'), exact: true }).click();
+      await settle(request, page.getByText(t('targets.jobDone')));
+      await expect(bindingRow(page, t, WEB).getByText(t('locations.importedByAlice'), { exact: true })).toBeVisible();
+      await expect(bindingRow(page, t, INTRANET).getByText(t('locations.importedByAlice'), { exact: true })).toHaveCount(0);
+      const cleanup = page.getByRole('switch', { name: new RegExp(`^${escapeRegExp(t('targets.page.cleanup.label'))}`) });
+      await expect(cleanup, 'new servers remove what Alice imported by default').toBeChecked();
+      await expectAccessible(page, 'windows server, cleanup switch');
+      await cleanup.click();
+      await expect(page.getByText(t('targets.page.cleanup.saved'), { exact: true })).toBeVisible();
+      await expect(cleanup).not.toBeChecked();
+      await page.reload();
+      await expect(cleanup, 'the saved value is read back after a reload').not.toBeChecked();
+      await cleanup.click();
+      await expect(page.getByText(t('targets.page.cleanup.saved'), { exact: true })).toBeVisible();
+      await page.reload();
+      await expect(cleanup).toBeChecked();
+
       // 9. A website that does not take the change (the fake keeps serving the certificate it served before the bind):
       // the verification fails, the provider's iis-restore points the binding back, the deployment is rolled back.
       const second = newCert(HOST);
