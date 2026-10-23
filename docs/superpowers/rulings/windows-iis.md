@@ -1245,6 +1245,17 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
     copies are protected by rule 2).
   - Ruling 14 assumes an Alice deployment never leaves a binding with an unusable key; if a W2 verify or rollback gap
     ever did, the "changed outside Alice" e-mail would be misleading.
+  - A removal deletes the key container the certificate names (Ruling 10). A **different** certificate that shares
+    that container (for example one renewed with the same key and imported into it) loses its key when Alice removes
+    the old one, even when that other certificate is the bound one (rule 2 keeps the bound certificate, not a container
+    it shares with an unbound one, which then breaks the binding). Alice's own imports
+    always create a fresh container, so this needs a third-party import or a deliberate key reuse on the server.
+  - Two incident cleanup jobs of the same incident and server running at the same moment could both find no notice in
+    the outbox and both queue one, so the store notice is sent twice (no lock on the outbox check; accepted).
+- **Cleanup while the licence is locked** (owner decision): `jobs.WindowsCleanup` is `ClassChange`, so every cleanup
+  run is held while the licence is locked, including the at-once removal of a compromised certificate after an
+  incident (Q7). Keep it so (a locked licence changes nothing on servers), or class the incident's removal as allowed
+  in lock (`ClassAlways` or `ClassContinuity`, as `incident.advance` is `ClassAlways`).
 - **RDP with its own certificate**: F12's RDP half was measured only as "absent" on the runners; a server whose RDP
   listener uses a CA certificate should be checked in the W4 manual matrix (the certificate must be kept `rdp`).
 - **Defender on**: the W4 manual matrix now includes a cleanup run with Defender (or the customer's EDR) on.
