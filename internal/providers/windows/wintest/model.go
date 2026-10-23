@@ -99,6 +99,16 @@ type Model struct {
 	chainExtra   *x509.Certificate
 	events       []Event
 	imported     []string
+
+	// The cleanup half (W3 Task 4).
+	clockFixed   time.Time            // SetNow's time; zero: the system clock
+	clockSkew    time.Duration        // Advance, on the system clock
+	stateTimes   map[string]time.Time // the modification time of each state file
+	keys         map[string]bool      // the machine key store: "<store>/<sha1>"
+	rdp          string
+	winrm        []string
+	failProtect  bool
+	failAfterKey bool
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -107,17 +117,19 @@ func NewModel() *Model {
 	m := &Model{
 		os: winhelper.OSFacts{Build: "10.0.20348.2700", Product: "Windows Server 2022 Datacenter", InstallationType: "Server",
 			OpenSSHVersion: "OpenSSH_for_Windows_8.1p1"},
-		elevated:  true,
-		iis:       winproto.IISFacts{Installed: true, Version: "10.0"},
-		stores:    map[string]*store{},
-		expired:   map[string]int{},
-		protocol:  winproto.Protocol,
-		delays:    map[string]time.Duration{},
-		endpoints: map[int]string{},
-		intents:   map[string]string{},
-		served:    map[string]*servedEntry{},
-		state:     map[string][]byte{},
-		lockWait:  winproto.LockWait,
+		elevated:   true,
+		iis:        winproto.IISFacts{Installed: true, Version: "10.0"},
+		stores:     map[string]*store{},
+		expired:    map[string]int{},
+		protocol:   winproto.Protocol,
+		delays:     map[string]time.Duration{},
+		endpoints:  map[int]string{},
+		intents:    map[string]string{},
+		served:     map[string]*servedEntry{},
+		state:      map[string][]byte{},
+		stateTimes: map[string]time.Time{},
+		keys:       map[string]bool{},
+		lockWait:   winproto.LockWait,
 	}
 	for _, s := range []string{"My", "WebHosting", "CA", "Root"} {
 		m.storeLocked(s)
@@ -204,6 +216,9 @@ func (m *Model) AddCertificate(store string, chainPEM, keyPEM []byte, o CertOpti
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.storeLocked(store)
+	if keyPEM != nil {
+		m.keys[keyID(store, e.sha1)] = true
+	}
 	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == e.sha1 })
 	s.certs = append(s.certs, e)
 	return e.sha1
@@ -230,13 +245,18 @@ func (m *Model) AddIntermediate(certPEM []byte) {
 	m.inter = append(m.inter, c)
 }
 
-// RemoveCertificate deletes a certificate from a store (the binding naming it stays).
+// RemoveCertificate deletes a certificate and its key from a store, as someone outside Alice would
+// (the binding naming it stays).
 func (m *Model) RemoveCertificate(storeName, sha1 string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.storeLocked(storeName)
 	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == sha1 })
+	delete(m.keys, keyID(storeName, sha1))
 }
+
+// keyID names a key of the machine key store by its certificate.
+func keyID(storeName, sha1 string) string { return fold(storeName) + "/" + sha1 }
 
 // AddBinding appends a record to the http.sys table. A port a Serve call has not listened on yet gets
 // its listener with the next Serve.

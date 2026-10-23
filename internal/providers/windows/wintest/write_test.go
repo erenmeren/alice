@@ -730,3 +730,302 @@ func TestDemoHostIsDeployable(t *testing.T) {
 		}
 	}
 }
+
+// The cleanup half (W3 Task 4): iis-cleanup against the model.
+
+func (f *wfix) plan(t *testing.T, watch ...winproto.CleanupRef) winproto.CleanupPlanResponse {
+	t.Helper()
+	if watch == nil {
+		watch = []winproto.CleanupRef{}
+	}
+	in, _ := json.Marshal(winproto.CleanupPlanInput{Watch: watch})
+	var p winproto.CleanupPlanResponse
+	if r := run(t, f.m, "iis-cleanup --plan", in, &p); r.Exit != 0 || !p.OK {
+		t.Fatalf("plan: %d %s", r.Exit, r.Stdout)
+	}
+	return p
+}
+
+// apply answers the decoded response, or the decoded error (Code "" when it succeeded).
+func (f *wfix) apply(t *testing.T, items ...winproto.CleanupItem) (winproto.CleanupApplyResponse, winproto.ErrorResponse) {
+	t.Helper()
+	in, _ := json.Marshal(winproto.CleanupApplyInput{Remove: items})
+	r := f.m.Handler()("iis-cleanup --apply", in)
+	var a winproto.CleanupApplyResponse
+	var e winproto.ErrorResponse
+	if r.Exit == 0 {
+		if err := json.Unmarshal(r.Stdout, &a); err != nil {
+			t.Fatalf("%s: %v", r.Stdout, err)
+		}
+	} else if len(r.Stdout) > 0 {
+		_ = json.Unmarshal(r.Stdout, &e)
+	}
+	return a, e
+}
+
+func itemOf(c winproto.CleanupCandidate, reason string) winproto.CleanupItem {
+	return winproto.CleanupItem{Store: c.Store, SHA1: c.SHA1, SHA256: c.SHA256, Reason: reason}
+}
+
+// redeployTo deploys each leaf in turn to the fixture's binding (the first over the old certificate),
+// operations 1, 2, ...
+func (f *wfix) redeployTo(t *testing.T, leaves ...pki.Leaf) {
+	t.Helper()
+	from := f.old
+	for i, to := range leaves {
+		var d winproto.DeployResponse
+		if r := run(t, f.m, "iis-deploy --op "+opID(i+1), deployInput(t, f.loc, sum256(from.Cert.Raw), to), &d); r.Exit != 0 || d.Phase != winproto.PhaseCommitted {
+			t.Fatalf("deploy %d: %d %s", i+1, r.Exit, r.Stdout)
+		}
+		from = to
+	}
+}
+
+func (f *wfix) redeploy(t *testing.T) (a, b pki.Leaf) {
+	t.Helper()
+	a, b = f.issue("www.example.test"), f.issue("www.example.test")
+	f.redeployTo(t, a, b)
+	return a, b
+}
+
+func TestModelCleanupAfterARedeploy(t *testing.T) {
+	f := newWriteFixture(t)
+	a, b := f.redeploy(t)
+	aSHA, bSHA := thumbprint(a.Cert.Raw), thumbprint(b.Cert.Raw)
+	keys := f.m.KeyCount()
+
+	p := f.plan(t)
+	if len(p.Candidates) != 1 || p.Candidates[0].SHA1 != aSHA || p.Candidates[0].Eligible != "" {
+		t.Fatalf("a fresh unbound import is a candidate, not eligible: %+v", p.Candidates)
+	}
+	f.m.Advance(7*24*time.Hour + time.Minute)
+	p = f.plan(t)
+	if len(p.Candidates) != 1 || p.Candidates[0].Eligible != winproto.CleanupAged {
+		t.Fatalf("%+v", p.Candidates)
+	}
+	res, e := f.apply(t, itemOf(p.Candidates[0], winproto.CleanupAged))
+	if e.Code != "" || len(res.Results) != 1 || res.Results[0].Result != winproto.CleanupRemoved {
+		t.Fatalf("%+v %+v", res, e)
+	}
+	if f.m.HasCertificate("My", aSHA) || f.m.HasKey("My", aSHA) || f.m.KeyCount() != keys-1 {
+		t.Fatal("A and its key are gone")
+	}
+	if !f.m.HasCertificate("My", bSHA) || !f.m.HasKey("My", bSHA) {
+		t.Fatal("B stays")
+	}
+	if ev := f.m.Events(); len(ev) == 0 || ev[len(ev)-1].ID != 1003 {
+		t.Fatalf("%+v", ev)
+	}
+}
+
+func TestModelCleanupKeepsListeners(t *testing.T) {
+	f := newWriteFixture(t)
+	a, _ := f.redeploy(t)
+	aSHA := thumbprint(a.Cert.Raw)
+	f.m.Advance(7*24*time.Hour + time.Minute)
+	f.plan(t) // stamps unbound_since
+	f.m.Advance(7*24*time.Hour + time.Minute)
+	keptBy := func(reason string) {
+		t.Helper()
+		p := f.plan(t, winproto.CleanupRef{SHA1: aSHA, SHA256: sum256(a.Cert.Raw)})
+		if len(p.Watched) != 1 || p.Watched[0].State != winproto.WatchKept || p.Watched[0].Reason != reason {
+			t.Fatalf("want %s: %+v", reason, p.Watched)
+		}
+		res, e := f.apply(t, winproto.CleanupItem{Store: "My", SHA1: aSHA, SHA256: sum256(a.Cert.Raw), Reason: winproto.CleanupAged})
+		if e.Code != "" || res.Results[0].Result != winproto.CleanupKept || res.Results[0].Reason != reason {
+			t.Fatalf("%+v %+v", res, e)
+		}
+		if !f.m.HasCertificate("My", aSHA) {
+			t.Fatal("A was removed")
+		}
+	}
+	f.m.SetRDPThumbprint(aSHA)
+	keptBy(winproto.KeptRDP)
+	f.m.SetRDPThumbprint("")
+	f.m.SetWinRMThumbprints(aSHA)
+	keptBy(winproto.KeptWinRM)
+	f.m.SetWinRMThumbprints()
+	f.m.FailProtected(true)
+	in, _ := json.Marshal(winproto.CleanupPlanInput{Watch: []winproto.CleanupRef{}})
+	var e winproto.ErrorResponse
+	if r := run(t, f.m, "iis-cleanup --plan", in, &e); r.Exit == 0 || e.Code != winproto.CodeIOError {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if _, e := f.apply(t, winproto.CleanupItem{Store: "My", SHA1: aSHA, SHA256: sum256(a.Cert.Raw), Reason: winproto.CleanupAged}); e.Code != winproto.CodeIOError {
+		t.Fatalf("%+v", e)
+	}
+	f.m.FailProtected(false)
+	f.plan(t) // the listeners no longer name A: the clock of its age starts again
+	f.m.Advance(7*24*time.Hour + time.Minute)
+	if p := f.plan(t); len(p.Candidates) != 1 || p.Candidates[0].Eligible != winproto.CleanupAged {
+		t.Fatalf("%+v", p.Candidates)
+	}
+}
+
+func TestModelKillBetweenKeyAndCertificate(t *testing.T) {
+	f := newWriteFixture(t)
+	a, b := f.redeploy(t)
+	aSHA := thumbprint(a.Cert.Raw)
+	f.plan(t) // stamps unbound_since
+	f.m.Advance(7*24*time.Hour + time.Minute)
+	p := f.plan(t)
+	item := itemOf(p.Candidates[0], winproto.CleanupAged)
+	keys := f.m.KeyCount()
+
+	f.m.FailAfterKey(true)
+	if _, e := f.apply(t, item); e.Code != winproto.CodeOutcomeUnknown {
+		t.Fatalf("%+v", e)
+	}
+	if !f.m.HasCertificate("My", aSHA) || f.m.HasKey("My", aSHA) || f.m.KeyCount() != keys-1 {
+		t.Fatal("the certificate stays keyless, no orphan key")
+	}
+	// The failure was once: the next plan offers A again, keyless, and the next apply removes it.
+	p = f.plan(t)
+	if len(p.Candidates) != 1 || p.Candidates[0].SHA1 != aSHA || p.Candidates[0].Eligible != winproto.CleanupAged {
+		t.Fatalf("%+v", p.Candidates)
+	}
+	res, e := f.apply(t, itemOf(p.Candidates[0], winproto.CleanupAged))
+	if e.Code != "" || res.Results[0].Result != winproto.CleanupRemoved {
+		t.Fatalf("%+v %+v", res, e)
+	}
+	if f.m.HasCertificate("My", aSHA) || f.m.KeyCount() != keys-1 || !f.m.HasKey("My", thumbprint(b.Cert.Raw)) {
+		t.Fatalf("%d keys", f.m.KeyCount())
+	}
+}
+
+func TestModelPrunesStateFiles(t *testing.T) {
+	f := newWriteFixture(t)
+	f.redeployTo(t, f.issue("www.example.test"), f.issue("www.example.test"), f.issue("www.example.test"))
+	op := func(n int) string { return "journal/" + opID(n) + ".json" }
+	if before := f.m.StateFiles(); !slices.Contains(before, op(1)) || !slices.Contains(before, op(3)) {
+		t.Fatalf("%v", before)
+	}
+	old := f.m.Host().(host).Now().Add(-8 * 24 * time.Hour)
+	f.m.SetStateTime(op(1), old)
+	f.m.SetStateTime(op(2), old)
+	p := f.plan(t)
+	if p.Pruned < 1 {
+		t.Fatalf("%+v", p)
+	}
+	after := f.m.StateFiles()
+	if slices.Contains(after, op(1)) || !slices.Contains(after, op(3)) {
+		t.Fatalf("%v", after)
+	}
+}
+
+func TestModelClockAndStateTimes(t *testing.T) {
+	m := NewModel()
+	h := m.Host().(host)
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	m.SetNow(t0)
+	m.Advance(time.Hour)
+	if !h.Now().Equal(t0.Add(time.Hour)) {
+		t.Fatalf("%v", h.Now())
+	}
+	_ = h.WriteState("journal/b.json", []byte("{}"))
+	_ = h.WriteState("journal/a.json", []byte("{}"))
+	_ = h.WriteState("bindings/x.json", []byte("{}"))
+	_ = h.WriteState("imports.json", []byte("{}"))
+	fs, err := h.ListState("journal/")
+	if err != nil || len(fs) != 2 || !fs[0].ModTime.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("%v %v", fs, err)
+	}
+	for _, f := range fs {
+		if strings.Contains(f.Name, "/") {
+			t.Fatalf("names are relative: %q", f.Name)
+		}
+	}
+	if fs, _ := h.ListState("nothing/"); len(fs) != 0 {
+		t.Fatal("a missing directory lists nothing")
+	}
+	m.SetStateTime("journal/a.json", t0)
+	if fs, _ := h.ListState("journal/"); !slices.ContainsFunc(fs, func(f winhelper.StateFile) bool { return f.Name == "a.json" && f.ModTime.Equal(t0) }) {
+		t.Fatalf("%v", fs)
+	}
+	if err := h.RemoveState("journal/a.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.RemoveState("journal/a.json"); err != nil {
+		t.Fatal("an absent file is nil")
+	}
+	if got := m.StateFiles(); !slices.Equal(got, []string{"bindings/x.json", "imports.json", "journal/b.json"}) {
+		t.Fatalf("%v", got)
+	}
+	// The default clock is the system's, moved by Advance.
+	m2 := NewModel()
+	m2.Advance(time.Hour)
+	if d := time.Until(m2.Host().(host).Now()); d < 59*time.Minute || d > 61*time.Minute {
+		t.Fatalf("%v", d)
+	}
+}
+
+func TestModelRemoveCertificateWholeAndOutside(t *testing.T) {
+	f := newWriteFixture(t)
+	h := f.m.Host().(host)
+	ctx := context.Background()
+	if ok, err := h.RemoveCertificate(ctx, "My", strings.Repeat("0", 40)); ok || err != nil {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if !f.m.HasCertificate("my", f.oldSHA1) || !f.m.HasKey("My", f.oldSHA1) || f.m.HasKey("My", "nope") {
+		t.Fatal("lookups fold the store name")
+	}
+	n := f.m.KeyCount()
+	f.m.RemoveCertificate("My", f.oldSHA1) // someone else removes it: the key goes too
+	if f.m.HasCertificate("My", f.oldSHA1) || f.m.HasKey("My", f.oldSHA1) || f.m.KeyCount() != n-1 {
+		t.Fatal("removed with its key")
+	}
+	p, err := h.ProtectedThumbprints(ctx)
+	if err != nil || len(p.RDP) != 0 || len(p.WinRM) != 0 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	f.m.SetRDPThumbprint("ABCD")
+	f.m.SetWinRMThumbprints("EF", "01")
+	if p, _ := h.ProtectedThumbprints(ctx); !slices.Equal(p.RDP, []string{"abcd"}) || !slices.Equal(p.WinRM, []string{"ef", "01"}) {
+		t.Fatalf("%+v", p)
+	}
+	f.m.FailProtected(true)
+	if _, err := h.ProtectedThumbprints(ctx); err == nil {
+		t.Fatal("unreadable")
+	}
+}
+
+func TestDemoHostDumpShowsAliceImported(t *testing.T) {
+	m, err := Demo(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := func() winproto.IISDumpResponse {
+		var d winproto.IISDumpResponse
+		if r := run(t, m, "iis-dump", nil, &d); r.Exit != 0 {
+			t.Fatalf("%d %s", r.Exit, r.Stdout)
+		}
+		return d
+	}
+	for _, c := range dump().Certificates {
+		if c.AliceImported {
+			t.Fatalf("the demo's certificates are not Alice's: %+v", c)
+		}
+	}
+	ca := pki.NewCA("Alice", pki.ECDSA256, now)
+	loc := winproto.Locator{Type: winproto.BindingHostnamePort, Host: "www.win.example.test", Port: 443, AppID: winproto.AppIDIIS}
+	prev, _ := m.Binding(loc)
+	pc, _, _ := m.Host().Certificate(context.Background(), prev.Store, prev.CertSHA1)
+	der, _ := base64.StdEncoding.DecodeString(pc.DER)
+	nl := ca.Issue(pki.Opts{CommonName: "www.win.example.test", SANs: []string{"www.win.example.test"}}, now)
+	if r := run(t, m, "iis-deploy --op "+opID(1), deployInput(t, loc, sum256(der), nl), nil); r.Exit != 0 {
+		t.Fatalf("%s", r.Stdout)
+	}
+	nsha := thumbprint(nl.Cert.Raw)
+	var seen int
+	for _, c := range dump().Certificates {
+		switch {
+		case c.SHA1 == nsha && c.AliceImported:
+			seen++
+		case c.SHA1 != nsha && c.AliceImported:
+			t.Fatalf("only the new one: %+v", c)
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("%d", seen)
+	}
+}

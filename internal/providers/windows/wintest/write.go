@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -292,6 +293,7 @@ func (h host) WriteState(name string, data []byte) error {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
 	h.m.state[name] = slices.Clone(data)
+	h.m.stateTimes[name] = h.m.nowLocked()
 	return nil
 }
 
@@ -416,34 +418,184 @@ func (h host) ImportPFX(_ context.Context, storeName string, pfx, password []byt
 		return sha, true, nil
 	}
 	usable := true
+	h.m.keys[keyID(storeName, sha)] = true
 	s := h.m.storeLocked(storeName)
 	s.certs = append(s.certs, &certEntry{leaf: leaf, sha1: sha, key: key, friendly: friendlyName, provider: defaultKeyProvider, usable: &usable})
 	h.m.imported = append(h.m.imported, sha)
 	return sha, false, nil
 }
 
-// errNotModelled is the answer of the W3 cleanup methods until the emulator models them (W3 Task 4).
-var errNotModelled = errors.New("wintest: not modelled yet")
+// errCannotRead is a registry value that cannot be read (FailProtected).
+var errCannotRead = errors.New("wintest: the registry cannot be read")
 
-// Now is the helper's clock (W3 Task 4 gives the model its own).
+// errAfterKey is FailAfterKey's failure between the key and the certificate.
+var errAfterKey = errors.New("wintest: the removal failed after the key was deleted")
+
+// nowLocked is the helper's clock: SetNow's time (moved by Advance) or the system's.
+func (m *Model) nowLocked() time.Time {
+	if !m.clockFixed.IsZero() {
+		return m.clockFixed
+	}
+	return time.Now().Add(m.clockSkew) //nolint:forbidigo // the emulated helper's clock is the system's until SetNow
+}
+
+// SetNow fixes the helper's clock at t (the default is the system clock); the zero time restores it.
+func (m *Model) SetNow(t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clockFixed, m.clockSkew = t, 0
+}
+
+// Advance moves the helper's clock forward by d.
+func (m *Model) Advance(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.clockFixed.IsZero() {
+		m.clockSkew += d
+		return
+	}
+	m.clockFixed = m.clockFixed.Add(d)
+}
+
+// SetRDPThumbprint sets the certificate the RDP listener names ("" none).
+func (m *Model) SetRDPThumbprint(sha1 string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rdp = fold(sha1)
+}
+
+// SetWinRMThumbprints sets the certificates the WinRM HTTPS listeners name.
+func (m *Model) SetWinRMThumbprints(sha1s ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.winrm = nil
+	for _, s := range sha1s {
+		m.winrm = append(m.winrm, fold(s))
+	}
+}
+
+// FailProtected makes the listeners' thumbprints unreadable (ProtectedThumbprints fails) while on.
+func (m *Model) FailProtected(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failProtect = on
+}
+
+// HasCertificate reports whether the store holds the certificate.
+func (m *Model) HasCertificate(storeName, sha1 string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.certLocked(storeName, sha1) != nil
+}
+
+// HasKey reports whether the certificate's key still exists in the machine key store.
+func (m *Model) HasKey(storeName, sha1 string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.keys[keyID(storeName, sha1)]
+}
+
+// KeyCount is the number of keys in the machine key store, those of no certificate (orphans) included.
+func (m *Model) KeyCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.keys)
+}
+
+// StateFiles lists the names under the data directory, sorted.
+func (m *Model) StateFiles() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.state))
+	for n := range m.state {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// SetStateTime sets the modification time of a state file (one that does not exist is ignored).
+func (m *Model) SetStateTime(name string, t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.state[name]; ok {
+		m.stateTimes[name] = t
+	}
+}
+
+// FailAfterKey makes the next RemoveCertificate of the helper delete the key, then fail before the
+// certificate (a kill between the two); the certificate stays, keyless.
+func (m *Model) FailAfterKey(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failAfterKey = on
+}
+
+// Now is the helper's clock.
 func (h host) Now() time.Time {
-	return time.Now() //nolint:forbidigo // the emulated helper's clock until W3 Task 4 gives the model one
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return h.m.nowLocked()
 }
 
-// ListState is not modelled yet (W3 Task 4).
-func (h host) ListState(string) ([]winhelper.StateFile, error) { return nil, errNotModelled }
-
-// RemoveState is not modelled yet (W3 Task 4).
-func (h host) RemoveState(string) error { return errNotModelled }
-
-// RemoveCertificate is not modelled yet (W3 Task 4).
-func (h host) RemoveCertificate(context.Context, string, string) (bool, error) {
-	return false, errNotModelled
+// ListState lists the files directly under dir ("journal/", "bindings/"), by their names within it and
+// their modification times, sorted by name. A directory without files lists nothing.
+func (h host) ListState(dir string) ([]winhelper.StateFile, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	var out []winhelper.StateFile
+	for n := range h.m.state {
+		if rest, ok := strings.CutPrefix(n, dir); ok && rest != "" && !strings.Contains(rest, "/") {
+			out = append(out, winhelper.StateFile{Name: rest, ModTime: h.m.stateTimes[n]})
+		}
+	}
+	slices.SortFunc(out, func(a, b winhelper.StateFile) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
 }
 
-// ProtectedThumbprints is not modelled yet (W3 Task 4).
+// RemoveState removes a state file; one that is absent is nil.
+func (h host) RemoveState(name string) error {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	delete(h.m.state, name)
+	delete(h.m.stateTimes, name)
+	return nil
+}
+
+// RemoveCertificate removes the key, then the certificate (the real helper's order, F11). FailAfterKey
+// fails between the two, once: the certificate is left without its key.
+func (h host) RemoveCertificate(_ context.Context, storeName, sha1 string) (bool, error) {
+	m := h.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.certLocked(storeName, sha1)
+	if e == nil {
+		return false, nil
+	}
+	delete(m.keys, keyID(storeName, sha1))
+	e.key = nil
+	if m.failAfterKey {
+		m.failAfterKey = false
+		return false, errAfterKey
+	}
+	s := m.storeLocked(storeName)
+	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c == e })
+	return true, nil
+}
+
+// ProtectedThumbprints are the certificates the RDP and WinRM listeners name (lower-case SHA-1).
 func (h host) ProtectedThumbprints(context.Context) (winhelper.Protected, error) {
-	return winhelper.Protected{}, errNotModelled
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if h.m.failProtect {
+		return winhelper.Protected{}, errCannotRead
+	}
+	var p winhelper.Protected
+	if h.m.rdp != "" {
+		p.RDP = []string{h.m.rdp}
+	}
+	p.WinRM = slices.Clone(h.m.winrm)
+	return p, nil
 }
 
 // Event records an Application log entry.
