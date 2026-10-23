@@ -13,7 +13,8 @@ export type Capability =
   | 'verify_deployment'
   | 'read_certificate_secret'
   | 'key_login'
-  | 'http01_challenge';
+  | 'http01_challenge'
+  | 'cleanup_certificates';
 
 export const CAPABILITIES: readonly Capability[] = [
   'test_connection',
@@ -28,6 +29,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'read_certificate_secret',
   'key_login',
   'http01_challenge',
+  'cleanup_certificates',
 ];
 
 // can: whether the target's stored capability set has the capability. The server rewrites the set from the registered
