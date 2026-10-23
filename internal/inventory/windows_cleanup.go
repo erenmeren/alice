@@ -41,7 +41,7 @@ const CleanupMaxItems = 256
 
 // TemplateWindowsCompromisedInStore tells the server's and the certificate's services that a compromised certificate is
 // still in a machine store after its incident's cleanup (Ruling 9): params target_name, certificate_name, store,
-// thumbprint.
+// thumbprint, and incident_id, by which it is queued once per incident and certificate.
 const TemplateWindowsCompromisedInStore = "windows.compromised_in_store"
 
 // The reasons Alice keeps a candidate the helper would remove (CleanupKept.Reason).
@@ -224,8 +224,8 @@ FROM unnest($2::text[]) AS x (fp) GROUP BY x.fp`, target, fps, since)
 // jobs; store, sha1, sha256, reason, and incident_id for an incident's job) for every certificate the apply removed;
 // and, for an incident's job only (Ruling 9), one notice TemplateWindowsCompromisedInStore per watched compromised
 // certificate that is still in a store afterwards (the helper kept it: not Alice's, or still used; or it was removable
-// and not removed), to the server's and the certificate's services. A scheduled job tells nobody: the incident's job,
-// queued once per server and incident, is the one notice.
+// and not removed), to the server's and the certificate's services, at most once per incident and certificate
+// (compromisedInStore). A scheduled job tells nobody.
 func (s *Service) RecordCleanup(ctx context.Context, target uuid.UUID, incident *uuid.UUID, plan providers.CleanupPlan, d CleanupDecision,
 	res providers.CleanupApplyResult) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -271,7 +271,7 @@ func (s *Service) RecordCleanup(ctx context.Context, target uuid.UUID, incident 
 			stores[w.SHA256], thumbs[w.SHA256] = append(stores[w.SHA256], w.Store), w.SHA1
 		}
 		for _, fp := range order {
-			if err := s.compromisedInStore(ctx, tx, target, fp, strings.Join(stores[fp], ", "), thumbs[fp]); err != nil {
+			if err := s.compromisedInStore(ctx, tx, target, *incident, fp, strings.Join(stores[fp], ", "), thumbs[fp]); err != nil {
 				return err
 			}
 		}
@@ -279,8 +279,19 @@ func (s *Service) RecordCleanup(ctx context.Context, target uuid.UUID, incident 
 	})
 }
 
-// compromisedInStore queues the notice about one compromised certificate still in a store of the server.
-func (s *Service) compromisedInStore(ctx context.Context, tx pgx.Tx, target uuid.UUID, fp, store, thumbprint string) error {
+// compromisedInStore queues the notice about one compromised certificate still in a store of the server, once per
+// incident and certificate: a second cleanup of the same incident (another place on the server settled after the first
+// job ended) finds the notice already in the outbox by its incident_id and thumbprint, as the key preview e-mail finds
+// its last one (sshkeys lastPreviewMail).
+func (s *Service) compromisedInStore(ctx context.Context, tx pgx.Tx, target, incident uuid.UUID, fp, store, thumbprint string) error {
+	var told bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM notifications_outbox WHERE template_key = $1 AND params->>'incident_id' = $2
+    AND params->>'thumbprint' = $3)`, TemplateWindowsCompromisedInStore, incident.String(), thumbprint).Scan(&told); err != nil {
+		return fmt.Errorf("inventory: read whether the incident's notice was queued: %w", err)
+	}
+	if told {
+		return nil
+	}
 	var name string
 	if err := tx.QueryRow(ctx, "SELECT name::text FROM targets WHERE id = $1", target).Scan(&name); err != nil {
 		return fmt.Errorf("inventory: read the server's name: %w", err)
@@ -307,7 +318,7 @@ WHERE fingerprint_sha256 = $1`, fp).Scan(&certName)
 		}
 	}
 	params := map[string]string{"target_name": truncRunes(name, 200), "certificate_name": truncRunes(strings.TrimSpace(certName), 200),
-		"store": store, "thumbprint": thumbprint}
+		"store": store, "thumbprint": thumbprint, "incident_id": incident.String()}
 	return s.notifier.NotifyServices(ctx, tx, svcs, TemplateWindowsCompromisedInStore, params)
 }
 

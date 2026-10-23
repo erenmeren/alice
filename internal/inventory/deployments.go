@@ -345,6 +345,19 @@ func (l deployLocation) deployableIdentity() bool {
 	return l.hasLocator && l.certPath != "" && utf8.RuneCountInString(l.certPath) <= providers.MaxCanonicalLength && l.keyPath == ""
 }
 
+// deployable is the location half of whether Alice can deploy to a location (checkDeployLocation's first rule; the
+// server half is canDeploy): found at the last scan, supported, and an identity a deployment can record. The incident
+// engine's place selection and the impact view use this same rule, reading deployableColumns into deployableDest.
+func (l deployLocation) deployable() bool { return !l.missing && l.supported && l.deployableIdentity() }
+
+// deployableColumns are the columns of certificate_locations l that deployable reads, in deployableDest's order.
+const deployableColumns = `l.supported, l.missing_since IS NOT NULL, l.cert_path, l.key_path, l.kind, l.locator IS NOT NULL`
+
+// deployableDest are the scan destinations of deployableColumns.
+func (l *deployLocation) deployableDest() []any {
+	return []any{&l.supported, &l.missing, &l.certPath, &l.keyPath, &l.kind, &l.hasLocator}
+}
+
 // targetReady are the statuses a deployment may be requested in: connected, or reachable again
 // by the job's own retries (unreachable), or being re-tested (checking). A server that needs a
 // person (pending or changed host key, failed sign-in) or is disabled is refused (F-31).
@@ -530,7 +543,7 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 // R49 (design §5.6 (c)), an *authz.UntrustedError when the server's service does not accept the source service's keys.
 func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCertificate, l deployLocation, t Target) (string, error) {
 	switch {
-	case l.missing || !l.supported || !l.deployableIdentity():
+	case !l.deployable():
 		return "location_unsupported", ErrLocationUnsupported
 	case !s.canDeploy(t.Type):
 		return "location_unsupported", ErrLocationUnsupported

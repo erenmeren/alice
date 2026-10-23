@@ -329,13 +329,22 @@ func TestRecordCleanupAuditsAndNotifiesOnce(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	want := []map[string]string{
-		{"target_name": "iis-01", "certificate_name": "kept.example.test", "store": "My", "thumbprint": thumbprint(kept)},
-		{"target_name": "iis-01", "certificate_name": "gone.example.test", "store": "My", "thumbprint": thumbprint(gone)},
+		{"target_name": "iis-01", "certificate_name": "kept.example.test", "store": "My", "thumbprint": thumbprint(kept), "incident_id": incident.String()},
+		{"target_name": "iis-01", "certificate_name": "gone.example.test", "store": "My", "thumbprint": thumbprint(gone), "incident_id": incident.String()},
 	}
 	if thumbprint(gone) < thumbprint(kept) {
 		want[0], want[1] = want[1], want[0]
 	}
 	assert.Equal(t, want, got, "the kept one and the removable one that was not removed; not the absent one")
+	n := h.emails(inventory.TemplateWindowsCompromisedInStore)
+
+	// A second cleanup of the same incident (another place of it on the server settled after the first job ended) does not
+	// tell again about the same certificates; another incident's does.
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	assert.Equal(t, n, h.emails(inventory.TemplateWindowsCompromisedInStore), "once per incident and certificate")
+	other := uuid.Must(uuid.NewV7())
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &other, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	assert.Equal(t, 2*n, h.emails(inventory.TemplateWindowsCompromisedInStore), "another incident tells again")
 
 	_, err = h.db.Owner.Exec(h.ctx, "DELETE FROM notifications_outbox")
 	require.NoError(t, err)

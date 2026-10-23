@@ -27,15 +27,22 @@ func TestIncidentQueuesWindowsCleanup(t *testing.T) {
 	var old uuid.UUID
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT id FROM certificates WHERE fingerprint_sha256 = $1", pki.Fingerprint(f.old.Cert)).Scan(&old))
 
+	// The impact view and the incident's places use a deployment request's rule: the IIS bindings are deployable places,
+	// a binding with a key problem and the WinRM binding are not.
+	impact, err := h.svc.CertificateImpact(h.ctx, old)
+	require.NoError(t, err)
+	deployable := map[uuid.UUID]bool{}
+	for _, l := range impact.Locations {
+		deployable[l.LocationID] = l.Deployable
+	}
+	assert.Equal(t, map[uuid.UUID]bool{f.bound: true, f.spare: true, f.file: true, f.foreign: false, f.keyProb: false}, deployable,
+		"the CCS binding names no certificate, so it is no place of it")
+
 	i, err := h.svc.StartIncident(h.ctx, f.admin, old, inventory.IncidentInput{})
 	require.NoError(t, err)
-	// The incident's place selection (insertIncidentLocations) reads a deployable place by a Unix path, so it skips an
-	// http.sys binding as incident.not_deployable today (reported to the controller); the two IIS bindings are made
-	// pending here as the owner, so the engine requests, follows and settles them as it does a file.
-	assert.Equal(t, "skipped:"+inventory.IncidentCodeNotDeployable, locationStatus(i)[f.bound])
-	_, err = h.db.Owner.Exec(h.ctx, `UPDATE certificate_incident_locations SET status = 'pending', error_code = '' WHERE incident_id = $1
-    AND location_id = ANY ($2)`, i.ID, []uuid.UUID{f.bound, f.spare})
-	require.NoError(t, err)
+	assert.Equal(t, map[uuid.UUID]string{f.bound: "pending", f.spare: "pending", f.file: "pending",
+		f.foreign: "skipped:" + inventory.IncidentCodeNotDeployable, f.keyProb: "skipped:" + inventory.IncidentCodeNotDeployable,
+	}, locationStatus(i), "the IIS bindings are places Alice replaces")
 	_, err = h.svc.ChooseIncidentReplacement(h.ctx, f.admin, i.ID, f.cert.ID)
 	require.NoError(t, err)
 	_, err = h.svc.AdvanceIncidents(h.ctx)

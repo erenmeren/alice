@@ -50,8 +50,8 @@ type ImpactLocation struct {
 	CertificateID *uuid.UUID // the certificate in the file now (nil: none readable)
 	Fingerprint   string     // its fingerprint ("" when none)
 	Match         string
-	// Deployable: Alice can deploy to the file (supported, a server whose software deploys certificates, a path the
-	// helper takes); otherwise it is listed for a person to replace by hand.
+	// Deployable: Alice can deploy to the place (a deployment request's rule: deployLocation.deployable on a server whose
+	// provider deploys certificates; a file or a Windows binding); otherwise it is listed for a person to replace by hand.
 	Deployable bool
 	// ACMECertificateID is the ACME certificate the file follows (a binding), nil for none.
 	ACMECertificateID *uuid.UUID
@@ -151,8 +151,7 @@ FROM certificates x WHERE x.public_key_sha256 = $1 ORDER BY x.id = $2 DESC, x.no
 	// Files on live servers that hold (or were last given by Alice) a certificate with this key.
 	rows, err = tx.Query(ctx, `SELECT l.id, l.target_id, t.name::text, t.type, l.cert_path, l.certificate_id, coalesce(x.fingerprint_sha256, ''),
     coalesce(x.fingerprint_sha256 = $2 OR l.deployed_fingerprint = $2, false),
-    l.supported AND l.missing_since IS NULL AND l.cert_path ~ '^/[A-Za-z0-9._/@:+-]+$' AND l.key_path ~ '^/[A-Za-z0-9._/@:+-]+$',
-    b.acme_certificate_id, l.binding_id IS NOT NULL
+    b.acme_certificate_id, l.binding_id IS NOT NULL, `+deployableColumns+`
 FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 LEFT JOIN certificates x ON x.id = l.certificate_id
@@ -167,9 +166,10 @@ ORDER BY t.name, l.cert_path, l.id LIMIT $3`, c.PublicKeySHA256, c.Fingerprint, 
 	out.Locations, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (ImpactLocation, error) {
 		var l ImpactLocation
 		var same bool
-		err := r.Scan(&l.LocationID, &l.TargetID, &l.TargetName, &l.TargetType, &l.CertPath, &l.CertificateID, &l.Fingerprint, &same,
-			&l.Deployable, &l.ACMECertificateID, &l.KVBound)
-		l.Match = match(same)
+		var dl deployLocation
+		err := r.Scan(append([]any{&l.LocationID, &l.TargetID, &l.TargetName, &l.TargetType, &l.CertPath, &l.CertificateID, &l.Fingerprint, &same,
+			&l.ACMECertificateID, &l.KVBound}, dl.deployableDest()...)...)
+		l.Match, l.Deployable = match(same), dl.deployable()
 		return l, err
 	})
 	if err != nil {

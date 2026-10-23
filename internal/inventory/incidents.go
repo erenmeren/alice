@@ -414,13 +414,13 @@ WHERE o.acme_certificate_id = $1 AND x.public_key_sha256 = $2 AND x.source = 'ac
 	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 }
 
-// insertIncidentLocations writes the affected files of live servers as the incident's locations and returns how many are
+// insertIncidentLocations writes the affected places of live servers (files and Windows bindings: deployLocation's
+// deployable rule, as a deployment request decides) as the incident's locations and returns how many are
 // pending (Alice replaces them) and skipped.
 func (s *Service) insertIncidentLocations(ctx context.Context, tx pgx.Tx, id, certificateID uuid.UUID, fingerprint, key string,
 	acmeID *uuid.UUID, now time.Time) (pending, skipped int, err error) {
 	rows, err := tx.Query(ctx, `SELECT l.id, t.type, coalesce(x.fingerprint_sha256 = $2 OR l.deployed_fingerprint = $2, false),
-    l.supported AND l.missing_since IS NULL AND l.cert_path ~ '^/[A-Za-z0-9._/@:+-]+$' AND l.key_path ~ '^/[A-Za-z0-9._/@:+-]+$',
-    b.acme_certificate_id, l.binding_id IS NOT NULL
+    b.acme_certificate_id, l.binding_id IS NOT NULL, `+deployableColumns+`
 FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 LEFT JOIN certificates x ON x.id = l.certificate_id
@@ -441,7 +441,10 @@ ORDER BY l.id LIMIT $4`, key, fingerprint, acmeID, MaxImpactRows)
 	}
 	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (affected, error) {
 		var x affected
-		return x, r.Scan(&x.loc, &x.typ, &x.same, &x.deployable, &x.bound, &x.kvBound)
+		var dl deployLocation
+		err := r.Scan(append([]any{&x.loc, &x.typ, &x.same, &x.bound, &x.kvBound}, dl.deployableDest()...)...)
+		x.deployable = dl.deployable()
+		return x, err
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("inventory: read the affected locations: %w", err)
