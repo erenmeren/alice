@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -90,6 +91,55 @@ const (
 	// BackoffRepairFailing: DriftMaxRepairs repairs within DriftRepairWindow failed.
 	BackoffRepairFailing = "repair_failing"
 )
+
+// Causes of a drifted Windows binding (LocationObservation.Cause; R62 Ruling 15): derived from the binding's problems,
+// never stored.
+const (
+	// DriftCauseRepointed: the binding names another certificate than the desired one (someone bound another one).
+	DriftCauseRepointed = "binding_repointed"
+	// DriftCauseCertRemoved: the binding names a certificate its store no longer holds (problem cert_missing).
+	DriftCauseCertRemoved = "cert_removed"
+	// DriftCauseKeyUnusable: the store holds the certificate without a key http.sys can use (a key problem).
+	DriftCauseKeyUnusable = "key_unusable"
+)
+
+// Problems of a Windows binding the drift rules read (the Windows provider's ProblemCertMissing, ProblemKeyMissing and
+// ProblemKeyInaccessible; inventory may not import the provider). problemCertMissing is locations.go's.
+const (
+	problemKeyMissing      = "key_missing"
+	problemKeyInaccessible = "key_inaccessible"
+)
+
+// warnAutoCertRebind is the Windows server's facts warning that its AutoCertRebind task is on (winproto.WarnAutoCertRebind:
+// on a renewal by autoenrolment Windows re-points the bindings itself, design §6.2 item 4, §11).
+const warnAutoCertRebind = "win_autocertrebind"
+
+// bindingBroken reports whether a location of kind with these problems is a Windows binding whose certificate left its
+// store or whose key http.sys cannot use (R62 Ruling 14). Never true for any other kind.
+func bindingBroken(kind providers.LocationKind, problem, keyProblem string) bool {
+	return kind == providers.LocationWinSSLBinding &&
+		(problem == problemCertMissing || keyProblem == problemKeyMissing || keyProblem == problemKeyInaccessible)
+}
+
+// driftCause is the cause of a drifted Windows binding (R62 Ruling 15): cert_removed (problem cert_missing),
+// key_unusable (any key problem), else binding_repointed; "" for a location that is not drifted or not a Windows binding.
+func driftCause(kind providers.LocationKind, health, problem, keyProblem string) string {
+	switch {
+	case kind != providers.LocationWinSSLBinding || health != HealthDrifted:
+		return ""
+	case problem == problemCertMissing:
+		return DriftCauseCertRemoved
+	case keyProblem != "":
+		return DriftCauseKeyUnusable
+	}
+	return DriftCauseRepointed
+}
+
+// driftRepairable reports whether a drift of this cause can be repaired by deploying the desired certificate again: not
+// when the certificate left the store or its key is unusable (the binding is unsupported; R62 Ruling 14).
+func driftRepairable(cause string) bool {
+	return cause != DriftCauseCertRemoved && cause != DriftCauseKeyUnusable
+}
 
 // TriggerDriftRepair is the trigger of an automatic repair's deployment (deployments.trigger, migration 00027).
 const TriggerDriftRepair = "drift_repair"
@@ -179,9 +229,14 @@ type LocationObservation struct {
 	BackedOffAt                    *time.Time
 	ActiveDeploymentID             *uuid.UUID
 	NextObserveAt                  *time.Time
+	// Cause is a drifted Windows binding's cause (DriftCause*; "" otherwise) and AutoCertRebind whether its server's
+	// AutoCertRebind task is on (false for every other kind); R62 Ruling 15.
+	Cause          string
+	AutoCertRebind bool
 
 	deployedAt *time.Time // the desired certificate's newest successful deployment to the location
 	certPath   string
+	kind       providers.LocationKind
 }
 
 // healthInput is what locationHealth decides from.
@@ -192,6 +247,7 @@ type healthInput struct {
 	fileFP          string
 	fileAt          *time.Time
 	changedOutside  *time.Time
+	fileBroken      bool // a Windows binding whose certificate left its store or whose key is unusable (bindingBroken)
 	tlsFP           string
 	tlsAt           *time.Time
 	attemptAt       *time.Time
@@ -211,7 +267,9 @@ func newer(t, ref *time.Time) bool {
 //     it, and no observation, now or earlier, found it there);
 //   - drifted: an observation newer than the desired certificate's last successful deployment disagrees with it: the
 //     website served another leaf, or the scan read another certificate in the file and judged it a change outside
-//     Alice (changed_outside_at: a certificate that Alice's own deployments can have left is never one);
+//     Alice (changed_outside_at: a certificate that Alice's own deployments can have left is never one); a Windows
+//     binding that broke (fileBroken: its certificate left the store or its key is unusable, R62 Ruling 14) disagrees
+//     on the same terms even when it still names the desired certificate;
 //   - unreachable: the last probe completed no handshake and is newer than both the last one that did and the
 //     deployment;
 //   - stale: the newest agreeing evidence (the deployment, a file that holds the desired certificate, a website that
@@ -231,7 +289,7 @@ func locationHealth(in healthInput) string {
 	if in.deployedAt == nil && in.inSyncFP != in.desired && !fileAgrees && !tlsAgrees {
 		return HealthPending
 	}
-	fileDisagrees := newer(in.fileAt, in.deployedAt) && in.fileFP != in.desired && newer(in.changedOutside, in.deployedAt)
+	fileDisagrees := newer(in.fileAt, in.deployedAt) && newer(in.changedOutside, in.deployedAt) && (in.fileFP != in.desired || in.fileBroken)
 	tlsDisagrees := newer(in.tlsAt, in.deployedAt) && in.tlsFP != in.desired
 	if fileDisagrees || tlsDisagrees {
 		return HealthDrifted
@@ -277,7 +335,10 @@ const observationSelect = `SELECT l.id, l.target_id, l.cert_path, l.file_observe
     coalesce(o.backoff_reason, ''), o.backed_off_at,
     (SELECT max(d.finished_at) FROM deployments d WHERE d.location_id = l.id AND d.certificate_id = dc.id AND d.status IN ('succeeded', 'unchanged')),
     ld.id, coalesce(ld.new_fingerprint, ''), ld.finished_at, coalesce(ld.verified, ''), coalesce(ld.trust_status, ''),
-    (SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1)
+    (SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1),
+    l.kind, l.problem, l.key_problem,
+    coalesce((SELECT t.facts->'warnings' @> jsonb_build_array(jsonb_build_object('Code', '` + warnAutoCertRebind + `'))
+              FROM targets t WHERE t.id = l.target_id), false)
 FROM certificate_locations l
 LEFT JOIN certificates fc ON fc.id = l.certificate_id
 ` + driftSourceJoin + `
@@ -308,12 +369,15 @@ func scanObservation(row pgx.Row, now time.Time) (LocationObservation, error) {
 		backoff                            string
 		driftSince, backedOff, next, attAt *time.Time
 		attemptErr, inSyncFP               string
+		problem, keyProblem                string
+		autoCertRebind                     bool
 	)
 	err := row.Scan(&o.LocationID, &o.TargetID, &o.certPath, &fileAt, &changedOutside, &fileCert, &fileFP, &fileNotAfter,
 		&sourceKind, &sourceID, &sourceAuto, &desiredCert, &desiredFP, &desiredNA,
 		&modeSetting, &next, &attAt, &attemptErr, &tlsAt, &tlsFP, &probe, &level, &trust, &trustErr, &tlsCert, &tlsNA,
 		&inSyncFP, &driftSince, &driftFP, &driftSource, &backoff, &backedOff,
-		&o.deployedAt, &lastID, &lastFP, &lastAt, &lastVerified, &lastTrust, &active)
+		&o.deployedAt, &lastID, &lastFP, &lastAt, &lastVerified, &lastTrust, &active,
+		&o.kind, &problem, &keyProblem, &autoCertRebind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return LocationObservation{}, ErrNotFound
 	}
@@ -351,11 +415,13 @@ func scanObservation(row pgx.Row, now time.Time) (LocationObservation, error) {
 	o.deployedAt = utcPtr(o.deployedAt)
 	in := healthInput{deployedAt: o.deployedAt, inSyncFP: inSyncFP, fileAt: fileAt, fileFP: fileFP, changedOutside: changedOutside,
 		tlsAt: tlsAt, tlsFP: tlsFP, attemptAt: attAt, attemptFailed: attemptErr != "", active: active != nil, now: now,
-		staleAfter: now.Add(-DriftStaleAfter)}
+		staleAfter: now.Add(-DriftStaleAfter), fileBroken: bindingBroken(o.kind, problem, keyProblem)}
 	if o.Desired != nil {
 		in.desired = o.Desired.Fingerprint
 	}
 	o.Health = locationHealth(in)
+	o.Cause = driftCause(o.kind, o.Health, problem, keyProblem)
+	o.AutoCertRebind = o.kind == providers.LocationWinSSLBinding && autoCertRebind
 	return o, nil
 }
 
@@ -427,6 +493,10 @@ var (
 	// ErrDriftRepairOff: a queued automatic repair whose location is no longer in mode auto (a person chose another
 	// mode, or automatic repair backed off).
 	ErrDriftRepairOff = errors.New("inventory: automatic repair is off for the location")
+	// ErrDriftNotRepairable: a repair was asked for a Windows binding whose certificate left its store or whose key
+	// http.sys cannot use (cause cert_removed or key_unusable, R62 Ruling 14): deploying the desired certificate again
+	// cannot repair it, and the binding is unsupported until a person fixes the store.
+	ErrDriftNotRepairable = errors.New("inventory: the drifted binding cannot be repaired from Alice")
 )
 
 // Closed reasons of a queued repair that no longer holds (deployments.error_code).
@@ -508,7 +578,7 @@ func validateMode() error {
 // through the request path of its source (DeployACMENow for an ACME certificate, RequestKVDeployment of the current
 // version for a Key Vault binding), so every check, refusal, licence rule and audit row of a person's deployment
 // applies. It works in every mode (in mode approve it is the prepared repair). ErrNotFound, ErrDriftNotBound,
-// ErrDriftNotDrifted.
+// ErrDriftNotDrifted, ErrDriftNotRepairable (a Windows binding whose certificate or key broke, R62 Ruling 14).
 func (s *Service) RepairDrift(ctx context.Context, a Actor, id uuid.UUID, strictSession bool) ([]RequestedDeployment, error) {
 	o, err := s.LocationObservation(ctx, id)
 	if err != nil {
@@ -519,6 +589,8 @@ func (s *Service) RepairDrift(ctx context.Context, a Actor, id uuid.UUID, strict
 		return nil, ErrDriftNotBound
 	case o.Health != HealthDrifted:
 		return nil, ErrDriftNotDrifted
+	case !driftRepairable(o.Cause):
+		return nil, ErrDriftNotRepairable
 	}
 	if o.Source == DriftSourceACME {
 		return s.DeployACMENow(ctx, a, *o.SourceID, ACMEDeployInput{LocationIDs: []uuid.UUID{id}})
@@ -619,7 +691,8 @@ WHERE fingerprint_sha256 = $1`, fp).Scan(&n)
 
 // driftNotice records a drift notice of a location in the alerts ledger (kind, the location, the instant that names the
 // episode or the back-off, threshold 0) and, only when the row is new, queues template for the location's services
-// (its server's and its certificate's, R56). So each is told once.
+// (its server's and its certificate's, R56). So each is told once. A Windows binding's goes in the Windows text of its
+// cause, with windows_note when its server's AutoCertRebind task is on (notifyLocation, windowsLocationMail).
 func (s *Service) driftNotice(ctx context.Context, tx pgx.Tx, kind, template string, o LocationObservation, at time.Time, observed string) error {
 	params, err := driftNames(ctx, tx, o, observed)
 	if err != nil {
@@ -640,7 +713,7 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 	if s.notifier == nil {
 		return nil
 	}
-	if err := s.notifyLocation(ctx, tx, o.LocationID, template, params); err != nil {
+	if err := s.notifyLocation(ctx, tx, o, template, params); err != nil {
 		return fmt.Errorf("inventory: queue the drift notice: %w", err)
 	}
 	return nil
@@ -673,6 +746,52 @@ const (
 // DriftTemplates lists the drift e-mails (render tests).
 func DriftTemplates() []string {
 	return []string{TemplateDriftDetected, TemplateDriftRepairReady, TemplateDriftRepaired, TemplateDriftFlapping, TemplateDriftRepairFailing}
+}
+
+// The Windows texts of the drift e-mails (R62 Ruling 16): R52's facts and params for an http.sys binding of a Windows
+// server, naming the binding and its certificate store, never a file. A detected drift has one text per cause; an
+// approve-mode drift whose cause cannot be repaired gets the detected text of its cause. Param windows_note
+// (autocertrebind) asks notify.Sender.Render for the AutoCertRebind sentence (email.windows_note_autocertrebind).
+const (
+	TemplateDriftDetectedWindows            = "location.drift_detected_windows"
+	TemplateDriftDetectedWindowsCertRemoved = "location.drift_detected_windows_cert_removed"
+	TemplateDriftDetectedWindowsKeyUnusable = "location.drift_detected_windows_key_unusable"
+	TemplateDriftRepairReadyWindows         = "location.drift_repair_ready_windows"
+	TemplateDriftRepairedWindows            = "location.drift_repaired_windows"
+	TemplateDriftFlappingWindows            = "location.drift_flapping_windows"
+	TemplateDriftRepairFailingWindows       = "location.drift_repair_failing_windows"
+)
+
+// WindowsDriftTemplates lists the Windows texts of the drift e-mails (render tests).
+func WindowsDriftTemplates() []string {
+	return []string{TemplateDriftDetectedWindows, TemplateDriftDetectedWindowsCertRemoved, TemplateDriftDetectedWindowsKeyUnusable,
+		TemplateDriftRepairReadyWindows, TemplateDriftRepairedWindows, TemplateDriftFlappingWindows, TemplateDriftRepairFailingWindows}
+}
+
+// windowsNoteAutoCertRebind is the value of param windows_note that asks for the AutoCertRebind sentence.
+const windowsNoteAutoCertRebind = "autocertrebind"
+
+// windowsLocationMail is the template and params of a drift e-mail about o as queued (mirror of windowsDeploymentMail).
+// Anything but a Windows binding keeps both as given, byte for byte. A Windows binding's is the Windows text: of its
+// cause for a detected drift, the detected text of its cause for a prepared repair that cannot be made, else the
+// Windows text of the template; with windows_note=autocertrebind when its server's AutoCertRebind task is on.
+func windowsLocationMail(o LocationObservation, template string, params map[string]string) (string, map[string]string) {
+	if o.kind != providers.LocationWinSSLBinding || !slices.Contains(DriftTemplates(), template) {
+		return template, params
+	}
+	detected := map[string]string{DriftCauseCertRemoved: TemplateDriftDetectedWindowsCertRemoved,
+		DriftCauseKeyUnusable: TemplateDriftDetectedWindowsKeyUnusable}[o.Cause]
+	if detected != "" && (template == TemplateDriftDetected || template == TemplateDriftRepairReady) {
+		template = detected
+	} else {
+		template += windowsTemplateSuffix
+	}
+	out := make(map[string]string, len(params)+1)
+	maps.Copy(out, params)
+	if o.AutoCertRebind {
+		out["windows_note"] = windowsNoteAutoCertRebind
+	}
+	return template, out
 }
 
 // driftModes lists the stored repair modes.

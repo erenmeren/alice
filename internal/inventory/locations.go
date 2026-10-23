@@ -391,6 +391,8 @@ type existingLocation struct {
 	deployed    string
 	fileSHA     string
 	keyType     string
+	problem     string // the stored problems (what the last scan found)
+	keyProblem  string
 	sameLocator bool // the stored locator is the reported one (both NULL for a file)
 	// The location's unfinished deployment (state not done) and its finished ones that matter to
 	// the changed-outside check (aliceFingerprints): every one finished since the location was last
@@ -495,6 +497,12 @@ func (e *existingLocation) changedOutside(fp string) bool {
 	return !unknown && !slices.Contains(expected, fp)
 }
 
+// newlyBroken reports whether p, the scan of a Windows binding stored with no problem, finds its certificate gone from
+// the store or its key unusable (bindingBroken; R62 Ruling 14). A file never is.
+func (e *existingLocation) newlyBroken(p preparedLocation) bool {
+	return e.problem == "" && e.keyProblem == "" && bindingBroken(p.kind, p.loc.Problem, p.loc.KeyProblem)
+}
+
 // preparedScan is the certificate half of a discovery made storable before its transaction:
 // every reported location prepared (prepareLocation: the certificate files parsed), the
 // certificates read with whether their chains are complete, and how many locations could not be
@@ -575,7 +583,9 @@ func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredC
 // A location whose file now holds another certificate moves to it; when the old one was known and
 // the new one is not Alice's (deployed_fingerprint, or what a deployment of the location can have
 // left, see aliceFingerprints), changed_outside_at is set and an audit event is returned for the
-// caller to append last.
+// caller to append last. So too, Windows only (R62 Ruling 14), when a bound Windows binding stored
+// with no problem is found with its certificate gone from the store or its key unusable: Alice never
+// removes a bound certificate nor changes a key's access (newlyBroken; the event names the problems).
 func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, scan preparedScan, markMissing bool,
 	now time.Time) (certSummary, []audit.Event, error) {
 	sum := certSummary{Skipped: scan.skipped, Certificates: len(scan.read)}
@@ -623,14 +633,24 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 		}
 		seen = append(seen, prev.id)
 		changedOutside := prev.changedOutside(fp)
+		broken := false
+		if prev.newlyBroken(p) {
+			if broken, err = locationBound(ctx, tx, prev.id); err != nil {
+				return certSummary{}, nil, err
+			}
+		}
+		changedOutside = changedOutside || broken
 		if err := updateLocation(ctx, tx, prev.id, p, certID, fileSHA, keyType, changedOutside, now); err != nil {
 			return certSummary{}, nil, err
 		}
 		if changedOutside {
+			details := map[string]string{"location_id": prev.id.String(), "target_id": t.ID.String(), "cert_path": p.loc.CertPath,
+				"fingerprint": fp, "previous_fingerprint": prev.baseline()}
+			if broken { // the problem that broke it: cert_missing, else the key's (an audit key may not name a key)
+				details["problem"] = cmp.Or(p.loc.Problem, p.loc.KeyProblem)
+			}
 			events = append(events, audit.Event{Actor: audit.SystemActor("jobs"), Action: "location.changed_outside",
-				ObjectType: "certificate_location", ObjectID: prev.id.String(), Result: audit.Success, Details: map[string]string{
-					"location_id": prev.id.String(), "target_id": t.ID.String(), "cert_path": p.loc.CertPath, "fingerprint": fp,
-					"previous_fingerprint": prev.baseline()}})
+				ObjectType: "certificate_location", ObjectID: prev.id.String(), Result: audit.Success, Details: details})
 		}
 	}
 	if markMissing {
@@ -643,6 +663,15 @@ WHERE target_id = $1 AND missing_since IS NULL AND NOT (id = ANY($3))`, t.ID, no
 		sum.MissingLocations = int(tag.RowsAffected())
 	}
 	return sum, events, nil
+}
+
+// locationBound reports whether the location follows a binding (an ACME or a Key Vault binding, boundLocationWhere).
+func locationBound(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	var bound bool
+	if err := tx.QueryRow(ctx, "SELECT "+boundLocationWhere+" FROM certificate_locations l WHERE l.id = $1", id).Scan(&bound); err != nil {
+		return false, fmt.Errorf("inventory: read whether the location is bound: %w", err)
+	}
+	return bound, nil
 }
 
 // locatorConflict reports a location that is not a file whose stored row disagrees with the report: the row of its path
@@ -673,11 +702,11 @@ func lockLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, kind provide
 		loc = &s
 	}
 	err := tx.QueryRow(ctx, `SELECT l.id, l.certificate_id, coalesce(c.fingerprint_sha256, ''), l.deployed_fingerprint, l.cert_file_sha256, l.key_type,
-    l.last_seen_at, l.locator IS NOT DISTINCT FROM $4::jsonb
+    l.last_seen_at, l.locator IS NOT DISTINCT FROM $4::jsonb, l.problem, l.key_problem
 FROM certificate_locations l LEFT JOIN certificates c ON c.id = l.certificate_id
 WHERE l.target_id = $1 AND l.kind = $2 AND certificate_location_path_hash(l.cert_path) = certificate_location_path_hash($3) AND l.cert_path = $3
 FOR UPDATE OF l`, target, kind.OrFile(), path, loc).Scan(&e.id, &e.certID, &e.fingerprint, &e.deployed, &e.fileSHA, &e.keyType, &lastSeen,
-		&e.sameLocator)
+		&e.sameLocator, &e.problem, &e.keyProblem)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

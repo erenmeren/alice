@@ -271,12 +271,14 @@ func previousCertificate(ref *providers.BackupRef) string {
 	return "-"
 }
 
-// notifyLocation queues an e-mail about a website (location.drift_*) for its server's and its certificate's services.
-func (s *Service) notifyLocation(ctx context.Context, tx pgx.Tx, location uuid.UUID, template string, params map[string]string) error {
-	svcs, err := locationServices(ctx, tx, location)
+// notifyLocation queues an e-mail about the website of o (location.drift_*) for its server's and its certificate's
+// services; a Windows binding's in its Windows text (windowsLocationMail, R62 Ruling 16).
+func (s *Service) notifyLocation(ctx context.Context, tx pgx.Tx, o LocationObservation, template string, params map[string]string) error {
+	svcs, err := locationServices(ctx, tx, o.LocationID)
 	if err != nil {
 		return err
 	}
+	template, params = windowsLocationMail(o, template, params)
 	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
 }
 

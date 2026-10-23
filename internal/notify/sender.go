@@ -229,6 +229,11 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	case "kv":
 		body += "\n\n" + s.Catalog.T(locale, "email.license_note_kv", map[string]string{"license_url": clean["license_url"]})
 	}
+	// A Windows server's AutoCertRebind task (R62 Ruling 16): the sentence that it may have re-pointed the binding; the
+	// param that asks for it is not rendered.
+	if params["windows_note"] == "autocertrebind" {
+		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_autocertrebind", nil)
+	}
 	body += "\n\n" + s.Catalog.T(locale, "email.footer", nil)
 	return Message{To: to, Subject: subject, Body: body}
 }

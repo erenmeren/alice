@@ -2032,6 +2032,7 @@
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
     "license_note": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}",
     "license_note_kv": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}\nKey Vault data may be outdated while the license is expired.",
+    "windows_note_autocertrebind": "Note: the AutoCertRebind task is on for this server. When autoenrolment renews a certificate, Windows binds the renewed certificate by itself, which changes the binding outside Alice. If Alice manages this binding, turn the task off (Task Scheduler, Microsoft\\Windows\\CertificateServicesClient\\AutoCertRebind).",
     "backup": {
       "failed": {
         "subject": "Alice could not make its daily backup",
@@ -2202,6 +2203,34 @@
       "drift_repair_failing": {
         "subject": "Alice stopped repairing {{cert_path}} on {{target_name}}: the repairs failed",
         "body": "Alice tried 3 times within 24 hours to put {{certificate_name}} back into the file {{cert_path}} on the server {{target_name}} (Alice found {{observed_name}}), and each deployment failed. The deployment history in Alice shows each step and the reason.\n\nAlice no longer repairs this location by itself: it only reports changes now.\n\nWhat to do: remove the cause shown in the deployment history, then choose Repair, or choose automatic repair again on the server's page in Alice."
+      },
+      "drift_detected_windows": {
+        "subject": "Certificate changed outside Alice on {{target_name}}: {{cert_path}}",
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} no longer has the certificate it should have ({{certificate_name}}). Alice found {{observed_name}} instead, although the right certificate was there before: someone or another tool bound another certificate, or changed what the website serves.\n\nAlice did not put the right certificate back by itself.\n\nWhat to do: open the server in Alice. Its certificate list shows, for this binding, the certificate it should have, what Alice last deployed, the certificate the binding names and what the website serves, each with its time. If the change was not intended, choose Repair to deploy the right certificate again. If another tool manages this binding, remove it from the certificate's bindings in Alice."
+      },
+      "drift_detected_windows_cert_removed": {
+        "subject": "Certificate removed from the store on {{target_name}}: {{cert_path}}",
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} names a certificate that is no longer in the server's certificate store. The binding should have {{certificate_name}}, and Alice deployed it there before: someone or another tool deleted the certificate from the store. Without it, the website on this binding cannot complete a TLS handshake.\n\nAlice does not deploy to a binding in this state, so it does not put the certificate back by itself. Alice never deletes a certificate that a binding uses.\n\nWhat to do: find out who removed the certificate (for example a cleanup script or a certificate management tool), then import {{certificate_name}} into the store again or bind another certificate. Once the next scan of the server in Alice shows the binding without a problem, Alice can deploy to it again."
+      },
+      "drift_detected_windows_key_unusable": {
+        "subject": "Certificate key unusable on {{target_name}}: {{cert_path}}",
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} names the certificate it should have ({{certificate_name}}), but Windows (http.sys) can no longer use its private key: the key was deleted, or its access rights were changed so that the system account cannot read it. Alice deployed the certificate with a usable key before: someone or another tool changed the key outside Alice.\n\nAlice does not deploy to a binding in this state, so it does not put the certificate back by itself. Alice never changes the access rights of a key.\n\nWhat to do: on the server, check the certificate's private key in the certificate store (Manage Private Keys) and give the SYSTEM account read access again, or import the certificate with its key again. Once the next scan of the server in Alice shows the binding without a problem, Alice can deploy to it again."
+      },
+      "drift_repair_ready_windows": {
+        "subject": "Repair ready: certificate changed outside Alice on {{target_name}}: {{cert_path}}",
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} no longer has the certificate it should have ({{certificate_name}}). Alice found {{observed_name}} instead, although the right certificate was there before: someone or another tool bound another certificate, or changed what the website serves.\n\nAlice prepared the repair but does not start it by itself for this location.\n\nWhat to do: open the server in Alice and check the binding. If the change was not intended, choose Repair: Alice deploys the right certificate again, with every check of a deployment. If another tool manages this binding, remove it from the certificate's bindings in Alice."
+      },
+      "drift_repaired_windows": {
+        "subject": "Certificate put back on {{target_name}}: {{cert_path}}",
+        "body": "The binding {{cert_path}} on the Windows server {{target_name}} had {{observed_name}} instead of the certificate it should have ({{certificate_name}}). Alice deployed {{certificate_name}} again by itself, and a new check confirmed that the website has it.\n\nIf this happens again, find out who changes the binding: when Alice has to put the certificate back 3 times within 24 hours, it stops doing so and tells you."
+      },
+      "drift_flapping_windows": {
+        "subject": "Alice stopped repairing {{cert_path}} on {{target_name}}: another tool keeps changing it",
+        "body": "Alice put {{certificate_name}} back on the binding {{cert_path}} on the Windows server {{target_name}} 3 times within 24 hours, and each time the binding was changed again (Alice found {{observed_name}}). Another tool keeps changing this binding, and two tools that manage the same binding work against each other.\n\nAlice no longer repairs this location by itself: it only reports changes now.\n\nWhat to do: decide which tool manages this binding. If it is Alice, stop the other tool (for example an IIS script, the rebinding after an autoenrolment renewal or a configuration management run), then choose automatic repair again on the server's page in Alice. If it is the other tool, remove the binding from the certificate's bindings in Alice."
+      },
+      "drift_repair_failing_windows": {
+        "subject": "Alice stopped repairing {{cert_path}} on {{target_name}}: the repairs failed",
+        "body": "Alice tried 3 times within 24 hours to put {{certificate_name}} back on the binding {{cert_path}} on the Windows server {{target_name}} (Alice found {{observed_name}}), and each deployment failed. The deployment history in Alice shows each step and the reason.\n\nAlice no longer repairs this location by itself: it only reports changes now.\n\nWhat to do: remove the cause shown in the deployment history, then choose Repair, or choose automatic repair again on the server's page in Alice."
       }
     },
     "target": {

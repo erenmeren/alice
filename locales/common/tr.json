@@ -2032,6 +2032,7 @@
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
     "license_note": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}",
     "license_note_kv": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}\nLisansın süresi dolmuşken Key Vault verileri güncel olmayabilir.",
+    "windows_note_autocertrebind": "Not: bu sunucuda AutoCertRebind görevi açık. Otomatik kayıt bir sertifikayı yenilediğinde Windows yenilenen sertifikayı kendiliğinden bağlar ve bu, bağlamayı Alice dışında değiştirir. Bu bağlamayı Alice yönetiyorsa görevi kapatın (Görev Zamanlayıcı, Microsoft\\Windows\\CertificateServicesClient\\AutoCertRebind).",
     "backup": {
       "failed": {
         "subject": "Alice günlük yedeğini alamadı",
@@ -2202,6 +2203,34 @@
       "drift_repair_failing": {
         "subject": "Alice {{target_name}} üzerindeki {{cert_path}} dosyasını onarmayı bıraktı: onarımlar başarısız oldu",
         "body": "Alice 24 saat içinde 3 kez {{target_name}} sunucusundaki {{cert_path}} dosyasına {{certificate_name}} sertifikasını geri koymayı denedi (Alice {{observed_name}} buldu) ve her dağıtım başarısız oldu. Her adımı ve nedeni Alice'teki dağıtım geçmişi gösterir.\n\nAlice bu konumu artık kendiliğinden onarmıyor: yalnızca değişiklikleri bildiriyor.\n\nNe yapmalı: dağıtım geçmişinde gösterilen nedeni giderin, sonra Onar'ı seçin ya da Alice'te sunucunun sayfasında otomatik onarımı yeniden seçin."
+      },
+      "drift_detected_windows": {
+        "subject": "{{target_name}} üzerinde sertifika Alice dışında değişti: {{cert_path}}",
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlamasında artık olması gereken sertifika ({{certificate_name}}) yok. Alice bunun yerine {{observed_name}} buldu; oysa doğru sertifika daha önce oradaydı: biri ya da başka bir araç başka bir sertifika bağladı ya da web sitesinin sunduğunu değiştirdi.\n\nAlice doğru sertifikayı kendiliğinden geri koymadı.\n\nNe yapmalı: Alice'te sunucuyu açın. Sertifika listesi bu bağlama için olması gereken sertifikayı, Alice'in son dağıttığını, bağlamanın gösterdiği sertifikayı ve web sitesinin sunduğunu, her birini zamanıyla gösterir. Değişiklik istenmediyse doğru sertifikayı yeniden dağıtmak için Onar'ı seçin. Bu bağlamayı başka bir araç yönetiyorsa onu Alice'te sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_detected_windows_cert_removed": {
+        "subject": "{{target_name}} üzerinde sertifika depodan kaldırıldı: {{cert_path}}",
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlaması, sunucunun sertifika deposunda artık bulunmayan bir sertifikayı gösteriyor. Bağlamada {{certificate_name}} olmalı ve Alice onu daha önce oraya dağıtmıştı: biri ya da başka bir araç sertifikayı depodan sildi. Sertifika olmadan bu bağlamadaki web sitesi TLS el sıkışmasını tamamlayamaz.\n\nAlice bu durumdaki bir bağlamaya dağıtım yapmaz, bu yüzden sertifikayı kendiliğinden geri koymaz. Alice bir bağlamanın kullandığı sertifikayı hiçbir zaman silmez.\n\nNe yapmalı: sertifikayı kimin kaldırdığını bulun (örneğin bir temizlik betiği ya da bir sertifika yönetim aracı), sonra {{certificate_name}} sertifikasını depoya yeniden aktarın ya da başka bir sertifika bağlayın. Alice'teki bir sonraki tarama bağlamayı sorunsuz gösterdiğinde Alice ona yeniden dağıtım yapabilir."
+      },
+      "drift_detected_windows_key_unusable": {
+        "subject": "{{target_name}} üzerinde sertifika anahtarı kullanılamıyor: {{cert_path}}",
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlaması olması gereken sertifikayı ({{certificate_name}}) gösteriyor, ancak Windows (http.sys) onun özel anahtarını artık kullanamıyor: anahtar silindi ya da erişim hakları sistem hesabı okuyamayacak biçimde değiştirildi. Alice sertifikayı daha önce kullanılabilir bir anahtarla dağıtmıştı: biri ya da başka bir araç anahtarı Alice dışında değiştirdi.\n\nAlice bu durumdaki bir bağlamaya dağıtım yapmaz, bu yüzden sertifikayı kendiliğinden geri koymaz. Alice bir anahtarın erişim haklarını hiçbir zaman değiştirmez.\n\nNe yapmalı: sunucuda sertifika deposundaki sertifikanın özel anahtarını denetleyin (Özel Anahtarları Yönet) ve SYSTEM hesabına yeniden okuma izni verin ya da sertifikayı anahtarıyla birlikte yeniden içe aktarın. Alice'teki bir sonraki tarama bağlamayı sorunsuz gösterdiğinde Alice ona yeniden dağıtım yapabilir."
+      },
+      "drift_repair_ready_windows": {
+        "subject": "Onarım hazır: {{target_name}} üzerinde sertifika Alice dışında değişti: {{cert_path}}",
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlamasında artık olması gereken sertifika ({{certificate_name}}) yok. Alice bunun yerine {{observed_name}} buldu; oysa doğru sertifika daha önce oradaydı: biri ya da başka bir araç başka bir sertifika bağladı ya da web sitesinin sunduğunu değiştirdi.\n\nAlice onarımı hazırladı, ancak bu konum için kendiliğinden başlatmıyor.\n\nNe yapmalı: Alice'te sunucuyu açın ve bağlamayı denetleyin. Değişiklik istenmediyse Onar'ı seçin: Alice doğru sertifikayı bir dağıtımın bütün denetimleriyle yeniden dağıtır. Bu bağlamayı başka bir araç yönetiyorsa onu Alice'te sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_repaired_windows": {
+        "subject": "{{target_name}} üzerinde sertifika geri kondu: {{cert_path}}",
+        "body": "{{target_name}} Windows sunucusundaki {{cert_path}} bağlamasında olması gereken sertifika ({{certificate_name}}) yerine {{observed_name}} vardı. Alice {{certificate_name}} sertifikasını kendiliğinden yeniden dağıttı ve yeni bir denetim web sitesinin onu sunduğunu doğruladı.\n\nBu yeniden olursa bağlamayı kimin değiştirdiğini bulun: Alice sertifikayı 24 saat içinde 3 kez geri koymak zorunda kalırsa bunu bırakır ve size bildirir."
+      },
+      "drift_flapping_windows": {
+        "subject": "Alice {{target_name}} üzerindeki {{cert_path}} bağlamasını onarmayı bıraktı: başka bir araç onu sürekli değiştiriyor",
+        "body": "Alice {{target_name}} Windows sunucusundaki {{cert_path}} bağlamasına 24 saat içinde 3 kez {{certificate_name}} sertifikasını geri koydu ve bağlama her seferinde yeniden değiştirildi (Alice {{observed_name}} buldu). Başka bir araç bu bağlamayı sürekli değiştiriyor; aynı bağlamayı yöneten iki araç birbirine karşı çalışır.\n\nAlice bu konumu artık kendiliğinden onarmıyor: yalnızca değişiklikleri bildiriyor.\n\nNe yapmalı: bu bağlamayı hangi aracın yöneteceğine karar verin. Alice ise öteki aracı durdurun (örneğin bir IIS betiği, otomatik kayıtla yenilemeden sonraki yeniden bağlama ya da bir yapılandırma yönetimi çalışması), sonra Alice'te sunucunun sayfasında otomatik onarımı yeniden seçin. Öteki araç ise bağlamayı Alice'te sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_repair_failing_windows": {
+        "subject": "Alice {{target_name}} üzerindeki {{cert_path}} bağlamasını onarmayı bıraktı: onarımlar başarısız oldu",
+        "body": "Alice 24 saat içinde 3 kez {{target_name}} Windows sunucusundaki {{cert_path}} bağlamasına {{certificate_name}} sertifikasını geri koymayı denedi (Alice {{observed_name}} buldu) ve her dağıtım başarısız oldu. Her adımı ve nedeni Alice'teki dağıtım geçmişi gösterir.\n\nAlice bu konumu artık kendiliğinden onarmıyor: yalnızca değişiklikleri bildiriyor.\n\nNe yapmalı: dağıtım geçmişinde gösterilen nedeni giderin, sonra Onar'ı seçin ya da Alice'te sunucunun sayfasında otomatik onarımı yeniden seçin."
       }
     },
     "target": {

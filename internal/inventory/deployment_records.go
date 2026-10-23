@@ -1235,19 +1235,30 @@ func (s *Service) paced(retryAt time.Time, attempts int) time.Time {
 }
 
 // needsAttentionTemplate: the lost-connection text when the last known cause is an SSH reason
-// (the latest recovery job's error, else the deployment's), else the unconfirmed-outcome text.
+// (the latest recovery job's error, else the deployment's), else the unconfirmed-outcome text. A
+// deployment to a Windows binding lost its connection also when the cause is deployment.interrupted
+// or windows.helper_missing: a Windows OpenSSH session that ended with no answer (R62 Ruling 17, W2
+// Ruling 6). notifyDeployment then queues the Windows text of the template.
 func needsAttentionTemplate(ctx context.Context, tx pgx.Tx, d lockedDeployment) (string, error) {
-	var cause string
+	var (
+		cause string
+		kind  providers.LocationKind
+	)
 	err := tx.QueryRow(ctx, `SELECT coalesce((SELECT last_error_code FROM jobs WHERE dedupe_key = $1 AND last_error_code <> ''
-ORDER BY created_at DESC, id DESC LIMIT 1), $2)`, recoverDedupePrefix+d.id.String(), d.errorCode).Scan(&cause)
+ORDER BY created_at DESC, id DESC LIMIT 1), $2), (SELECT location_kind FROM deployments WHERE id = $3)`,
+		recoverDedupePrefix+d.id.String(), d.errorCode, d.id).Scan(&cause, &kind)
 	if err != nil {
 		return "", fmt.Errorf("inventory: read the recovery's cause: %w", err)
 	}
-	if strings.HasPrefix(cause, "ssh.") {
+	windowsLost := kind == providers.LocationWinSSLBinding && (cause == interruptedCode || cause == windowsHelperMissing)
+	if strings.HasPrefix(cause, "ssh.") || windowsLost {
 		return TemplateDeploymentNeedsAttention, nil
 	}
 	return TemplateDeploymentNeedsAttentionUnconfirmed, nil
 }
+
+// windowsHelperMissing is the Windows provider's reason for an answer it never got (windows.ReasonHelperMissing).
+const windowsHelperMissing = "windows.helper_missing"
 
 func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedDeployment, retryAt time.Time, needsAttention bool) error {
 	if !d.wasSent() {

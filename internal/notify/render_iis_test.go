@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"maps"
 	"regexp"
 	"strings"
 	"testing"
@@ -88,4 +89,70 @@ func TestWindowsCompromisedInStoreRendersInBothLanguages(t *testing.T) {
 		assert.NotRegexp(t, linuxWording, m.Body, lang)
 	}
 	assert.Contains(t, s.Render("ada@example.com", inventory.TemplateWindowsCompromisedInStore, "en", params).Body, "Store: My. Thumbprint: "+sha1+".")
+}
+
+// R62 W3 Ruling 16: every drift e-mail has a Windows text, three of them for a detected drift (re-pointed, certificate
+// removed from the store, key unusable), that names the binding and the certificates with R52's params, never a file,
+// a folder or Nginx; the AutoCertRebind sentence is added only when windows_note is autocertrebind. The Linux texts are
+// unchanged (TestDriftTemplatesRenderInBothLanguages).
+func TestWindowsDriftTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "iis-01 (İzmir)", "cert_path": "http.sys/ipport/0.0.0.0:443", "certificate_name": "www.örnek.example",
+		"observed_name": "eski.example"}
+	want := []string{"location.drift_detected_windows", "location.drift_detected_windows_cert_removed", "location.drift_detected_windows_key_unusable",
+		"location.drift_repair_ready_windows", "location.drift_repaired_windows", "location.drift_flapping_windows", "location.drift_repair_failing_windows"}
+	require.Equal(t, want, inventory.WindowsDriftTemplates())
+	noteEN, noteTR := cat.T("en", "email.windows_note_autocertrebind", nil), cat.T("tr", "email.windows_note_autocertrebind", nil)
+	require.NotEqual(t, "email.windows_note_autocertrebind", noteEN)
+	require.NotEqual(t, "email.windows_note_autocertrebind", noteTR)
+	assert.Contains(t, noteEN, "AutoCertRebind")
+	assert.Contains(t, noteTR, "AutoCertRebind")
+	for _, tpl := range inventory.WindowsDriftTemplates() {
+		assert.NotContains(t, inventory.DriftTemplates(), tpl, "the Windows texts are their own keys")
+		for _, lang := range []string{"en", "tr"} {
+			note := map[string]string{"en": noteEN, "tr": noteTR}[lang]
+			plain := s.Render("ada@example.com", tpl, lang, params)
+			withNote := maps.Clone(params)
+			withNote["windows_note"] = "autocertrebind"
+			noted := s.Render("ada@example.com", tpl, lang, withNote)
+			other := maps.Clone(params)
+			other["windows_note"] = "something_else"
+			for _, m := range []notify.Message{plain, noted} {
+				text := m.Subject + "\n" + m.Body
+				assert.NotContains(t, text, "{{", "%s %s", tpl, lang)
+				assert.NotContains(t, text, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+				assert.NotContains(t, text, "ALC-", "%s %s", tpl, lang)
+				assert.NotContains(t, text, "autocertrebind", "%s %s: the param's value is not rendered", tpl, lang)
+				assert.Contains(t, m.Subject, "iis-01 (İzmir)", "%s %s", tpl, lang)
+				assert.Contains(t, m.Body, "http.sys/ipport/0.0.0.0:443", "%s %s", tpl, lang)
+				assert.Contains(t, m.Body, "www.örnek.example", "%s %s", tpl, lang)
+				assert.NotRegexp(t, linuxWording, m.Subject, "%s %s", tpl, lang)
+				assert.NotRegexp(t, linuxWording, m.Body, "%s %s", tpl, lang)
+				assert.NotRegexp(t, `(?i)(: |\()(yes|no|true|false|evet|hayır)(\.|\)|\n|$)`, text, "%s %s", tpl, lang)
+			}
+			assert.NotContains(t, plain.Body, note, "%s %s: no note without the param", tpl, lang)
+			assert.NotContains(t, s.Render("ada@example.com", tpl, lang, other).Body, note, "%s %s: only autocertrebind asks for it", tpl, lang)
+			assert.Contains(t, noted.Body, note, "%s %s", tpl, lang)
+			assert.Equal(t, plain.Subject, noted.Subject, "%s %s", tpl, lang)
+			footer := cat.T(lang, "email.footer", nil)
+			assert.True(t, strings.HasSuffix(noted.Body, note+"\n\n"+footer), "%s %s: the note sits before the footer", tpl, lang)
+		}
+	}
+	// A removed certificate names the one it should have; the observed one is "-" (the binding names none).
+	removed := maps.Clone(params)
+	removed["observed_name"] = "-"
+	en := s.Render("ada@example.com", "location.drift_detected_windows_cert_removed", "en", removed)
+	assert.Contains(t, en.Body, "certificate store")
+	assert.NotContains(t, en.Body, "Repair", "an unrepairable drift offers no repair")
+	en = s.Render("ada@example.com", "location.drift_detected_windows_key_unusable", "en", params)
+	assert.Contains(t, en.Body, "private key")
+	assert.NotContains(t, en.Body, "Repair", "an unrepairable drift offers no repair")
+	for _, tpl := range []string{"location.drift_detected_windows", "location.drift_repair_ready_windows"} {
+		assert.Contains(t, s.Render("ada@example.com", tpl, "en", params).Body, "eski.example", tpl)
+		assert.Contains(t, s.Render("ada@example.com", tpl, "en", params).Body, "Repair", tpl)
+		assert.Contains(t, s.Render("ada@example.com", tpl, "tr", params).Body, "Onar'ı seçin", tpl)
+	}
+	assert.Contains(t, s.Render("ada@example.com", "location.drift_flapping_windows", "en", params).Subject, "another tool keeps changing it")
 }
