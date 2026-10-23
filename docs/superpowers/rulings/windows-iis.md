@@ -437,7 +437,12 @@ The plan's 24 rulings stand as written, except where an entry says "Amended".
    refusal before `enter` passes through. A kill at a point answers **nothing** (no line on stdout, like a dead
    process): `winhelper.ExitKilled` 137 in process, `wintest.KilledExit` 255 at the SSH layer (an ssh client sees no
    exit status). Standard input is read before the elevation check, so an oversized input from an unelevated caller
-   is `TOO_LARGE`.
+   is `TOO_LARGE`. Precision (final review Minor 1): when the budget ends, the real helper answers `OUTCOME_UNKNOWN`
+   at once and `main` exits with that answer, so a handler past `enter` is cut there and the journal decides what
+   happened (safe). The `WriteGrace` bound (8 s) on finishing a step therefore applies only to an in-process host,
+   the emulator and the e2e fake: there the abandoned call may keep writing for up to 8 s after the answer, holding
+   the lock, and may commit after `OUTCOME_UNKNOWN`, which a real host cannot. That gap is latent: no test fault makes
+   a host slow (Task 4 review minor 2; deferred to W3 below).
 8. **Journal and binding records.** As written. Amended (Tasks 2, 3): exit codes 2 (`USAGE`, `INVALID_ARGUMENT`,
    `BAD_CONTENT`, `TOO_LARGE`, `NOT_ELEVATED`), 3 (`HASH_MISMATCH`, `FENCED`, `OPERATION_EXISTS`, `RECOVERY_PENDING`
    with `pending_op`, `BINDING_NOT_FOUND`, `KEY_UNUSABLE`, `BACKUP_MISSING`, `UNKNOWN_OP`, `SUPERSEDED`), 4 (`BUSY`,
@@ -501,7 +506,12 @@ The plan's 24 rulings stand as written, except where an entry says "Amended".
     stays in the API, empty, beside the new `backup_store` and `backup_sha1` (`^(?i:my|webhosting)$`). Notices and
     e-mails of a Windows deployment name the previous certificate (`<store> \ <sha1>`) instead of a backup folder
     (`*_windows` texts, not deferred: an e-mail sending a Windows administrator to `/var/lib/alice-helper/backups`
-    is wrong advice).
+    is wrong advice); the e-mail names the store only when it is `My` or `WebHosting` (the API's rule, final review
+    Minor 3). After a successful deployment the location's `details.cert_sha1` is the deployed leaf's thumbprint
+    (`leafThumbprint`: the SHA-1 of the stored chain's first certificate, only when its DER SHA-256 is the token),
+    written with `cert_file_sha256`, so the next deployment's rollback info names the certificate Alice deployed (Task
+    14, found by the e2e journey); when it cannot be derived the old thumbprint is removed, never kept beside the new
+    token (final review Minor 2); a rolled-back deployment leaves it as it was.
 18. **A cut scan does not block a deployment.** Amended (Task 8): per verdict: `win_foreign_app` is dropped only when
     the sites may be cut, a `cert_missing` only when the entries or certificates may be cut, Alice's own drops
     counted as cuts; `leaf_unreadable` stays.
@@ -555,7 +565,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   until the record is written (a deployment killed at `deploy.writing` still serves the leaf alone on both hosts);
   only a write changes the served chain, hence the binding record's `chain` (Ruling 10).
 
-### Runner runs used (6 of 20)
+### Runner runs used (7 of 20)
 
 | Run | Head | Result | What it found |
 |---|---|---|---|
@@ -565,12 +575,29 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 4 <https://github.com/erenmeren/alice/actions/runs/39860675538> | `4654e471` | **green** on both images | Every Task 6 and Task 9 test passed (not skipped), `TestRealRestoreForbidden` and `TestRealRunnerIsClean` included |
 | 5 <https://github.com/erenmeren/alice/actions/runs/39863868398> | `7c2b08d1` | 2022 green; 2025 failed | Only `TestRealSetupScript`'s first `version` after setup did not end (second occurrence): hardened in `95b3e817` (wait for sshd's banner, diagnostics, one retry at 60 s); every Task 9 fidelity test passed on both images |
 | 6 <https://github.com/erenmeren/alice/actions/runs/39866197908> | `90f83ad8` | **green** on both images | The binding record chain (Task 3 fix rounds 3-4) on real Windows |
+| 7 <https://github.com/erenmeren/alice/actions/runs/39879604187> | `fcf85df8` | **green** on both images | Every test of the branch after Tasks 11, 13 and 14 and the e-mail texts, on both images |
 
 The `ci.yml` runs of the branch: 39853314997 at `0e144e16` (gitleaks flagged the redaction test's fake PEM in
 `winproto_test.go`, fingerprinted in `.gitleaksignore` by the controller; `internal/notify`
 `TestF62UntrustedCertificateAndThePin` failed once and passes locally, untouched by W2); 39860675128 at `4654e471`
-(go, secrets, web, ssh-matrix, licensectl green; coverage and stack cancelled by the next push). The final runs are
-Task 16's.
+(go, secrets, web, ssh-matrix, licensectl green; coverage and stack cancelled by the next push).
+
+Final gates (Task 16):
+
+- **Local `make ci`** at `fcf85df8` (`E2E_PROJECT=alice-e2e-w2 ALICE_E2E_PORT=9975`): exit 0. It ran lint, test,
+  coverage (every floor met), perf, test-backup-cycle, test-ssh, build, release-symcheck, i18n-check, web-lint,
+  web-coverage, vuln (no vulnerabilities), secrets-scan, fs-scan, e2e-hardening-check, e2e, image-check and image-scan
+  (0 findings).
+- **e2e**: 158 passed, 4 skipped, 0 failed (48.8 min) in that `make ci`; Task 14's own full run had the same totals
+  (48.9 min). The Windows journey is `web/e2e/windows.spec.ts` ("add a Windows server, confirm its host key, see its
+  http.sys bindings and IIS sites, deploy and roll back", EN and TR).
+- **gitleaks over the whole range** `fc43d4db..HEAD` (the worktree's own scan sees no commits): two `generic-api-key`
+  findings, both operation UUIDs in `cmd/alice-fakewindows/main_test.go` (`469a584f`); their fingerprints are in
+  `.gitleaksignore` (`6acf54e1`, no key material), and the range is clean.
+- **Real Windows**: run 7 green on windows-2022 and windows-2025.
+- **Final review** of `fc43d4db..fcf85df8`: ready to merge, no Critical or Important finding; its minors are under
+  [Final review fixes (W2)](#final-review-fixes-w2).
+- Final CI on origin: <to be filled by the controller>
 
 ## Rulings made during execution (W2)
 
@@ -593,6 +620,10 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - `TestRealSetupScript` retries a timed-out first `version` once with 60 s and logs diagnostics: runs 2 and 5 hung on
   the first sign-in of the just-created account with sshd already answering (cost: one real one-off hang is masked
   once; the second timeout still fails).
+- The gitleaks findings of the whole range (two operation UUIDs in the fake's stale-TLS test, `469a584f`) were
+  fingerprinted by the controller (`6acf54e1`), as the earlier one: a pushed commit cannot be rewritten.
+- The final review's minors 1, 2, 3, 6 and 7 were fixed in one wave after the local `make ci`; 4 and 5 were accepted
+  (below).
 
 ### Task 1 (winproto)
 
@@ -729,6 +760,10 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   the incident for the guard rows is inserted by SQL.
 - Review minor (accepted): after `restore_forbidden` the location's token stays the old DER hash while the binding
   names the new certificate, as on Nginx; the next discovery corrects it.
+- Fix round (`2b37aa53`, `fcf85df8`, with Task 14's review minors): the stored locator deployed in a provider unit
+  test; rolled-back crash rows read the journal restored; one recorded phase per fenced row; the thumbprint recorded
+  after a deployment only when the chain's leaf is the token's certificate (`leafThumbprint`), a rollback leaving it
+  as it was; the forbidden-rollback notice checked in the text of the deployment's kind.
 
 ### Task 12 (API)
 
@@ -755,27 +790,73 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 
 ### Task 14 (e2e)
 
-- Recorded by Task 16 from Task 14's report.
+- The journey extends W1's test in `web/e2e/windows.spec.ts` (one test per language, EN and TR): upload, the grouped
+  bindings and the grouped picker, a deployment committed and verified at level 3 ("Trusted"), then `ctl
+  stale-tls-on`, a deployment whose verification fails and is rolled back, the page naming the previous certificate
+  `My \ <SHA-1>`; `beforeEach` and `afterEach` run `ctl stale-tls-off`. The TR run starts from EN's rolled-back
+  certificate (the fake's state carries over; tolerated). Timeout 8 min.
+- `alice-fakewindows ctl stale-tls-on|off` (no arguments; `POST /stale-tls-on|off` on the loopback control API) calls
+  `wintest.Model.StaleTLS`; `TestCtlStaleTLSKeepsTheListenerOnTheOldCertificate` runs a real `iis-deploy` over SSH.
+- After a successful Windows deployment the location's `details.cert_sha1` is the deployed leaf's thumbprint (Ruling
+  17; `21d052ec`): the journey found the rollback's "Previous certificate" naming the certificate before the last
+  deployment, because only discovery wrote the details. The rollback itself was right (the helper restores from its
+  journal). Other details (the friendly name) stay as discovered until the next scan (cost if wrong: none).
+- No CA trust plumbing for the fake: the uploaded chain carries its root, which the trust policy takes as the
+  `uploaded_root` anchor, so level 3 is reached (cost if wrong: a journey deploying a certificate without its root
+  would read "Served").
+- The deployjobs tests broken by the `*_windows` e-mail templates (`2db347aa`) were fixed in the tests.
+- Review minor 4 (accepted, note): a run that dies mid-deployment can leave a `writing` journal on the fake, and its
+  retry then fails loudly with `RECOVERY_PENDING`; a future `ctl reset` would clear it.
+
+## Final review fixes (W2)
+
+The final whole-branch review of `fc43d4db..fcf85df8` found no Critical or Important issue (Rulings 4, 7, 10 and 11
+and Review Focus 1-6 hold end to end). Its minors:
+
+1. **The write grace on the real helper**: the text of Ruling 7 now says that the real helper answers
+   `OUTCOME_UNKNOWN` and exits at once when the budget ends, so `WriteGrace` bounds only in-process hosts; the
+   emulator's abandoned call may write for up to 8 s (latent, no slow-host fault; deferred to W3 below).
+2. **A thumbprint that cannot be derived after a deployment** is removed from the location's details instead of
+   kept beside the new token (Ruling 17; `TestASuccessWithoutADerivableThumbprintDropsTheOldOne`).
+3. **The e-mail's previous certificate** names the store under the API's rule `^(?i:my|webhosting)$`, not the
+   record's looser one (`TestPreviousCertificateText`).
+4. Accepted: `winhelper.Run`, `RunForced` and `reply` are used only by tests now (the real helper and wintest call
+   `Execute` and `ExecuteForced`); they stay as documented test conveniences.
+5. Accepted: the SHA-256 hex validator exists twice (`windows.isHexSHA256`, `winhelper.validSHA256`); a
+   `winproto.ValidSHA256` can join them later.
+6. **A damaged binding record** (`C:\ProgramData\Alice\helper\bindings\<hash>.json`) blocks its binding with the
+   retryable `IO_ERROR` until the recovery escalates (fails closed); `docs/troubleshooting.md` `ALC-WIN-0007` now says
+   what the operator does (check that no journal of that binding is `writing` or `restoring`, move the file aside,
+   try again; the first deployment then writes even an already bound certificate).
+7. **`parseRestoreInput` refuses anything but white space after the JSON value** (one trailing `}` or `]` was
+   accepted, `dec.More()` being false before a closing bracket) (`TestRestoreInputRefusals`,
+   `TestRestoreInputAcceptsSurroundingWhiteSpace`).
 
 ## Acceptance (design §13 W2)
 
 - Manual deploy to an SNI and an IP binding, committed at level 3 (public-CA chain), 2 (private CA without root) and
   1 (skip): Tasks 8 (`TestDeployOutcomeTable`), 11 (`TestWindowsManualDeployment`, `TestWindowsDeploymentLevels`),
-  14 (e2e journey EN and TR: pending Task 14, filled by Task 16).
+  14 (the e2e journey `web/e2e/windows.spec.ts`, EN and TR: committed, verified, level "Trusted" in the browser).
 - A hash mismatch changes nothing; an unchanged certificate answers unchanged: Tasks 3
   (`TestDeployRefusalsChangeNothing`, `TestDeployUnchanged`), 11 (`TestWindowsHashMismatchChangesNothing`,
   `TestWindowsUnchanged`).
 - A failed verification rolls back; a forbidden backup restores nothing and ends `rollback_failed` with
   `deployment.rollback_forbidden`; the helper's own refusal on a real runner: Tasks 3 (`TestRestoreForbiddenOnEveryPath`),
-  8 (`TestWindowsLocationTargetContract`), 9 (`TestRealRestoreForbidden`, runs 4 and 6 green on both images), 11
-  (`TestWindowsFailedVerificationRollsBack`, `TestWindowsRollbackGuardRows`), 14 (e2e rollback: pending Task 14).
+  8 (`TestWindowsLocationTargetContract`), 9 (`TestRealRestoreForbidden`, runs 4, 6 and 7 green on both images), 11
+  (`TestWindowsFailedVerificationRollsBack`, `TestWindowsRollbackGuardRows`), 14 (the e2e journey's rollback after
+  `ctl stale-tls-on`: rolled back, restore ok, the previous certificate named).
 - The crash table passes on the emulator; the fidelity test passes for every write subcommand on real Windows: Tasks 4
   (`TestModelKillAtEveryPoint`), 3 (`TestRecoveryAfterAKillAtEveryPoint`), 11
-  (`TestWindowsDeploymentSurvivesAKillAtEveryPoint`), 9 (`TestFidelity*` of the write subcommands, runs 4 and 6).
+  (`TestWindowsDeploymentSurvivesAKillAtEveryPoint`), 9 (`TestFidelity*` of the write subcommands, runs 4, 6 and 7).
 - ACME and Key Vault automatic deployment reach a Windows location; the scoped-access trust check applies: Tasks 10,
   11 (`TestWindowsACMEAutomaticDeployment`, `TestWindowsKeyVaultAutomaticDeployment`,
   `TestWindowsCrossServiceNeedsTrust`).
-- Final gates: see Task 16.
+- Final gates (Task 16): local `make ci` at `fcf85df8` exit 0 (every coverage floor met, no vulnerabilities, image
+  scan 0); e2e 158 passed, 4 skipped, 0 failed; real-Windows run 7
+  (<https://github.com/erenmeren/alice/actions/runs/39879604187>) green on both images; gitleaks over
+  `fc43d4db..HEAD` clean after the fingerprints of `6acf54e1`; `make matrix-check MATRIXCHECK_FLAGS=-strict`,
+  `make docs-check` and `make i18n-check` pass at the final commit (see
+  [Runner runs used](#runner-runs-used-7-of-20)).
 
 ## Owner items (W2)
 
@@ -816,3 +897,6 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   `backup_store` or the `http.sys/` prefix (Task 13 review minor 4).
 - The dump does not show `alice_imported` (W3's cleanup does); intermediates Alice added stay in `CA` (design §6.7).
 - R52 drift for Windows locations, `iis-cleanup`, the incident cleanup rule (Q7), as planned.
+- When a slow-host fault is added to the emulator, the wintest handler must mark its host dead on `o.Abandoned`: an
+  in-process abandoned call can write for up to `WriteGrace` (8 s) after `OUTCOME_UNKNOWN`, which a real helper
+  cannot (Ruling 7, final review Minor 1).
