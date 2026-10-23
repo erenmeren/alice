@@ -297,18 +297,23 @@ export function TargetDetailPage() {
           {can(tg, 'cleanup_certificates') && (
             <Panel title={t('targets.page.cleanup.title')}>
               <Stack gap="xs">
+                {/* Not disabled while saving (focus would be lost): busy, and a second change is ignored until the answer. */}
                 <Switch
                   checked={tg.certificate_cleanup ?? true}
-                  disabled={!canManage || savingCleanup}
+                  disabled={!canManage}
+                  aria-busy={savingCleanup}
+                  aria-describedby="cleanup-help"
                   label={t('targets.page.cleanup.label')}
-                  description={t('targets.page.cleanup.help')}
-                  onChange={(e) => void saveCleanup(e.currentTarget.checked, tg.version)}
+                  onChange={(e) => {
+                    if (!savingCleanup) void saveCleanup(e.currentTarget.checked, tg.version);
+                  }}
                 />
-                {cleanupSaved && (
-                  <Text size="sm" role="status">
-                    {t('targets.page.cleanup.saved')}
-                  </Text>
-                )}
+                <Text id="cleanup-help" size="xs" c="dimmed">
+                  {t('targets.page.cleanup.help')}
+                </Text>
+                <Text size="sm" role="status">
+                  {cleanupSaved ? t('targets.page.cleanup.saved') : ''}
+                </Text>
                 <ErrorAlert error={cleanupError} />
               </Stack>
             </Panel>

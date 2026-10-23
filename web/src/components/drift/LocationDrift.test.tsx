@@ -47,7 +47,7 @@ describe('ObservationFacts of a Windows binding', () => {
 
   it('keeps the texts of a certificate file unchanged', async () => {
     await renderWithStepUp(<ObservationFacts observation={driftedObservationFixture()} />);
-    expect(screen.getByTestId('fact-file')).toHaveTextContent('The file held the right certificate'.slice(0, 13));
+    expect(screen.getByTestId('fact-file')).toHaveTextContent(/^The file held another certificate \(.+\) at the scan of /);
     expect(screen.getByTestId('fact-file')).not.toHaveTextContent('Binding (last scan)');
     expect(screen.queryByTestId('drift-cause')).not.toBeInTheDocument();
     expect(screen.queryByTestId('drift-autocertrebind')).not.toBeInTheDocument();

@@ -260,7 +260,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await settle(request, page.getByText(t('targets.jobDone')));
       await expect(bindingRow(page, t, WEB).getByText(t('locations.importedByAlice'), { exact: true })).toBeVisible();
       await expect(bindingRow(page, t, INTRANET).getByText(t('locations.importedByAlice'), { exact: true })).toHaveCount(0);
-      const cleanup = page.getByRole('switch', { name: new RegExp(`^${escapeRegExp(t('targets.page.cleanup.label'))}`) });
+      const cleanup = page.getByRole('switch', { name: t('targets.page.cleanup.label'), exact: true });
       await expect(cleanup, 'new servers remove what Alice imported by default').toBeChecked();
       await expectAccessible(page, 'windows server, cleanup switch');
       await cleanup.click();

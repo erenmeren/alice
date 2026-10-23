@@ -158,6 +158,7 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
                       {b.observation && (
                         <Stack gap={4} align="flex-start">
                           <HealthBadge observation={b.observation} />
+                          {/* The ACME binding carries no location kind in the API, so the file wording is used here. */}
                           <ObservationFacts observation={b.observation} />
                         </Stack>
                       )}

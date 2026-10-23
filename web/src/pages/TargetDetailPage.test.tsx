@@ -953,8 +953,7 @@ describe('TargetDetailPage in the design', () => {
 // R62: the per-server switch "remove certificates Alice imported once nothing uses them" (PATCH /targets/{id}).
 describe('TargetDetailPage cleanup switch', () => {
   const winPath = `/servers/${windowsTargetFixture.id}`;
-  // The help text is part of the switch's label (Mantine puts the description inside it).
-  const label = /^Remove certificates Alice imported once nothing uses them/;
+  const label = 'Remove certificates Alice imported once nothing uses them';
 
   function onWindows(role: 'admin' | 'operator' | 'auditor', target: Target, lang = 'en') {
     const patches: { body: unknown; ifMatch: string | null }[] = [];
@@ -995,6 +994,22 @@ describe('TargetDetailPage cleanup switch', () => {
     await waitFor(() => expect(screen.getByRole('switch', { name: label })).toBeChecked());
   });
 
+  it('keeps its value and shows the error when the change is refused', async () => {
+    onWindows('admin', windowsTargetFixture);
+    server.use(http.patch('/api/v1/targets/:id', () => errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed')));
+    await renderRoute(winPath);
+    await userEvent.click(await screen.findByRole('switch', { name: label }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: label })).toBeChecked();
+    expect(screen.queryByText('Saved.')).not.toBeInTheDocument();
+  });
+
+  it('describes the switch by its help text', async () => {
+    onWindows('admin', windowsTargetFixture);
+    await renderRoute(winPath);
+    expect(await screen.findByRole('switch', { name: label })).toHaveAccessibleDescription(/^Alice never removes a certificate that anything still uses/);
+  });
+
   it('is read only for a person who cannot manage the server', async () => {
     onWindows('operator', windowsTargetFixture);
     await renderRoute(winPath);
@@ -1011,6 +1026,6 @@ describe('TargetDetailPage cleanup switch', () => {
   it('is worded in Turkish', async () => {
     onWindows('admin', windowsTargetFixture, 'tr');
     await renderRoute(winPath, { languages: ['tr-TR'] });
-    expect(await screen.findByRole('switch', { name: /^Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır/ })).toBeChecked();
+    expect(await screen.findByRole('switch', { name: "Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır" })).toBeChecked();
   });
 });
