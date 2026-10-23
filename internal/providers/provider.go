@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
@@ -179,6 +180,75 @@ type Session interface {
 	// VerifyDeployment (CapVerifyDeployment) checks which certificate the location serves.
 	VerifyDeployment(ctx context.Context, req VerifyRequest) (VerifyResult, error)
 }
+
+// CertificateCleaner (CapCleanupCertificates) removes certificates Alice put on a target and no longer
+// uses (R62 W3). It is implemented by the sessions of a provider that advertises the capability
+// (providertest.CheckSession); without the capability both methods answer ErrUnsupported.
+//
+// PlanCleanup lists the target's candidates (certificates Alice imported that nothing on the target
+// uses) and a verdict on each watched certificate; it may also do the target's own bookkeeping (the
+// Windows helper stamps how long each candidate has been unused and prunes old journals), so it is not
+// read-only. ApplyCleanup removes the items, each judged again by the target at that moment, and
+// answers one result per item in order; an empty list sends nothing. Either may fail with an error whose
+// outcome is unknown (Windows: windows.cleanup_outcome_unknown, retryable): the next plan settles it.
+type CertificateCleaner interface {
+	PlanCleanup(ctx context.Context, watch []CleanupRef) (CleanupPlan, error)
+	ApplyCleanup(ctx context.Context, items []CleanupItem) (CleanupApplyResult, error)
+}
+
+// CleanupRef names a certificate by its lower-case hex SHA-1 (thumbprint) and DER SHA-256.
+type CleanupRef struct{ SHA1, SHA256 string }
+
+// CleanupCertificate is a candidate of a plan: a certificate Alice imported that nothing uses. Eligible
+// is CleanupAged or CleanupExpired once the target would remove it, "" while it waits; UnboundSince is
+// when the target first found it unused (its own clock); NotAfter is zero when the target did not say.
+type CleanupCertificate struct {
+	Store, SHA1, SHA256, FriendlyName, Eligible string
+	NotAfter, UnboundSince                      time.Time
+}
+
+// CleanupWatched is the verdict on a watched certificate in one store: State WatchRemovable, WatchKept
+// (Reason says why) or WatchAbsent (found in no store; Store "").
+type CleanupWatched struct{ Store, SHA1, SHA256, State, Reason string }
+
+// CleanupPlan answers PlanCleanup. Pruned counts the bookkeeping files the plan removed; Partial is true
+// when the target listed only part of its candidates (the next plan takes the rest); Warnings are the
+// target's (Windows: journal_unreadable, binding_record_unreadable).
+type CleanupPlan struct {
+	Candidates []CleanupCertificate
+	Watched    []CleanupWatched
+	Pruned     int
+	Partial    bool
+	Warnings   []string
+}
+
+// CleanupItem is one certificate to remove with Alice's reason (CleanupAged, CleanupExpired,
+// CleanupIncident).
+type CleanupItem struct{ Store, SHA1, SHA256, Reason string }
+
+// CleanupItemResult is what the target did with one item: Result CleanupRemoved, CleanupKept (Reason
+// says why) or CleanupAbsent.
+type CleanupItemResult struct{ SHA256, Result, Reason string }
+
+// CleanupApplyResult answers ApplyCleanup, one result per item in order.
+type CleanupApplyResult struct{ Results []CleanupItemResult }
+
+// The values of a cleanup: why a certificate is removed (CleanupCertificate.Eligible, CleanupItem.Reason),
+// what an apply did (CleanupItemResult.Result) and a watched certificate's state (CleanupWatched.State).
+// They are the Windows helper's words (winproto), so Alice's judgement needs no provider package.
+const (
+	CleanupAged     = "aged"
+	CleanupExpired  = "expired"
+	CleanupIncident = "incident"
+
+	CleanupRemoved = "removed"
+	CleanupKept    = "kept"
+	CleanupAbsent  = "absent"
+
+	WatchRemovable = "removable"
+	WatchKept      = "kept"
+	WatchAbsent    = "absent"
+)
 
 // ConnectionCache is implemented by providers that keep connections to targets between sessions
 // (linuxssh's pool). ForgetTarget closes the idle connections of a deleted target and drops what

@@ -17,7 +17,8 @@
       "fields": {
         "host": { "label": "Adres", "help": "Windows sunucusunun ana bilgisayar adı veya IP adresi." },
         "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22 (Windows üzerindeki OpenSSH Server)." },
-        "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." }
+        "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." },
+        "certificate_cleanup": { "label": "Kullanılmayan sertifikaları kaldır", "help": "Alice'in içe aktardığı sertifikaları artık hiçbir şey kullanmadığında kaldırır (hiçbir bağlama, Uzak Masaüstü veya WinRM dinleyicisi kullanmıyorsa ve hiçbir geri alma onlara ihtiyaç duymuyorsa). Kapalıyken Alice yalnızca bunları bildirir." }
       }
     }
   },

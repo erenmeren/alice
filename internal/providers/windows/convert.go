@@ -468,6 +468,7 @@ func certDetails(d map[string]any, c winproto.StoreCertificate) {
 	} else {
 		d["key_usable_by_system"] = nil
 	}
+	d["alice_imported"] = c.AliceImported // R62 Ruling 19: the bindings panel's "Imported by Alice"
 }
 
 // keyProblem is the key's problem: the helper's (a value outside the set is unknown), key_missing

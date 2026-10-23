@@ -13,11 +13,20 @@ import (
 )
 
 // Spec §6.5 item 5: the shared conformance suite over real SSH sessions against the emulated host,
-// with the four capabilities W2 advertises; the private key must never appear in any result or error.
+// with the five capabilities W3 advertises (W2's four and cleanup_certificates, whose session is a
+// providers.CertificateCleaner); the private key must never appear in any result or error.
 func TestWindowsConformance(t *testing.T) {
 	e := newEnv(t)
 	want := providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDeployCertificate,
-		providers.CapVerifyDeployment)
+		providers.CapVerifyDeployment, providers.CapCleanupCertificates)
+	if got := e.prov.Capabilities(); len(got) != len(want) {
+		t.Fatalf("capabilities %v", got.Sorted())
+	}
+	for c := range want {
+		if !e.prov.Capabilities().Has(c) {
+			t.Fatalf("missing %s", c)
+		}
+	}
 	providertest.CheckProvider(t, e.prov)
 	providertest.CheckSession(t, providertest.SessionHarness{
 		Capabilities: e.prov.Capabilities(),
@@ -28,7 +37,7 @@ func TestWindowsConformance(t *testing.T) {
 	})
 	providertest.CheckUnsupported(t, e.open(t), want)
 
-	// A session without the deployment capabilities answers ErrUnsupported for each of them.
+	// A session without the deployment and cleanup capabilities answers ErrUnsupported for each of them.
 	s, ok := e.open(t).(*session)
 	if !ok {
 		t.Fatal("not a Windows session")

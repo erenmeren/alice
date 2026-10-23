@@ -52,7 +52,8 @@ func TestRegisterProvidersShipsEveryProvider(t *testing.T) {
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDiscoverKVKeys,
 		providers.CapDiscoverKVSecrets, providers.CapReadCertificateSecret, providers.CapImportCertificate}, byKind[providers.KindAzureKV].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDeployCertificate,
-		providers.CapVerifyDeployment}, byKind[providers.KindWindows].Capabilities, "R61 W2: a Windows server is deployed to and verified")
+		providers.CapVerifyDeployment, providers.CapCleanupCertificates}, byKind[providers.KindWindows].Capabilities,
+		"R61 W2: a Windows server is deployed to and verified; R62 W3: what Alice imported is cleaned up")
 
 	p, ok := reg.Get(providers.KindLinuxSSH)
 	require.True(t, ok)

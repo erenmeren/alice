@@ -25,8 +25,9 @@ func TestWindowsProviderDescribesItself(t *testing.T) {
 	p := newEnv(t).prov
 	assert.Equal(t, providers.KindWindows, p.Kind())
 	assert.Equal(t, "provider.windows.name", p.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapTestConnection,
-		providers.CapVerifyDeployment}, p.Capabilities().Sorted(), "W2 advertises what it implements: deployment and verification")
+	assert.Equal(t, []providers.Capability{providers.CapCleanupCertificates, providers.CapDeployCertificate, providers.CapDiscoverCerts,
+		providers.CapTestConnection, providers.CapVerifyDeployment}, p.Capabilities().Sorted(),
+		"W3 advertises what it implements: deployment, verification and cleanup")
 	assert.Empty(t, p.CredentialSchema().Fields, "targets use the platform key; no per-target secret")
 	fields := map[string]providers.Field{}
 	for _, f := range p.ConfigSchema().Fields {
@@ -34,7 +35,10 @@ func TestWindowsProviderDescribesItself(t *testing.T) {
 		assert.Equal(t, "provider.windows.fields."+f.Name+".label", f.LabelKey)
 		assert.Equal(t, "provider.windows.fields."+f.Name+".help", f.HelpKey)
 	}
-	require.Len(t, fields, 3)
+	require.Len(t, fields, 4)
+	assert.Equal(t, providers.Field{Name: "certificate_cleanup", Type: providers.FieldBool, Default: true,
+		LabelKey: "provider.windows.fields.certificate_cleanup.label", HelpKey: "provider.windows.fields.certificate_cleanup.help"},
+		fields["certificate_cleanup"], "W3 Ruling 13: the switch per server, on unless turned off")
 	assert.True(t, fields["host"].Required)
 	assert.Equal(t, 22, fields["port"].Default)
 	assert.Equal(t, DefaultUser, fields["username"].Default)
@@ -78,6 +82,41 @@ func TestParseConfigTakesDomainAccounts(t *testing.T) {
 	}
 	assert.Equal(t, map[string]string{"host": validate.Required, "port": validate.OutOfRange, "username": validate.Pattern}, got)
 	assert.Equal(t, errs, newEnv(t).prov.ValidateConfig(providers.TargetConfig{"port": 70000, "username": "a b"}))
+}
+
+// W3 Ruling 13: certificate_cleanup is a boolean, true when absent or null; anything else is refused.
+func TestCleanupSwitch(t *testing.T) {
+	base := func(v any, set bool) providers.TargetConfig {
+		c := providers.TargetConfig{"host": "iis-01"}
+		if set {
+			c["certificate_cleanup"] = v
+		}
+		return c
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  providers.TargetConfig
+		want bool
+	}{
+		{"true", base(true, true), true},
+		{"false", base(false, true), false},
+		{"absent", base(nil, false), true},
+		{"null", base(nil, true), true},
+	} {
+		_, errs := ParseConfig(tc.cfg)
+		assert.Empty(t, errs, tc.name)
+		assert.Equal(t, tc.want, CleanupEnabled(tc.cfg), tc.name)
+	}
+	for _, v := range []any{"yes", "true", 1, 0.0, []any{true}} {
+		cfg := base(v, true)
+		_, errs := ParseConfig(cfg)
+		require.Len(t, errs, 1, "%v", v)
+		assert.Equal(t, validate.FieldError{Field: "certificate_cleanup", Code: validate.OneOf, Params: map[string]string{"values": "true, false"}}, errs[0])
+		assert.False(t, CleanupEnabled(cfg), "%v: a value that is not a boolean (never stored) removes nothing", v)
+	}
+	c, errs := ParseConfig(base(false, true))
+	require.Empty(t, errs)
+	assert.Equal(t, linuxssh.Config{Host: "iis-01", Port: 22, Username: DefaultUser}, c, "the switch is not part of the connection")
 }
 
 func TestOpenSendsBareCommands(t *testing.T) {
@@ -349,8 +388,9 @@ func TestCommandsAreForcedLines(t *testing.T) {
 	assert.Equal(t, budget{linuxssh.DefaultCommandTimeout, 64 << 10}, budgets[winproto.SubWinFacts])
 	assert.Equal(t, budget{linuxssh.LongCommandTimeout, winproto.DumpOutput}, budgets[winproto.SubIISDump])
 	assert.Equal(t, budget{linuxssh.DefaultCommandTimeout, 128 << 10}, budgets[winproto.SubTLSProbe])
+	assert.Equal(t, budget{linuxssh.LongCommandTimeout, 1 << 20}, budgets[winproto.SubIISCleanup])
 	assert.Less(t, winproto.HelperBudget, linuxssh.LongCommandTimeout, "the helper gives up before Alice cuts the connection")
-	for _, bad := range [][]string{{"iis-cleanup"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
+	for _, bad := range [][]string{{"rdp-deploy"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
 		_, err := cmd(bad[0], nil, bad[1:]...)
 		assert.ErrorIs(t, err, linuxssh.ErrInvalidArgument, "%q", bad)
 	}

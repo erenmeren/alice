@@ -52,10 +52,11 @@ type Provider struct {
 }
 
 var (
-	_ providers.Provider        = (*Provider)(nil)
-	_ providers.ConnectionCache = (*Provider)(nil)
-	_ providers.RollbackModel   = (*Provider)(nil)
-	_ providers.Session         = (*session)(nil)
+	_ providers.Provider           = (*Provider)(nil)
+	_ providers.ConnectionCache    = (*Provider)(nil)
+	_ providers.RollbackModel      = (*Provider)(nil)
+	_ providers.Session            = (*session)(nil)
+	_ providers.CertificateCleaner = (*session)(nil)
 )
 
 // guardsRollback: every helper Alice writes to checks the rollback guard itself on every restore path
@@ -72,10 +73,10 @@ func (p *Provider) RollbackTraits() providers.RollbackTraits {
 
 // New returns the provider. It advertises what it implements: the connection test and certificate
 // discovery (W1), deployment (DeployCertificate, RollbackDeployment, DeploymentStatus, FenceDeployment)
-// and verification (W2, R61).
+// and verification (W2, R61), and the certificate cleanup (PlanCleanup, ApplyCleanup: W3, R62).
 func New(o Options) *Provider {
 	p := &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts,
-		providers.CapDeployCertificate, providers.CapVerifyDeployment),
+		providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapCleanupCertificates),
 		allowUnverified: o.AllowUnverifiedHelper, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
 		restoreAttempts: 3, restoreWait: 10 * time.Second}
 	if p.prober == nil {
@@ -100,7 +101,8 @@ func (p *Provider) DisplayNameKey() string { return "provider.windows.name" }
 func (p *Provider) Capabilities() providers.CapabilitySet { return p.caps.Clone() }
 
 // ConfigSchema implements providers.Provider: the Linux path's names (Ruling 1); username is the
-// Windows account, a local name or DOMAIN\name.
+// Windows account, a local name or DOMAIN\name; certificate_cleanup is the cleanup's switch (R62 W3
+// Ruling 13, on by default).
 func (p *Provider) ConfigSchema() providers.ConfigSchema {
 	return providers.ConfigSchema{Fields: []providers.Field{
 		{Name: "host", Type: providers.FieldHost, Required: true, Min: 1, Max: 253,
@@ -109,6 +111,8 @@ func (p *Provider) ConfigSchema() providers.ConfigSchema {
 			LabelKey: "provider.windows.fields.port.label", HelpKey: "provider.windows.fields.port.help"},
 		{Name: "username", Type: providers.FieldString, Default: DefaultUser, Pattern: userRE.String(), Min: 1, Max: 36,
 			LabelKey: "provider.windows.fields.username.label", HelpKey: "provider.windows.fields.username.help"},
+		{Name: ConfigCertificateCleanup, Type: providers.FieldBool, Default: true,
+			LabelKey: "provider.windows.fields.certificate_cleanup.label", HelpKey: "provider.windows.fields.certificate_cleanup.help"},
 	}}
 }
 

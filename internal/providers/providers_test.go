@@ -600,6 +600,22 @@ func TestHTTP01IsAKnownCapability(t *testing.T) {
 	assert.NotPanics(t, func() { reg.Register(fake.New(providers.KindNginx, providers.CapHTTP01)) })
 }
 
+// W3 (R62): cleanup_certificates is a known capability; a session that advertises it must be a
+// CertificateCleaner (providertest.CheckSession), which the fake's sessions are not.
+func TestCleanupCertificatesIsAKnownCapability(t *testing.T) {
+	assert.Equal(t, providers.Capability("cleanup_certificates"), providers.CapCleanupCertificates)
+	reg := providers.NewRegistry()
+	p := fake.New(providers.KindWindows, providers.CapTestConnection, providers.CapCleanupCertificates)
+	assert.NotPanics(t, func() { reg.Register(p) })
+	s, err := p.Open(context.Background(), providers.TargetRef{}, nil, providers.Env{})
+	require.NoError(t, err)
+	_, ok := s.(providers.CertificateCleaner)
+	assert.False(t, ok)
+	assert.Equal(t, []string{"aged", "expired", "incident", "removed", "kept", "absent", "removable", "kept", "absent"},
+		[]string{providers.CleanupAged, providers.CleanupExpired, providers.CleanupIncident, providers.CleanupRemoved, providers.CleanupKept,
+			providers.CleanupAbsent, providers.WatchRemovable, providers.WatchKept, providers.WatchAbsent})
+}
+
 func TestKeyLoginIsAKnownCapabilityAndUnsupportedByDefault(t *testing.T) {
 	assert.True(t, providers.NewCapabilitySet(providers.CapKeyLogin).Has(providers.CapKeyLogin))
 	_, err := providers.UnsupportedSession{}.VerifyKeyLogin(context.Background(), providers.KeyLoginRequest{})

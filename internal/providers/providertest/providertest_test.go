@@ -375,3 +375,59 @@ func TestCheckImportResultReportsABrokenResult(t *testing.T) {
 	assert.Contains(t, r.failures[0], "refused needs a *providers.Error")
 	assert.Contains(t, r.failures[1], "blank or unknown outcome")
 }
+
+// cleanerSession implements TestConnection (ctxSession) and providers.CertificateCleaner; unsupported
+// makes both cleanup methods answer ErrUnsupported.
+type cleanerSession struct {
+	ctxSession
+	unsupported bool
+}
+
+func (s cleanerSession) PlanCleanup(context.Context, []providers.CleanupRef) (providers.CleanupPlan, error) {
+	if s.unsupported {
+		return providers.CleanupPlan{}, providers.ErrUnsupported
+	}
+	return providers.CleanupPlan{}, nil
+}
+
+func (s cleanerSession) ApplyCleanup(context.Context, []providers.CleanupItem) (providers.CleanupApplyResult, error) {
+	if s.unsupported {
+		return providers.CleanupApplyResult{}, providers.ErrUnsupported
+	}
+	return providers.CleanupApplyResult{}, nil
+}
+
+// cleanup_certificates is accepted only from a session that implements providers.CertificateCleaner
+// (CheckSession never calls it: a plan writes on the server); a session that implements it without the
+// capability answers ErrUnsupported (CheckUnsupported).
+func TestCheckSessionNeedsTheCleanerForItsCapability(t *testing.T) {
+	with := func(s providers.Session) providertest.SessionHarness {
+		h := harness(ctxSession{})
+		h.Capabilities = providers.NewCapabilitySet(providers.CapTestConnection, providers.CapCleanupCertificates)
+		h.Open = func(ctx context.Context) (providers.Session, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, providers.NewError("ssh.timeout", true, err, nil)
+			}
+			return s, nil
+		}
+		return h
+	}
+	r := &recorder{TB: t}
+	providertest.CheckSession(r, with(ctxSession{}))
+	assert.Equal(t, []string{"cleanup_certificates is advertised but the session is no providers.CertificateCleaner"}, r.failures)
+
+	r = &recorder{TB: t}
+	providertest.CheckSession(r, with(cleanerSession{}))
+	assert.Empty(t, r.failures)
+
+	r = &recorder{TB: t}
+	providertest.CheckUnsupported(r, cleanerSession{}, providers.NewCapabilitySet(providers.CapTestConnection))
+	assert.Equal(t, []string{"PlanCleanup without its capability: got <nil>, want ErrUnsupported",
+		"ApplyCleanup without its capability: got <nil>, want ErrUnsupported"}, r.failures)
+	r = &recorder{TB: t}
+	providertest.CheckUnsupported(r, cleanerSession{unsupported: true}, providers.NewCapabilitySet(providers.CapTestConnection))
+	assert.Empty(t, r.failures)
+	r = &recorder{TB: t}
+	providertest.CheckUnsupported(r, cleanerSession{}, providers.NewCapabilitySet(providers.CapTestConnection, providers.CapCleanupCertificates))
+	assert.Empty(t, r.failures, "an advertised cleaner is not checked")
+}

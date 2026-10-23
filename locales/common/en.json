@@ -17,7 +17,8 @@
       "fields": {
         "host": { "label": "Address", "help": "Host name or IP address of the Windows server." },
         "port": { "label": "SSH port", "help": "Usually 22 (OpenSSH Server on Windows)." },
-        "username": { "label": "Windows account", "help": "alice, or DOMAIN\\alice-svc for a domain account." }
+        "username": { "label": "Windows account", "help": "alice, or DOMAIN\\alice-svc for a domain account." },
+        "certificate_cleanup": { "label": "Remove unused certificates", "help": "Remove certificates Alice imported once nothing uses them (no binding, Remote Desktop or WinRM listener, and no rollback can need them). Off, Alice only reports them." }
       }
     }
   },

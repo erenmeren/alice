@@ -535,7 +535,7 @@ func TestDiscoverCertificateChainAndToken(t *testing.T) {
 	assert.Equal(t, f.ca.Intermediate.Raw, chain[1].Raw)
 	assert.Equal(t, map[string]any{"store": "MY", "cert_sha1": sha, "app_id": winproto.AppIDIIS, "application": "iis", "friendly_name": "Web 2026",
 		"key_provider": "Microsoft Software Key Storage Provider", "key_exportable": true, "key_usable_by_system": true, "flags": uint32(0x10),
-		"cert_check_mode": uint32(4), "ctl_identifier": "", "ctl_store": ""}, c.Location.Details)
+		"cert_check_mode": uint32(4), "ctl_identifier": "", "ctl_store": "", "alice_imported": false}, c.Location.Details)
 	assert.Equal(t, providers.Locator{"type": "hostnameport", "host": "www.example.com", "port": 443, "app_id": winproto.AppIDIIS}, c.Location.Locator)
 
 	// The store compares case-insensitively; the certificate is looked up by (folded store, sha1).
@@ -840,4 +840,18 @@ func TestCutDumpDropsUnprovableVerdicts(t *testing.T) {
 	assert.NotContains(t, m, "http.sys/ipport/0.0.0.0:11443", "the missing entry may be the one Alice could not read")
 	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:8443")
 	assert.Contains(t, m, "http.sys/ipport/0.0.0.0:9443")
+}
+
+// W3 Ruling 19: whether Alice imported the bound certificate reaches the location's details, both ways.
+func TestDetailsCarryAliceImported(t *testing.T) {
+	f := newDump(t)
+	ours, _ := f.cert("My", "ours.example.com", func(c *winproto.StoreCertificate) { c.AliceImported = true })
+	theirs, _ := f.cert("My", "theirs.example.com")
+	f.bind(winproto.SSLBinding{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS, CertSHA1: ours, Store: "My"})
+	f.bind(winproto.SSLBinding{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 8443, AppID: winproto.AppIDIIS, CertSHA1: theirs, Store: "My"})
+	f.site("Web", "*:443:", 0)
+	f.site("Web", "*:8443:", 0)
+	m := byPath(must3(f.convert()))
+	assert.Equal(t, true, m["http.sys/ipport/0.0.0.0:443"].Location.Details["alice_imported"])
+	assert.Equal(t, false, m["http.sys/ipport/0.0.0.0:8443"].Location.Details["alice_imported"])
 }

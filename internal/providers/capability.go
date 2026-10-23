@@ -26,6 +26,9 @@ const (
 	CapKeyLogin Capability = "key_login"
 	// CapHTTP01: publish and remove an ACME HTTP-01 token on the server (http01.Publisher; spec 2026-10-17 §3.4).
 	CapHTTP01 Capability = "http01_challenge"
+	// CapCleanupCertificates: plan and remove certificates Alice put on the target and no longer uses
+	// (CertificateCleaner; R62 W3, the Windows provider's iis-cleanup).
+	CapCleanupCertificates Capability = "cleanup_certificates"
 )
 
 // CapabilitySet is the static set a provider advertises.
@@ -62,5 +65,5 @@ func (c CapabilitySet) Clone() CapabilitySet { return maps.Clone(c) }
 var knownCapabilities = NewCapabilitySet(
 	CapTestConnection, CapDiscoverCerts, CapDiscoverSSHKeys, CapDiscoverKVKeys, CapDiscoverKVSecrets,
 	CapDeployCertificate, CapImportCertificate, CapAuthorizedKeys, CapVerifyDeployment, CapReadCertificateSecret,
-	CapKeyLogin, CapHTTP01,
+	CapKeyLogin, CapHTTP01, CapCleanupCertificates,
 )

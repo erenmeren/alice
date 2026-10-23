@@ -109,6 +109,13 @@ func CheckUnsupported(t testing.TB, s providers.Session, caps providers.Capabili
 		_, err := s.VerifyKeyLogin(ctx, providers.KeyLoginRequest{})
 		expect("VerifyKeyLogin", err)
 	}
+	if c, ok := s.(providers.CertificateCleaner); ok && !caps.Has(providers.CapCleanupCertificates) {
+		// An optional interface: only a session that implements it is asked.
+		_, err := c.PlanCleanup(ctx, nil)
+		expect("PlanCleanup", err)
+		_, err = c.ApplyCleanup(ctx, nil)
+		expect("ApplyCleanup", err)
+	}
 }
 
 // SessionHarness opens sessions of one provider against a working counterpart (a fake server,
@@ -222,7 +229,9 @@ var sessionOps = []sessionOp{
 // DeployCertificate and RollbackDeployment do not return ErrUnsupported, and run CheckDeployOutcome
 // and CheckRollbackOutcome on every outcome those tests produce. The same holds for
 // CapImportCertificate: ImportCertificate changes the vault, so a provider carries its own test
-// that it is implemented and runs CheckImportResult on every outcome it produces.
+// that it is implemented and runs CheckImportResult on every outcome it produces. For
+// CapCleanupCertificates the session must be a providers.CertificateCleaner; it is not called (a plan
+// does the target's bookkeeping), so such a provider carries its own tests of both methods.
 //
 // The checks: every advertised capability's methods are implemented (never ErrUnsupported) and
 // return only *providers.Error; the others answer ErrUnsupported (CheckUnsupported); Open and
@@ -298,6 +307,9 @@ func CheckSession(t testing.TB, h SessionHarness) {
 		return
 	}
 	CheckUnsupported(t, s, h.Capabilities)
+	if _, ok := s.(providers.CertificateCleaner); h.Capabilities.Has(providers.CapCleanupCertificates) && !ok {
+		t.Errorf("%s is advertised but the session is no providers.CertificateCleaner", providers.CapCleanupCertificates)
+	}
 	_ = s.Close()
 	CheckNoSecrets(t, h.Secrets, seen...)
 }

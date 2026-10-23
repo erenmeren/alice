@@ -27,6 +27,10 @@ const (
 	ReasonBackupMissing       = "windows.backup_missing"       // BACKUP_MISSING: the previous certificate is not in its store with a usable key
 	ReasonLocationUnsupported = "windows.location_unsupported" // a locator Alice does not deploy to (W2 Ruling 5)
 	ReasonHelperRefused       = "windows.helper_refused"       // every other helper code; param helper_code
+
+	// ReasonCleanupOutcomeUnknown (W3, ALC-WIN-0014): iis-cleanup answered OUTCOME_UNKNOWN (its budget
+	// ended after its first durable write); retryable, the next plan settles it (R62 Ruling 12).
+	ReasonCleanupOutcomeUnknown = "windows.cleanup_outcome_unknown"
 )
 
 // The engine's own reasons the helper's codes map to (Ruling 6), so its recovery paths work unchanged.
@@ -115,8 +119,12 @@ type budget struct {
 // budgets of the subcommands. iis-dump's helper gives up after winproto.HelperBudget (50 s), before
 // Alice's 60 s cut the connection; iis-deploy and iis-restore wait up to winproto.LockWait for the lock
 // and finish under winproto.WriteGrace within the long budget too; iis-status takes no lock and
-// iis-fence waits at most LockWait, inside the default budget.
+// iis-fence waits at most LockWait, inside the default budget. iis-cleanup's helper runs under
+// winproto.HelperBudget (lock wait included) and answers OUTCOME_UNKNOWN when it ends, before Alice's
+// long budget cuts the connection; a plan lists at most 256 candidates and as many verdicts as the watch
+// list allows, well inside 1 MiB.
 var budgets = map[string]budget{
+	winproto.SubIISCleanup: {linuxssh.LongCommandTimeout, 1 << 20},
 	winproto.SubVersion:    {linuxssh.DefaultCommandTimeout, 64 << 10},
 	winproto.SubWinFacts:   {linuxssh.DefaultCommandTimeout, 64 << 10},
 	winproto.SubIISDump:    {linuxssh.LongCommandTimeout, winproto.DumpOutput},
