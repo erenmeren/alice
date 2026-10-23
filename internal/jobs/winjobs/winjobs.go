@@ -79,6 +79,9 @@ func (h *handlers) open(ctx context.Context, id uuid.UUID) (providers.Session, i
 		return nil, t, jobs.Fail("target.disabled", nil, nil)
 	case t.Status == inventory.StatusPendingHostKey:
 		return nil, t, jobs.Fail("target.host_key_unconfirmed", nil, nil)
+	case !slices.Contains(t.Capabilities, string(providers.CapCleanupCertificates)):
+		// Before any connection: a server whose provider does not clean up is never dialled for it.
+		return nil, t, jobs.Fail("internal.unexpected", nil, fmt.Errorf("winjobs: the server cannot clean up certificates"))
 	}
 	p, ok := h.d.Registry.Get(ref.Kind)
 	if !ok {
@@ -109,7 +112,7 @@ func (h *handlers) open(ctx context.Context, id uuid.UUID) (providers.Session, i
 func (h *handlers) cleanup(jobCtx context.Context, j jobs.Job, _ jobs.StepRecorder) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(jobCtx, cleanupTimeout)
 	defer cancel()
-	sess, t, err := h.open(ctx, j.TargetID)
+	sess, _, err := h.open(ctx, j.TargetID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +122,8 @@ func (h *handlers) cleanup(jobCtx context.Context, j jobs.Job, _ jobs.StepRecord
 		}
 	}()
 	cleaner, ok := sess.(providers.CertificateCleaner)
-	if !ok || !slices.Contains(t.Capabilities, string(providers.CapCleanupCertificates)) {
-		return nil, jobs.Fail("internal.unexpected", nil, fmt.Errorf("winjobs: the server's provider cannot clean up certificates"))
+	if !ok {
+		return nil, jobs.Fail("internal.unexpected", nil, fmt.Errorf("winjobs: the server's provider session cannot clean up certificates"))
 	}
 	var incident *uuid.UUID
 	if raw, ok := j.Payload["incident_id"]; ok {

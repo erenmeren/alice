@@ -225,7 +225,8 @@ FROM unnest($2::text[]) AS x (fp) GROUP BY x.fp`, target, fps, since)
 // and, for an incident's job only (Ruling 9), one notice TemplateWindowsCompromisedInStore per watched compromised
 // certificate that is still in a store afterwards (the helper kept it: not Alice's, or still used; or it was removable
 // and not removed), to the server's and the certificate's services, at most once per incident and certificate
-// (compromisedInStore). A scheduled job tells nobody.
+// (compromisedInStore), and only when no place of the incident on the server is still open (pending or deploying). A
+// scheduled job tells nobody. Removals are recorded in every case.
 func (s *Service) RecordCleanup(ctx context.Context, target uuid.UUID, incident *uuid.UUID, plan providers.CleanupPlan, d CleanupDecision,
 	res providers.CleanupApplyResult) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -252,6 +253,17 @@ func (s *Service) RecordCleanup(ctx context.Context, target uuid.UUID, incident 
 			}
 		}
 		if incident == nil || s.notifier == nil {
+			return nil
+		}
+		// A place of the incident on this server that is still open (its deployment unfinished) may keep the certificate
+		// in use: the job queued when the last place settles is the one that reports.
+		var open bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM certificate_incident_locations il JOIN certificate_locations l ON l.id = il.location_id
+WHERE il.incident_id = $1 AND l.target_id = $2 AND il.status = ANY ($3))`, *incident, target,
+			[]string{IncidentLocationPending, IncidentLocationDeploying}).Scan(&open); err != nil {
+			return fmt.Errorf("inventory: read the incident's open places: %w", err)
+		}
+		if open {
 			return nil
 		}
 		var order []string
@@ -360,18 +372,22 @@ ORDER BY t.id LIMIT $6 FOR UPDATE OF t SKIP LOCKED`, TypeWindows, StatusOK, stri
 }
 
 // queueIncidentCleanupTx queues, in the caller's transaction, the windows.cleanup of the server of an incident's place
-// that was just settled, when the place is an http.sys binding (Ruling 9): payload incident_id, one live job per server
-// and incident (the dedupe key).
+// that has just settled, when the place is an http.sys binding on a server with the cleanup capability (Ruling 9; as
+// ScheduleWindowsCleanup): payload incident_id. The dedupe key names the place
+// (windows.cleanup:<target>:incident:<incident>:<location>), so a job already running for an earlier place of the server
+// never absorbs a later place's: the job queued after the last settlement sees every place settled.
 func (s *Service) queueIncidentCleanupTx(ctx context.Context, tx pgx.Tx, incident, location uuid.UUID) error {
 	var target uuid.UUID
 	var kind providers.LocationKind
-	if err := tx.QueryRow(ctx, "SELECT target_id, kind FROM certificate_locations WHERE id = $1", location).Scan(&target, &kind); err != nil {
+	var capable bool
+	if err := tx.QueryRow(ctx, `SELECT l.target_id, l.kind, $2 = ANY (t.capabilities) FROM certificate_locations l
+JOIN targets t ON t.id = l.target_id WHERE l.id = $1`, location, string(providers.CapCleanupCertificates)).Scan(&target, &kind, &capable); err != nil {
 		return fmt.Errorf("inventory: read the incident's place: %w", err)
 	}
-	if kind != providers.LocationWinSSLBinding {
+	if kind != providers.LocationWinSSLBinding || !capable {
 		return nil
 	}
 	_, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobWindowsCleanup, TargetID: target, Payload: map[string]string{"incident_id": incident.String()},
-		Kind: "system", DedupeKey: fmt.Sprintf("%s:%s:incident:%s", JobWindowsCleanup, target, incident)})
+		Kind: "system", DedupeKey: fmt.Sprintf("%s:%s:incident:%s:%s", JobWindowsCleanup, target, incident, location)})
 	return err
 }

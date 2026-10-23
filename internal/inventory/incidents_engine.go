@@ -361,10 +361,30 @@ func (s *Service) complete(ctx context.Context, i Incident) (bool, error) {
 	return moved, err
 }
 
-// setLocation changes one location of an open incident.
+// setLocation changes one location of an open incident. A place that settles (any final state: verified, unverified,
+// failed) queues, in the same transaction, the certificate cleanup of its server when it is a Windows binding
+// (queueIncidentCleanupTx; R62 W3 Ruling 9, §15 Q7): the compromised certificate leaves the machine store at once
+// instead of with the daily run, and the last place to settle has a job that sees every place of the server settled.
 func (s *Service) setLocation(ctx context.Context, incident, location uuid.UUID, from, status string, deployment *uuid.UUID, code string,
 	attempts int) (bool, error) {
-	return setLocationIn(ctx, s.pool, s.clock.Now().UTC(), incident, location, from, status, deployment, code, attempts)
+	now := s.clock.Now().UTC()
+	if !incidentPlaceFinal(status) {
+		return setLocationIn(ctx, s.pool, now, incident, location, from, status, deployment, code, attempts)
+	}
+	var moved bool
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		if moved, err = setLocationIn(ctx, tx, now, incident, location, from, status, deployment, code, attempts); err != nil || !moved {
+			return err
+		}
+		return s.queueIncidentCleanupTx(ctx, tx, incident, location)
+	})
+	return moved, err
+}
+
+// incidentPlaceFinal reports whether an incident place in status has settled: every status but pending and deploying.
+func incidentPlaceFinal(status string) bool {
+	return status != IncidentLocationPending && status != IncidentLocationDeploying
 }
 
 // setLocationIn is setLocation through q (the pool, or a transaction that does more with the change) at now.
@@ -407,10 +427,7 @@ func (s *Service) requestIncidentDeployment(ctx context.Context, i Incident, l i
 	return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationFailed, nil, codeOf(err), l.attempts+1)
 }
 
-// followIncidentDeployment settles a location whose deployment ended. A place on a Windows server that is settled
-// verified or unverified (the compromised certificate is out of the binding either way) queues, in the same transaction,
-// the cleanup of that server with the incident (R62 W3 Ruling 9, §15 Q7): the compromised certificate leaves the machine
-// store at once instead of with the daily run.
+// followIncidentDeployment settles a location whose deployment ended (setLocation queues a Windows server's cleanup).
 func (s *Service) followIncidentDeployment(ctx context.Context, i Incident, l incidentLocationRow) (bool, error) {
 	if l.depState != DeployStateDone {
 		return false, nil
@@ -421,15 +438,7 @@ func (s *Service) followIncidentDeployment(ctx context.Context, i Incident, l in
 		if l.depVerified != "remote" && l.depVerified != "local" {
 			status = IncidentLocationUnverified
 		}
-		var moved bool
-		err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-			var err error
-			if moved, err = setLocationIn(ctx, tx, s.clock.Now().UTC(), i.ID, l.location, IncidentLocationDeploying, status, nil, "", l.attempts); err != nil || !moved {
-				return err
-			}
-			return s.queueIncidentCleanupTx(ctx, tx, i.ID, l.location)
-		})
-		return moved, err
+		return s.setLocation(ctx, i.ID, l.location, IncidentLocationDeploying, status, nil, "", l.attempts)
 	}
 	code := l.depCode
 	if code == "" {

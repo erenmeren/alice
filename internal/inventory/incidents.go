@@ -468,8 +468,12 @@ VALUES ($1, $2, $3, $4, $5)`, id, x.loc, status, code, now); err != nil {
 		}
 		if status == IncidentLocationPending {
 			pending++
-		} else {
-			skipped++
+			continue
+		}
+		skipped++
+		// A skipped place has settled: a Windows server's cleanup is queued as for any settled place (setLocation).
+		if err := s.queueIncidentCleanupTx(ctx, tx, id, x.loc); err != nil {
+			return 0, 0, err
 		}
 	}
 	return pending, skipped, nil

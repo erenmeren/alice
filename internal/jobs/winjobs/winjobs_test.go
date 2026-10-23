@@ -242,7 +242,7 @@ func TestCleanupWithoutTheInterfaceIsUnexpected(t *testing.T) {
 	w.inv.target.Capabilities = []string{string(providers.CapTestConnection)}
 	_, err = w.h.cleanup(context.Background(), testJob, nil)
 	assert.Equal(t, "internal.unexpected", failure(t, err).Reason)
-	assert.Equal(t, []string{"TargetRef", "Close"}, w.calls, "no capability: no plan")
+	assert.Equal(t, []string{"TargetRef"}, w.calls, "no capability: checked before a session is opened (nothing to close), no plan")
 }
 
 // A plan or an apply whose outcome is unknown fails the job with the provider's reason (one attempt; the next day's plan
