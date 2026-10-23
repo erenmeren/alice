@@ -565,7 +565,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   until the record is written (a deployment killed at `deploy.writing` still serves the leaf alone on both hosts);
   only a write changes the served chain, hence the binding record's `chain` (Ruling 10).
 
-### Runner runs used (7 of 20)
+### Runner runs used (9 of 20)
 
 | Run | Head | Result | What it found |
 |---|---|---|---|
@@ -576,6 +576,8 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 5 <https://github.com/erenmeren/alice/actions/runs/39863868398> | `7c2b08d1` | 2022 green; 2025 failed | Only `TestRealSetupScript`'s first `version` after setup did not end (second occurrence): hardened in `95b3e817` (wait for sshd's banner, diagnostics, one retry at 60 s); every Task 9 fidelity test passed on both images |
 | 6 <https://github.com/erenmeren/alice/actions/runs/39866197908> | `90f83ad8` | **green** on both images | The binding record chain (Task 3 fix rounds 3-4) on real Windows |
 | 7 <https://github.com/erenmeren/alice/actions/runs/39879604187> | `fcf85df8` | **green** on both images | Every test of the branch after Tasks 11, 13 and 14 and the e-mail texts, on both images |
+| 8 <https://github.com/erenmeren/alice/actions/runs/39888002949> (attempt 1) | `b5afa7ce` | 2025 green; 2022 failed | Only `TestRealSetupScript`: the W1 setup script (OpenSSH capability install) hung until `go test`'s 10 min timeout, a runner flake outside W2 code |
+| 9 <https://github.com/erenmeren/alice/actions/runs/39888002949> (attempt 2) | `b5afa7ce` | **green** on both images | The final-review fixes; the branch head's code |
 
 The `ci.yml` runs of the branch: 39853314997 at `0e144e16` (gitleaks flagged the redaction test's fake PEM in
 `winproto_test.go`, fingerprinted in `.gitleaksignore` by the controller; `internal/notify`
