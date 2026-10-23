@@ -25,24 +25,25 @@ var packageStart = time.Now()
 func TestRealRunnerIsClean(t *testing.T) {
 	requireReal(t)
 
-	// No http.sys record on the W2 ports (the helper's own listing, which the W1 twin checks against
-	// netsh's records).
+	// No http.sys record on the W2 and W3 ports (the helper's own listing, which the W1 twin checks
+	// against netsh's records).
 	list, err := sslBindings()
 	require.NoError(t, err)
 	require.NotEmpty(t, list, "positive control: the runner image's own records are listed")
 	for _, b := range list {
-		assert.False(t, b.Port >= 45330 && b.Port <= 45389, "an http.sys record is left: %+v", b)
+		assert.False(t, b.Port >= 45330 && b.Port <= 45398, "an http.sys record is left: %+v", b)
 	}
 
-	// No alice-w2- certificate in My, WebHosting or CA (by subject or friendly name: the helper names its
-	// imports "Alice <first SAN> ...", and every W2 fixture name starts alice-w2-).
+	// No alice-w2- or alice-w3- certificate in My, WebHosting or CA (by subject or friendly name: the
+	// helper names its imports "Alice <first SAN> ...", and every W2 and W3 fixture name starts so).
 	out := powershell(t, `$n = 0
 foreach ($s in @('My', 'WebHosting', 'CA')) {
     $p = "Cert:\LocalMachine\$s"
     if (-not (Test-Path -LiteralPath $p)) { continue }
     foreach ($c in Get-ChildItem -LiteralPath $p) {
         $n++
-        if ($c.Subject -like '*alice-w2-*' -or $c.FriendlyName -like '*alice-w2-*') { "left $s $($c.Thumbprint) $($c.Subject)" }
+        if ($c.Subject -like '*alice-w2-*' -or $c.FriendlyName -like '*alice-w2-*' -or
+            $c.Subject -like '*alice-w3-*' -or $c.FriendlyName -like '*alice-w3-*') { "left $s $($c.Thumbprint) $($c.Subject)" }
     }
 }
 "count $n"`)
@@ -65,18 +66,21 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	// its file's creation time (the image's own keys are older than this test binary).
 	assert.Empty(t, machineKeysSince(t, packageStart), "machine keys created during this run are left")
 
-	// No alice-w2- site.
+	// No alice-w2- or alice-w3- site.
 	sites, err := exec.Command(appcmdPath(), "list", "site", "/text:name").Output()
 	require.NoError(t, err)
 	require.Contains(t, string(sites), "Default Web Site", "positive control: appcmd lists the image's own site")
 	for _, name := range strings.Fields(string(sites)) {
-		assert.False(t, strings.HasPrefix(name, "alice-w2-"), "an IIS site is left: %s", name)
+		assert.False(t, strings.HasPrefix(name, "alice-w2-") || strings.HasPrefix(name, "alice-w3-"), "an IIS site is left: %s", name)
 	}
 
-	// No test data directory and no fixture web directory.
+	// No test data directory (W2's and W3's alike: C:\ProgramData\Alice\helper-test-<random>) and no
+	// fixture web directory.
 	left, err := filepath.Glob(`C:\ProgramData\Alice\helper-test-*`)
 	require.NoError(t, err)
 	assert.Empty(t, left, "test data directories are left")
-	_, err = os.Stat(filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", "alice-w2-fidelity"))
-	assert.ErrorIs(t, err, os.ErrNotExist, "the fixture sites' directory is left")
+	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity"} {
+		_, err = os.Stat(filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", dir))
+		assert.ErrorIs(t, err, os.ErrNotExist, "the fixture sites' directory %s is left", dir)
+	}
 }

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -674,11 +675,50 @@ func TestRealStateFiles(t *testing.T) {
 	_, _, err = h.ReadState("bindings/dir.json")
 	assert.Error(t, err)
 
+	// ListState and RemoveState (W3): regular files only, by their names within the directory; a
+	// directory, a junction and a file symbolic link are neither listed nor removed, nor followed.
+	require.NoError(t, h.WriteState("journal/bbbb.json", []byte(`{}`)))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "journal", "sub.json"), 0o700))
+	target := t.TempDir()
+	targetFile := filepath.Join(target, "target.json")
+	require.NoError(t, os.WriteFile(targetFile, []byte(`{"t":1}`), 0o600))
+	junction, fileLink := filepath.Join(dir, "journal", "junction.json"), filepath.Join(dir, "journal", "filelink.json")
+	t.Cleanup(func() { _ = os.Remove(junction); _ = os.Remove(fileLink) }) // the links only, before the directory
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).CombinedOutput()
+	require.NoError(t, err, "mklink /J: %s", out)
+	out, err = exec.Command("cmd", "/c", "mklink", fileLink, targetFile).CombinedOutput()
+	require.NoError(t, err, "mklink: %s", out)
+	files, err := h.ListState("journal/")
+	require.NoError(t, err)
+	var names []string
+	for _, f := range files {
+		names = append(names, f.Name)
+		assert.WithinDuration(t, time.Now(), f.ModTime, 5*time.Minute, "%s: the file's last write time", f.Name)
+	}
+	slices.Sort(names)
+	assert.Equal(t, []string{"aaaa.json", "bbbb.json"}, names, "regular files only")
+	files, err = newHost(newTestDataDir(t)).ListState("bindings/")
+	require.NoError(t, err, "a directory that does not exist lists nothing")
+	assert.Empty(t, files)
+	_, err = h.ListState("other/")
+	assert.Error(t, err)
+	require.NoError(t, h.RemoveState("journal/bbbb.json"))
+	require.NoError(t, h.RemoveState("journal/bbbb.json"), "absent is nil")
+	_, found, err = h.ReadState("journal/bbbb.json")
+	require.NoError(t, err)
+	assert.False(t, found, "removed")
+	for _, bad := range []string{"journal/sub.json", "journal/junction.json", "journal/filelink.json", "../x.json"} {
+		assert.Error(t, h.RemoveState(bad), bad)
+	}
+	data, err = os.ReadFile(targetFile) //nolint:gosec // the test's own file
+	require.NoError(t, err)
+	assert.Equal(t, `{"t":1}`, string(data), "the link's target is untouched")
+
 	// A reparse point planted as journal makes the directory untrusted.
 	planted := newTestDataDir(t)
 	link := filepath.Join(planted, "journal")
 	t.Cleanup(func() { _ = os.Remove(link) }) // the junction only, before the directory
-	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, t.TempDir()).CombinedOutput()
+	out, err = exec.Command("cmd", "/c", "mklink", "/J", link, t.TempDir()).CombinedOutput()
 	require.NoError(t, err, "mklink: %s", out)
 	assert.ErrorIs(t, newHost(planted).DataDirSafe(), winhelper.ErrJournal)
 	assert.ErrorIs(t, newHost(filepath.Join(planted, "missing")).DataDirSafe(), winhelper.ErrJournal)

@@ -474,21 +474,26 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 			assert.False(t, covers(bad, dep), "the Windows helper links %s", dep)
 		}
 	}
-	// The kill hook of the fidelity tests (ALICE_WIN_TEST_KILL_AT) is compiled with -tags alicetest only:
-	// the shipped build's files never include it, the test build's do (positive control).
-	hook := "point_alicetest_windows.go"
+	// The kill hook of the fidelity tests (ALICE_WIN_TEST_KILL_AT, W2) and the clock offset of the cleanup
+	// fidelity test (ALICE_WIN_TEST_CLOCK_OFFSET, W3 Ruling 22) are compiled with -tags alicetest only:
+	// the shipped build's files never include them, the test build's do (positive control).
+	hooks := map[string]string{"point_alicetest_windows.go": "ALICE_WIN_TEST_KILL_AT",
+		"now_alicetest_windows.go": "ALICE_WIN_TEST_CLOCK_OFFSET"}
 	files := func(tags string) []string {
 		return goListDepsFor(t, "windows", `{{if eq .ImportPath "alice/cmd/alice-winhelper"}}{{join .GoFiles " "}}{{end}}`, tags,
 			"./cmd/alice-winhelper")
 	}
-	shipped := files("")
+	shipped, testBuild := files(""), files("alicetest")
 	require.Contains(t, shipped, "main.go", "positive control: the helper's own files are listed")
-	assert.NotContains(t, shipped, hook, "the shipped Windows helper compiles the kill hook")
-	assert.Contains(t, files("alicetest"), hook, "positive control: the test build compiles the kill hook")
-	for _, f := range shipped {
-		src, err := os.ReadFile(filepath.Join(moduleRoot(t), "cmd", "alice-winhelper", f))
-		require.NoError(t, err)
-		assert.NotContains(t, string(src), "ALICE_WIN_TEST_KILL_AT", "%s of the shipped helper reads the kill hook", f)
+	require.Contains(t, shipped, "now_windows.go", "positive control: the shipped helper has its clock")
+	for hook, env := range hooks {
+		assert.NotContains(t, shipped, hook, "the shipped Windows helper compiles a test hook")
+		assert.Contains(t, testBuild, hook, "positive control: the test build compiles the test hook")
+		for _, f := range shipped {
+			src, err := os.ReadFile(filepath.Join(moduleRoot(t), "cmd", "alice-winhelper", f))
+			require.NoError(t, err)
+			assert.NotContains(t, string(src), env, "%s of the shipped helper reads a test hook", f)
+		}
 	}
 	// Positive control: the e2e build does link a test-only package, so the check can see one.
 	assert.Contains(t, goListDeps(t, "e2e testlicense", "./cmd/alice"), "alice/internal/license/licensetest")

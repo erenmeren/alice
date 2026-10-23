@@ -347,3 +347,97 @@ func (h host) LockHeld() bool {
 	}
 	return held
 }
+
+// maxListedState bounds the entries ListState visits in one directory; more is an error (pruning keeps
+// the directories far below it).
+const maxListedState = 1 << 16
+
+// stateDir turns ListState's directory ("journal/" or "bindings/", the slash optional) into its path.
+func (h host) stateDir(dir string) (string, bool) {
+	d := strings.TrimSuffix(dir, "/")
+	for _, known := range stateDirs {
+		if d == known {
+			return filepath.Join(h.dataDir, d), true
+		}
+	}
+	return "", false
+}
+
+// ListState lists the regular files directly in journal\ or bindings\ (FindFirstFile on the directory):
+// a directory, a reparse point or a device is left out, never followed. ModTime is the find data's last
+// write time. A directory that does not exist lists nothing; one that is a reparse point or not a
+// directory is an error.
+func (h host) ListState(dir string) ([]winhelper.StateFile, error) {
+	path, ok := h.stateDir(dir)
+	if !ok {
+		return nil, errState
+	}
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, errState
+	}
+	attrs, err := windows.GetFileAttributes(p)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return nil, nil
+	}
+	if err != nil || attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return nil, errState
+	}
+	pattern, err := windows.UTF16PtrFromString(filepath.Join(path, "*"))
+	if err != nil {
+		return nil, errState
+	}
+	var fd windows.Win32finddata
+	fh, err := windows.FindFirstFile(pattern, &fd)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return nil, nil // removed since the check
+	}
+	if err != nil {
+		return nil, errState
+	}
+	defer func() { _ = windows.FindClose(fh) }()
+	const skip = windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_REPARSE_POINT | windows.FILE_ATTRIBUTE_DEVICE
+	var out []winhelper.StateFile
+	for n := 0; ; n++ {
+		if n >= maxListedState {
+			return nil, errState
+		}
+		if fd.FileAttributes&skip == 0 {
+			out = append(out, winhelper.StateFile{Name: windows.UTF16ToString(fd.FileName[:]),
+				ModTime: time.Unix(0, fd.LastWriteTime.Nanoseconds()).UTC()})
+		}
+		err := windows.FindNextFile(fh, &fd)
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, errState
+		}
+	}
+}
+
+// RemoveState deletes a state file ("journal/<op>.json" and the other names of ReadState): only a
+// regular file, with DeleteFile (which removes a link itself, never what it points to); one that is
+// absent is nil.
+func (h host) RemoveState(name string) error {
+	path, ok := h.statePath(name)
+	if !ok {
+		return errState
+	}
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return errState
+	}
+	attrs, err := windows.GetFileAttributes(p)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return nil
+	}
+	if err != nil || attrs&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE) != 0 {
+		return errState
+	}
+	err = windows.DeleteFile(p)
+	if err == nil || errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return nil
+	}
+	return errState
+}

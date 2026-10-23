@@ -411,7 +411,8 @@ func appcmdPath() string {
 func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 	tw.t.Helper()
 	prefix := name[:min(len(name), len("alice-w1-"))]
-	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-", "fixture site names start alice-w1- or alice-w2-")
+	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-" || prefix == "alice-w3-",
+		"fixture site names start alice-w1-, alice-w2- or alice-w3-")
 	if tw.webDir == "" {
 		tw.webDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", prefix+"fidelity")
 		dir := tw.webDir
@@ -462,9 +463,10 @@ func TestFidelityVersionAndRefusals(t *testing.T) {
 	}{
 		{[]string{winproto.SubVersion}, ""},
 		{[]string{winproto.SubVersion, "x"}, winproto.CodeUsage},
-		// W2: iis-deploy is known (USAGE without --op, on both: the model is a WriteHost); iis-cleanup is
-		// W3's and stays unknown.
-		{[]string{"iis-cleanup"}, winproto.CodeUnknownSubcommand},
+		// W2: iis-deploy is known (USAGE without --op, on both: the model is a WriteHost); W3: so is
+		// iis-cleanup (USAGE without --plan or --apply). rdp-deploy is W6's and stays unknown (W3 Ruling 2).
+		{[]string{"rdp-deploy"}, winproto.CodeUnknownSubcommand},
+		{[]string{winproto.SubIISCleanup}, winproto.CodeUsage},
 		{[]string{winproto.SubIISDeploy}, winproto.CodeUsage},
 		{[]string{winproto.SubTLSProbe, "--addr"}, winproto.CodeUsage},
 	} {

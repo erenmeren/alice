@@ -127,7 +127,8 @@ func netshKeyOf(l winproto.Locator) string {
 // own Ex write. The model is given the record as the helper reads it.
 func (tw *wtwin) addRecord(l winproto.Locator, thumb string, ex *winproto.ExtendedParam, opts ...string) winproto.SSLBinding {
 	tw.t.Helper()
-	require.True(tw.t, l.Port >= 45340 && l.Port <= 45389, "W2 fixture ports are 45340-45389")
+	require.True(tw.t, l.Port >= 45340 && l.Port <= 45389 || l.Port >= 45390 && l.Port <= 45398,
+		"W2 fixture ports are 45340-45389, W3's 45390-45398")
 	key := netshKeyOf(l)
 	tw.t.Cleanup(func() {
 		if out, err := exec.Command("netsh", "http", "delete", "sslcert", key).CombinedOutput(); err != nil {
