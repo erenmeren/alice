@@ -16,15 +16,16 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// Protocol and locations. Protocol 1 spans W1, W2 and W3 (W1 Ruling 2: nothing was released between
-// them): W2 added iis-deploy, iis-restore, iis-status and iis-fence to it, W3 adds iis-cleanup. Version
-// is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 is W2's (W2 Ruling 2), 0.3.0
-// is W3's; 1.0.0 is kept for the first released helper (W4). WriteMinVersion is the oldest helper Alice
-// sends a write subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends iis-cleanup to.
+// Protocol and locations. Protocol 1 spans every helper version (W1 Ruling 2: nothing was released
+// before W4): W2 added iis-deploy, iis-restore, iis-status and iis-fence to it, W3 iis-cleanup. Version
+// is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 W2's (W2 Ruling 2), 0.3.0
+// W3's, and 1.0.0 the first released helper (W4, R63), protocol 1 throughout. WriteMinVersion is the
+// oldest helper Alice sends a write subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends
+// iis-cleanup to.
 const (
 	Protocol          = 1
 	MinProtocol       = 1
-	Version           = "0.3.0"
+	Version           = "1.0.0"
 	WriteMinVersion   = "0.2.0"
 	CleanupMinVersion = "0.3.0"
 

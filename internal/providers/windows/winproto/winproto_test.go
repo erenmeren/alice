@@ -292,7 +292,7 @@ func TestWriteSubcommandsAndCodes(t *testing.T) {
 			t.Errorf("%q != %q", c[0], c[1])
 		}
 	}
-	if winproto.Version != "0.3.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
+	if winproto.Version != "1.0.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
@@ -586,7 +586,7 @@ func TestValidCleanupItem(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
-	if winproto.Version != "0.3.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
+	if winproto.Version != "1.0.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.CleanupMinVersion) {
@@ -609,5 +609,28 @@ func TestCleanupBoundsAreConsistent(t *testing.T) {
 	}
 	if winproto.MaxCleanupItems > winproto.MaxCleanupCandidates {
 		t.Error("an apply may not name more than a plan lists")
+	}
+}
+
+// TestReleasedHelperVersion: 1.0.0 is the first released helper (R63); the minimums stay, so a W3
+// 0.3.0 helper still cleans, and versions compare numerically, not as text.
+func TestReleasedHelperVersion(t *testing.T) {
+	if winproto.Version != "1.0.0" {
+		t.Fatalf("Version = %q", winproto.Version)
+	}
+	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
+		t.Error("Version below WriteMinVersion")
+	}
+	if !winproto.VersionAtLeast(winproto.Version, winproto.CleanupMinVersion) {
+		t.Error("Version below CleanupMinVersion")
+	}
+	if !winproto.VersionAtLeast("0.3.0", winproto.CleanupMinVersion) {
+		t.Error("a 0.3.0 helper must still clean")
+	}
+	if winproto.VersionAtLeast("0.3.0", winproto.Version) {
+		t.Error("0.3.0 is below the released version")
+	}
+	if !winproto.VersionAtLeast("1.0.0", "0.3.0") {
+		t.Error("1.0.0 must compare above 0.3.0 numerically")
 	}
 }
