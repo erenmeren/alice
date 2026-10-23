@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +27,7 @@ import (
 
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 type logBuffer struct {
@@ -433,3 +436,88 @@ func TestPrepareRefusesAnOversizedBodyAndAnUnreadableScript(t *testing.T) {
 type iotestErr struct{}
 
 func (iotestErr) Read([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// servedLeaf is the SHA-256 (lower-case hex) of the leaf a TLS handshake to addr with the demo binding's SNI shows.
+func servedLeaf(t *testing.T, addr string) string {
+	t.Helper()
+	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: "www.win.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	return sha256Hex(conn.ConnectionState().PeerCertificates[0].Raw)
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// deploy runs iis-deploy of leaf to the demo's hostnameport binding over a fresh SSH connection, as the provider does.
+func deploy(t *testing.T, st *stack, key ssh.Signer, op, expect string, leaf pki.Leaf) winproto.DeployResponse {
+	t.Helper()
+	in, err := json.Marshal(winproto.DeployInput{
+		Locator:      winproto.Locator{Type: winproto.BindingHostnamePort, Host: "www.win.example.test", Port: 443, AppID: winproto.AppIDIIS},
+		ExpectSHA256: expect, ChainPEM: string(leaf.FullchainPEM), KeyPEM: string(leaf.KeyPEM),
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{},
+	})
+	require.NoError(t, err)
+	c, err := dial(st.ssh, key, ssh.FingerprintSHA256(st.hostKey))
+	require.NoError(t, err)
+	defer func() { _ = c.Close() }()
+	s, err := c.NewSession()
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	s.Stdin = bytes.NewReader(in)
+	out, err := s.Output(winproto.SubIISDeploy + " --op " + op)
+	require.NoError(t, err, string(out))
+	var resp winproto.DeployResponse
+	require.NoError(t, json.Unmarshal(out, &resp), string(out))
+	return resp
+}
+
+func TestCtlStaleTLSKeepsTheListenerOnTheOldCertificate(t *testing.T) {
+	st := startStack(t)
+	key := clientKey(t)
+	code, _, errOut := st.ctlRun(t, setupScriptFor(t, key), "prepare")
+	require.Equal(t, 0, code, errOut)
+	code, out, errOut := st.ctlRun(t, "", "endpoints")
+	require.Equal(t, 0, code, errOut)
+	var eps map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &eps))
+	addr := eps["443"]
+
+	now := time.Now()
+	ca := pki.NewCA("Fake Windows Test CA", pki.ECDSA256, now)
+	opts := pki.Opts{CommonName: "www.win.example.test", SANs: []string{"www.win.example.test"}}
+	first, second := ca.Issue(opts, now), ca.Issue(opts, now)
+	resp := deploy(t, st, key, "6f1c3a52-7f3b-4c55-9a51-0d6c2b1e8f01", servedLeaf(t, addr), first)
+	require.True(t, resp.OK, "%+v", resp)
+	firstSHA := sha256Hex(first.Cert.Raw)
+	assert.Equal(t, firstSHA, servedLeaf(t, addr), "without stale TLS the listener serves the new certificate")
+
+	code, out, errOut = st.ctlRun(t, "", "stale-tls-on")
+	require.Equal(t, 0, code, errOut)
+	assert.JSONEq(t, `{"ok":true}`, out)
+	resp = deploy(t, st, key, "6f1c3a52-7f3b-4c55-9a51-0d6c2b1e8f02", firstSHA, second)
+	require.True(t, resp.OK, "%+v", resp)
+	assert.Equal(t, firstSHA, servedLeaf(t, addr), "while stale TLS is on the listener keeps the certificate it served")
+
+	code, out, errOut = st.ctlRun(t, "", "stale-tls-off")
+	require.Equal(t, 0, code, errOut)
+	assert.JSONEq(t, `{"ok":true}`, out)
+	assert.Equal(t, sha256Hex(second.Cert.Raw), servedLeaf(t, addr), "with stale TLS off the listener serves the binding again")
+
+	// The control commands take no argument and only POST.
+	code, _, errOut = st.ctlRun(t, "", "stale-tls-on", "extra")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "takes no argument")
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	for _, path := range []string{"/stale-tls-on", "/stale-tls-off"} {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+st.ctl+path, nil)
+		require.NoError(t, err)
+		r, err := client.Do(req)
+		require.NoError(t, err)
+		_ = r.Body.Close()
+		assert.Equal(t, http.StatusMethodNotAllowed, r.StatusCode, path)
+	}
+}

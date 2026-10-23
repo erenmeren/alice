@@ -1,9 +1,11 @@
-import type { Page } from '@playwright/test';
+import { X509Certificate } from 'node:crypto';
+import type { Locator, Page } from '@playwright/test';
 import {
   browserLocale,
   expect,
   expectAccessible,
   field,
+  newCert,
   resetInstall,
   runWizard,
   settle,
@@ -11,10 +13,12 @@ import {
   translator,
   windowsExec,
   type Lang,
+  type PemPair,
   type Translate,
 } from './helpers';
 
-// A Windows server on the e2e stack (R60, phase W1: connection and discovery only): the emulated Windows server of the
+// A Windows server on the e2e stack (R60, phase W1: connection and discovery; R61, phase W2: deployment, verification
+// and rollback): the emulated Windows server of the
 // compose service fakewindows (cmd/alice-fakewindows, the demo host of internal/providers/windows/wintest): Windows
 // Server 2022 Datacenter 10.0.20348.2700 with IIS 10.0, the sites "Default Web Site" (https *:443:www.win.example.test,
 // SNI) and "Intranet" (https *:8443:), and the http.sys entries hostnameport www.win.example.test:443 (IIS, My), ipport
@@ -25,12 +29,16 @@ import {
 const SERVER = 'e2e-windows';
 const PRODUCT = 'Windows Server 2022 Datacenter';
 const BUILD = '10.0.20348.2700';
-const WEB = 'http.sys/hostnameport/www.win.example.test:443';
+const HOST = 'www.win.example.test';
+const WEB = `http.sys/hostnameport/${HOST}:443`;
 const INTRANET = 'http.sys/ipport/0.0.0.0:8443';
 const WINRM = 'http.sys/ipport/0.0.0.0:5986';
 const CCS = 'http.sys/ccs/443';
-// The Windows journey adds a server and runs two jobs (the connection test, the first discovery).
-const JOURNEY_TIMEOUT = 4 * 60_000;
+// The Windows journey adds a server, runs two jobs (the connection test, the first discovery) and two deployments
+// (R61: one committed and verified, one whose verification fails and is rolled back).
+const JOURNEY_TIMEOUT = 8 * 60_000;
+// The Windows steps of a deployment that reach the server, in order (R61).
+const DEPLOY_STEPS = ['import_chain', 'import_certificate', 'bind', 'verify'];
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -54,6 +62,74 @@ function fact(page: Page, label: string) {
   return page.locator('dt', { hasText: new RegExp(`^${escapeRegExp(label)}$`) }).locator('xpath=following-sibling::dd[1]');
 }
 
+// uploadPair uploads a certificate with its key on Certificates -> Upload certificate under label and closes the result.
+async function uploadPair(page: Page, t: Translate, pair: PemPair, label: string): Promise<void> {
+  await nav(page, t, 'nav.certificates');
+  await page.getByRole('button', { name: t('certificates.uploadButton') }).click();
+  const dialog = page.getByRole('dialog', { name: t('certificates.upload.title') });
+  await field(dialog, t('certificates.upload.certificate')).fill(pair.cert);
+  await field(dialog, t('certificates.upload.privateKey')).fill(pair.key);
+  await field(dialog, t('certificates.upload.label')).fill(label);
+  await dialog.getByRole('button', { name: t('certificates.upload.submit') }).click();
+  await expect(dialog.getByText(t('certificates.upload.uploaded'))).toBeVisible();
+  await dialog.getByRole('button', { name: t('ui.close') }).last().click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: label })).toBeVisible();
+}
+
+// openServer opens the Windows server's page from the server list.
+async function openServer(page: Page, t: Translate): Promise<void> {
+  await nav(page, t, 'nav.servers');
+  await page.getByRole('link', { name: SERVER, exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: SERVER })).toBeVisible();
+}
+
+// deployToWeb opens the deploy dialog from the www.win.example.test binding's row, checks the grouped binding picker
+// (the binding's group selected with its own control: exactly that binding), picks the certificate named label and
+// starts the deployment.
+async function deployToWeb(page: Page, t: Translate, subject: string, label: string): Promise<Locator> {
+  const prefix = t('locations.deployNamed', { site: '\u0000' }).split('\u0000')[0];
+  await bindingRow(page, t, WEB).getByRole('button', { name: new RegExp(`^${escapeRegExp(prefix)}`) }).click();
+  const dialog = page.getByRole('dialog', { name: t('deploy.title') });
+  const groups = dialog.getByTestId('deploy-certificate-group');
+  await expect(groups, 'the picker groups the bindings by the certificate they serve').toHaveCount(4);
+  const group = groups.filter({ has: page.getByRole('heading', { level: 3, name: subject, exact: true }) });
+  await expect(group).toHaveCount(1);
+  await group.getByRole('button', { name: t('deploy.selectGroupNamed', { name: subject }) }).click();
+  await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(1);
+  await expect(group.getByRole('checkbox', { checked: true })).toHaveCount(1);
+  const select = field(dialog, t('deploy.certificate'));
+  const value = await select.locator('option', { hasText: label }).getAttribute('value');
+  expect(value, `certificate ${label} offered`).toBeTruthy();
+  await select.selectOption(value!);
+  await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
+  return dialog;
+}
+
+function steps(scope: Locator, t: Translate): Locator {
+  return scope.getByRole('list', { name: t('deployments.stepsTitle') });
+}
+
+// expectStep checks one step row: its status and its Windows name.
+async function expectStep(scope: Locator, t: Translate, step: string, status: 'ok' | 'failed'): Promise<void> {
+  const row = steps(scope, t).locator(`li[data-step="${step}"]`);
+  await expect(row, step).toHaveAttribute('data-status', status);
+  await expect(row).toContainText(t(`deployments.steps.${step}`));
+}
+
+// openDeployment opens a deployment from the history by its certificate's label.
+async function openDeployment(page: Page, t: Translate, label: string): Promise<void> {
+  await nav(page, t, 'nav.deployments');
+  const name = new RegExp(`^${escapeRegExp(t('deployments.openNamed', { name: `${label}, ` }))}`);
+  await page.getByTestId('deployment-row').getByRole('link', { name }).click();
+  await expect(page.getByRole('heading', { level: 1, name: t('deployments.detailTitle') })).toBeVisible();
+}
+
+// sha1Of is a certificate's SHA-1 thumbprint as Windows names it, without separators (compared ignoring case).
+function sha1Of(pem: string): string {
+  return new X509Certificate(pem).fingerprint.replace(/:/g, '');
+}
+
 for (const lang of ['en', 'tr'] as Lang[]) {
   const t = translator(lang);
 
@@ -61,10 +137,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
     test.use({ locale: browserLocale(lang) });
 
     test.beforeEach(async ({ request }) => {
+      windowsExec(['ctl', 'stale-tls-off']);
       await resetInstall(request);
     });
+    test.afterEach(() => {
+      windowsExec(['ctl', 'stale-tls-off']);
+    });
 
-    test('add a Windows server, confirm its host key and see its http.sys bindings and IIS sites', async ({ page, request }) => {
+    test('add a Windows server, confirm its host key, see its http.sys bindings and IIS sites, deploy and roll back', async ({ page, request }) => {
       test.setTimeout(JOURNEY_TIMEOUT);
       await runWizard(page, request, lang);
       expect(JSON.parse(windowsExec(['ctl', 'ping']))).toEqual({ ok: true });
@@ -142,6 +222,60 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const usedWhere = page.getByRole('table', { name: t('certificates.detail.usedWhere') });
       await expect(usedWhere.getByRole('link', { name: SERVER, exact: true })).toBeVisible();
       await expect(usedWhere.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) })).toBeVisible();
+
+      // 7. R61: the bindings grouped by the certificate they serve (three certificates, and the CCS entry without one).
+      const first = newCert(HOST);
+      const firstLabel = `win-renewal-1-${lang}`;
+      await uploadPair(page, t, first, firstLabel);
+      await openServer(page, t);
+      const groups = page.getByTestId('certificate-group');
+      await expect(groups).toHaveCount(4);
+      const webGroup = groups.filter({ has: page.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) }) });
+      await expect(webGroup.getByTestId('certificate-group-row')).toContainText(HOST);
+      await expect(webGroup.getByTestId('certificate-group-row')).toContainText(t('locations.group.count', { count: 1 }));
+      await expect(groups.last().getByTestId('certificate-group-row')).toContainText(t('locations.group.noCertificate'));
+      await expect(groups.last()).toContainText(CCS);
+
+      // 8. Deploy to the hostnameport binding: chain, certificate, bind, verify; committed, served and trusted.
+      const deploying = await deployToWeb(page, t, HOST, firstLabel);
+      await settle(request, deploying.getByText(t('deploy.succeeded'), { exact: true }));
+      for (const step of DEPLOY_STEPS) await expectStep(deploying, t, step, 'ok');
+      await deploying.getByRole('button', { name: t('deploy.close') }).last().click();
+      await expect(deploying).toHaveCount(0);
+      await openDeployment(page, t, firstLabel);
+      await expect(page.getByTestId('deployment-status')).toHaveText(t('enum.deploymentStatus.succeeded'));
+      const main = page.getByRole('main');
+      for (const step of DEPLOY_STEPS) await expectStep(main, t, step, 'ok');
+      await expect(main.getByText(t('deployments.level.trusted'), { exact: true })).toBeVisible();
+      await expect(main.getByText(t('deployments.bindingLabel'), { exact: true })).toBeVisible();
+      await expectAccessible(page, 'windows deployment, verified');
+
+      // 9. A website that does not take the change (the fake keeps serving the certificate it served before the bind):
+      // the verification fails, the provider's iis-restore points the binding back, the deployment is rolled back.
+      const second = newCert(HOST);
+      const secondLabel = `win-renewal-2-${lang}`;
+      await uploadPair(page, t, second, secondLabel);
+      await openServer(page, t);
+      windowsExec(['ctl', 'stale-tls-on']);
+      const rollback = await deployToWeb(page, t, HOST, secondLabel);
+      await settle(request, rollback.getByText(t('deploy.rolledBack'), { exact: true }));
+      await expect(rollback.getByRole('alert').first()).toContainText(t('errors.deployment.verify_failed.title'));
+      await expect(rollback.getByRole('alert').first()).toContainText(t('deployments.windowsErrors.deployment.verify_failed.cause'));
+      await expectStep(rollback, t, 'bind', 'ok');
+      await expectStep(rollback, t, 'verify', 'failed');
+      await expectStep(rollback, t, 'restore', 'ok');
+      await rollback.getByRole('button', { name: t('deploy.close') }).last().click();
+      await expect(rollback).toHaveCount(0);
+      windowsExec(['ctl', 'stale-tls-off']);
+      await openDeployment(page, t, secondLabel);
+      await expect(page.getByTestId('deployment-status')).toHaveText(t('enum.deploymentStatus.rolled_back'));
+      await expectStep(main, t, 'restore', 'ok');
+      await expectStep(main, t, 'verify_old', 'ok');
+      await expect(main.getByText(t('deployments.windowsErrors.deployment.verify_failed.cause'))).toBeVisible();
+      // The previous certificate the binding names again: its store and SHA-1 thumbprint.
+      const previous = t('deployments.previousWindows', { store: 'My', sha1: sha1Of(first.cert) });
+      await expect(page.getByTestId('windows-previous')).toHaveText(new RegExp(`^${escapeRegExp(previous)}$`, 'i'));
+      await expectAccessible(page, 'windows deployment, rolled back');
     });
   });
 }
