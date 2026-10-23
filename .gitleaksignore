@@ -69,3 +69,6 @@ a8c3f77ce09b8cf604e7008f4771db4f7ba75946:web/src/components/acme/AcmeSettings.te
 9a36df07a579f90e9d8fcc76a8d4b844a8c0018b:internal/providers/windows/setup_test.go:generic-api-key:117
 # The DeployInput redaction test's fake PEM ("SECRETKEYMATERIAL" in a PKCS #8 header, not a key), no key material.
 9190fcf4e024ee9675c506acab00cb416a732ff4:internal/providers/windows/winproto/winproto_test.go:private-key:417
+# The fake's stale-TLS test passes fixed operation ids (UUIDs) to iis-deploy, no key material.
+469a584fe82de1d8e3768c5e962cdbc26d31e746:cmd/alice-fakewindows/main_test.go:generic-api-key:492
+469a584fe82de1d8e3768c5e962cdbc26d31e746:cmd/alice-fakewindows/main_test.go:generic-api-key:500
