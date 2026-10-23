@@ -160,7 +160,8 @@ func (p *Provider) HelperInfo() (string, int) { return winproto.HelperPath, winp
 // $ErrorActionPreference = 'Stop' (Windows PowerShell 5.1) and their exit code is checked instead.
 const scriptTemplate = `#Requires -RunAsAdministrator
 # Prepares this Windows server for Alice. Run it once in an elevated PowerShell (Windows PowerShell 5.1 or
-# PowerShell 7), in the directory that holds alice-helper.exe from the Alice bundle. Running it again is safe.
+# PowerShell 7), in the directory that holds alice-helper.exe from the helper folder of the Alice package.
+# Running it again is safe.
 # What it changes and how to undo it: docs/windows-host-preparation.md.
 # The whole script is one block, so a pasted copy also stops as a whole at the first error.
 & {
