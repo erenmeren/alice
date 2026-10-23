@@ -264,8 +264,8 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
 - **Blast radius.** Alice can reach every managed server through its key and helper.
 - **Windows servers.** Whoever controls Alice can bind any certificate it holds to every managed Windows binding and
   remove the certificates Alice imported; the helper is not signed with Authenticode; Windows Server 2019, Server
-  Core, a domain baseline, Defender switched on and ARM64 servers are checked by hand before each release, not by the
-  automated tests (`SECURITY-REPORT.md` KI-42).
+  Core, a domain baseline and Defender switched on are checked by hand before each release, ARM64 servers when
+  available (otherwise the release notes say so), not by the automated tests (`SECURITY-REPORT.md` KI-42).
 - **Certificate authorities.** Alice's ACME account can request certificates for the names an administrator allowed;
   Alice revokes the certificates it ordered (and, in a key compromise incident, only after replacing them everywhere);
   a certificate from another source is revoked at the authority that issued it. Behaviour against real public or company authorities, real DNS

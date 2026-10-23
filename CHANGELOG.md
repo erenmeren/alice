@@ -9,7 +9,9 @@
   [windows-host-preparation.md](docs/windows-host-preparation.md)); `make release` builds them, and the stage refuses a
   missing or changed helper.
 - Every change to the Windows helper or provider, every night and every release tag run the helper's real-host tests on
-  Windows Server 2022 and 2025, with the helper built byte for byte as the package ships it; one check,
+  Windows Server 2022 and 2025; each run builds the helper the package ships on both images and compares it byte for
+  byte with the Linux release build, and the setup script test installs those bytes (the other real tests run the
+  same source built by the test); one check,
   `windows-required`, reports the result (how to require it: `docs/dev/windows-ci.md` in the source repository). `release.yml`
   stages a tag only after that check passed.
 

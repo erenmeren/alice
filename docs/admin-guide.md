@@ -1531,13 +1531,17 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   application control policy (WDAC or AppLocker) must allow it by its hash, not by a publisher.
 - **Helper versions.** 1.0.0 is the first released helper. Alice deploys with a helper of 0.2.0 or later and cleans up
   with 0.3.0 or later, so a server with an older helper keeps working with what it supports. When you update Alice,
-  copy the new package's helper to the Windows servers first, then update Alice.
+  check the new package's signature and the helper's checksum, copy the helper to the Windows servers, then update
+  Alice, as the operator guide's [Updates](operator-guide.md#updates) describes.
 - **What is tested on real Windows.** Every change to the helper and the Windows provider, every night and every
   release run the helper's real-host tests (discovery, deployment, restore, cleanup, the setup script) on Windows
-  Server 2022 and 2025 (Desktop Experience), with the very helper the package ships. Windows Server 2019, Server Core, a
-  domain-joined server under the Microsoft security baseline, Defender or another EDR switched on, a Remote Desktop
-  listener with its own certificate, AD FS and ARM64 servers are checked by hand before each release (the release
-  checklist's section "Windows servers before release").
+  Server 2022 and 2025 (Desktop Experience). Each run builds the helper the package ships on both images and compares
+  it byte for byte with the Linux release build; the setup script test installs those bytes and calls the helper over
+  SSH, while the discovery, deployment, restore and cleanup tests run the same source built by the test. Windows
+  Server 2019, Server Core, a domain-joined server under the Microsoft security baseline, Defender or another EDR
+  switched on and a Remote Desktop listener with its own certificate are checked by hand before each release, AD FS
+  and ARM64 servers when available, otherwise the release notes say so (the release checklist's section "Windows
+  servers before release").
 - Alice does not manage the SSH keys of a Windows server. Not deployable in this release: Centralized Certificate
   Store bindings, bindings of other applications or other stores, a binding whose only problem is its key, and a host
   name written with non-ASCII letters (use its `xn--` form in IIS).

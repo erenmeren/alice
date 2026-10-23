@@ -23,14 +23,17 @@ must not block a change that touches nothing Windows.
 | Event | Base the change is measured against | Windows legs | A newer run of the same branch cancels it |
 |---|---|---|---|
 | Push to a branch other than the default branch | `git merge-base origin/<default> HEAD`: the whole branch, on every push | when the branch changes a watched path; no merge base: always | yes |
-| Push to the default branch (`main`) | the push's `before` commit; an empty, all-zeros or unknown `before` (the branch's creation, a force push) runs the legs | when the push changes a watched path | no: a cancelled default-branch run would leave its Windows change untested |
+| Push to the default branch (`main`) | the push's `before` commit; an empty, all-zeros or unknown `before` (the branch's creation, a force push) runs the legs | when the push changes a watched path | no, and nothing displaces it: each default-branch push has a concurrency group of its own (`main-<sha>`), since a cancelled or displaced default-branch run would leave its Windows change untested |
 | Pull request | the pull request's base commit | when the pull request changes a watched path | yes |
 | Nightly (`41 2 * * *` UTC, the default branch) | none | always | no (its own concurrency group) |
-| By hand (`workflow_dispatch`) | none | always | a push to the same branch cancels it (both share the branch's group, and the push run cancels what is in progress) |
+| By hand (`workflow_dispatch`) | none | always | on a branch other than the default one, a push to that branch cancels it (both share the branch's group, and the push run cancels what is in progress); on the default branch a push never does (the push has its own group) |
 | A release tag | `release.yml` calls the workflow with `all: true`; a tag push never starts it directly | always | no |
 
 A base that is not a commit in the clone, or a failed `git diff`, answers `true`: an unknown base runs the legs, it
-never skips them. A pull request from a branch of this repository runs twice (once for the push, once for the pull
+never skips them. GitHub keeps one pending run per concurrency group and cancels it when a newer one queues, whatever
+`cancel-in-progress` says; that is why a push to the default branch, which is diffed from its `before` commit, gets a
+group per commit: a queued push run displaced by the next push would leave its change untested, since the next push
+diffs from it. On other branches the whole branch is diffed, so a displaced run loses nothing. A pull request from a branch of this repository runs twice (once for the push, once for the pull
 request), as `ci.yml` does. There is no `merge_group` trigger: if a merge queue is ever enabled for `main`, add
 `merge_group:` to `on:` of `windows.yml` (the required check must report for the queue's commits too).
 
@@ -110,7 +113,8 @@ gh run list --workflow windows.yml --branch <branch> --limit 3
 gh run watch <run id>
 ```
 
-A manual run always runs both legs. A push to the same branch while it runs cancels it.
+A manual run always runs both legs. On a branch other than the default one, a push to that branch while it runs
+cancels it; a push to the default branch never cancels or displaces anything.
 
 ## The nightly run
 

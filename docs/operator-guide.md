@@ -166,10 +166,12 @@ The full guide is [upgrade.md](upgrade.md): `cd /opt/alice && sudo ./alice-updat
 with the recovery passphrase at hand. The update stops Alice **before** it makes its backup, so the outage starts
 with the backup and lasts a few minutes; announce it. A failed update returns to the installed version by itself.
 
-Update the managed servers' helpers first, then Alice: a new helper works with the previous Alice release. For each
-Windows server, take the new package's `helper/alice-winhelper-windows-amd64.exe` (or `-arm64.exe`), check it
-against the package's `helper/alice-winhelper.sha256`, and copy it to the server as
-`C:\Program Files\Alice\alice-helper.exe` in an elevated PowerShell
+After checking the new package's signature as in
+[install-guide.md, section 3](install-guide.md#3-check-the-package-before-you-extract-it), update the managed servers'
+helpers first, then Alice: a new helper works with the previous Alice release. For each Windows server, take the new
+package's `helper/alice-winhelper-windows-amd64.exe` (or `-arm64.exe`), check it against the package's
+`helper/alice-winhelper.sha256` (this copy does not go through the setup script, so these two checks are the only
+ones), and copy it to the server as `C:\Program Files\Alice\alice-helper.exe` in an elevated PowerShell
 ([windows-host-preparation.md](windows-host-preparation.md)); then choose **Test connection** on the server's page.
 
 ## Logs

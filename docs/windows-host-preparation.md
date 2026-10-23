@@ -17,7 +17,8 @@ Alice does not manage the SSH keys of a Windows server.
 Supported systems: Windows Server 2019, 2022 and 2025, with Desktop Experience or Server Core, on x64 (AMD64) or
 ARM64, with IIS 10 when the server runs IIS. Alice is tested on Windows Server 2022 and 2025 with Desktop
 Experience. Windows Server 2019, Server Core and a domain-joined server under a security baseline are supported but
-are checked by hand before each release, not by the automated tests. A server without IIS can be added as well: its
+are checked by hand before each release, not by the automated tests; ARM64 and AD FS servers when available
+(otherwise the release notes say so). A server without IIS can be added as well: its
 other bindings (WinRM, SSTP, AD FS) are listed, as not supported.
 
 ## Two ways to set up the account
