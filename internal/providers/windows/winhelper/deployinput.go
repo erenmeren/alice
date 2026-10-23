@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io"
 	"strconv"
 	"unicode/utf8"
 
@@ -260,7 +262,8 @@ func decodeKeyPEM(data []byte, sec *secrets) (typ string, der []byte, ok bool) {
 }
 
 // parseRestoreInput decodes iis-restore's stdin (winproto.RestoreInput, no key material): exactly the
-// two lists, both required. Syntax is BAD_CONTENT, a list that is not ValidForbidden INVALID_ARGUMENT.
+// two lists, both required, and nothing but white space after the object. Syntax is BAD_CONTENT, a list that is not
+// ValidForbidden INVALID_ARGUMENT.
 func parseRestoreInput(raw []byte) (guard, error) {
 	var in struct {
 		SPKI *[]string `json:"forbidden_spki_sha256"`
@@ -268,13 +271,19 @@ func parseRestoreInput(raw []byte) (guard, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil || dec.More() || in.SPKI == nil || in.Leaf == nil {
+	if err := dec.Decode(&in); err != nil || !atEOF(dec) || in.SPKI == nil || in.Leaf == nil {
 		return guard{}, refused(winproto.CodeBadContent, "the input is not the rollback guard")
 	}
 	if !winproto.ValidForbidden(*in.SPKI) || !winproto.ValidForbidden(*in.Leaf) {
 		return guard{}, refused(winproto.CodeInvalidArgument, "a forbidden list is not allowed")
 	}
 	return guard{SPKI: *in.SPKI, Leaf: *in.Leaf}, nil
+}
+
+// atEOF reports whether only white space follows dec's value (dec.More is false before a closing bracket too).
+func atEOF(dec *json.Decoder) bool {
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
 }
 
 // jsonScan reads the few JSON forms parseDeployInput accepts (cmd/alice-helper/deployinput.go).

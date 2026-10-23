@@ -379,6 +379,12 @@ func TestRestoreInputRefusals(t *testing.T) {
 		{`{"forbidden_spki_sha256":[]}`, winproto.CodeBadContent},
 		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[],"x":1}`, winproto.CodeBadContent},
 		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]} {}`, winproto.CodeBadContent},
+		// W2 final review Minor 7: nothing but white space may follow the one JSON value (dec.More was false before a
+		// closing bracket, so one trailing } or ] was accepted).
+		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]}}`, winproto.CodeBadContent},
+		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]}]`, winproto.CodeBadContent},
+		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]} x`, winproto.CodeBadContent},
+		{`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":[]},`, winproto.CodeBadContent},
 		{`{"forbidden_spki_sha256":["zz"],"forbidden_leaf_sha256":[]}`, winproto.CodeInvalidArgument},
 	} {
 		f.reset()
@@ -408,5 +414,19 @@ func TestRestoreWithRSA(t *testing.T) {
 	}
 	if _, rr, out := f.restore(op1, []string{}, []string{}); rr.Phase != winproto.PhaseRestored {
 		t.Fatalf("%s", out)
+	}
+}
+
+// W2 final review Minor 7: white space may surround the one JSON value; the lists are kept as sent.
+func TestRestoreInputAcceptsSurroundingWhiteSpace(t *testing.T) {
+	leaf := strings.Repeat("ab", 32)
+	for _, in := range []string{
+		`{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":["` + leaf + `"]}`,
+		" \r\n\t" + `{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":["` + leaf + `"]}` + "\r\n \t",
+	} {
+		g, err := parseRestoreInput([]byte(in))
+		if err != nil || len(g.SPKI) != 0 || len(g.Leaf) != 1 || g.Leaf[0] != leaf {
+			t.Fatalf("%q: %+v %v", in, g, err)
+		}
 	}
 }
