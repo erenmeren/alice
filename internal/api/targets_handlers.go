@@ -113,6 +113,8 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 		Host     string `json:"host"`
 		Port     int    `json:"port"`
 		Username string `json:"username"`
+		// Config is the provider's settings beyond the connection (R62 Ruling 13), validated by the provider.
+		Config map[string]any `json:"config"`
 		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
 		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
 		ServiceID *uuid.UUID `json:"service_id"`
@@ -129,7 +131,7 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, jobID, err := s.deps.Inventory.CreateTarget(r.Context(), s.actor(r), inventory.NewTarget{
-		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, ServiceID: service,
+		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, Config: req.Config, ServiceID: service,
 	})
 	if err != nil {
 		s.fail(w, r, err)

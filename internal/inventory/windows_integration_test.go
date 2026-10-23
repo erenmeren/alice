@@ -384,3 +384,43 @@ func TestSyncCapabilitiesCoversWindows(t *testing.T) {
 	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT capabilities FROM targets WHERE id = $1", id).Scan(&caps))
 	assert.Equal(t, []string{"cleanup_certificates", "deploy_certificate", "discover_certificates", "test_connection", "verify_deployment"}, caps)
 }
+
+// R62 Ruling 13: the per-server switch is saved through the create input, validated by the provider, read back
+// (nil: absent, which reads as on), and kept when other fields change. (An update cannot set it: alice_app has no
+// UPDATE on targets.config and a grant needs a migration.)
+func TestWindowsTargetCertificateCleanupSwitchIsSaved(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	tg, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-01", Type: "windows", Host: "iis-01.corp.example",
+		Config: map[string]any{"certificate_cleanup": false}})
+	require.NoError(t, err)
+	require.NotNil(t, tg.CertificateCleanup)
+	assert.False(t, *tg.CertificateCleanup)
+	var stored string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT config->>'certificate_cleanup' FROM targets WHERE id = $1", tg.ID).Scan(&stored))
+	assert.Equal(t, "false", stored)
+
+	plain, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-02", Type: "windows", Host: "iis-02.corp.example"})
+	require.NoError(t, err)
+	assert.Nil(t, plain.CertificateCleanup, "absent: the default (on)")
+
+	name := "iis-02b"
+	up, err := h.svc.UpdateTarget(h.ctx, admin, tg.ID, tg.Version, inventory.TargetPatch{Name: &name})
+	require.NoError(t, err)
+	require.NotNil(t, up.CertificateCleanup, "another change keeps the switch")
+	assert.False(t, *up.CertificateCleanup)
+	got, err := h.svc.GetTarget(h.ctx, up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, up, got)
+
+	for name, cfg := range map[string]map[string]any{"a string": {"certificate_cleanup": "yes"}, "a number": {"certificate_cleanup": 1.0},
+		"an unknown key": {"retention": true}, "a connection key": {"host": "evil.example"}} {
+		var errs validate.Errors
+		_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "bad", Type: "windows", Host: "bad.corp.example", Config: cfg})
+		require.ErrorAs(t, err, &errs, name)
+	}
+	var errs validate.Errors
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "lin", Type: "linux", Host: "lin.corp.example",
+		Config: map[string]any{"certificate_cleanup": false}})
+	require.ErrorAs(t, err, &errs, "a Linux server has no such switch")
+}

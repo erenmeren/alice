@@ -142,9 +142,12 @@ type targetDTO struct {
 	Capabilities           []string     `json:"capabilities"`
 	Facts                  factsDTO     `json:"facts"`
 	Vault                  *vaultDTO    `json:"vault,omitempty"` // Key Vaults only
-	Version                int          `json:"version"`
-	CreatedAt              time.Time    `json:"created_at"`
-	UpdatedAt              time.Time    `json:"updated_at"`
+	// Config is the provider's settings beyond the connection (R62 Ruling 13): a Windows server shows
+	// certificate_cleanup (true when never set); left out for every other type.
+	Config    map[string]any `json:"config,omitempty"`
+	Version   int            `json:"version"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
 	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
@@ -198,8 +201,13 @@ func factsJSON(f inventory.Facts) factsDTO {
 }
 
 func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
+	var cfg map[string]any
+	if t.Type == inventory.TypeWindows {
+		cfg = map[string]any{providers.ConfigCertificateCleanup: t.CertificateCleanup == nil || *t.CertificateCleanup}
+	}
 	return targetDTO{
-		ID: t.ID.String(), Name: t.Name, Type: t.Type, Host: t.Host, Port: t.Port, Username: t.Username,
+		Config: cfg,
+		ID:     t.ID.String(), Name: t.Name, Type: t.Type, Host: t.Host, Port: t.Port, Username: t.Username,
 		Status: t.Status, LastError: vaultLastError(t),
 		LastSuccessAt: utcPtr(t.LastSuccessAt), LastDiscoveryAt: utcPtr(t.LastDiscoveryAt),
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,

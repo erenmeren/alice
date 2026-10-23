@@ -49,6 +49,7 @@ func scanTarget(row pgx.Row) (Target, error) {
 		return Target{}, fmt.Errorf("inventory: decode target facts: %w", err)
 	}
 	t.Host, t.Port, t.Username = c.Host, c.Port, c.Username
+	t.CertificateCleanup = c.CertificateCleanup
 	t.DiscoveryInterval = time.Duration(interval) * time.Second
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	t.LastSuccessAt, t.LastDiscoveryAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt)
@@ -145,6 +146,13 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	cfg := targetConfig{Host: n.Host, Port: n.Port, Username: n.Username}
 	if fes := p.ValidateConfig(providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}); len(fes) > 0 {
 		return Target{}, uuid.Nil, validate.Errors(fes)
+	}
+	if in.Config != nil {
+		sw, _, errs := validateProviderSettings(p, providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}, in.Config)
+		if len(errs) > 0 {
+			return Target{}, uuid.Nil, errs
+		}
+		cfg.CertificateCleanup = sw
 	}
 	pk, err := s.EnsurePlatformKey(ctx)
 	if err != nil {
@@ -396,6 +404,42 @@ WHERE id = $1`, id, cur.Name, int(cur.DiscoveryInterval/time.Second), s.clock.No
 		return Target{}, err
 	}
 	return updated, nil
+}
+
+// validateProviderSettings checks the provider settings beyond the connection (R62 Ruling 13) that a create
+// body carries (an update cannot: alice_app has no UPDATE on targets.config): only the cleanup switch, and only when the provider's schema declares it; the provider's own
+// ParseConfig judges the value (base is the connection settings it is judged with). It returns the switch (nil when
+// the body gives null) and whether the body named it.
+func validateProviderSettings(p providers.Provider, base providers.TargetConfig, in map[string]any) (sw *bool, named bool, errs validate.Errors) {
+	declared := map[string]bool{}
+	for _, f := range p.ConfigSchema().Fields {
+		declared[f.Name] = true
+	}
+	cfg := providers.TargetConfig{}
+	for k, v := range base {
+		cfg[k] = v
+	}
+	for k, v := range in {
+		if k != providers.ConfigCertificateCleanup || !declared[k] {
+			errs.Add("config."+k, validate.Pattern, nil)
+			continue
+		}
+		cfg[k] = v
+		named = true
+	}
+	if len(errs) > 0 {
+		return nil, false, errs
+	}
+	for _, fe := range p.ValidateConfig(cfg) {
+		errs = append(errs, validate.FieldError{Field: "config." + fe.Field, Code: fe.Code, Params: fe.Params})
+	}
+	if len(errs) > 0 {
+		return nil, false, errs
+	}
+	if b, ok := cfg[providers.ConfigCertificateCleanup].(bool); ok {
+		sw = &b
+	}
+	return sw, named, nil
 }
 
 // DeleteTarget soft-deletes a server: its license slot is free at once and nothing is changed on

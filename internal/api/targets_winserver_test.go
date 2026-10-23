@@ -68,3 +68,43 @@ func TestTargetJSONOmitsWindowsFactsForOtherTypes(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), `"windows"`)
 }
+
+// R62 Ruling 13: the provider's schema field certificate_cleanup travels through the target's create body as "config"
+// (an update does not take it: alice_app has no UPDATE on targets.config) and is read back in the target's "config" (a Windows server shows the effective value, true by default;
+// another type shows none).
+func TestWindowsTargetCertificateCleanupSwitch(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	var gotIn inventory.NewTarget
+	win := sampleTarget()
+	win.Type, win.Username = inventory.TypeWindows, "alice"
+	off := false
+	inv.CreateTargetFn = func(_ context.Context, _ inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+		gotIn = in
+		w := win
+		w.CertificateCleanup = &off
+		return w, jobID, nil
+	}
+	h := NewHandler(d)
+	rec := call(h, http.MethodPost, "/api/v1/targets", "admin",
+		`{"name":"iis-01","type":"windows","host":"iis-01.example.com","config":{"certificate_cleanup":false}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, map[string]any{"certificate_cleanup": false}, gotIn.Config)
+	assert.Equal(t, map[string]any{"certificate_cleanup": false}, decodeMap(t, rec.Body.Bytes())["target"].(map[string]any)["config"])
+
+	path := "/api/v1/targets/" + targetID.String()
+	inv.GetTargetFn = func(context.Context, uuid.UUID) (inventory.Target, error) { return win, nil }
+	rec = call(h, http.MethodGet, path, "admin", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, map[string]any{"certificate_cleanup": true}, decodeMap(t, rec.Body.Bytes())["config"], "absent reads true")
+
+	rec = callWith(h, http.MethodPatch, path, "admin", `{"config":{"certificate_cleanup":true}}`, map[string]string{"If-Match": `"7"`})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "an update does not take config (alice_app cannot write targets.config)")
+
+	inv.GetTargetFn = func(context.Context, uuid.UUID) (inventory.Target, error) { return sampleTarget(), nil }
+	rec = call(h, http.MethodGet, path, "admin", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.NotContains(t, decodeMap(t, rec.Body.Bytes()), "config", "a Linux server has no provider switch")
+
+	rec = call(h, http.MethodPost, "/api/v1/targets", "admin", `{"name":"x","type":"windows","host":"h.example.com","config":"nope"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "config is an object")
+}
