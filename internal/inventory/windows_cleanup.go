@@ -215,8 +215,8 @@ FROM unnest($2::text[]) AS x (fp) GROUP BY x.fp`, target, fps, since)
 
 // RecordCleanup records one cleanup of the server in one transaction: an audit row windows.certificate_removed (actor
 // jobs; store, sha1, sha256, reason, and incident_id for an incident's job) for every certificate the apply removed;
-// and, for an incident's job only (Ruling 9), one notice TemplateWindowsCompromisedInStore per watched compromised
-// certificate that is still in a store afterwards (the helper kept it: not Alice's, or still used; or it was removable
+// and, for an incident's job only (Ruling 9), one notice TemplateWindowsCompromisedInStore per watched certificate of that
+// incident (its key's) that is still in a store afterwards (the helper kept it: not Alice's, or still used; or it was removable
 // and not removed), to the server's and the certificate's services, at most once per incident and certificate
 // (compromisedInStore), and only when no place of the incident on the server is still open (pending or deploying). A
 // scheduled job tells nobody. Removals are recorded in every case.
@@ -259,10 +259,24 @@ WHERE il.incident_id = $1 AND l.target_id = $2 AND il.status = ANY ($3))`, *inci
 		if open {
 			return nil
 		}
+		// Only the incident's own certificates (every certificate with its key, as the incident marked them): an earlier
+		// incident's compromised certificate still in a store was reported under that incident.
+		rows, err := tx.Query(ctx, `SELECT c.fingerprint_sha256 FROM certificates c JOIN certificate_incidents i
+  ON i.public_key_sha256 = c.public_key_sha256 WHERE i.id = $1`, *incident)
+		if err != nil {
+			return fmt.Errorf("inventory: read the incident's certificates: %w", err)
+		}
+		mine, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return fmt.Errorf("inventory: read the incident's certificates: %w", err)
+		}
 		var order []string
 		stores := map[string][]string{}
 		thumbs := map[string]string{}
 		for _, w := range plan.Watched {
+			if !slices.Contains(mine, w.SHA256) {
+				continue
+			}
 			removed := slices.ContainsFunc(gone, func(it providers.CleanupItem) bool {
 				return it.SHA256 == w.SHA256 && strings.EqualFold(it.Store, w.Store)
 			})
