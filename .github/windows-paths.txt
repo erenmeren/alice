@@ -1,0 +1,31 @@
+# The paths whose change runs the Windows workflow (.github/workflows/windows.yml, W4, R63, Ruling 6).
+# deploy/dev/windows-ci.sh changed reads this list; one entry per line, # starts a comment line.
+#   dir/**   every file below dir
+#   dir/*    every file directly in dir
+#   path     that file only
+# internal/archtest/windowsci_test.go fails when a package the Windows tests build (GOOS=windows
+# go list -deps -test of the helper and the provider, tags "" and alicetest) is not matched, when a
+# fixed entry is missing, or when an entry matches no tracked file.
+
+# The workflow, its decisions and the build inputs.
+.github/workflows/windows.yml
+.github/windows-paths.txt
+deploy/dev/windows-ci.sh
+go.mod
+go.sum
+Makefile
+docs/windows-host-preparation.md
+
+# The Windows helper and provider and the packages their tests build.
+cmd/alice-winhelper/**
+internal/providers/windows/**
+internal/providers/*
+internal/providers/linuxssh/**
+internal/providers/tlsverify/**
+internal/providers/providertest/**
+internal/providers/apacheconf/**
+internal/providers/haproxyconf/**
+internal/providers/nginx/nginxconf/**
+internal/platform/**
+internal/secrets/**
+internal/testutil/pki/**
