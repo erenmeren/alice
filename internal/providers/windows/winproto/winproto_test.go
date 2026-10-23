@@ -228,7 +228,7 @@ func TestDumpJSONShape(t *testing.T) {
 	check("certificate ref", keys(t, winproto.CertificateRef{}), want("store sha1"))
 	check("binding", keys(t, d.Bindings[0]), want("type ip host port app_id cert_sha1 store flags cert_check_mode revocation_freshness_time url_retrieval_timeout ctl_identifier ctl_store"))
 	check("binding bare", keys(t, winproto.SSLBinding{}), want("type port app_id cert_sha1 store flags cert_check_mode revocation_freshness_time url_retrieval_timeout"))
-	check("cert", keys(t, cert), want("store sha1 sha256 der chain friendly_name not_after has_key key_provider key_exportable key_usable_by_system key_problem"))
+	check("cert", keys(t, cert), want("store sha1 sha256 der chain friendly_name not_after has_key key_provider key_exportable key_usable_by_system key_problem alice_imported"))
 	check("site", keys(t, d.Sites[0]), want("name id state bindings"))
 	check("site binding", keys(t, d.Sites[0].Bindings[0]), want("protocol binding_information ssl_flags"))
 	check("iis", keys(t, d.IIS), want("installed version shared_config ccs_enabled ccs_path autocertrebind"))
@@ -292,7 +292,7 @@ func TestWriteSubcommandsAndCodes(t *testing.T) {
 			t.Errorf("%q != %q", c[0], c[1])
 		}
 	}
-	if winproto.Version != "0.2.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
+	if winproto.Version != "0.3.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
@@ -504,5 +504,110 @@ func TestStepStatuses(t *testing.T) {
 	// helperproto.NginxStep documents "ok" | "failed"; the Windows steps use the same words.
 	if winproto.StepOK != "ok" || winproto.StepFailed != "failed" {
 		t.Fatal(winproto.StepOK, winproto.StepFailed)
+	}
+}
+
+func TestCleanupShapesJSON(t *testing.T) {
+	want := func(s string) []string { f := strings.Fields(s); sort.Strings(f); return f }
+	check := func(name string, got, exp []string) {
+		if !reflect.DeepEqual(got, exp) {
+			t.Errorf("%s keys: %v, want %v", name, got, exp)
+		}
+	}
+	check("ref", keys(t, winproto.CleanupRef{}), want("sha1 sha256"))
+	check("plan input", keys(t, winproto.CleanupPlanInput{}), want("watch"))
+	check("candidate", keys(t, winproto.CleanupCandidate{}), want("store sha1 sha256 friendly_name not_after unbound_since eligible"))
+	check("watched", keys(t, winproto.CleanupWatched{}), want("store sha1 sha256 state reason"))
+	check("plan", keys(t, winproto.CleanupPlanResponse{}), want("ok candidates watched pruned warnings truncated"))
+	check("item", keys(t, winproto.CleanupItem{}), want("store sha1 sha256 reason"))
+	check("apply input", keys(t, winproto.CleanupApplyInput{}), want("remove"))
+	check("result", keys(t, winproto.CleanupResult{}), want("sha256 result reason"))
+	check("apply", keys(t, winproto.CleanupApplyResponse{}), want("ok results"))
+	b, err := json.Marshal(winproto.CleanupPlanInput{Watch: []winproto.CleanupRef{}})
+	if err != nil || string(b) != `{"watch":[]}` {
+		t.Errorf("plan input: %s %v", b, err)
+	}
+	b, err = json.Marshal(winproto.StoreCertificate{AliceImported: true})
+	if err != nil || !strings.Contains(string(b), `"alice_imported":true`) {
+		t.Errorf("alice_imported: %s %v", b, err)
+	}
+}
+
+func TestCleanupVocabulary(t *testing.T) {
+	for _, c := range [][2]string{
+		{winproto.SubIISCleanup, "iis-cleanup"}, {winproto.ArgPlan, "--plan"}, {winproto.ArgApply, "--apply"},
+		{winproto.CleanupAged, "aged"}, {winproto.CleanupExpired, "expired"}, {winproto.CleanupIncident, "incident"},
+		{winproto.KeptBound, "bound"}, {winproto.KeptRDP, "rdp"}, {winproto.KeptWinRM, "winrm"}, {winproto.KeptJournal, "journal"},
+		{winproto.KeptNotAlice, "not_alice"}, {winproto.KeptTooYoung, "too_young"}, {winproto.KeptJournalUnreadable, "journal_unreadable"},
+		{winproto.CleanupRemoved, "removed"}, {winproto.CleanupKept, "kept"}, {winproto.CleanupAbsent, "absent"},
+		{winproto.WatchRemovable, "removable"}, {winproto.WatchKept, "kept"}, {winproto.WatchAbsent, "absent"},
+		{winproto.WarnJournalUnreadable, "journal_unreadable"},
+	} {
+		if c[0] != c[1] {
+			t.Errorf("%q != %q", c[0], c[1])
+		}
+	}
+	if winproto.MaxCleanupInput != 64<<10 || winproto.MaxCleanupItems != 256 || winproto.MaxCleanupCandidates != 256 ||
+		winproto.CleanupMinAge != 7*24*time.Hour || winproto.JournalKeep != 7*24*time.Hour ||
+		winproto.JournalRetention != 30*24*time.Hour || winproto.MaxPrunePerRun != 1000 {
+		t.Error("bounds")
+	}
+}
+
+func TestValidCleanupItem(t *testing.T) {
+	sha1 := strings.Repeat("a", 40)
+	sha256 := strings.Repeat("b", 64)
+	item := func(store, s1, s256, reason string) winproto.CleanupItem {
+		return winproto.CleanupItem{Store: store, SHA1: s1, SHA256: s256, Reason: reason}
+	}
+	for name, c := range map[string]struct {
+		in   winproto.CleanupItem
+		want bool
+	}{
+		"aged":              {item("My", sha1, sha256, winproto.CleanupAged), true},
+		"expired":           {item("My", sha1, sha256, winproto.CleanupExpired), true},
+		"incident":          {item("WebHosting", sha1, sha256, winproto.CleanupIncident), true},
+		"upper sha1":        {item("My", strings.Repeat("A", 40), sha256, winproto.CleanupAged), false},
+		"upper sha256":      {item("My", sha1, strings.Repeat("B", 64), winproto.CleanupAged), false},
+		"39 digit sha1":     {item("My", sha1[:39], sha256, winproto.CleanupAged), false},
+		"63 digit sha256":   {item("My", sha1, sha256[:63], winproto.CleanupAged), false},
+		"65 digit sha256":   {item("My", sha1, sha256+"b", winproto.CleanupAged), false},
+		"non hex sha256":    {item("My", sha1, strings.Repeat("g", 64), winproto.CleanupAged), false},
+		"bad store":         {item("My/Root", sha1, sha256, winproto.CleanupAged), false},
+		"empty store":       {item("", sha1, sha256, winproto.CleanupAged), false},
+		"root-like store":   {item("Root", sha1, sha256, "forced"), false},
+		"empty reason":      {item("My", sha1, sha256, ""), false},
+		"upper-case reason": {item("My", sha1, sha256, "AGED"), false},
+	} {
+		if got := winproto.ValidCleanupItem(c.in); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestVersions(t *testing.T) {
+	if winproto.Version != "0.3.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
+		t.Error("versions")
+	}
+	if !winproto.VersionAtLeast(winproto.Version, winproto.CleanupMinVersion) {
+		t.Error("this helper is below its own cleanup minimum")
+	}
+	if winproto.VersionAtLeast("0.2.0", winproto.CleanupMinVersion) {
+		t.Error("a 0.2.0 helper does not know iis-cleanup")
+	}
+	if !winproto.VersionAtLeast("0.2.0", winproto.WriteMinVersion) {
+		t.Error("a 0.2.0 helper still writes")
+	}
+}
+
+func TestCleanupBoundsAreConsistent(t *testing.T) {
+	if winproto.JournalKeep >= winproto.JournalRetention {
+		t.Error("the journal is kept for less than it is retained")
+	}
+	if winproto.CleanupMinAge != winproto.JournalKeep {
+		t.Error("a certificate is cleaned no sooner than the journal that could restore it is kept")
+	}
+	if winproto.MaxCleanupItems > winproto.MaxCleanupCandidates {
+		t.Error("an apply may not name more than a plan lists")
 	}
 }

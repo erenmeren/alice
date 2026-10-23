@@ -16,16 +16,17 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// Protocol and locations. Protocol 1 spans W1 and W2 (W1 Ruling 2: nothing was released between
-// them): W2 adds iis-deploy, iis-restore, iis-status and iis-fence to it; iis-cleanup is W3. Version
-// is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 is W2's (W2 Ruling 2);
-// 1.0.0 is kept for the first released helper (W4). WriteMinVersion is the oldest helper Alice sends
-// a write subcommand to (W2 Ruling 3).
+// Protocol and locations. Protocol 1 spans W1, W2 and W3 (W1 Ruling 2: nothing was released between
+// them): W2 added iis-deploy, iis-restore, iis-status and iis-fence to it, W3 adds iis-cleanup. Version
+// is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 is W2's (W2 Ruling 2), 0.3.0
+// is W3's; 1.0.0 is kept for the first released helper (W4). WriteMinVersion is the oldest helper Alice
+// sends a write subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends iis-cleanup to.
 const (
-	Protocol        = 1
-	MinProtocol     = 1
-	Version         = "0.2.0"
-	WriteMinVersion = "0.2.0"
+	Protocol          = 1
+	MinProtocol       = 1
+	Version           = "0.3.0"
+	WriteMinVersion   = "0.2.0"
+	CleanupMinVersion = "0.3.0"
 
 	HelperPath   = `C:\Program Files\Alice\alice-helper.exe`
 	DataDir      = `C:\ProgramData\Alice\helper`
@@ -48,6 +49,12 @@ const (
 	SubIISFence   = "iis-fence"
 
 	ArgOp = "--op"
+
+	// The cleanup subcommand (W3): iis-cleanup --plan reads a CleanupPlanInput and iis-cleanup --apply
+	// a CleanupApplyInput from stdin.
+	SubIISCleanup = "iis-cleanup"
+	ArgPlan       = "--plan"
+	ArgApply      = "--apply"
 )
 
 // Exit codes equal helperproto's.
@@ -296,6 +303,8 @@ type StoreCertificate struct {
 	KeyExportable     bool     `json:"key_exportable"`
 	KeyUsableBySystem *bool    `json:"key_usable_by_system"`
 	KeyProblem        string   `json:"key_problem,omitempty"`
+	// AliceImported is true when the helper's journals record that Alice imported this certificate.
+	AliceImported bool `json:"alice_imported"`
 }
 
 // SiteBinding is one binding of an IIS site.
@@ -339,10 +348,11 @@ type IISDumpResponse struct {
 type TLSProbeResponse = helperproto.TLSProbeResponse
 
 var (
-	tokenRE = regexp.MustCompile(`^[A-Za-z0-9._:@+-]{1,253}$`)
-	sha1RE  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	appIDRE = regexp.MustCompile(`^\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}$`)
-	storeRE = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
+	tokenRE  = regexp.MustCompile(`^[A-Za-z0-9._:@+-]{1,253}$`)
+	sha1RE   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	appIDRE  = regexp.MustCompile(`^\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}$`)
+	sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	storeRE  = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
 )
 
 // ValidToken reports whether s may be one token of a forced command line.
@@ -570,4 +580,141 @@ type StatusResponse struct {
 	Error             string `json:"error"`
 	NewCertSHA256     string `json:"new_cert_sha256"`
 	CurrentCertSHA256 string `json:"current_cert_sha256"`
+}
+
+// Bounds and times of iis-cleanup (W3). MaxCleanupInput bounds stdin; an apply names at most
+// MaxCleanupItems certificates and a plan lists at most MaxCleanupCandidates (Truncated beyond).
+// CleanupMinAge is how long a certificate must have been unbound before it is removable and equals
+// JournalKeep, how long a journal is kept whole; JournalRetention is when an old journal is pruned,
+// at most MaxPrunePerRun per run.
+const (
+	MaxCleanupInput      = 64 << 10
+	MaxCleanupItems      = 256
+	MaxCleanupCandidates = 256
+	CleanupMinAge        = 7 * 24 * time.Hour
+	JournalKeep          = 7 * 24 * time.Hour
+	JournalRetention     = 30 * 24 * time.Hour
+	MaxPrunePerRun       = 1000
+)
+
+// Why a certificate is removed (CleanupCandidate.Eligible, CleanupItem.Reason).
+const (
+	CleanupAged     = "aged"
+	CleanupExpired  = "expired"
+	CleanupIncident = "incident"
+)
+
+// Why a certificate is kept (CleanupWatched.Reason, CleanupResult.Reason).
+const (
+	KeptBound             = "bound"
+	KeptRDP               = "rdp"
+	KeptWinRM             = "winrm"
+	KeptJournal           = "journal"
+	KeptNotAlice          = "not_alice"
+	KeptTooYoung          = "too_young"
+	KeptJournalUnreadable = "journal_unreadable"
+)
+
+// CleanupResult.Result values.
+const (
+	CleanupRemoved = "removed"
+	CleanupKept    = "kept"
+	CleanupAbsent  = "absent"
+)
+
+// CleanupWatched.State values.
+const (
+	WatchRemovable = "removable"
+	WatchKept      = "kept"
+	WatchAbsent    = "absent"
+)
+
+// WarnJournalUnreadable: a journal could not be read, so the certificates it may name are kept.
+const WarnJournalUnreadable = "journal_unreadable"
+
+// ValidSHA256 reports whether s is 64 lower-case hex digits.
+func ValidSHA256(s string) bool { return sha256RE.MatchString(s) }
+
+// CleanupRef names a certificate by its SHA-1 and DER SHA-256.
+type CleanupRef struct {
+	SHA1   string `json:"sha1"`
+	SHA256 string `json:"sha256"`
+}
+
+// CleanupPlanInput is the JSON on iis-cleanup --plan's stdin, at most MaxCleanupInput bytes. Watch
+// names the certificates Alice wants a verdict on (a required member, possibly empty, at most
+// MaxForbidden entries).
+type CleanupPlanInput struct {
+	Watch []CleanupRef `json:"watch"`
+}
+
+// CleanupCandidate is a certificate Alice imported that no binding names. Eligible is CleanupAged or
+// CleanupExpired, or "" while nothing may remove it yet; UnboundSince and NotAfter are RFC 3339.
+type CleanupCandidate struct {
+	Store        string `json:"store"`
+	SHA1         string `json:"sha1"`
+	SHA256       string `json:"sha256"`
+	FriendlyName string `json:"friendly_name"`
+	NotAfter     string `json:"not_after"`
+	UnboundSince string `json:"unbound_since"`
+	Eligible     string `json:"eligible"`
+}
+
+// CleanupWatched is the verdict on one watched certificate: State a Watch* value, Reason a Kept* value
+// when State is WatchKept, else "".
+type CleanupWatched struct {
+	Store  string `json:"store"`
+	SHA1   string `json:"sha1"`
+	SHA256 string `json:"sha256"`
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
+// CleanupPlanResponse answers iis-cleanup --plan. Pruned counts the journals the run deleted.
+type CleanupPlanResponse struct {
+	OK         bool               `json:"ok"`
+	Candidates []CleanupCandidate `json:"candidates"`
+	Watched    []CleanupWatched   `json:"watched"`
+	Pruned     int                `json:"pruned"`
+	Warnings   []string           `json:"warnings"`
+	Truncated  bool               `json:"truncated"`
+}
+
+// CleanupItem is one certificate to remove, with the reason Alice gives (a Cleanup* reason).
+type CleanupItem struct {
+	Store  string `json:"store"`
+	SHA1   string `json:"sha1"`
+	SHA256 string `json:"sha256"`
+	Reason string `json:"reason"`
+}
+
+// ValidCleanupItem reports whether i names a certificate of a valid store by its lower-case SHA-1 and
+// SHA-256 and gives one of the three reasons.
+func ValidCleanupItem(i CleanupItem) bool {
+	switch i.Reason {
+	case CleanupAged, CleanupExpired, CleanupIncident:
+	default:
+		return false
+	}
+	return ValidStore(i.Store) && ValidSHA1(i.SHA1) && ValidSHA256(i.SHA256)
+}
+
+// CleanupApplyInput is the JSON on iis-cleanup --apply's stdin, at most MaxCleanupInput bytes:
+// 1 to MaxCleanupItems items.
+type CleanupApplyInput struct {
+	Remove []CleanupItem `json:"remove"`
+}
+
+// CleanupResult is what --apply did with one item: Result a Cleanup* result, Reason a Kept* value when
+// the certificate was kept, else "".
+type CleanupResult struct {
+	SHA256 string `json:"sha256"`
+	Result string `json:"result"`
+	Reason string `json:"reason"`
+}
+
+// CleanupApplyResponse answers iis-cleanup --apply, one result per item in order.
+type CleanupApplyResponse struct {
+	OK      bool            `json:"ok"`
+	Results []CleanupResult `json:"results"`
 }
