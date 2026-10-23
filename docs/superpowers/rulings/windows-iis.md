@@ -1036,11 +1036,12 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | Run | Head | Result | What it found |
 |---|---|---|---|
 | 1 <https://github.com/erenmeren/alice/actions/runs/39912110730> | `efb5c13f` | **green** on both images | F11 and F12 confirmed; `TestRealCleanupRemovesKeyAndCertificate`, `TestRealProtectedThumbprints` and `TestFidelityCleanup` passed (not skipped), `TestRealRunnerIsClean` included |
-| 2 <https://github.com/erenmeren/alice/actions/runs/39926856807> | `f5fb07f7` | pending (filled in Task 13) | Every test of the branch after Tasks 7-10 (filled in Task 13) |
+| 2 <https://github.com/erenmeren/alice/actions/runs/39926856807> | `f5fb07f7` | **green** on both images | Every test of the branch at that head after Tasks 7-10, the F11 and F12 tests included |
 
 The `ci.yml` runs of the branch: 39912110868 at `efb5c13f` failed only in the web job (`enums.test.ts` counted the
 cleanup plan's warnings as dump warnings: fixed in `37574e52`, plus the web's `cleanup_certificates` capability in
-`c86aaadd`); 39926856788 at `f5fb07f7`: (filled in Task 13).
+`c86aaadd`); 39926856788 at `f5fb07f7`: go, coverage, web, secrets, ssh-matrix and licensectl green (the web fix
+`37574e52`/`c86aaadd` confirmed).
 
 Final gates (Task 13): (filled in Task 13: local `make ci`, e2e totals, gitleaks over `e21e1ba3..HEAD`, the real
 Windows run of the branch head, the final review, final CI on origin).
@@ -1101,33 +1102,41 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 ### Task 1 (winproto)
 
 - `winproto.ValidSHA256` (lower-case 64 hex) added beside `ValidSHA1`, as W2's final review minor 5 anticipated.
-- The package comment says protocol 1 spans W1-W3 and `1.0.0` is W4's.
+- The package comment says protocol 1 spans W1-W3 and `1.0.0` is W4's: W3 adds a subcommand, not a protocol change,
+  so a W2 Alice and a W3 helper still agree.
 
 ### Task 2 (winhelper core)
 
 - `StateFile.Name` is relative to the listed directory; `RemoveState` takes the full state name (`journal/<op>.json`),
-  as `ReadState` does.
+  as `ReadState` does: one form of name for reading and removing, so no caller joins paths.
 - A stamp `unbound_since` is exactly RFC 3339 UTC with whole seconds (`stamp(t)`); anything else makes the inventory
-  invalid. Recording an import again keeps its stamp (duplicates compared without it).
+  invalid. Recording an import again keeps its stamp (duplicates compared without it): one exact form compares and
+  orders without parsing, and a repeated import must not restart the 7-day wait.
 - After the existing-copy race (`ImportPFX` answers `existed`) the deployment commits, sets `alice_imported` false and
-  records no inventory entry.
+  records no inventory entry: the copy in the store is not Alice's, so cleanup must never take it.
 - The dump marks `alice_imported` best effort: an unreadable `imports.json` marks none, journals are read only when an
-  inventory match is missing.
+  inventory match is missing: the dump is a read for discovery, which an unreadable file must not fail.
 
 ### Task 3 (iis-cleanup)
 
-- A certificate read error before the gate is a refusal (`STORE_ERROR` or `IO_ERROR`); after it `OUTCOME_UNKNOWN`.
+- A certificate read error before the gate is a refusal (`STORE_ERROR` or `IO_ERROR`); after it `OUTCOME_UNKNOWN`:
+  before the gate nothing was written, after it Alice cannot know what was (Ruling 12).
 - An `imports.json` that cannot be decoded refuses plan and apply (`IO_ERROR`): rewriting it would destroy the
   inventory.
 - A `RemoveCertificate` that answers "not removed" (someone else removed it after the judgement) still runs the
-  bookkeeping and answers `absent` without an event.
-- The plan's watch looks in `My` and `WebHosting` and answers one verdict per store holding the certificate.
+  bookkeeping and answers `absent` without an event: the server ends in the state the removal wanted, and the event
+  would claim a removal Alice did not make.
+- The plan's watch looks in `My` and `WebHosting` and answers one verdict per store holding the certificate: those are
+  the stores Alice deploys to, and a copy in each is a separate thing to report.
 
 ### Task 4 (wintest cleanup half)
 
-- The model's clock is the system clock plus a skew (`SetNow`, `Advance`); state files carry model-clock times.
-- `FailProtected` fails the whole `ProtectedThumbprints`, as the real helper errors on any unreadable value;
-  `FailAfterKey` fails the next removal once between the key and the certificate.
+- The model's clock is the system clock plus a skew (`SetNow`, `Advance`); state files carry model-clock times: the
+  age rules can be shown without waiting days, and the files agree with the helper's own clock.
+- `FailProtected` fails the whole `ProtectedThumbprints`, as the real helper errors on any unreadable value: the
+  emulator must refuse where the real helper refuses (fidelity), never answer a partial list that would let a used
+  certificate look unused. `FailAfterKey` fails the next removal once between the key and the certificate, to show the
+  gate's `OUTCOME_UNKNOWN` between the two steps.
 
 ### Task 5 (cmd/alice-winhelper)
 
@@ -1136,10 +1145,13 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   certificate alone (every Alice import makes a fresh container, `CERT_STORE_ADD_NEW` never replaces a third party's
   copy).
 - `ListState` lists only `journal/` and `bindings/`, skips directories, reparse points and devices, at most 65536
-  entries; `RemoveState` refuses a directory, reparse point or device and treats an absent file as removed.
-- Only the helper's `Now` moves with the test clock offset; store reads and lock deadlines keep the real clock.
+  entries; `RemoveState` refuses a directory, reparse point or device and treats an absent file as removed: an
+  elevated helper must never follow a link out of its data directory, and a second removal is not an error.
+- Only the helper's `Now` moves with the test clock offset; store reads and lock deadlines keep the real clock: the
+  test moves the age rules only, Windows itself sees the real time.
 - The F11 and F12 verdict lines are logged last and only when the test did not fail (review fix `b6311da2`);
-  `TestRealProtectedThumbprints` uses a private data directory.
+  `TestRealProtectedThumbprints` uses a private data directory: a failed test must not log a CONFIRMED verdict, and
+  the test must not touch the runner's real helper state.
 
 ### Task 6 (providers, Windows cleanup)
 
@@ -1148,25 +1160,31 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - The cleanup value constants live in `providers` (equal to winproto's, pinned by test), because archtest forbids
   inventory from importing `providers/windows/...`.
 - Only `OUTCOME_UNKNOWN` maps to `windows.cleanup_outcome_unknown`; a transport error after the send keeps its mapped
-  reason; the next plan settles either way.
+  reason; the next plan settles either way: only that code says the helper passed the gate, a transport error already
+  has a reason the operator can act on, and both end the same way because the next plan reads the server as it is.
 - Answer validation is strict (closed sets of stores, states, reasons and warnings); a future helper adding one needs
   Alice to learn it (protocol 1 contract).
 
 ### Task 7 (inventory and winjobs)
 
-- The cleanup switch helper moved to `providers` and later to the column (Ruling 13).
-- `RecordCleanup` refuses an apply result whose SHA-256s do not match its items in order.
+- The cleanup switch helper moved to `providers` and later to the column (Ruling 13): archtest forbids inventory from
+  importing the Windows provider, and the column replaced the config field.
+- `RecordCleanup` refuses an apply result whose SHA-256s do not match its items in order: a mismatched answer would
+  record the removal of a different certificate.
 - The cleanup is queued in the same transaction as the incident place update: a failed queue rolls the update back
   and the next tick retries.
 - `ScheduleWindowsCleanup` takes Windows servers with status ok and the capability and no `windows.cleanup` job of any
-  kind in the last 24 hours, at most 500 per run, `FOR UPDATE SKIP LOCKED`.
+  kind in the last 24 hours, at most 500 per run, `FOR UPDATE SKIP LOCKED`: one plan a day per server whatever queued
+  it, no session to a server that cannot answer, a bounded run, and two schedulers never take the same server.
 
 ### Task 8 (drift rule, cause, e-mails)
 
 - `driftCause` treats any key problem as `key_unusable`; the scan rule's `bindingBroken` uses only `cert_missing`,
-  `key_missing` and `key_inaccessible` (Rulings 14, 15).
+  `key_missing` and `key_inaccessible` (Rulings 14, 15): no key problem is repairable by re-pointing, but only those
+  three mean the binding cannot serve.
 - An approve-mode drift with an unrepairable cause gets the detected text of its cause; `auto` mails it once after
-  `DriftAutoNoticeAfter` (unchanged engine).
+  `DriftAutoNoticeAfter` (unchanged engine): the operator learns why the repair is not offered, and the engine's
+  notice rule stays the one every provider shares.
 - Turkish says "{{cert_path}} bağlaması" so no suffix touches the binding text.
 
 ### Task 9 (engine and jobs on the emulator)
@@ -1181,8 +1199,10 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 ### Task 10 (API)
 
 - `repair_available` is false for `cert_removed` and `key_unusable`; `ErrDriftNotRepairable` maps to `ALC-WIN-0013`
-  (409), `windows.cleanup_outcome_unknown` to `ALC-WIN-0014` (502, retryable).
-- The target DTO shows `certificate_cleanup` only for a server with the capability; a non-boolean in the PATCH is 400.
+  (409), `windows.cleanup_outcome_unknown` to `ALC-WIN-0014` (502, retryable): re-pointing cannot fix those causes, a
+  refused repair is a state conflict, and the next plan settles an unknown outcome.
+- The target DTO shows `certificate_cleanup` only for a server with the capability; a non-boolean in the PATCH is 400:
+  a switch a W2 helper cannot honour must not be offered, and the column holds only true or false.
 - The `windows.compromised_in_store` text also names "a deployment to the server is still running with it" (Task 7
   review minor), and the `cert_removed` drift text covers a binding with no http.sys record (Task 8 review minor).
 
