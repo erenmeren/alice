@@ -3,15 +3,21 @@ package archtest
 import (
 	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // The Windows workflow runs only when a change touches what the Windows tests build (W4, R63, Ruling 6).
@@ -234,6 +240,288 @@ func TestWindowsWorkflowWatchesEveryDependency(t *testing.T) {
 		for _, e := range entries {
 			code, out := changedWith(t, e+"\n", files)
 			assert.Equal(t, 0, code, "entry %q matches no tracked file: %s", e, out)
+		}
+	})
+}
+
+const windowsWorkflow = ".github/workflows/windows.yml"
+
+// loadWorkflow decodes a workflow file into maps.
+func loadWorkflow(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(moduleRoot(t), path)) //nolint:gosec // repository file
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	// A YAML 1.1 reader decodes the key on as true; go.yaml.in/yaml/v3 keeps the string. Accept both.
+	if _, ok := doc["on"]; !ok {
+		if v, ok := doc["true"]; ok {
+			doc["on"] = v
+		}
+	}
+	return doc
+}
+
+// ymap returns m[key] as a mapping, failing the test when it is not one.
+func ymap(t *testing.T, m map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := m[key].(map[string]any)
+	require.True(t, ok, "%q is not a mapping: %#v", key, m[key])
+	return v
+}
+
+// ysteps returns the steps of a job.
+func ysteps(t *testing.T, job map[string]any) []map[string]any {
+	t.Helper()
+	list, ok := job["steps"].([]any)
+	require.True(t, ok, "steps is not a list")
+	steps := make([]map[string]any, 0, len(list))
+	for _, s := range list {
+		m, ok := s.(map[string]any)
+		require.True(t, ok)
+		steps = append(steps, m)
+	}
+	return steps
+}
+
+// ystrings returns v as a list of strings (a single string is a list of one).
+func ystrings(v any) []string {
+	switch x := v.(type) {
+	case string:
+		return []string{x}
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, e := range x {
+			s, _ := e.(string)
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
+// jobRun joins the run texts of a job's steps.
+func jobRun(t *testing.T, job map[string]any) string {
+	t.Helper()
+	var b strings.Builder
+	for _, s := range ysteps(t, job) {
+		if r, ok := s["run"].(string); ok {
+			b.WriteString(r)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func yamlText(v any) string {
+	out, err := yaml.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// The one required check (Rulings 4, 5, 8, 12): every trigger starts the workflow, the changes job
+// decides whether the legs run, and windows-required turns the results into one verdict.
+func TestWindowsWorkflowGate(t *testing.T) {
+	doc := loadWorkflow(t, windowsWorkflow)
+	on := ymap(t, doc, "on")
+
+	for _, ev := range []string{"push", "pull_request"} {
+		require.Contains(t, on, ev)
+		trig, _ := on[ev].(map[string]any) // pull_request may carry no settings
+		assert.NotContains(t, trig, "paths", "%s runs on every change; the changes job decides (Ruling 5)", ev)
+		assert.NotContains(t, trig, "paths-ignore", ev)
+	}
+	push, _ := on["push"].(map[string]any)
+	assert.Equal(t, []string{"**"}, ystrings(push["branches"]), "push runs for every branch")
+	assert.NotContains(t, push, "tags", "a tag push runs through release.yml's call only")
+	require.Contains(t, on, "schedule")
+	assert.Contains(t, yamlText(on["schedule"]), "41 2 * * *", "the nightly run (Ruling 9)")
+	require.Contains(t, on, "workflow_dispatch")
+	call, _ := on["workflow_call"].(map[string]any)
+	inputs, _ := call["inputs"].(map[string]any)
+	all, _ := inputs["all"].(map[string]any)
+	assert.Equal(t, "boolean", all["type"], "workflow_call input all (Ruling 12)")
+	assert.Equal(t, false, all["default"])
+
+	assert.Equal(t, map[string]any{"contents": "read"}, doc["permissions"])
+	conc := ymap(t, doc, "concurrency")
+	group, _ := conc["group"].(string)
+	assert.True(t, strings.HasPrefix(group, "windows-"), "a literal prefix, never github.workflow (Ruling 8): %q", group)
+	assert.NotContains(t, group, "github.workflow")
+	cancel, _ := conc["cancel-in-progress"].(string)
+	assert.Contains(t, cancel, "refs/tags/", "a release call is never cancelled")
+
+	jobs := ymap(t, doc, "jobs")
+	for _, j := range []string{"changes", "linux-build", "helper", "windows-required"} {
+		require.Contains(t, jobs, j)
+	}
+
+	changes := ymap(t, jobs, "changes")
+	run := jobRun(t, changes)
+	for _, want := range []string{"--no-renames", "-z", "git diff --no-renames --name-only -z", "windows-ci.sh changed .github/windows-paths.txt", "git merge-base origin/main HEAD"} {
+		assert.Contains(t, run, want, "the changes step (Ruling 5)")
+	}
+	outputs, _ := changes["outputs"].(map[string]any)
+	assert.Contains(t, outputs, "windows")
+
+	gate := ymap(t, jobs, "windows-required")
+	assert.Equal(t, "windows-required", gate["name"], "the context name branch protection requires")
+	assert.Equal(t, "always()", gate["if"])
+	needs := ystrings(gate["needs"])
+	slices.Sort(needs)
+	assert.Equal(t, []string{"changes", "helper", "linux-build"}, needs)
+	assert.Contains(t, jobRun(t, gate), "deploy/dev/windows-ci.sh gate")
+
+	for _, j := range []string{"linux-build", "helper"} {
+		cond, _ := ymap(t, jobs, j)["if"].(string)
+		assert.Contains(t, cond, "needs.changes.outputs.windows", "%s runs only when changes says so", j)
+	}
+
+	for name := range jobs {
+		for _, s := range ysteps(t, ymap(t, jobs, name)) {
+			if r, ok := s["run"].(string); ok {
+				assert.NotContains(t, r, "${{", "job %s step %v: values reach run text through env: only", name, s["name"])
+			}
+		}
+	}
+}
+
+var (
+	requiredListRE = regexp.MustCompile(`(?s)\$required = @\((.*?)\n\s*\)`)
+	quotedNameRE   = regexp.MustCompile(`'(Test\w+)'`)
+)
+
+// Ruling 7: the workflow's $required list names exactly the real and fidelity tests.
+func TestWindowsWorkflowRequiresEveryRealTest(t *testing.T) {
+	root := moduleRoot(t)
+	doc := loadWorkflow(t, windowsWorkflow)
+	helper := ymap(t, ymap(t, doc, "jobs"), "helper")
+	m := requiredListRE.FindStringSubmatch(jobRun(t, helper))
+	require.NotNil(t, m, "the helper job has no $required = @(...) list")
+	var required []string
+	for _, q := range quotedNameRE.FindAllStringSubmatch(m[1], -1) {
+		required = append(required, q[1])
+	}
+	require.NotEmpty(t, required)
+
+	files, err := filepath.Glob(filepath.Join(root, "cmd", "alice-winhelper", "*_test.go"))
+	require.NoError(t, err)
+	require.NoError(t, filepath.WalkDir(filepath.Join(root, "internal", "providers", "windows"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, "_test.go") {
+			files = append(files, p)
+		}
+		return err
+	}))
+	var found []string
+	fset := token.NewFileSet()
+	for _, f := range files {
+		file, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Recv == nil && (strings.HasPrefix(fn.Name.Name, "TestReal") || strings.HasPrefix(fn.Name.Name, "TestFidelity")) {
+				found = append(found, fn.Name.Name)
+			}
+		}
+	}
+	require.Contains(t, found, "TestRealRunnerIsClean", "positive control")
+
+	var missing, stale []string
+	for _, n := range found {
+		if !slices.Contains(required, n) {
+			missing = append(missing, n)
+		}
+	}
+	for _, n := range required {
+		if !slices.Contains(found, n) {
+			stale = append(stale, n)
+		}
+	}
+	slices.Sort(missing)
+	slices.Sort(stale)
+	assert.Empty(t, missing, "real tests missing from $required in %s", windowsWorkflow)
+	assert.Empty(t, stale, "names in $required in %s that are no test", windowsWorkflow)
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(required))), len(required), "a name is listed twice")
+}
+
+// Ruling 10: one set of build flags for alice-helper.exe in the Makefile, the reproducibility check
+// and the Windows legs, so the runners test the bytes the release ships.
+func TestWindowsHelperBuildFlagsAgree(t *testing.T) {
+	root := moduleRoot(t)
+	common := []string{"-trimpath", "-buildvcs=false", `-ldflags "-s -w"`}
+	archLevel := map[string]string{"amd64": "GOAMD64=v1", "arm64": "GOARM64=v8.0"}
+
+	// checkLines requires one build line per architecture with the common flags and its GOARCH level.
+	checkLines := func(t *testing.T, where string, lines []string) {
+		t.Helper()
+		for arch, level := range archLevel {
+			var hit []string
+			for _, l := range lines {
+				if strings.Contains(l, "GOARCH="+arch) {
+					hit = append(hit, l)
+				}
+			}
+			require.Len(t, hit, 1, "%s: one Windows build line for %s", where, arch)
+			for _, f := range append([]string{level}, common...) {
+				assert.Contains(t, hit[0], f, "%s %s", where, arch)
+			}
+		}
+	}
+
+	t.Run("Makefile winhelper", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(root, "Makefile")) //nolint:gosec // repository file
+		require.NoError(t, err)
+		_, recipe, ok := strings.Cut(string(raw), "\nwinhelper:")
+		require.True(t, ok, "no winhelper target")
+		recipe, _, _ = strings.Cut(recipe, "\n\n")
+		var builds []string
+		for _, l := range strings.Split(recipe, "\n") {
+			if strings.Contains(l, "go build") {
+				assert.Contains(t, l, "CGO_ENABLED=0")
+				assert.Contains(t, l, "GOOS=windows")
+				builds = append(builds, l)
+			}
+		}
+		checkLines(t, "Makefile", builds)
+	})
+
+	t.Run("reproducible-check.sh", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(root, "deploy", "dev", "reproducible-check.sh")) //nolint:gosec // repository file
+		require.NoError(t, err)
+		text := string(raw)
+		assert.Contains(t, text, "export CGO_ENABLED=0", "the builds of build_copy inherit it")
+		var builds []string
+		for _, l := range strings.Split(text, "\n") {
+			if strings.Contains(l, "GOOS=windows") && strings.Contains(l, "go build") {
+				builds = append(builds, l)
+			}
+		}
+		checkLines(t, "reproducible-check.sh", builds)
+	})
+
+	t.Run("windows.yml", func(t *testing.T) {
+		doc := loadWorkflow(t, windowsWorkflow)
+		var build map[string]any
+		for _, s := range ysteps(t, ymap(t, ymap(t, doc, "jobs"), "helper")) {
+			if r, _ := s["run"].(string); strings.Contains(r, "go build") {
+				require.Nil(t, build, "one build step")
+				build = s
+			}
+		}
+		require.NotNil(t, build, "no build step in the helper job")
+		env, _ := build["env"].(map[string]any)
+		assert.Equal(t, "0", env["CGO_ENABLED"])
+		assert.Equal(t, "windows", env["GOOS"])
+		assert.Equal(t, "v1", env["GOAMD64"], "amd64 level")
+		assert.Equal(t, "v8.0", env["GOARM64"], "arm64 level")
+		run, _ := build["run"].(string)
+		for _, f := range common {
+			assert.Contains(t, run, f)
+		}
+		for arch := range archLevel {
+			assert.Contains(t, run, "'"+arch+"'")
 		}
 	})
 }

@@ -2,50 +2,127 @@ name: windows
 
 # The Windows helper on real Windows Server (R60 Ruling 17, design 2026-10-21 §13): the real-host tests
 # of cmd/alice-winhelper, the fidelity test against the emulator and the setup script smoke test, on
-# windows-2022 and windows-2025. Not a required check yet (W4 makes it one).
+# windows-2022 and windows-2025. Its job windows-required is the one required check (W4, R63): it runs
+# on every push and pull request, and the Windows legs run only when a change touches a path of
+# .github/windows-paths.txt (deploy/dev/windows-ci.sh decides), nightly, by hand or when release.yml
+# calls it with all: true. docs/dev/windows-ci.md describes the jobs, the decision and the gate.
 on:
+  # Every branch, no tags: a tag push runs this workflow only through release.yml's call, so no second
+  # direct run shares that call's concurrency group.
   push:
-    paths:
-      - cmd/alice-winhelper/**
-      - internal/providers/windows/**
-      - internal/providers/linuxssh/**
-      - internal/providers/linuxssh/helperproto/**
-      - internal/providers/linuxssh/linuxsshtest/**
-      - internal/testutil/pki/**
-      - internal/providers/tlsverify/**
-      - internal/providers/*.go
-      - internal/platform/**
-      - .github/workflows/windows.yml
-      - go.mod
-      - go.sum
+    branches: ['**']
   pull_request:
-    paths:
-      - cmd/alice-winhelper/**
-      - internal/providers/windows/**
-      - internal/providers/linuxssh/**
-      - internal/providers/linuxssh/helperproto/**
-      - internal/providers/linuxssh/linuxsshtest/**
-      - internal/testutil/pki/**
-      - internal/providers/tlsverify/**
-      - internal/providers/*.go
-      - internal/platform/**
-      - .github/workflows/windows.yml
-      - go.mod
-      - go.sum
   schedule:
     - cron: '41 2 * * *'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      all:
+        description: Run the Windows legs whatever the change
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# A newer push to the same branch (or pull request) cancels the run it supersedes.
+# A newer push to the same branch (or pull request) cancels the run it supersedes. The nightly run and
+# a release call (a tag ref) are never cancelled. A literal prefix: a called workflow sees the caller's
+# github.workflow (Ruling 8).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  # Ruling 5: windows=true for the nightly run, a manual run or a call with all: true, or when the
+  # diff names a watched path. An unknown base runs the legs; it never skips them.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows: ${{ steps.decide.outputs.windows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Decide whether the Windows legs run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          ALL: ${{ inputs.all }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          answer() {
+            echo "windows=$1" >> "$GITHUB_OUTPUT"
+            echo "windows=$1: $2"
+          }
+          if [[ $EVENT == schedule || $EVENT == workflow_dispatch || ${ALL:-false} == true ]]; then
+            answer true "event $EVENT, all=${ALL:-false}"
+            exit 0
+          fi
+          case $EVENT in
+            pull_request) base=$PR_BASE ;;
+            push) base=$BEFORE ;;
+            *) base="" ;;
+          esac
+          if [[ -z $base || $base =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "base \"$base\" is no commit in the clone; using the merge base with origin/main"
+            if ! base=$(git merge-base origin/main HEAD); then
+              answer true "no base to compare with"
+              exit 0
+            fi
+          fi
+          # The names go to a file first: a failed git diff answers true, it never feeds the matcher
+          # a partial list.
+          names="$RUNNER_TEMP/changed-names"
+          if ! git diff --no-renames --name-only -z "$base" HEAD > "$names"; then
+            answer true "git diff $base HEAD failed"
+            exit 0
+          fi
+          code=0
+          bash deploy/dev/windows-ci.sh changed .github/windows-paths.txt < "$names" || code=$?
+          case $code in
+            0) answer true "a watched path changed since $base" ;;
+            1) answer false "no watched path changed since $base" ;;
+            *)
+              echo "::error::deploy/dev/windows-ci.sh changed exited $code"
+              exit 1
+              ;;
+          esac
+
+  # Ruling 10 (F13): the helper as make winhelper builds it on Linux, the host the release is built on.
+  linux-build:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      amd64: ${{ steps.hashes.outputs.amd64 }}
+      arm64: ${{ steps.hashes.outputs.arm64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - name: make winhelper
+        run: make winhelper
+      - name: Output the SHA-256 values
+        id: hashes
+        run: |
+          set -euo pipefail
+          cat bin/alice-winhelper.sha256
+          for arch in amd64 arm64; do
+            sum=$(awk -v f="alice-winhelper-windows-$arch.exe" '$2 == f { print $1 }' bin/alice-winhelper.sha256)
+            if [[ ! $sum =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::no SHA-256 for $arch in bin/alice-winhelper.sha256"
+              exit 1
+            fi
+            echo "$arch=$sum" >> "$GITHUB_OUTPUT"
+          done
+
   helper:
+    needs: [changes, linux-build]
+    if: needs.changes.outputs.windows == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -71,11 +148,14 @@ jobs:
           if (-not $r.Success) { throw "Install-WindowsFeature Web-Server failed (exit code $($r.ExitCode))" }
           if (-not (Test-Path "$env:windir\system32\inetsrv\appcmd.exe")) { throw 'appcmd.exe is missing after the install' }
 
-      # As make winhelper builds them; TestRealSetupScript embeds their checksums.
+      # As make winhelper builds them (Ruling 10: GOAMD64 applies to amd64 only, GOARM64 to arm64
+      # only); TestRealSetupScript embeds their checksums.
       - name: Build alice-helper.exe for amd64 and arm64
         env:
           CGO_ENABLED: "0"
           GOOS: windows
+          GOAMD64: v1
+          GOARM64: v8.0
         run: |
           foreach ($arch in 'amd64', 'arm64') {
             $env:GOARCH = $arch
@@ -83,6 +163,29 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "go build for $arch failed" }
           }
           Get-FileHash bin/alice-winhelper-windows-*.exe -Algorithm SHA256 | Format-Table -AutoSize Hash, Path
+
+      # F13: the runner tests the bytes the release (built on Linux) ships.
+      - name: Compare with the Linux build
+        env:
+          LINUX_AMD64: ${{ needs.linux-build.outputs.amd64 }}
+          LINUX_ARM64: ${{ needs.linux-build.outputs.arm64 }}
+        run: |
+          $linux = @{ amd64 = $env:LINUX_AMD64; arm64 = $env:LINUX_ARM64 }
+          $differ = $false
+          foreach ($arch in 'amd64', 'arm64') {
+            $here = (Get-FileHash "bin/alice-winhelper-windows-$arch.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+            $there = "$($linux[$arch])".ToLowerInvariant()
+            if ($there -notmatch '^[0-9a-f]{64}$') {
+              Write-Host "::error::the linux-build job output no SHA-256 for $arch"
+              $differ = $true
+            } elseif ($here -ne $there) {
+              Write-Host "::error::alice-winhelper-windows-$arch.exe differs from the Linux build: $here here, $there on Linux"
+              $differ = $true
+            } else {
+              Write-Host "$arch identical to the Linux build: $here"
+            }
+          }
+          if ($differ) { exit 1 }
 
       # A skipped real test is a failure: every test below must print its PASS line (the rule of
       # SSH_MATRIX_PASSED in the Makefile).
@@ -103,10 +206,20 @@ jobs:
           $status = $LASTEXITCODE
           go test -count=1 -v -tags alicetest ./cmd/alice-winhelper/... 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { $status = $LASTEXITCODE }
+          # Every TestReal* and TestFidelity* function, by name (Ruling 7,
+          # internal/archtest TestWindowsWorkflowRequiresEveryRealTest).
           $required = @(
             'TestRealHostIsElevated',
             'TestRealOSFactsMatchTheRegistryReadIndependently',
+            'TestRealIISFacts',
+            'TestRealWinFactsWithUnreadableFactFiles',
+            'TestRealStoresListTheMachineStores',
+            'TestRealCertificateFacts',
+            'TestRealExpiredInStore',
             'TestRealBindingsListAnSNIAndAnIPBinding',
+            'TestRealForeignBinding',
+            'TestRealAppcmdSites',
+            'TestRealAppcmdStateByEnvironment',
             'TestFidelityVersionAndRefusals',
             'TestFidelityWinFacts',
             'TestFidelityDumpSNIAndIPBindings',
@@ -118,6 +231,7 @@ jobs:
             'TestRealUpdateKeepsTheRecordAndExParams',
             'TestRealImportPFX',
             'TestRealStateFiles',
+            'TestRealStateFilesLockHolder',
             'TestRealEvent',
             'TestFidelityDeploySNIAndIP',
             'TestFidelityDeployKeepsEverySetting',
@@ -136,3 +250,22 @@ jobs:
           if ($missing.Count -gt 0) { Write-Host "::error::These tests did not pass (skipped, failed or not run): $($missing -join ', ')" }
           if ($status -ne 0) { Write-Host "::error::go test failed (exit code $status)" }
           if ($status -ne 0 -or $missing.Count -gt 0) { exit 1 }
+
+  # Ruling 4: the one required check. It runs on every trigger and passes only when changes succeeded
+  # and either both legs were skipped on windows=false or both succeeded on windows=true.
+  windows-required:
+    name: windows-required
+    if: always()
+    needs: [changes, linux-build, helper]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: Decide
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          WINDOWS: ${{ needs.changes.outputs.windows }}
+          LINUX_BUILD: ${{ needs.linux-build.result }}
+          HELPER: ${{ needs.helper.result }}
+        run: bash deploy/dev/windows-ci.sh gate "$CHANGES" "${WINDOWS:-false}" "$LINUX_BUILD" "$HELPER"
