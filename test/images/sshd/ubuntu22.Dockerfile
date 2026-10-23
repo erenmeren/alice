@@ -15,7 +15,7 @@
 # haproxy is the distribution's package with its default configuration: installed, never started
 # (discovery only; Nginx owns 80 and 443); the test writes its fixture configuration on ports
 # 9443-9445 (TestRealHAProxy, internal/providers/haproxy/containers_integration_test.go).
-FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx apache2 haproxy openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \
