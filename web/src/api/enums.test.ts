@@ -166,7 +166,12 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
   // R60: the Windows helper's warnings; win_ctl is a location warning, the others are server warnings.
-  const winWarnings = goConsts('internal/providers/windows/winproto/winproto.go', /^Warn/);
+  const winAllWarnings = goConsts('internal/providers/windows/winproto/winproto.go', /^Warn/);
+  // W3: warnings of the helper's `iis-cleanup --plan` answer. Only Alice's cleanup job consumes them; they are
+  // never a location or a server warning, so the SPA has no label for them. A new Warn* constant of winproto
+  // is a dump warning unless it is named here (the assertion below pins this list against the Go source).
+  const cleanupPlanWarnings = ['journal_unreadable', 'binding_record_unreadable'];
+  const winWarnings = winAllWarnings.filter((w) => !cleanupPlanWarnings.includes(w));
   // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
   const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/haproxy', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
@@ -229,6 +234,13 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     for (const w of inventoryWarnings) expect(Object.keys(LOCATION_WARNINGS), w).toContain(w);
     for (const w of typesWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).toContain(w);
     for (const w of winWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).toContain(w);
+  });
+
+  it('classifies the cleanup plan warnings of the Windows helper apart from the dump warnings', () => {
+    // Every winproto Warn* constant is a dump warning or one of the cleanup plan's; none is both.
+    expect(winAllWarnings.filter((w) => cleanupPlanWarnings.includes(w))).toEqual([...cleanupPlanWarnings].sort());
+    expect(winAllWarnings).toEqual([...winWarnings, ...cleanupPlanWarnings].sort());
+    for (const w of cleanupPlanWarnings) expect([...Object.keys(LOCATION_WARNINGS), ...Object.keys(WARNING_PARAMS)], w).not.toContain(w);
   });
 
   it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
