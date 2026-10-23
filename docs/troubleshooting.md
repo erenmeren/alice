@@ -2177,6 +2177,14 @@ limitation).
 
 **What to do.** Check the free space of the system disk and the owner and permissions of `C:\ProgramData\Alice\helper` (Administrators and SYSTEM only, as the Windows setup script makes it); run the setup script again if they were changed, then try again.
 
+If every deployment and rollback of one binding keeps failing this way while other bindings of the same server deploy, the binding's record `C:\ProgramData\Alice\helper\bindings\<hash>.json` is probably damaged. The file is empty or is not valid JSON, often after the disk ran full or the server lost power. The helper does not guess about a damaged record, so it changes nothing on that binding and keeps failing. To clear it:
+
+1. Make sure no deployment of that binding is still interrupted or recovering in Alice. Also check that no file in `C:\ProgramData\Alice\helper\journal\` that names this binding has the `phase` `writing` or `restoring`. If one does, wait for Alice's recovery to end it first.
+2. As an Administrator, move the damaged file out of the `bindings` folder. Keep a copy for support, and leave the `journal` folder as it is.
+3. Try again. Without the record, the helper reads the live binding, and the first deployment writes the certificate even if the binding already names it.
+
+None of these files holds key material.
+
 ## ALC-WIN-0008: Windows server could not open a certificate store
 
 **Meaning.** The helper could not open the binding's machine certificate store (`My` or `WebHosting`) or the intermediate store (`CA`), or Windows refused to add a certificate to it (helper code `STORE_ERROR`). (HTTP 502, reason `windows.store_error`.)
