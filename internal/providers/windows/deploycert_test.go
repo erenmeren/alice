@@ -559,6 +559,27 @@ func TestDeployRefusesNonASCIIHost(t *testing.T) {
 	assert.Zero(t, w.countSent(winproto.SubIISDeploy), "nothing sent")
 }
 
+// R61 Task 11 review: the location as inventory stores and hands it over (providers.ParseLocator of the stored JSON:
+// the port is a json.Number) is deployed to and verified, not refused as unsupported.
+func TestDeployTakesTheStoredLocator(t *testing.T) {
+	w := newWEnv(t)
+	nl := w.issue()
+	req := w.deployReq(nl)
+	stored, err := providers.ParseLocator([]byte(`{"app_id":"` + winproto.AppIDIIS + `","host":"` + wHost + `","port":443,"type":"hostnameport"}`))
+	require.NoError(t, err)
+	_, isNumber := stored["port"].(json.Number)
+	require.True(t, isNumber, "the stored form")
+	req.Location.Locator = stored
+	req.Trust = &providers.TrustPolicy{Roots: rootPool(w.ca), Store: providers.TrustStoreSystem, Enforce: true}
+	out, err := w.session(t).DeployCertificate(context.Background(), req, nil)
+	providertest.CheckDeployOutcome(t, out, err)
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployCommitted, out.Result)
+	assert.Equal(t, "remote", out.Verified)
+	assert.Equal(t, derSHA256(nl.Cert.Raw), w.served())
+	assert.Equal(t, 1, w.countSent(winproto.SubIISDeploy))
+}
+
 // Review Focus 5: the key travels only on standard input. The command line is exactly
 // "iis-deploy --op <id>", neither Format of the request nor the session's logs show the key, and the
 // input buffer is cleared after the send.

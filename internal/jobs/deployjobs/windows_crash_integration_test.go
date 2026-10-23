@@ -21,15 +21,16 @@ type winKillRow struct {
 	status string // the final record
 	reason string
 	want   func(e *env) pki.Leaf
-	fenced bool // nothing was written: the recovery fenced the operation
+	fenced bool   // nothing was written: the recovery fenced the operation
+	phase  string // a fenced row: the phase recorded (the status read before the fence)
 }
 
 // winKillRows are the rows of the helper's crash points (Task 3), by point; the matrix runs them in the order a run passes them.
 var winKillRows = map[string]winKillRow{
-	"deploy.locked":             {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true},
-	"deploy.prepared":           {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true},
-	"deploy.import_chain":       {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true},
-	"deploy.import_certificate": {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true},
+	"deploy.locked":             {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true, phase: winproto.PhaseNone},
+	"deploy.prepared":           {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true, phase: winproto.PhasePrepared},
+	"deploy.import_chain":       {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true, phase: winproto.PhasePrepared},
+	"deploy.import_certificate": {status: inventory.DeployStatusFailed, reason: "deployment.interrupted", want: oldLeaf, fenced: true, phase: winproto.PhasePrepared},
 	"deploy.writing":            {status: inventory.DeployStatusRolledBack, reason: "deployment.interrupted", want: oldLeaf},
 	"deploy.bound":              {status: inventory.DeployStatusRolledBack, reason: "deployment.interrupted", want: oldLeaf},
 	"deploy.read_back":          {status: inventory.DeployStatusRolledBack, reason: "deployment.interrupted", want: oldLeaf},
@@ -64,6 +65,7 @@ func TestWindowsDeploymentSurvivesAKillAtEveryPoint(t *testing.T) {
 			s := e.addWinServer("iis-01")
 			s.model.StaleTLS(tc.stale)
 			s.model.KillAt(point)
+			deployedBefore := e.winLocation(s).DeployedFingerprint
 			id := e.request(s.loc)[0]
 			e.drain()
 			require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State, "a killed helper is an uncertain outcome")
@@ -79,14 +81,17 @@ func TestWindowsDeploymentSurvivesAKillAtEveryPoint(t *testing.T) {
 				assert.Equal(t, pki.Fingerprint(e.nw.Cert), e.winLocation(s).DeployedFingerprint)
 				assert.Equal(t, winproto.PhaseCommitted, s.phase(t, id))
 			} else {
-				assert.NotEqual(t, pki.Fingerprint(e.nw.Cert), e.winLocation(s).DeployedFingerprint)
+				assert.Equal(t, deployedBefore, e.winLocation(s).DeployedFingerprint, "the record still names what was deployed before")
+			}
+			if tc.status == inventory.DeployStatusRolledBack {
+				assert.Equal(t, winproto.PhaseRestored, s.phase(t, id), "the helper's journal agrees with the record")
 			}
 			assert.Equal(t, 1, s.sent(winproto.SubIISDeploy), "the certificate is sent at most once")
 			if !tc.fenced {
 				return
 			}
 			assert.Equal(t, winproto.PhaseFenced, s.phase(t, id))
-			assert.True(t, d.Phase == winproto.PhaseNone || d.Phase == winproto.PhasePrepared || d.Phase == "", d.Phase)
+			assert.Equal(t, tc.phase, d.Phase)
 			// The operation sent again (a late or replayed send) never runs: the helper answers FENCED and changes nothing.
 			in, err := json.Marshal(winproto.DeployInput{Locator: s.locator, ExpectSHA256: pki.Fingerprint(e.old.Cert), ChainPEM: string(e.nw.FullchainPEM),
 				KeyPEM: string(e.nw.KeyPEM), ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})

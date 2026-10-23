@@ -241,7 +241,9 @@ func sha256Hex(b []byte) string {
 // newCertSHA256 is Material.NewCertSHA256: the location's compare-and-swap token once a deployment wrote certPEM, in
 // the form its provider compares (DeployRequest.ExpectCertSHA256): the SHA-256 of the DER of the leaf an http.sys
 // binding names (R61; "" when certPEM holds no certificate), else of the file's bytes (the helper writes the PEM sent
-// verbatim).
+// verbatim). Only the first PEM block is read: a stored chain is leaf first (certs.ParseChainPEM). A chain whose first block
+// is not a CERTIFICATE gives "", which no binding's token equals: the next deployment is then refused (HASH_MISMATCH,
+// nothing changed) until a discovery reads the binding's token again; it never names a wrong certificate.
 func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
 	if kind != providers.LocationWinSSLBinding {
 		return sha256Hex(certPEM)
