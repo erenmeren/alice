@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # The decisions of the Windows workflow (.github/workflows/windows.yml, W4, R63).
 #
-#   windows-ci.sh changed <list-file>
-#     Reads changed file names, one per line, on standard input. Prints the first name an entry of
-#     <list-file> matches and exits 0; exits 1 when none matches. Entries (Ruling 6), one per line,
+#   git diff --no-renames --name-only -z <base> HEAD | windows-ci.sh changed <list-file>
+#     Reads changed file names on standard input, each ended by a NUL byte (the -z output: raw,
+#     unquoted names, so a name with a non-ASCII byte, a quote, a tab or a newline arrives intact).
+#     --no-renames lists a renamed file under its old and its new path, so a file moved out of a
+#     watched directory still counts. Newline-separated input is not supported.
+#     Prints the first name an entry of <list-file> matches and exits 0; exits 1 when none matches.
+#     Entries (Ruling 6), one per line,
 #     blank lines and lines starting with # ignored:
 #       dir/**   every file below dir
 #       dir/*    every file directly in dir
@@ -22,7 +26,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: windows-ci.sh changed <list-file> < names" >&2
+  echo "usage: git diff --no-renames --name-only -z <base> HEAD | windows-ci.sh changed <list-file>" >&2
   echo "       windows-ci.sh gate <changes_result> <windows> <linux_build_result> <helper_result>" >&2
   exit 2
 }
@@ -98,8 +102,7 @@ changed() {
     check_entry "$line"
     entries+=("$line")
   done <"$list"
-  while IFS= read -r name || [[ -n $name ]]; do
-    name=${name%$'\r'}
+  while IFS= read -r -d '' name || [[ -n $name ]]; do
     [[ -z $name ]] && continue
     for entry in "${entries[@]}"; do
       if matches "$name" "$entry"; then
@@ -123,13 +126,14 @@ gate() {
   result_ok "$changes"
   result_ok "$build"
   result_ok "$helper"
-  if [[ $windows != true && $windows != false ]]; then
-    echo "windows-ci: windows is \"$windows\", not true or false" >&2
-    exit 2
-  fi
+  # A failed changes job leaves windows empty: its result decides before windows is read.
   if [[ $changes != success ]]; then
     echo "gate: fail: the changes job ended $changes"
     exit 1
+  fi
+  if [[ $windows != true && $windows != false ]]; then
+    echo "windows-ci: windows is \"$windows\", not true or false" >&2
+    exit 2
   fi
   if [[ $windows == false ]]; then
     if [[ $build == skipped && $helper == skipped ]]; then

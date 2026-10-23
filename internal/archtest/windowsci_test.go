@@ -54,6 +54,16 @@ func changedWith(t *testing.T, entries, names string) (int, string) {
 	return runWindowsCI(t, names, "changed", list)
 }
 
+// nul joins names the way git diff --name-only -z prints them: each name ended by a NUL byte.
+func nul(names ...string) string {
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString(n)
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
 func TestWindowsChangedScript(t *testing.T) {
 	const list = "# watched\n\na/**\n  # indented comment\nb/*\nc.txt\n"
 	cases := []struct {
@@ -61,17 +71,23 @@ func TestWindowsChangedScript(t *testing.T) {
 		input string
 		code  int
 	}{
-		{"below a dir/** entry", "a/x/y.go\n", 0},
-		{"directly in a dir/* entry", "b/z.go\n", 0},
-		{"below a dir/* entry", "b/sub/z.go\n", 1},
-		{"an exact entry", "c.txt\n", 0},
-		{"a longer name than an exact entry", "c.txt.bak\n", 1},
-		{"a sibling with the same prefix", "ab/x\n", 1},
-		{"the dir of a dir/** entry itself", "a\n", 1},
-		{"the dir of a dir/* entry itself", "b\n", 1},
-		{"a comment line is no entry", "# watched\n", 1},
+		{"below a dir/** entry", nul("a/x/y.go"), 0},
+		{"directly in a dir/* entry", nul("b/z.go"), 0},
+		{"below a dir/* entry", nul("b/sub/z.go"), 1},
+		{"an exact entry", nul("c.txt"), 0},
+		{"a longer name than an exact entry", nul("c.txt.bak"), 1},
+		{"a sibling with the same prefix", nul("ab/x"), 1},
+		{"the dir of a dir/** entry itself", nul("a"), 1},
+		{"the dir of a dir/* entry itself", nul("b"), 1},
+		{"a comment line is no entry", nul("# watched"), 1},
 		{"empty input", "", 1},
-		{"one match among others", "web/x.ts\nb/sub/z.go\nb/ok.go\n", 0},
+		{"one match among others", nul("web/x.ts", "b/sub/z.go", "b/ok.go"), 0},
+		{"a last name without its NUL", nul("web/x.ts") + "c.txt", 0},
+		// -z names arrive raw: git's quoting of these ("a/\303\251.go") would match nothing.
+		{"a non-ASCII name below a dir/** entry", nul("web/x.ts", "a/été.go"), 0},
+		{"a name with a quote and a space below a dir/** entry", nul("a/say \"hi\".go"), 0},
+		{"a name with a newline directly in a dir/* entry", nul("b/x\ny"), 0}, // one file directly in b
+		{"newline-separated names are one name", "web/x.ts\nc.txt\n", 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -80,13 +96,13 @@ func TestWindowsChangedScript(t *testing.T) {
 		})
 	}
 	t.Run("prints the first matching name", func(t *testing.T) {
-		code, out := changedWith(t, list, "web/x.ts\nb/ok.go\na/q\n")
+		code, out := changedWith(t, list, nul("web/x.ts", "b/ok.go", "a/q"))
 		require.Equal(t, 0, code, out)
 		assert.Equal(t, "b/ok.go", strings.TrimSpace(out))
 	})
 	for _, bad := range []string{"a/**/b", "/abs/**", "a/../b", "..", "a b/**", "a/*/b", "**", "a/**x", "*.go", "a/"} {
 		t.Run("entry of another form "+bad, func(t *testing.T) {
-			code, out := changedWith(t, "c.txt\n"+bad+"\n", "c.txt\n")
+			code, out := changedWith(t, "c.txt\n"+bad+"\n", nul("c.txt"))
 			assert.Equal(t, 2, code, out)
 		})
 	}
@@ -104,26 +120,28 @@ func TestWindowsChangedScript(t *testing.T) {
 
 func TestWindowsGateDecision(t *testing.T) {
 	cases := []struct {
-		args string
+		args []string
 		code int
 	}{
-		{"success false skipped skipped", 0},
-		{"success true success success", 0},
-		{"success true success failure", 1},
-		{"success true success cancelled", 1},
-		{"success true skipped skipped", 1},
-		{"success true failure success", 1},
-		{"failure false skipped skipped", 1},
-		{"success false success success", 1}, // the legs ran although nothing changed: a wrong changes output
-		{"cancelled true skipped skipped", 1},
-		{"success maybe skipped skipped", 2},
-		{"success true success", 2},
-		{"done true success success", 2},
-		{"success true success passed", 2},
+		{[]string{"success", "false", "skipped", "skipped"}, 0},
+		{[]string{"success", "true", "success", "success"}, 0},
+		{[]string{"success", "true", "success", "failure"}, 1},
+		{[]string{"success", "true", "success", "cancelled"}, 1},
+		{[]string{"success", "true", "skipped", "skipped"}, 1},
+		{[]string{"success", "true", "failure", "success"}, 1},
+		{[]string{"failure", "false", "skipped", "skipped"}, 1},
+		{[]string{"failure", "", "skipped", "skipped"}, 1},      // a failed changes job outputs no windows value
+		{[]string{"success", "false", "success", "success"}, 1}, // the legs ran although nothing changed: a wrong changes output
+		{[]string{"cancelled", "true", "skipped", "skipped"}, 1},
+		{[]string{"success", "maybe", "skipped", "skipped"}, 2},
+		{[]string{"success", "", "skipped", "skipped"}, 2},
+		{[]string{"success", "true", "success"}, 2},
+		{[]string{"done", "true", "success", "success"}, 2},
+		{[]string{"success", "true", "success", "passed"}, 2},
 	}
 	for _, c := range cases {
-		t.Run(c.args, func(t *testing.T) {
-			code, out := runWindowsCI(t, "", append([]string{"gate"}, strings.Fields(c.args)...)...)
+		t.Run(strings.Join(c.args, ","), func(t *testing.T) {
+			code, out := runWindowsCI(t, "", append([]string{"gate"}, c.args...)...)
 			assert.Equal(t, c.code, code, out)
 			if c.code != 2 {
 				assert.Equal(t, 1, strings.Count(strings.TrimSpace(out), "\n")+1, "one line saying why: %q", out)
@@ -164,7 +182,7 @@ func windowsTestDeps(t *testing.T, tags string) []string {
 
 func trackedFiles(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command("git", "ls-files")
+	cmd := exec.Command("git", "ls-files", "-z") // raw names, each ended by a NUL: the script's input
 	cmd.Dir = moduleRoot(t)
 	out, err := cmd.Output()
 	require.NoError(t, err)
@@ -196,7 +214,7 @@ func TestWindowsWorkflowWatchesEveryDependency(t *testing.T) {
 		var missing []string
 		for _, d := range all {
 			// A directory is watched when a file directly inside it is.
-			if code, out := runWindowsCI(t, d+"/doc.go\n", "changed", windowsPaths); code != 0 {
+			if code, out := runWindowsCI(t, nul(d+"/doc.go"), "changed", windowsPaths); code != 0 {
 				require.Equal(t, 1, code, out)
 				missing = append(missing, d)
 			}
