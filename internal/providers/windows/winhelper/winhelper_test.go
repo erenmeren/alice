@@ -71,7 +71,7 @@ func TestRunRefusesUnknownAndEmpty(t *testing.T) {
 	h := &fakeHost{}
 	code, out := run(t, h)
 	wantError(t, code, out, 2, "USAGE")
-	for _, sub := range []string{"iis-cleanup", "ssh", "nope"} {
+	for _, sub := range []string{"rdp-deploy", "ssh", "nope"} {
 		code, out = run(t, h, sub)
 		wantError(t, code, out, 2, "UNKNOWN_SUBCOMMAND")
 	}

@@ -195,6 +195,14 @@ type fakeWriteHost struct {
 	listStateErr   error
 	removeStateErr func(name string) error
 	removeCertErr  error
+	// removeAfterKeyErr, when set, makes RemoveCertificate remove the key and then fail with it before
+	// the certificate (a kill between the two, W3 Ruling 10): the certificate stays, keyless.
+	removeAfterKeyErr error
+	// readStateFn, listStateFn decide each ReadState and ListState (nil reads); bindingBlockFn runs
+	// before each SSLBindings (a slow http.sys).
+	readStateFn    func(name string) error
+	listStateFn    func(dir string) error
+	bindingBlockFn func()
 	protected      Protected
 	protectedErr   error
 }
@@ -264,6 +272,9 @@ func (f *fakeWriteHost) logf(s string) {
 
 func (f *fakeWriteHost) SSLBindings(context.Context) ([]winproto.SSLBinding, error) {
 	f.calls.Add(1)
+	if f.bindingBlockFn != nil {
+		f.bindingBlockFn()
+	}
 	if f.bindingsErr != nil {
 		return nil, f.bindingsErr
 	}
@@ -319,6 +330,11 @@ func (f *fakeWriteHost) ReadState(name string) ([]byte, bool, error) {
 	defer f.wmu.Unlock()
 	if f.readStateErr != nil {
 		return nil, false, f.readStateErr
+	}
+	if f.readStateFn != nil {
+		if err := f.readStateFn(name); err != nil {
+			return nil, false, err
+		}
 	}
 	b, ok := f.state[name]
 	return slices.Clone(b), ok, nil
@@ -465,6 +481,11 @@ func (f *fakeWriteHost) ListState(dir string) ([]StateFile, error) {
 	if f.listStateErr != nil {
 		return nil, f.listStateErr
 	}
+	if f.listStateFn != nil {
+		if err := f.listStateFn(dir); err != nil {
+			return nil, err
+		}
+	}
 	out := []StateFile{}
 	for name := range f.state {
 		if rest, ok := strings.CutPrefix(name, dir); ok && !strings.Contains(rest, "/") {
@@ -499,6 +520,13 @@ func (f *fakeWriteHost) RemoveCertificate(_ context.Context, store, sha1 string)
 	f.mu.Lock()
 	k := [2]string{store, sha1}
 	c, ok := f.certs[k]
+	if ok && f.removeAfterKeyErr != nil {
+		c.HasKey, c.KeyProblem = false, "key_missing"
+		f.certs[k] = c
+		f.mu.Unlock()
+		f.logf("remove-key " + store + " " + sha1)
+		return false, f.removeAfterKeyErr
+	}
 	if ok {
 		delete(f.certs, k)
 	}

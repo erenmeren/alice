@@ -501,37 +501,56 @@ func recordImport(h WriteHost, e importEntry) error {
 	return writeImports(h, f)
 }
 
-// journalFile is a file of journalDir as readJournals found it: J is its journal when OK.
+// journalFile is a journal file of journalDir as readJournals found it: J is its journal when OK.
+// Neither OK nor Unread: the file could not be decoded (W3 Ruling 7: it keeps every candidate until
+// pruning removes it after JournalRetention). Unread: it was not read, because the read failed or the
+// listing was past maxJournalFiles; it keeps every candidate too and is never pruned (what it holds
+// is unknown).
 type journalFile struct {
-	File StateFile
-	J    journal
-	OK   bool
+	File   StateFile
+	Op     string
+	J      journal
+	OK     bool
+	Unread bool
 }
 
-// readJournals reads every file of journalDir (ListState). A file that is not named "<op>.json" or
-// whose journal readJournal refuses is listed with OK false (W3 Ruling 7: an unreadable journal keeps
-// every candidate until pruning removes it). A listing failure or a read failure is returned as it is.
-// The order is the files' names.
+// maxJournalFiles bounds how many journals one call reads (tests lower it); pruning keeps the
+// directory far below it.
+var maxJournalFiles = 4096
+
+// readJournals reads the journals of journalDir (ListState), in the order of their names. Only a file
+// named "<op>.json" is a journal: anything else (a temporary file of WriteState, a file someone put
+// there) is never read as one and is left out. A journal that does not decode or that readJournal
+// refuses is listed with OK false; one whose read fails, and every one past maxJournalFiles, with
+// Unread (W3 Ruling 7: the cleanup keeps every candidate while one is listed so; the dump leaves them
+// out). Only a listing failure is an error.
 func readJournals(h WriteHost) ([]journalFile, error) {
 	files, err := h.ListState(journalDir)
 	if err != nil {
 		return nil, err
 	}
 	slices.SortFunc(files, func(a, b StateFile) int { return strings.Compare(a.Name, b.Name) })
-	out := make([]journalFile, 0, len(files))
+	out := make([]journalFile, 0, min(len(files), maxJournalFiles+1))
 	for _, f := range files {
-		jf := journalFile{File: f}
-		if op, ok := strings.CutSuffix(f.Name, ".json"); ok && winproto.ValidOpID(op) {
-			j, found, err := readJournal(h, op)
-			switch {
-			case errors.Is(err, errBadJournal):
-			case err != nil:
-				return nil, err
-			case found:
-				jf.J, jf.OK = j, true
-			default:
-				continue // removed since the listing
-			}
+		op, ok := strings.CutSuffix(f.Name, ".json")
+		if !ok || !winproto.ValidOpID(op) {
+			continue
+		}
+		jf := journalFile{File: f, Op: op}
+		if len(out) >= maxJournalFiles {
+			jf.Unread = true
+			out = append(out, jf)
+			continue
+		}
+		j, found, err := readJournal(h, op)
+		switch {
+		case errors.Is(err, errBadJournal):
+		case err != nil:
+			jf.Unread = true
+		case found:
+			jf.J, jf.OK = j, true
+		default:
+			continue // removed since the listing
 		}
 		out = append(out, jf)
 	}

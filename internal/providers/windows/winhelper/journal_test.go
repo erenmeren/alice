@@ -488,13 +488,15 @@ func (l listsGone) ListState(dir string) ([]StateFile, error) {
 	return append(files, StateFile{Name: op3 + ".json"}), err
 }
 
-// TestReadJournals: every file of journal/, the good ones decoded, the others named (W3 Ruling 7).
+// TestReadJournals: every journal of journal/, the good ones decoded, the others named (W3 Ruling 7);
+// a file not named "<op>.json" is not a journal.
 func TestReadJournals(t *testing.T) {
 	h := newWriteHost()
 	mustWrite(t, h, sampleJournal(op2))
 	mustWrite(t, h, journal{Op: op1, Phase: winproto.PhaseFenced})
 	h.state[journalDir+"README"] = []byte("x")
 	h.state[journalDir+"not-an-op.json"] = []byte("{}")
+	h.state[journalDir+op2+".json.tmp"] = []byte("{")
 	h.state[journalName(op3)] = []byte("{")
 	h.state[bindingRecordName(canon443)] = []byte("{}") // another directory
 	h.modTimes = map[string]time.Time{journalName(op2): testNow}
@@ -504,20 +506,23 @@ func TestReadJournals(t *testing.T) {
 	}
 	var got []string
 	for _, f := range files {
-		got = append(got, fmt.Sprintf("%s %v %s", f.File.Name, f.OK, f.J.Op))
+		got = append(got, fmt.Sprintf("%s %s %v %v %s", f.File.Name, f.Op, f.OK, f.Unread, f.J.Op))
 	}
-	want := []string{op1 + ".json true " + op1, op2 + ".json true " + op2, op3 + ".json false ", "README false ", "not-an-op.json false "}
+	want := []string{op1 + ".json " + op1 + " true false " + op1, op2 + ".json " + op2 + " true false " + op2,
+		op3 + ".json " + op3 + " false false "}
 	if !reflect.DeepEqual(got, want) || !files[1].File.ModTime.Equal(testNow) {
 		t.Fatalf("%q", got)
 	}
 	// A file listed and then removed is left out.
 	delete(h.state, journalName(op3))
-	if files, err := readJournals(listsGone{h}); err != nil || len(files) != 4 {
+	if files, err := readJournals(listsGone{h}); err != nil || len(files) != 2 {
 		t.Fatalf("%v %+v", err, files)
 	}
+	// A read that fails is not an error: the journal is listed unread.
 	h.readStateErr = errors.New("disk")
-	if _, err := readJournals(h); err == nil || errors.Is(err, errBadJournal) {
-		t.Fatal(err)
+	files, err = readJournals(h)
+	if err != nil || len(files) != 2 || !files[0].Unread || files[0].OK || !files[1].Unread {
+		t.Fatalf("%v %+v", err, files)
 	}
 	h.listStateErr = errors.New("disk")
 	if _, err := readJournals(h); err == nil {

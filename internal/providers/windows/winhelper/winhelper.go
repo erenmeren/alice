@@ -82,6 +82,9 @@ var commands = map[string]command{
 	winproto.SubIISRestore: {write: true, input: winproto.MaxRestoreInput, run: cmdIISRestore},
 	winproto.SubIISStatus:  {elevated: true, run: cmdIISStatus},
 	winproto.SubIISFence:   {write: true, run: cmdIISFence},
+
+	// iis-cleanup (W3): --plan and --apply change the machine under the gate.
+	winproto.SubIISCleanup: {write: true, input: winproto.MaxCleanupInput, run: cmdIISCleanup},
 }
 
 // RunForced is the "ssh" entry: it splits SSH_ORIGINAL_COMMAND with winproto.SplitCommandLine and runs it.
