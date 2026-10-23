@@ -23,10 +23,14 @@ func TestPreviousCertificateText(t *testing.T) {
 		"thumbprint only":      {&providers.BackupRef{PreviousSHA1: sha1, PreviousSHA256: sha256}, sha1},
 		"SHA-256 only":         {&providers.BackupRef{OperationID: op, PreviousSHA256: sha256}, "SHA-256 " + sha256},
 		"bad store":            {&providers.BackupRef{Store: "MY\r\nBcc: x", PreviousSHA1: sha1}, sha1},
-		"bad thumbprint":       {&providers.BackupRef{Store: "MY", PreviousSHA1: "0123456789ABCDEF0123456789ABCDEF01234567", PreviousSHA256: sha256}, "SHA-256 " + sha256},
-		"bad SHA-256":          {&providers.BackupRef{PreviousSHA256: "x"}, "-"},
-		"a Linux backup":       {&providers.BackupRef{OperationID: op, Dir: BackupRoot + "/" + op.String()}, "-"},
-		"none":                 {nil, "-"},
+		"my, any case":         {&providers.BackupRef{Store: "my", PreviousSHA1: sha1}, `my \ ` + sha1},
+		// W2 final review Minor 3: the API's rule (My or WebHosting), not the record's looser store rule.
+		"another store":  {&providers.BackupRef{Store: "Remote Desktop", PreviousSHA1: sha1}, sha1},
+		"a long store":   {&providers.BackupRef{Store: "Please call 555-0100 about this certificate", PreviousSHA1: sha1}, sha1},
+		"bad thumbprint": {&providers.BackupRef{Store: "MY", PreviousSHA1: "0123456789ABCDEF0123456789ABCDEF01234567", PreviousSHA256: sha256}, "SHA-256 " + sha256},
+		"bad SHA-256":    {&providers.BackupRef{PreviousSHA256: "x"}, "-"},
+		"a Linux backup": {&providers.BackupRef{OperationID: op, Dir: BackupRoot + "/" + op.String()}, "-"},
+		"none":           {nil, "-"},
 	} {
 		assert.Equal(t, tc.want, previousCertificate(tc.ref), name)
 	}

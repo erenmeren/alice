@@ -654,6 +654,9 @@ FROM deployments d WHERE d.id = $1`, id, DeployStateRecovering).Scan(&exists, &p
 var (
 	backupStoreRE = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
 	backupSHA1RE  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// mailStoreRE is the API's store rule (api paramStoreRE): one of the two stores Alice deploys to, in any letter
+	// case. An e-mail names no other store, so no server-reported text beyond these two reaches it.
+	mailStoreRE = regexp.MustCompile(`^(?i:my|webhosting)$`)
 )
 
 // startBackupRef is the rollback_info of the start record of deployment id, written before the first change. A file
@@ -1070,6 +1073,8 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		// confirms it).
 		// An http.sys binding now names the deployed leaf: its thumbprint replaces the one the last discovery read, so
 		// the next deployment's rollback info (W2 Ruling 17) names this certificate as the previous one (R61 Task 14).
+		// A thumbprint that cannot be derived removes the old one: nothing is named rather than a wrong certificate
+		// next to the new token (the next discovery records the binding's own).
 		thumb, err := deployedThumbprint(ctx, tx, d.certificate, fileSHA)
 		if err != nil {
 			return err
@@ -1077,7 +1082,8 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET deployed_fingerprint = $2, changed_outside_at = NULL, certificate_id = $3,
     key_type = (SELECT CASE WHEN key_algorithm IN ('rsa', 'ecdsa') THEN key_algorithm ELSE '' END FROM certificates WHERE id = $3),
     cert_file_sha256 = $4, version = version + 1,
-    details = CASE WHEN kind = 'win_sslbinding' AND $5::text <> '' THEN jsonb_set(details, '{cert_sha1}', to_jsonb($5::text)) ELSE details END
+    details = CASE WHEN kind <> 'win_sslbinding' THEN details
+                   WHEN $5::text <> '' THEN jsonb_set(details, '{cert_sha1}', to_jsonb($5::text)) ELSE details - 'cert_sha1' END
 WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA, thumb); err != nil {
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}

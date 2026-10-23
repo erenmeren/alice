@@ -254,14 +254,14 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 // previousCertificate names the certificate a Windows binding named before the change, from its start record (W2
 // Ruling 17): `<store> \ <thumbprint>` as the deployment's page shows it, else the thumbprint, else "SHA-256 <hex>"
 // (the DER's SHA-256, all the record keeps when a scan changed the binding meanwhile), else "-". Only values that keep
-// their rule are named.
+// their rule are named; the store only when it is My or WebHosting (the API's rule).
 func previousCertificate(ref *providers.BackupRef) string {
 	if ref == nil {
 		return "-"
 	}
 	sha1 := backupSHA1RE.MatchString(ref.PreviousSHA1)
 	switch {
-	case sha1 && backupStoreRE.MatchString(ref.Store):
+	case sha1 && mailStoreRE.MatchString(ref.Store):
 		return ref.Store + ` \ ` + ref.PreviousSHA1
 	case sha1:
 		return ref.PreviousSHA1

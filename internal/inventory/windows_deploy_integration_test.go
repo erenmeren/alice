@@ -322,3 +322,54 @@ func TestWindowsRefusalParamsAreKept(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"helper_version": "0.1.0", "required_version": "0.2.0"}, d.ErrorParams)
 }
+
+// W2 final review Minor 2: after a successful deployment a Windows location names the deployed leaf's thumbprint, or
+// none at all: when it cannot be derived (the token is not the stored chain's leaf, or unknown) the old thumbprint is
+// removed, never kept next to the new token (the next deployment's rollback info would name the wrong certificate).
+func TestASuccessWithoutADerivableThumbprintDropsTheOldOne(t *testing.T) {
+	f := newWinDeployFixture(t)
+	h := f.h
+	details := func(loc uuid.UUID) map[string]any {
+		t.Helper()
+		var raw []byte
+		require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT details FROM certificate_locations WHERE id = $1", loc).Scan(&raw))
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		return m
+	}
+	finish := func(loc uuid.UUID, token string) uuid.UUID {
+		t.Helper()
+		r := f.request(loc)
+		f.start(r.ID, nil)
+		require.NoError(t, h.svc.FinishDeployment(h.ctx, r.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded,
+			Verified: "remote", Result: "committed", Phase: "committed", CertFileSHA256: token}))
+		return r.ID
+	}
+
+	// Positive control: the token is the deployed leaf's, so its thumbprint replaces the old one.
+	finish(f.bound, derSHA(f.nw))
+	assert.Equal(t, thumbprint(f.nw), details(f.bound)["cert_sha1"])
+
+	// A token that is not the stored chain's leaf: no thumbprint, the old one removed, the rest of the details kept.
+	require.Equal(t, thumbprint(f.old), details(f.spare)["cert_sha1"])
+	other := pki.Fingerprint(f.ca.Intermediate)
+	finish(f.spare, other)
+	got := details(f.spare)
+	assert.NotContains(t, got, "cert_sha1", "a thumbprint that cannot be derived is removed, not kept")
+	assert.Equal(t, "MY", got["store"], "the other details stay")
+	var token string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT cert_file_sha256 FROM certificate_locations WHERE id = $1", f.spare).Scan(&token))
+	assert.Equal(t, other, token)
+
+	// The next deployment's rollback info then names no thumbprint rather than a wrong one.
+	r := f.request(f.spare)
+	_, err := h.svc.BeginDeployment(h.ctx, r.ID)
+	require.NoError(t, err)
+	m, err := h.svc.DeploymentMaterial(h.ctx, r.ID, true)
+	require.NoError(t, err)
+	m.PrivateKeyPEM.Zero()
+	require.NoError(t, h.svc.StartDeployment(h.ctx, r.ID, m.SendValues(other, 2)))
+	var info map[string]any
+	require.NoError(t, json.Unmarshal([]byte(f.rollbackInfo(r.ID)), &info))
+	assert.NotContains(t, info, "previous_sha1")
+}
