@@ -8851,7 +8851,7 @@ components:
             R62. Why a drifted Windows binding is drifted: binding_repointed (it names another certificate), cert_removed
             (its store no longer holds the certificate, or the binding has none), key_unusable (the certificate has no
             private key http.sys can use). "" for a certificate file and for a location that is not drifted.
-        autocertrebind: { type: boolean, description: 'R62. A Windows binding: the server runs the AutoCertRebind task, which can bind a certificate by itself (design §6.2)' }
+        autocertrebind: { type: boolean, description: 'R62. True only for a drifted Windows binding with a known drift_cause whose server runs the AutoCertRebind task (which can bind a certificate by itself, design §6.2); false for every other location, including an in_sync binding on such a server' }
     FileProblem:
       type: string
       description: >-

@@ -108,6 +108,8 @@ func TestObservationDriftCause(t *testing.T) {
 	d := observationJSON(&inventory.LocationObservation{Health: inventory.HealthDrifted})
 	assert.Equal(t, "", d.DriftCause)
 	assert.False(t, d.AutoCertRebind)
+	assert.False(t, observationJSON(&inventory.LocationObservation{Health: inventory.HealthInSync, Cause: inventory.DriftCauseRepointed, AutoCertRebind: true}).AutoCertRebind,
+		"an in-sync binding on a server with the task reads false")
 	assert.True(t, d.RepairAvailable, "a file: as before")
 	assert.Equal(t, "", observationJSON(&inventory.LocationObservation{Health: inventory.HealthInSync, Cause: "invented"}).DriftCause,
 		"a cause outside the closed list, or without a drift, is not shown")
