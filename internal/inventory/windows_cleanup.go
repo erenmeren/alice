@@ -26,8 +26,8 @@ import (
 // and the server's switch. A certificate is removed only when both judges agree, the helper judging again at apply time.
 
 // JobWindowsCleanup plans and applies the cleanup of one Windows server (payload: incident_id when an incident queued it;
-// dedupe windows.cleanup:<target>:<unix day> for the daily run, windows.cleanup:<target>:incident:<incident> for an
-// incident's). The handler is internal/jobs/winjobs.
+// dedupe windows.cleanup:<target>:<unix day> for the daily run, windows.cleanup:<target>:incident:<incident>:<location>
+// for an incident's, one per settled place). The handler is internal/jobs/winjobs.
 const JobWindowsCleanup = "windows.cleanup"
 
 // CleanupRollbackWindow is how long after a finished deployment its new and previous certificates stay on the server
