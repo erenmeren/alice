@@ -2449,6 +2449,12 @@
         "subject": "SSH key rotation waits for a decision: {{key_label}}",
         "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}} (later if the rotation is paused because of the license)."
       }
+    },
+    "windows": {
+      "compromised_in_store": {
+        "subject": "A compromised certificate is still on {{target_name}}",
+        "body": "After the key-compromise incident of the certificate {{certificate_name}}, Alice took it out of the bindings, but the certificate is still in a certificate store of the Windows server {{target_name}}.\n\nStore: {{store}}. Thumbprint: {{thumbprint}}.\n\nAlice removes only certificates it imported itself and that nothing on the server uses. This one was not imported by Alice, or a binding, the Remote Desktop listener or a WinRM listener still uses it, or the server's certificate cleanup is switched off. Its private key is no longer secret: find what still uses it, replace it there, then delete the certificate and its key from the store."
+      }
     }
   },
   "rotation": {

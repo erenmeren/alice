@@ -252,11 +252,12 @@ const (
 // briefly down), then the sweep (acme.sweep) queues it again after an hour. A network discovery scan runs once: a
 // failed or interrupted scan is started again by a person or by its scope's schedule, never by the queue's backoff (a
 // retry would probe the same hosts again within minutes). An observation of a server's bound locations runs once too:
-// a failed probe is recorded on the locations, and the next one comes with the observation interval (R52).
+// a failed probe is recorded on the locations, and the next one comes with the observation interval (R52). A Windows
+// certificate cleanup runs once: the next day's run plans again and settles an apply whose outcome was unknown (R62 W3).
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name,
-		inventory.JobACMERenew, NetdiscoScan.Name, inventory.JobDriftObserve:
+		inventory.JobACMERenew, NetdiscoScan.Name, inventory.JobDriftObserve, inventory.JobWindowsCleanup:
 		return 1
 	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5
@@ -275,10 +276,12 @@ func MaxAttemptsFor(t Type) int {
 // is not either: the rotation sweep re-queues it and the rotation's own emails carry its failures. The cleanup of an
 // ACME order is not either: its failure is recorded on the order (cleanup_error_code, audit acme.order.cleanup_failed)
 // and the ACME sweep queues it again every hour, so a dead-job email would repeat every hour while a hook is down. An
-// observation of a server is not either: its failure is on the locations (unreachable) and in the drift notices.
+// observation of a server is not either: its failure is on the locations (unreachable) and in the drift notices. A Windows
+// certificate cleanup is not either: it runs every day, its failure is in the job history, and a dead-job e-mail would
+// repeat daily while a server is down (R62 W3 Ruling 13: a cleanup mails nobody but an incident's report).
 func AlertsWhenExhausted(t Type) bool {
 	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name &&
-		t.Name != ACMECleanup.Name && t.Name != inventory.JobDriftObserve
+		t.Name != ACMECleanup.Name && t.Name != inventory.JobDriftObserve && t.Name != inventory.JobWindowsCleanup
 }
 
 // maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many
@@ -316,6 +319,18 @@ var (
 	DriftSchedule = Register("drift.schedule", license.ClassReadOnly)
 	DriftObserve  = Register("drift.observe", license.ClassReadOnly)
 	DriftRepair   = Register("drift.repair", license.ClassContinuity)
+)
+
+// The Windows certificate cleanup (R62 W3 Ruling 13, docs/superpowers/rulings/windows-iis.md). windows.cleanup plans and
+// applies the removal of the certificates Alice imported on one Windows server that nothing uses and no rollback can need
+// (a compromised one at once after its incident): it changes a managed server, so it is refused and held in lock.
+// windows.cleanup_schedule is the periodic task that queues the daily run of each Windows server: it only queues
+// (ClassReadOnly, as discovery.schedule: paused in lock). The schedule's name is a literal (the web's label guard reads
+// literal Register calls); the cleanup's equals inventory.JobWindowsCleanup. The handler and the task are in
+// internal/jobs/winjobs.
+var (
+	WindowsCleanup         = Register(inventory.JobWindowsCleanup, license.ClassChange)
+	WindowsCleanupSchedule = Register("windows.cleanup_schedule", license.ClassReadOnly)
 )
 
 // Phase 7 periodic task (R42 rows 3 and 5; §8.2 alerts.evaluate, §8.6 "not gated"): the expiry scan sends notices in

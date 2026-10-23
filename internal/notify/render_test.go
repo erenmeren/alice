@@ -61,7 +61,7 @@ func TestEveryInventoryTemplateRendersInBothLanguages(t *testing.T) {
 	params := map[string]string{"target_name": "web-01 (İzmir)", "old_fingerprint": "SHA256:oldOLDold", "new_fingerprint": "SHA256:newNEWnew",
 		"cert_path": "/etc/nginx/ssl/www.crt", "deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "backup_dir": "/var/lib/alice-helper/backups/x",
 		"operation_id":     "0190f5a0-0000-7000-8000-00000000beef",
-		"certificate_name": "web-cert", "count": "37"}
+		"certificate_name": "web-cert", "count": "37", "store": "My", "thumbprint": "0123456789abcdef0123456789abcdef01234567"}
 	for _, tpl := range inventory.Templates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)

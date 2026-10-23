@@ -250,6 +250,23 @@ const (
 	WatchAbsent    = "absent"
 )
 
+// ConfigCertificateCleanup is the per-server switch of the certificate cleanup (R62 W3 Ruling 13): a boolean in the
+// target's configuration (targets.config), true when absent. Off, the windows.cleanup job still plans and removes
+// nothing. It is read here so Alice's judgement (internal/inventory) needs no provider package.
+const ConfigCertificateCleanup = "certificate_cleanup"
+
+// CertificateCleanupEnabled reads the switch: true when it is absent or null, else its value; a value that is not a
+// boolean (the provider's configuration rule refuses it, so it is never stored) reads false, the side that removes
+// nothing.
+func CertificateCleanupEnabled(cfg TargetConfig) bool {
+	v, ok := cfg[ConfigCertificateCleanup]
+	if !ok || v == nil {
+		return true
+	}
+	on, _ := v.(bool)
+	return on
+}
+
 // ConnectionCache is implemented by providers that keep connections to targets between sessions
 // (linuxssh's pool). ForgetTarget closes the idle connections of a deleted target and drops what
 // the provider keeps for it; a connection still in use is closed when its session ends.

@@ -267,6 +267,12 @@ func TestE2EBuildNeverTicksTheDriftTasks(t *testing.T) {
 	assert.GreaterOrEqual(t, driftRepairEvery, 50*365*24*time.Hour)
 }
 
+// Nor the Windows certificate cleanup schedule: a journey runs windows.cleanup_schedule with POST /test/scheduler/run
+// (R62 W3).
+func TestE2EBuildNeverTicksTheWindowsCleanupSchedule(t *testing.T) {
+	assert.GreaterOrEqual(t, windowsCleanupScheduleEvery, 50*365*24*time.Hour)
+}
+
 // Nor the network discovery schedule or retention: the journeys start scans by hand and run netdisco.schedule and
 // netdisco.retention with POST /test/scheduler/run.
 func TestE2EBuildNeverTicksNetworkDiscovery(t *testing.T) {

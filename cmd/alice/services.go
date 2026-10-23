@@ -30,6 +30,7 @@ import (
 	"alice/internal/jobs/netdiscojobs"
 	"alice/internal/jobs/sshkeyjobs"
 	"alice/internal/jobs/targetjobs"
+	"alice/internal/jobs/winjobs"
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
@@ -320,7 +321,17 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	acmejobs.Register(runner, acmeDeps(svc, clk, log))
 	netdiscojobs.Register(runner, netdiscoDeps(svc, clk, log))
 	driftjobs.Register(runner, driftDeps(svc, clk, log))
+	winjobs.Register(runner, winDeps(svc, clk, log))
 	return runner
+}
+
+// winDeps are the dependencies of the Windows certificate cleanup (R62 W3): the windows.cleanup job and its schedule.
+func winDeps(svc *services, clk clock.Clock, log *slog.Logger) winjobs.Deps {
+	d := winjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	return d
 }
 
 // driftDeps are the dependencies of the certificate drift work (R52): the observation job and its two tasks.
@@ -510,6 +521,10 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		// never ticks them: the journeys run them with POST /test/scheduler/run.
 		driftjobs.ScheduleTask(svc.inventory, driftScheduleEvery, log),
 		driftjobs.RepairTask(svc.inventory, driftRepairEvery, log),
+		// Windows certificate cleanup (R62 W3): the daily run of every Windows server (ReadOnly: paused in lock; it only
+		// queues windows.cleanup jobs, which change a server and are held in lock). The e2e build never ticks it: a journey
+		// runs it with POST /test/scheduler/run.
+		winjobs.ScheduleTask(svc.inventory, windowsCleanupScheduleEvery, log),
 	)
 }
 

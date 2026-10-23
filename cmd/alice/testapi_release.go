@@ -55,6 +55,10 @@ const (
 	driftRepairEvery   = time.Minute
 )
 
+// windowsCleanupScheduleEvery is the interval of the Windows certificate cleanup schedule (R62 W3 Ruling 13): each
+// Windows server is cleaned up once a day; the hourly schedule only finds the due ones.
+const windowsCleanupScheduleEvery = time.Hour
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule (a scope's
 // window is minute-exact) and its retention.
 const (

@@ -20,21 +20,14 @@ var userRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9-]{0,14}\\)?[A-Za-z0-9][
 // ValidUser reports whether s is an account name a Windows target may use (alice, CORP\alice-svc).
 func ValidUser(s string) bool { return userRE.MatchString(s) }
 
-// ConfigCertificateCleanup is the per-server switch of the certificate cleanup (R62 W3 Ruling 13): a
-// boolean in the target's configuration, true when absent. Off, the windows.cleanup job still plans and
-// removes nothing.
-const ConfigCertificateCleanup = "certificate_cleanup"
+// ConfigCertificateCleanup is the per-server switch of the certificate cleanup (R62 W3 Ruling 13):
+// providers.ConfigCertificateCleanup.
+const ConfigCertificateCleanup = providers.ConfigCertificateCleanup
 
-// CleanupEnabled reads the switch: true when it is absent or null, else its value; a value that is not a
-// boolean (ParseConfig refuses it, so it is never stored) reads false, the side that removes nothing.
-func CleanupEnabled(cfg providers.TargetConfig) bool {
-	v, ok := cfg[ConfigCertificateCleanup]
-	if !ok || v == nil {
-		return true
-	}
-	on, _ := v.(bool)
-	return on
-}
+// CleanupEnabled reads the switch (providers.CertificateCleanupEnabled): true when it is absent or null, else its
+// value; a value that is not a boolean (ParseConfig refuses it, so it is never stored) reads false, the side that
+// removes nothing.
+func CleanupEnabled(cfg providers.TargetConfig) bool { return providers.CertificateCleanupEnabled(cfg) }
 
 // ParseConfig reads a Windows target's configuration: host and port follow the Linux rules (one
 // shared check, linuxssh.ParseConfig); username is DefaultUser when absent and must be ValidUser,

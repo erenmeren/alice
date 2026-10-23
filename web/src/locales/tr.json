@@ -771,6 +771,7 @@
       "location_drift_mode_changed": "Sertifika konumunun onarım kipi değişti",
       "location_drift_repair_requested": "Sertifika konumunun otomatik onarımı istendi",
       "location_drift_backoff": "Sertifika konumunun otomatik onarımı durdu",
+      "windows_certificate_removed": "Alice'in içe aktardığı sertifika bir Windows sunucusundan kaldırıldı",
       "access_binding_added": "Erişim eklendi",
       "access_binding_removed": "Erişim kaldırıldı",
       "service_policy_changed": "Hizmet ilkesi değiştirildi",
@@ -1473,6 +1474,10 @@
         "schedule": "Sertifika konumlarının zamanlanmış denetimleri",
         "observe": "Bir sunucunun sertifika konumlarının denetimi",
         "repair": "Değişen sertifika konumlarının otomatik onarımı"
+      },
+      "windows": {
+        "cleanup": "Alice'in bir Windows sunucusuna içe aktardığı sertifikaların temizliği",
+        "cleanup_schedule": "Windows sunucularının sertifikalarının zamanlanmış temizlikleri"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",

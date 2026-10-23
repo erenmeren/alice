@@ -670,3 +670,23 @@ func TestWindowsFactsRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &out))
 	assert.Equal(t, *in.Windows, out)
 }
+
+// W3 (R62) Ruling 13: the per-server cleanup switch is read in package providers, so Alice's judgement (internal/inventory)
+// reads it without the Windows provider: absent or null is on, a boolean is itself, anything else (never stored) is off.
+func TestCertificateCleanupEnabled(t *testing.T) {
+	assert.Equal(t, "certificate_cleanup", providers.ConfigCertificateCleanup)
+	for _, tc := range []struct {
+		cfg  providers.TargetConfig
+		want bool
+	}{
+		{nil, true},
+		{providers.TargetConfig{}, true},
+		{providers.TargetConfig{"certificate_cleanup": nil}, true},
+		{providers.TargetConfig{"certificate_cleanup": true}, true},
+		{providers.TargetConfig{"certificate_cleanup": false}, false},
+		{providers.TargetConfig{"certificate_cleanup": "true"}, false},
+		{providers.TargetConfig{"certificate_cleanup": 1}, false},
+	} {
+		assert.Equal(t, tc.want, providers.CertificateCleanupEnabled(tc.cfg), "%v", tc.cfg)
+	}
+}

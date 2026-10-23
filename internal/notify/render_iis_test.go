@@ -68,3 +68,24 @@ func TestWindowsDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 		assert.NotContains(t, s.Render("ada@example.com", inventory.WindowsTemplate(inventory.TemplateDeploymentRollbackForbidden), lang, params).Body, sha1)
 	}
 }
+
+// R62 W3 Ruling 9: the report of a compromised certificate still in a Windows server's store after its incident names the
+// server, the certificate, the store and the thumbprint, in English and Turkish, and no Linux wording.
+func TestWindowsCompromisedInStoreRendersInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	const sha1 = "0123456789abcdef0123456789abcdef01234567"
+	params := map[string]string{"target_name": "iis-01 (İzmir)", "certificate_name": "www.example.test", "store": "My", "thumbprint": sha1}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", inventory.TemplateWindowsCompromisedInStore, lang, params)
+		assert.NotContains(t, m.Subject, "email.", lang)
+		assert.NotContains(t, m.Body, "{{", lang)
+		assert.Contains(t, m.Subject, "iis-01 (İzmir)", lang)
+		for _, v := range params {
+			assert.Contains(t, m.Body, v, lang)
+		}
+		assert.NotRegexp(t, linuxWording, m.Body, lang)
+	}
+	assert.Contains(t, s.Render("ada@example.com", inventory.TemplateWindowsCompromisedInStore, "en", params).Body, "Store: My. Thumbprint: "+sha1+".")
+}

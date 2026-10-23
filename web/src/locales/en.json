@@ -771,6 +771,7 @@
       "location_drift_mode_changed": "Repair mode of a certificate location changed",
       "location_drift_repair_requested": "Automatic repair of a certificate location requested",
       "location_drift_backoff": "Automatic repair of a certificate location stopped",
+      "windows_certificate_removed": "Certificate Alice imported removed from a Windows server",
       "access_binding_added": "Access added",
       "access_binding_removed": "Access removed",
       "service_policy_changed": "Service policy changed",
@@ -1473,6 +1474,10 @@
         "schedule": "Scheduled checks of certificate locations",
         "observe": "Check of a server's certificate locations",
         "repair": "Automatic repair of changed certificate locations"
+      },
+      "windows": {
+        "cleanup": "Cleanup of the certificates Alice imported on a Windows server",
+        "cleanup_schedule": "Scheduled cleanups of Windows servers' certificates"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",

@@ -82,6 +82,11 @@ func TestReleaseSchedulesDriftWork(t *testing.T) {
 	assert.Equal(t, time.Minute, driftRepairEvery)
 }
 
+// The release build looks for Windows servers due for their daily certificate cleanup every hour (R62 W3 Ruling 13).
+func TestReleaseSchedulesWindowsCleanupHourly(t *testing.T) {
+	assert.Equal(t, time.Hour, windowsCleanupScheduleEvery)
+}
+
 // The release build plans due rotations and sweeps the live runs every minute (contract C1: the sweep
 // advances runs and checks the 15-minute re-check bound, so a coarser tick would delay a removal past
 // its re-check), and destroys retired private keys hourly (that task also reconciles ended deploys:

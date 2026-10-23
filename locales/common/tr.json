@@ -2449,6 +2449,12 @@
         "subject": "SSH anahtarı yenilemesi bir karar bekliyor: {{key_label}}",
         "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}} (yenileme lisans nedeniyle duraklatılırsa daha sonra)."
       }
+    },
+    "windows": {
+      "compromised_in_store": {
+        "subject": "Ele geçirilmiş bir sertifika hâlâ sunucuda: {{target_name}}",
+        "body": "{{certificate_name}} sertifikasının anahtar ele geçirilmesi olayından sonra Alice sertifikayı bağlamalardan çıkardı, ancak sertifika hâlâ şu Windows sunucusunun bir sertifika deposunda: {{target_name}}.\n\nDepo: {{store}}. Parmak izi: {{thumbprint}}.\n\nAlice yalnızca kendi içe aktardığı ve sunucuda hiçbir şeyin kullanmadığı sertifikaları kaldırır. Bu sertifikayı Alice içe aktarmadı ya da bir bağlama, Uzak Masaüstü dinleyicisi veya bir WinRM dinleyicisi onu hâlâ kullanıyor ya da sunucunun sertifika temizliği kapalı. Özel anahtarı artık gizli değil: onu hâlâ neyin kullandığını bulun, orada değiştirin, ardından sertifikayı ve anahtarını depodan silin."
+      }
     }
   },
   "rotation": {

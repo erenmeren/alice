@@ -152,7 +152,7 @@ func Templates() []string {
 		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,
 		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVAutoDeployUntrusted, TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne, TemplateKVSkippedMore,
 		TemplateKVSkippedMoreOne, TemplateKVStoppedMore, TemplateKVStoppedMoreOne, TemplateKVImportFailed,
-		TemplateKVImportOutcomeUnknown}
+		TemplateKVImportOutcomeUnknown, TemplateWindowsCompromisedInStore}
 }
 
 // The services an e-mail of this package is about (R56, design §7.2): the notifier sends it to their recipients (the

@@ -88,6 +88,11 @@ const (
 	driftRepairEvery   = 100 * 365 * 24 * time.Hour
 )
 
+// windowsCleanupScheduleEvery is the Windows certificate cleanup schedule's interval in the e2e build: in effect never,
+// like the drift tasks (the demo clock would otherwise queue cleanups between two Playwright steps). The task stays
+// scheduled (checkWiring, RunNow): a journey runs it with POST /test/scheduler/run {"task": "windows.cleanup_schedule"}.
+const windowsCleanupScheduleEvery = 100 * 365 * 24 * time.Hour
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule and retention
 // in the e2e build: in effect never, like the ACME planners (the demo clock would otherwise queue scans or remove rows
 // between two Playwright steps). The tasks stay scheduled (checkWiring, RunNow): the journeys start scans by hand and
