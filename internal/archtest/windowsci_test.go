@@ -340,6 +340,18 @@ func checkoutWith(t *testing.T, job map[string]any) map[string]any {
 	return with
 }
 
+// collapseCode drops shell comment lines and joins the rest with single spaces.
+func collapseCode(script string) string {
+	var words []string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		words = append(words, strings.Fields(line)...)
+	}
+	return strings.Join(words, " ")
+}
+
 func yamlText(v any) string {
 	out, err := yaml.Marshal(v)
 	if err != nil {
@@ -394,8 +406,11 @@ func TestWindowsWorkflowGate(t *testing.T) {
 		`default=${DEFAULT_BRANCH:-main}`,
 		`git merge-base "origin/$default" HEAD`,
 		`if [[ $REF == "refs/heads/$default" ]]; then`,
+		// On the default branch an unusable before runs the legs; the merge base there is HEAD itself.
+		`base=$BEFORE if [[ -z $base || $base =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then answer true`,
 	} {
-		assert.Contains(t, run, want, "the changes step (Ruling 5, amended)")
+		// Compared with white space collapsed: comments aside, indentation and line breaks do not matter.
+		assert.Contains(t, collapseCode(run), want, "the changes step (Ruling 5, amended)")
 	}
 	assert.NotContains(t, run, "origin/main", "the default branch comes through env:, main only as its fallback")
 	assert.Contains(t, stepEnvText(t, changes, "Decide whether the Windows legs run"), "github.event.repository.default_branch")

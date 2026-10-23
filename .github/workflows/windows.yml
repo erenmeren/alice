@@ -41,7 +41,8 @@ jobs:
   #                            every push, so a push that cancels (supersedes) an earlier one with a
   #                            Windows change still runs the legs; a diff from before would leave that
   #                            change untested;
-  #   push to the default one  its before commit (those runs are never cancelled), else the merge base.
+  #   push to the default one  its before commit (those runs are never cancelled); an unusable before
+  #                            answers true (the merge base there is HEAD itself, an empty diff).
   # An unknown base runs the legs; it never skips them.
   changes:
     runs-on: ubuntu-latest
@@ -75,7 +76,14 @@ jobs:
             pull_request) base=$PR_BASE ;;
             push)
               if [[ $REF == "refs/heads/$default" ]]; then
+                # On the default branch the merge base with origin/<default> is HEAD itself (an empty
+                # diff), so a before that is empty, all zeros or no commit here (the branch's creation,
+                # a force push) answers true directly.
                 base=$BEFORE
+                if [[ -z $base || $base =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+                  answer true "before \"$base\" is no commit in the clone"
+                  exit 0
+                fi
               elif ! base=$(git merge-base "origin/$default" HEAD); then
                 answer true "no merge base with origin/$default"
                 exit 0
