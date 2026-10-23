@@ -9,6 +9,7 @@ export type LocationHealth = 'in_sync' | 'drifted' | 'pending' | 'unreachable' |
 export type DriftMode = 'observe' | 'approve' | 'auto';
 export type DriftModeSetting = DriftMode | 'default';
 export type DriftProbe = 'alice' | 'helper';
+export type DriftCause = '' | 'binding_repointed' | 'cert_removed' | 'key_unusable';
 export type DriftBackoff = '' | 'flapping' | 'repair_failing';
 
 // The enums above, checked against api/openapi.yaml and the Go sources by drift.test.ts; each has a label in both
@@ -47,6 +48,10 @@ export interface LocationObservation {
   active_deployment_id: string | null;
   next_observe_at: string | null;
   repair_available: boolean;
+  // drift_cause (R62): why a drifted Windows binding is drifted; '' for a file and for a place that is not drifted.
+  drift_cause: DriftCause;
+  // autocertrebind: a Windows server runs the AutoCertRebind task, which can bind a certificate by itself.
+  autocertrebind: boolean;
 }
 
 const v1 = '/api/v1';
@@ -59,6 +64,10 @@ export const setDriftMode = (locationId: string, mode: DriftModeSetting) =>
 
 // repairDrift deploys the certificate the location should have again (a person's deployment, with every check).
 export const repairDrift = (locationId: string) => apiFetch<DeployResult>(`${v1}/locations/${enc(locationId)}/actions/repair`, { method: 'POST' });
+
+// DRIFT_CAUSES are the causes of a drifted Windows binding (R62); each has a text in both languages.
+export const DRIFT_CAUSES: readonly DriftCause[] = ['binding_repointed', 'cert_removed', 'key_unusable'];
+export const causeKey = (c: string) => ((DRIFT_CAUSES as readonly string[]).includes(c) ? `drift.cause.${c}` : 'enum.unknown');
 
 export const healthKey = (h: string) => ((LOCATION_HEALTHS as readonly string[]).includes(h) ? `drift.health.${h}` : 'enum.unknown');
 export const modeKey = (m: string) => ((DRIFT_MODE_SETTINGS as readonly string[]).includes(m) ? `drift.mode.${m}` : 'enum.unknown');

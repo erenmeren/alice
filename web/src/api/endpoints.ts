@@ -220,6 +220,12 @@ export function listTargets(cursor?: string | null, type?: TargetType) {
 
 export const getTarget = (id: string) => apiFetch<Target>(`${v1}/targets/${enc(id)}`);
 
+// setCertificateCleanup changes a server's switch "remove certificates Alice imported once nothing uses them" (R62).
+// Only a server whose capabilities include cleanup_certificates takes it (422 otherwise); version is the server's
+// current version (If-Match).
+export const setCertificateCleanup = (id: string, certificateCleanup: boolean, version: number) =>
+  apiFetch<Target>(`${v1}/targets/${enc(id)}`, { method: 'PATCH', body: { certificate_cleanup: certificateCleanup }, headers: ifMatchVersion(version) });
+
 export const createTarget = (req: TargetCreateRequest) =>
   apiFetch<TargetCreated>(`${v1}/targets`, { method: 'POST', body: req });
 

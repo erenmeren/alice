@@ -350,6 +350,11 @@ function LocationRow({
                 {t('locations.deploying')}
               </StatusBadge>
             )}
+            {windows && l.kind === 'win_sslbinding' && l.details?.alice_imported === true && (
+              <StatusBadge tone="neutral" icon="Download" size="sm" testId="alice-imported">
+                {t('locations.importedByAlice')}
+              </StatusBadge>
+            )}
           </Group>
           {missing && <Text size="xs">{t('locations.missingSince', { time: formatDateTime(l.missing_since, i18n.language) })}</Text>}
           {!l.supported && <Text size="xs">{unsupportedText(t, target, l)}</Text>}
@@ -372,7 +377,7 @@ function LocationRow({
           {l.observation && (
             <Stack gap={4} align="flex-start" data-testid="location-observation">
               <HealthBadge observation={l.observation} />
-              <ObservationFacts observation={l.observation} />
+              <ObservationFacts observation={l.observation} windows={windows} />
             </Stack>
           )}
         </Stack>

@@ -1219,7 +1219,13 @@
       "operationsTextLinux": "Alice, bu sunucudaki SSH anahtarlarını kısıtlı yardımcı aracı üzerinden okur ve değiştirir.",
       "readOnly": "Salt okunur",
       "operationsTextDiscovery": "Alice, {{software}} tarafından kullanılan sertifika dosyalarını kısıtlı yardımcısıyla okur. {{software}} dosyalarını ve yapılandırmasını hiçbir zaman değiştirmez.",
-      "operationsTextWindows": "Alice bu sunucunun http.sys bağlamalarına kısıtlı yardımcısı üzerinden sertifika dağıtır. IIS siteleri ve ayarları sizin denetiminizde kalır."
+      "operationsTextWindows": "Alice bu sunucunun http.sys bağlamalarına kısıtlı yardımcısı üzerinden sertifika dağıtır. IIS siteleri ve ayarları sizin denetiminizde kalır.",
+      "cleanup": {
+        "title": "Ayarlar",
+        "label": "Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır",
+        "help": "Alice, hâlâ kullanılan bir sertifikayı ya da kendisinin içe aktarmadığı bir sertifikayı hiçbir zaman kaldırmaz. Bir sertifika kullanılmaz olduktan sonra en az 7 gün bekler.",
+        "saved": "Kaydedildi."
+      }
     }
   },
   "hostKeys": {
@@ -1976,6 +1982,7 @@
     "noSite": "(IIS sitesi yok)",
     "problemCertificateWin": "Sertifika: {{problem}}",
     "problemKeyWin": "Özel anahtar: {{problem}}",
+    "importedByAlice": "Alice tarafından içe aktarıldı",
     "group": {
       "noCertificate": "Sertifika yok",
       "count_one": "{{count}} bağlama",
@@ -4768,6 +4775,8 @@
       "neverDeployed": "Alice buraya henüz bir sertifika dağıtmadı.",
       "file": "{{time}} taramasında dosyada {{cert}} vardı.",
       "fileNever": "Dosyayı henüz hiçbir tarama okumadı.",
+      "bindingScan": "Bağlama (son tarama): {{cert}}, {{time}}.",
+      "bindingNever": "Bağlama (son tarama): henüz okunmadı.",
       "tlsAlice": "Web sitesi {{time}} tarihinde {{cert}} sundu (Alice'ten denetlendi).",
       "tlsHelper": "Web sitesi {{time}} tarihinde {{cert}} sundu (sunucunun kendisinden denetlendi).",
       "tlsNever": "Web sitesi henüz denetlenmedi.",
@@ -4781,6 +4790,12 @@
     },
     "repair": "Onar",
     "repairNamed": "{{site}} için onar",
+    "cause": {
+      "binding_repointed": "Neden: bağlama Alice dışında başka bir sertifikaya çevrildi.",
+      "cert_removed": "Neden: sertifika sunucunun sertifika deposundan kaldırıldı. Alice onu geri koymaz; bu bağlamaya bir sertifika dağıtın.",
+      "key_unusable": "Neden: Windows sertifikanın özel anahtarını kullanamıyor. Bu bağlamaya bir sertifika dağıtın."
+    },
+    "autocertrebind": "Bu sunucuda AutoCertRebind görevi çalışıyor; görev kendiliğinden bir sertifika bağlayabilir ve bir onarımı geri alabilir.",
     "repairQueued": "Onarım sıraya alındı: dağıtımı açın",
     "summary": {
       "inSync_one": "{{count}} yerin {{n}} tanesinde canlı ve doğrulanmış",

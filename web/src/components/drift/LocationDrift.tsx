@@ -2,7 +2,7 @@ import { Box, Button, Code, Group, NativeSelect, Stack, Text } from '@mantine/co
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { driftSummary, healthKey, modeKey, repairDrift, setDriftMode, DRIFT_MODE_SETTINGS, type DriftModeSetting, type LocationObservation } from '../../api/drift';
+import { causeKey, driftSummary, healthKey, modeKey, repairDrift, setDriftMode, DRIFT_MODE_SETTINGS, type DriftModeSetting, type LocationObservation } from '../../api/drift';
 import { DEPLOYMENTS_KEY } from '../../api/queryKeys';
 import { formatDateTime } from '../../datetime';
 import type { IconName } from '../../design/Icon';
@@ -33,7 +33,8 @@ export function HealthBadge({ observation: o }: { observation: LocationObservati
 // ObservationFacts lists the four facts, each with its own time: the certificate the location should have, the one
 // Alice last deployed, the one in the file at the last scan that read it, and the one the website served at the last
 // probe (from Alice or from the server itself, with the trust of the served chain).
-export function ObservationFacts({ observation: o }: { observation: LocationObservation }) {
+// For a Windows binding (windows) the file fact reads "Binding (last scan)" and a drifted binding names its cause.
+export function ObservationFacts({ observation: o, windows = false }: { observation: LocationObservation; windows?: boolean }) {
   const { t, i18n } = useTranslation();
   const time = (iso: string | null) => (iso ? formatDateTime(iso, i18n.language) : '');
   const cert = (fp: string) => {
@@ -63,7 +64,9 @@ export function ObservationFacts({ observation: o }: { observation: LocationObse
         )}
       </Text>
       <Text size="xs" data-testid="fact-file">
-        {o.file ? t('drift.facts.file', { cert: cert(o.file.fingerprint), time: time(o.file.observed_at) }) : t('drift.facts.fileNever')}
+        {o.file
+          ? t(windows ? 'drift.facts.bindingScan' : 'drift.facts.file', { cert: cert(o.file.fingerprint), time: time(o.file.observed_at) })
+          : t(windows ? 'drift.facts.bindingNever' : 'drift.facts.fileNever')}
       </Text>
       <Text size="xs" data-testid="fact-tls">
         {o.tls
@@ -77,6 +80,16 @@ export function ObservationFacts({ observation: o }: { observation: LocationObse
         </Text>
       )}
       {o.drift_since && <Text size="xs">{t('drift.facts.driftSince', { time: time(o.drift_since) })}</Text>}
+      {windows && o.drift_cause !== '' && (
+        <Text size="xs" data-testid="drift-cause">
+          {t(causeKey(o.drift_cause))}
+        </Text>
+      )}
+      {windows && o.autocertrebind && (
+        <Text size="xs" data-testid="drift-autocertrebind">
+          {t('drift.autocertrebind')}
+        </Text>
+      )}
     </Stack>
   );
 }

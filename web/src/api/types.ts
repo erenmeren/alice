@@ -449,6 +449,9 @@ export interface Target {
   keys_managed_elsewhere: boolean;
   capabilities: string[];
   facts: TargetFacts;
+  // certificate_cleanup (R62): the switch "remove certificates Alice imported once nothing uses them"; present only on a
+  // server whose capabilities include cleanup_certificates. Changed with PATCH /targets/{id}.
+  certificate_cleanup?: boolean;
   // vault is present on a Key Vault (type azure_key_vault) and never holds a secret.
   vault?: Vault;
   version: number;
@@ -797,6 +800,8 @@ export interface Deployment {
   // backup_dir is "" for a Windows binding; its previous certificate is backup_store (My or WebHosting) and
   // backup_sha1 (its SHA-1 thumbprint), both absent for any other deployment (R61).
   backup_dir: string;
+  // location_kind (R62): what the deployment's location is; always present (server_file for a certificate file).
+  location_kind: LocationKind;
   backup_store?: string;
   backup_sha1?: string;
   requested_by: string | null;

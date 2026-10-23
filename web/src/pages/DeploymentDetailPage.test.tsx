@@ -728,6 +728,23 @@ describe('DeploymentDetailPage of a Windows binding', () => {
   });
 });
 
+describe('DeploymentDetailPage recognises a Windows deployment by its location kind', () => {
+  it('words the binding and the previous certificate when location_kind is win_sslbinding', async () => {
+    show(windowsDeploymentFixture({ id: ID }));
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(`Previous certificate: My \\ ${WIN_PREVIOUS_SHA1}`)).toBeInTheDocument();
+    expect(screen.getByText('Binding', { selector: 'dt' })).toBeInTheDocument();
+  });
+
+  it('does not take a backup_store without the kind, or an http.sys text, for Windows', async () => {
+    show(windowsDeploymentFixture({ id: ID, location_kind: 'server_file' }));
+    await renderRoute(`/deployments/${ID}`);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByText(/Previous certificate: My/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Binding', { selector: 'dt' })).not.toBeInTheDocument();
+  });
+});
+
 // R61, Task 13 review I1: no text a Windows deployment can show speaks of Nginx, its files, a reload or the Linux
 // backup folder. The reasons are read from the Windows provider, the shared verification judgement and the deployment
 // engine; a reason only the Linux helper or the Nginx provider produces is left out by name, with the reason why.

@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
-import { deploymentDetailFixture } from '../test/fixtures';
+import { deploymentDetailFixture, windowsDeploymentFixture } from '../test/fixtures';
 import { server } from '../test/server';
-import { CANCELLED_REASON, deploymentView, isCancelled, wasSent, watchDeployments } from './deployments';
+import { CANCELLED_REASON, deploymentView, isCancelled, isWindowsDeployment, wasSent, watchDeployments } from './deployments';
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `0192c000-0000-7000-8000-${String(i).padStart(12, '0')}`);
 
@@ -135,5 +135,18 @@ describe('deploymentView', () => {
     expect(isCancelled({ status: 'failed', error: null })).toBe(false);
     expect(['queued', 'precheck', ''].map((state) => wasSent({ state: state as never }))).toEqual([false, false, false]);
     expect(['deploying', 'recovering', 'done'].map((state) => wasSent({ state: state as never }))).toEqual([true, true, true]);
+  });
+});
+
+// R62, Ruling 18: a deployment is a Windows one by its location kind, not by a guess from its text.
+describe('isWindowsDeployment', () => {
+  it('reads location_kind', () => {
+    expect(isWindowsDeployment(windowsDeploymentFixture())).toBe(true);
+    expect(isWindowsDeployment(deploymentDetailFixture())).toBe(false);
+  });
+
+  it('does not guess from a backup store or an http.sys text', () => {
+    expect(isWindowsDeployment(deploymentDetailFixture({ backup_store: 'My' }))).toBe(false);
+    expect(isWindowsDeployment(deploymentDetailFixture({ cert_path: 'http.sys/hostnameport/www.example.test:443' }))).toBe(false);
   });
 });

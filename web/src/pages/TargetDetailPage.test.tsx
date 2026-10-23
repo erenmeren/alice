@@ -949,3 +949,68 @@ describe('TargetDetailPage in the design', () => {
     expect(within(row).getAllByRole('cell')[0]).toHaveTextContent(/^root$/);
   });
 });
+
+// R62: the per-server switch "remove certificates Alice imported once nothing uses them" (PATCH /targets/{id}).
+describe('TargetDetailPage cleanup switch', () => {
+  const winPath = `/servers/${windowsTargetFixture.id}`;
+  // The help text is part of the switch's label (Mantine puts the description inside it).
+  const label = /^Remove certificates Alice imported once nothing uses them/;
+
+  function onWindows(role: 'admin' | 'operator' | 'auditor', target: Target, lang = 'en') {
+    const patches: { body: unknown; ifMatch: string | null }[] = [];
+    let current = target;
+    onServer(role, target, [], lang);
+    server.use(
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(current)),
+      http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+      http.patch('/api/v1/targets/:id', async ({ request }) => {
+        const body = (await request.json()) as { certificate_cleanup: boolean };
+        patches.push({ body, ifMatch: request.headers.get('If-Match') });
+        current = { ...current, certificate_cleanup: body.certificate_cleanup, version: current.version + 1 };
+        return HttpResponse.json(current);
+      }),
+    );
+    return patches;
+  }
+
+  it('shows the switch on by default with its help text', async () => {
+    onWindows('admin', windowsTargetFixture);
+    await renderRoute(winPath);
+    const sw = await screen.findByRole('switch', { name: label });
+    expect(sw).toBeChecked();
+    expect(screen.getByText(/Alice never removes a certificate that anything still uses/)).toBeInTheDocument();
+  });
+
+  it('saves it off and on with the version, and shows the saved value', async () => {
+    const patches = onWindows('admin', windowsTargetFixture);
+    await renderRoute(winPath);
+    await userEvent.click(await screen.findByRole('switch', { name: label }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ body: { certificate_cleanup: false }, ifMatch: `"${windowsTargetFixture.version}"` });
+    await waitFor(() => expect(screen.getByRole('switch', { name: label })).not.toBeChecked());
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('switch', { name: label }));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches[1].body).toEqual({ certificate_cleanup: true });
+    await waitFor(() => expect(screen.getByRole('switch', { name: label })).toBeChecked());
+  });
+
+  it('is read only for a person who cannot manage the server', async () => {
+    onWindows('operator', windowsTargetFixture);
+    await renderRoute(winPath);
+    expect(await screen.findByRole('switch', { name: label })).toBeDisabled();
+  });
+
+  it('is absent on a server without the capability', async () => {
+    onWindows('admin', { ...windowsTargetFixture, capabilities: ['deploy_certificate'], certificate_cleanup: undefined });
+    await renderRoute(winPath);
+    await screen.findByRole('heading', { name: 'web-iis', level: 1 });
+    expect(screen.queryByRole('switch', { name: label })).not.toBeInTheDocument();
+  });
+
+  it('is worded in Turkish', async () => {
+    onWindows('admin', windowsTargetFixture, 'tr');
+    await renderRoute(winPath, { languages: ['tr-TR'] });
+    expect(await screen.findByRole('switch', { name: /^Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır/ })).toBeChecked();
+  });
+});

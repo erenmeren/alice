@@ -1,12 +1,12 @@
-import { Alert, Button, Code, Group, Loader, Stack, Table, Text, Textarea } from '@mantine/core';
+import { Alert, Button, Code, Group, Loader, Stack, Switch, Table, Text, Textarea } from '@mantine/core';
 import type { i18n as I18n, TFunction } from 'i18next';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router';
-import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
+import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, setCertificateCleanup, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
-import { capabilityText } from '../api/capabilities';
+import { can, capabilityText } from '../api/capabilities';
 import { hasCertificateLocations, isServerType, isWebServer, isWindows, webServerState } from '../api/webServer';
 import { softwareName } from '../components/software';
 import { CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
@@ -85,6 +85,9 @@ export function TargetDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
+  const [savingCleanup, setSavingCleanup] = useState(false);
+  const [cleanupSaved, setCleanupSaved] = useState(false);
+  const [cleanupError, setCleanupError] = useState<unknown>(null);
 
   // A scan changes the websites and certificates too, which live under their own query keys.
   const refresh = async () => {
@@ -119,6 +122,21 @@ export function TargetDetailPage() {
     }
     setBusy(false);
     await refresh();
+  };
+
+  // saveCleanup saves the per-server cleanup switch (PATCH with the version read) and shows the answer.
+  const saveCleanup = async (on: boolean, version: number) => {
+    setSavingCleanup(true);
+    setCleanupSaved(false);
+    setCleanupError(null);
+    try {
+      client.setQueryData(targetKey(id), await setCertificateCleanup(id, on, version));
+      setCleanupSaved(true);
+    } catch (e) {
+      setCleanupError(e);
+    }
+    setSavingCleanup(false);
+    void client.invalidateQueries({ queryKey: TARGETS_KEY });
   };
 
   if (target.isPending) return <PageLoader />;
@@ -276,6 +294,25 @@ export function TargetDetailPage() {
               )}
             </Group>
           </Panel>
+          {can(tg, 'cleanup_certificates') && (
+            <Panel title={t('targets.page.cleanup.title')}>
+              <Stack gap="xs">
+                <Switch
+                  checked={tg.certificate_cleanup ?? true}
+                  disabled={!canManage || savingCleanup}
+                  label={t('targets.page.cleanup.label')}
+                  description={t('targets.page.cleanup.help')}
+                  onChange={(e) => void saveCleanup(e.currentTarget.checked, tg.version)}
+                />
+                {cleanupSaved && (
+                  <Text size="sm" role="status">
+                    {t('targets.page.cleanup.saved')}
+                  </Text>
+                )}
+                <ErrorAlert error={cleanupError} />
+              </Stack>
+            </Panel>
+          )}
         </div>
       </div>
 

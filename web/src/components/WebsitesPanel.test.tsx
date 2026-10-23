@@ -503,3 +503,31 @@ describe('WebsitesPanel on a Windows server', () => {
     expectNoRawKeys(screen.getAllByTestId('certificate-group')[0].closest('table')!);
   });
 });
+
+// R62, Ruling 19: a binding whose certificate Alice imported says so.
+describe('WebsitesPanel imported by Alice', () => {
+  const host = (h: string) => [{ names: [h], section: 'Default Web Site', listens: [{ addr: h, port: 443, default_server: false }], file: '', line: 0 }];
+  const imported = windowsBindingFixture({ id: 'w-imp', cert_path: 'http.sys/hostnameport/www.example.test:443', certificate: CERT, servers: host('www.example.test'), details: { alice_imported: true } });
+  const foreign = windowsBindingFixture({ id: 'w-for', cert_path: 'http.sys/hostnameport/api.example.test:443', certificate: CERT, servers: host('api.example.test'), details: { alice_imported: false } });
+  const bare = windowsBindingFixture({ id: 'w-bare', cert_path: 'http.sys/hostnameport/old.example.test:443', certificate: null, servers: host('old.example.test') });
+
+  it.each([
+    ['en', 'Imported by Alice'],
+    ['tr', 'Alice tarafından içe aktarıldı'],
+  ])('shows the badge only on a binding whose details say so (%s)', async (lang, text) => {
+    onNginx('operator', [imported, foreign, bare], windowsTargetFixture, false, lang);
+    await renderRoute(`/servers/${windowsTargetFixture.id}`, { languages: [lang] });
+    const rows = await screen.findAllByTestId('location-row');
+    const row = (id: string) => rows.find((r) => r.getAttribute('data-location') === id)!;
+    expect(within(row('w-imp')).getByText(text)).toBeInTheDocument();
+    expect(within(row('w-for')).queryByText(text)).not.toBeInTheDocument();
+    expect(within(row('w-bare')).queryByText(text)).not.toBeInTheDocument();
+  });
+
+  it('shows none on a file location', async () => {
+    onNginx('operator', [locationFixture({ details: { alice_imported: true } })]);
+    await renderRoute(path);
+    await screen.findAllByTestId('location-row');
+    expect(screen.queryByText('Imported by Alice')).not.toBeInTheDocument();
+  });
+});

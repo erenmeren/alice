@@ -53,10 +53,10 @@ export function rollbackForbidden(d: { phase: string; error?: { reason: string }
   return d.phase === 'restore_forbidden' || d.error?.reason === ROLLBACK_FORBIDDEN;
 }
 
-// isWindowsDeployment: a deployment to an http.sys binding of a Windows server (R61). Its previous certificate is named
-// by store and thumbprint, or the location is a binding (the canonical text starts with http.sys/).
-export function isWindowsDeployment(d: Pick<Deployment, 'cert_path'> & { backup_store?: string }): boolean {
-  return (d.backup_store ?? '') !== '' || d.cert_path.startsWith('http.sys/');
+// isWindowsDeployment: a deployment to an http.sys binding of a Windows server (R61). The API names the kind of the
+// deployment's location (R62, Ruling 18); nothing is guessed from the text of the location or from a backup store.
+export function isWindowsDeployment(d: Pick<Deployment, 'location_kind'>): boolean {
+  return d.location_kind === 'win_sslbinding';
 }
 
 // windowsPrevious is the previous certificate of a Windows deployment (store and SHA-1 thumbprint): the deployment's

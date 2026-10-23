@@ -1219,7 +1219,13 @@
       "operationsTextLinux": "Alice reads and changes the SSH keys on this server through its restricted helper.",
       "readOnly": "Read only",
       "operationsTextDiscovery": "Alice reads the certificate files {{software}} uses through its restricted helper. It never changes {{software}} files or configuration.",
-      "operationsTextWindows": "Alice deploys certificates to the http.sys bindings of this server through its restricted helper. IIS sites and their settings remain under your control."
+      "operationsTextWindows": "Alice deploys certificates to the http.sys bindings of this server through its restricted helper. IIS sites and their settings remain under your control.",
+      "cleanup": {
+        "title": "Settings",
+        "label": "Remove certificates Alice imported once nothing uses them",
+        "help": "Alice never removes a certificate that anything still uses, or one it did not import itself. It waits at least 7 days after a certificate stopped being used.",
+        "saved": "Saved."
+      }
     }
   },
   "hostKeys": {
@@ -1976,6 +1982,7 @@
     "noSite": "(no IIS site)",
     "problemCertificateWin": "Certificate: {{problem}}",
     "problemKeyWin": "Private key: {{problem}}",
+    "importedByAlice": "Imported by Alice",
     "group": {
       "noCertificate": "No certificate",
       "count_one": "{{count}} binding",
@@ -4768,6 +4775,8 @@
       "neverDeployed": "Alice has not deployed a certificate here yet.",
       "file": "The file held {{cert}} at the scan of {{time}}.",
       "fileNever": "No scan has read the file yet.",
+      "bindingScan": "Binding (last scan): {{cert}} at {{time}}.",
+      "bindingNever": "Binding (last scan): not read yet.",
       "tlsAlice": "The website served {{cert}} at {{time}} (checked from Alice).",
       "tlsHelper": "The website served {{cert}} at {{time}} (checked from the server itself).",
       "tlsNever": "The website has not been checked yet.",
@@ -4781,6 +4790,12 @@
     },
     "repair": "Repair",
     "repairNamed": "Repair {{site}}",
+    "cause": {
+      "binding_repointed": "Cause: the binding was changed to another certificate outside Alice.",
+      "cert_removed": "Cause: the certificate was removed from the server's certificate store. Alice does not put it back; deploy a certificate to this binding.",
+      "key_unusable": "Cause: Windows cannot use the private key of the certificate. Deploy a certificate to this binding."
+    },
+    "autocertrebind": "This server runs the AutoCertRebind task, which can bind a certificate by itself and may undo a repair.",
     "repairQueued": "Repair queued: open the deployment",
     "summary": {
       "inSync_one": "Live and verified on {{n}} of {{count}} place",

@@ -576,6 +576,7 @@ export function deploymentFixture(o: Partial<Deployment> = {}): Deployment {
     target_name: targetFixture.name,
     cert_path: '/etc/nginx/ssl/www.crt',
     key_path: '/etc/nginx/ssl/www.key',
+    location_kind: 'server_file',
     job_id: null,
     job_status: 'succeeded',
     trigger: 'manual',
@@ -683,7 +684,8 @@ export const windowsTargetFixture: Target = {
   type: 'windows',
   host: 'iis-01.example.com',
   username: 'CORP\\alice-svc',
-  capabilities: ['deploy_certificate', 'discover_certificates', 'test_connection', 'verify_deployment'],
+  capabilities: ['cleanup_certificates', 'deploy_certificate', 'discover_certificates', 'test_connection', 'verify_deployment'],
+  certificate_cleanup: true,
   facts: {
     ...targetFixture.facts,
     os: { id: 'windows', version_id: '10.0.20348.2700', pretty_name: 'Windows Server 2022 Datacenter' },
@@ -725,6 +727,7 @@ export function windowsDeploymentFixture(o: Partial<DeploymentDetail> = {}): Dep
     cert_path: 'http.sys/hostnameport/www.example.test:443',
     key_path: '',
     backup_dir: '',
+    location_kind: 'win_sslbinding',
     backup_store: 'My',
     backup_sha1: WIN_PREVIOUS_SHA1,
     steps: [
@@ -1315,6 +1318,8 @@ export function observationFixture(o: Partial<LocationObservation> = {}): Locati
     active_deployment_id: null,
     next_observe_at: '2026-10-20T12:00:00Z',
     repair_available: false,
+    drift_cause: '',
+    autocertrebind: false,
     ...o,
   };
 }

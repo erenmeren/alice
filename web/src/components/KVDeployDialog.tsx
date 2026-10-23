@@ -149,7 +149,8 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                       <span translate="no">{site.target_name}</span> <Code translate="no">{site.cert_path}</Code>
                     </Text>
                   )}
-                  <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} vault windows={isWindowsDeployment(dep ?? { cert_path: site?.cert_path ?? '' })} />
+                  {/* Until the deployment is read, a vault binding's location has no kind in the API: its canonical text decides. */}
+                  <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} vault windows={isWindowsDeployment(dep ?? { location_kind: site?.cert_path.startsWith('http.sys/') ? 'win_sslbinding' : 'server_file' })} />
                   {step && dep && !isSettled(dep) && (
                     <Text size="xs" c="dimmed" aria-live="polite">
                       {t('deployments.currentStep', { step: t(step) })}
