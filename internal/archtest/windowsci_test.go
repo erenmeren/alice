@@ -389,6 +389,12 @@ func TestWindowsWorkflowGate(t *testing.T) {
 	group, _ := conc["group"].(string)
 	assert.True(t, strings.HasPrefix(group, "windows-"), "a literal prefix, never github.workflow (Ruling 8): %q", group)
 	assert.NotContains(t, group, "github.workflow")
+	// A default-branch push gets a group of its own per commit: GitHub keeps one pending run per group
+	// and cancels it when a newer one queues, whatever cancel-in-progress says, so a shared group
+	// would drop a queued push whose before the next push then diffs from.
+	assert.Contains(t, group, "github.event.repository.default_branch", "a default-branch push has its own group")
+	assert.Contains(t, group, "format('main-{0}', github.sha)", "one group per default-branch commit")
+	assert.Contains(t, group, "'nightly'", "the nightly run keeps its group")
 	cancel, _ := conc["cancel-in-progress"].(string)
 	assert.Contains(t, cancel, "refs/tags/", "a release call is never cancelled")
 	assert.Contains(t, cancel, "github.event.repository.default_branch", "a push to the default branch is never cancelled")
@@ -417,7 +423,7 @@ func TestWindowsWorkflowGate(t *testing.T) {
 	outputs, _ := changes["outputs"].(map[string]any)
 	assert.Contains(t, outputs, "windows")
 	assert.Equal(t, 0, checkoutWith(t, changes)["fetch-depth"], "changes needs the history and origin/<default>")
-	for _, j := range []string{"changes", "linux-build", "windows-required"} {
+	for _, j := range []string{"changes", "linux-build", "helper", "windows-required"} {
 		assert.Equal(t, false, checkoutWith(t, ymap(t, jobs, j))["persist-credentials"], "%s keeps no token in the clone", j)
 	}
 
@@ -427,7 +433,8 @@ func TestWindowsWorkflowGate(t *testing.T) {
 	needs := ystrings(gate["needs"])
 	slices.Sort(needs)
 	assert.Equal(t, []string{"changes", "helper", "linux-build"}, needs)
-	assert.Contains(t, jobRun(t, gate), "deploy/dev/windows-ci.sh gate")
+	assert.Contains(t, jobRun(t, gate), `deploy/dev/windows-ci.sh gate "$CHANGES" "$WINDOWS" "$LINUX_BUILD" "$HELPER"`,
+		"windows passes as is: the script refuses an empty value after a successful changes job")
 	gateEnv := stepEnvText(t, gate, "Decide")
 	for _, want := range []string{"needs.changes.result", "needs.changes.outputs.windows", "needs.linux-build.result", "needs.helper.result"} {
 		assert.Contains(t, gateEnv, want, "the gate step's env")
