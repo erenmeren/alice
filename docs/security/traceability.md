@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-281 IDs: 272 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+288 IDs: 278 test, 7 partial, 1 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -201,6 +201,13 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | WIN-36 | The helper is killed between the key's removal and the certificate's, or after the removal before its bookkeeping; a W2... | test | `internal/providers/windows/winhelper:TestRemovalOrderSurvivesAKill`<br>`internal/providers/windows/wintest:TestModelKillBetweenKeyAndCertificate`<br>`internal/providers/windows:TestCleanupNeedsHelper030` |
 | WIN-37 | Journals and fence tombstones accumulate | test | `internal/providers/windows/winhelper:TestPrune`<br>`internal/providers/windows/wintest:TestModelPrunesStateFiles` |
 | WIN-38 | The emulator and the real helper run iis-cleanup side by side; a real removal; the listeners' registry values; the runne... | test | `cmd/alice-winhelper:TestFidelityCleanup`<br>`cmd/alice-winhelper:TestRealCleanupRemovesKeyAndCertificate`<br>`cmd/alice-winhelper:TestRealProtectedThumbprints`<br>`cmd/alice-winhelper:TestRealRunnerIsClean` |
+| WIN-39 | A change under a watched Windows path; a change of any other file; a failed, cancelled or skipped leg; a failed changes... | test | `internal/archtest:TestWindowsChangedScript`<br>`internal/archtest:TestWindowsGateDecision`<br>`internal/archtest:TestWindowsWorkflowGate` |
+| WIN-40 | A package the Windows tests build is not on the watched list; an entry matches no file; a real-Windows test is skipped,... | test | `internal/archtest:TestWindowsWorkflowWatchesEveryDependency`<br>`internal/archtest:TestWindowsWorkflowRequiresEveryRealTest` |
+| WIN-41 | The release stage with the Windows helpers; one of them missing or changed after make winhelper | test | `tools/releasebuild:TestStageLayout`<br>`tools/releasebuild:TestStageRefusesAMissingInput`<br>`tools/releasebuild:TestStageListsTheWindowsHelpersInSHA256SUMS` |
+| WIN-42 | The helper the runners test and the helper the release ships; a release tag | test | `internal/archtest:TestWindowsHelperBuildFlagsAgree`<br>`internal/archtest:TestReleaseWorkflowWaitsForWindows`<br>`.github/workflows/windows.yml:Compare with the Linux build` |
+| WIN-43 | Helper 1.0.0 under Alice 1.0; a 0.3.0 and a 0.2.0 helper | test | `internal/providers/windows/winproto:TestReleasedHelperVersion`<br>`internal/providers/windows:TestCleanupNeedsHelper030` |
+| WIN-44 | An ACME certificate deployed to a Windows binding and to a certificate file | test | `internal/api:TestACMEBindingDTOHasLocationKind`<br>`internal/inventory:TestListACMEBindingsCarriesTheLocationKind`<br>`web/src/pages/AcmeCertificatePage.test.tsx:speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)` |
+| WIN-45 | The owner's manual matrix before release: Windows Server 2019, Server Core, a domain baseline, Defender on (with a clean... | owner | owner step: docs/release-checklist.md section 8 (rows 8.1-8.8) |
 | S-01 | Run the full integration suite and the E2E suite with log capture (zap/slog handler wrapping a buffer, plus container st... | test | `internal/api:TestPlatformKeyNeverLeaks`<br>`internal/api:TestSecretLeakSuiteWithGeneratedKeys`<br>`internal/api:TestSecretsNeverLeak` |
 | S-02 | Response scanner middleware in test builds: every HTTP response body, header, and cookie is scanned for canaries and PEM... | test | `internal/api:TestSecretsNeverLeak` |
 | S-03 | Error paths: force failures (invalid key upload, wrong password for PFX, SSH failure, KV 403 echoing a body containing a... | test | `internal/api:TestSecretsNeverLeak` |

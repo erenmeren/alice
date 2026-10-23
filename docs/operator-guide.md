@@ -22,6 +22,7 @@ targets.
 | `alice license keys` | Lists the vendor license keys built into this binary with their status and SHA-256 fingerprints; compare them with the fingerprint your vendor publishes. A build without the vendor key says so and accepts no license (evaluation only). |
 | `alice migrate` | Applies database migrations and exits. The whole run must finish within `ALICE_MIGRATE_TIMEOUT` (default 30m). `alice serve` also applies them at startup. |
 | `make helper` (development checkout) | Builds the static `alice-helper` for Linux amd64 and arm64 into `bin/` with `bin/alice-helper.sha256`. See [nginx-host-preparation.md](nginx-host-preparation.md). |
+| `make winhelper` (development checkout) | Builds `alice-helper.exe` for Windows amd64 and arm64 into `bin/` (`alice-winhelper-windows-amd64.exe`, `alice-winhelper-windows-arm64.exe`) with `bin/alice-winhelper.sha256`. A release package carries the same files in `helper/`. See [windows-host-preparation.md](windows-host-preparation.md). |
 
 `alice audit verify` does not need the master key, so it works even when Alice refuses to start because of a
 key problem.
@@ -38,7 +39,10 @@ key problem.
   install.sh, alice-update.sh, alicectl   0755 root     the scripts of the installed version
   lib/                               0755 root          script library, database role script
   release-keys/rk-*.pem              0644 root          release public keys trusted for updates
-  helper/                            0755 root          alice-helper for the managed servers, with checksums
+  helper/                            0755 root          the helpers for the managed servers: alice-helper for
+                                                        Linux (alice-helper-linux-*, alice-helper.sha256) and
+                                                        alice-helper.exe for Windows
+                                                        (alice-winhelper-windows-*.exe, alice-winhelper.sha256)
   docs/, licenses/, sbom/, CHANGELOG.md                 copies from the package
   secrets/                           0700 root          db_postgres_password, db_owner_password, db_app_password
   keys/                              0700 user 10001    master.key (0400), tls.crt (0644), tls.key (0400)
@@ -161,6 +165,12 @@ cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d postgr
 The full guide is [upgrade.md](upgrade.md): `cd /opt/alice && sudo ./alice-update.sh <package>` (from a root shell),
 with the recovery passphrase at hand. The update stops Alice **before** it makes its backup, so the outage starts
 with the backup and lasts a few minutes; announce it. A failed update returns to the installed version by itself.
+
+Update the managed servers' helpers first, then Alice: a new helper works with the previous Alice release. For each
+Windows server, take the new package's `helper/alice-winhelper-windows-amd64.exe` (or `-arm64.exe`), check it
+against the package's `helper/alice-winhelper.sha256`, and copy it to the server as
+`C:\Program Files\Alice\alice-helper.exe` in an elevated PowerShell
+([windows-host-preparation.md](windows-host-preparation.md)); then choose **Test connection** on the server's page.
 
 ## Logs
 

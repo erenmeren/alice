@@ -294,8 +294,8 @@ this server".
 ## Steps
 
 1. Get the helper. In a development checkout run `make helper`; it writes `bin/alice-helper-linux-amd64`,
-   `bin/alice-helper-linux-arm64` and `bin/alice-helper.sha256`. (Release packages will ship the same files in a
-   `helper/` directory.) Copy the file for the server's processor (`amd64` for x86_64, `arm64` for aarch64) to the
+   `bin/alice-helper-linux-arm64` and `bin/alice-helper.sha256`. (Release packages ship the same files in a
+   `helper/` directory, listed in the package's signed `SHA256SUMS`.) Copy the file for the server's processor (`amd64` for x86_64, `arm64` for aarch64) to the
    server as `alice-helper`, in a new directory that only you can write, for example one made with
    `mkdir -m 700 ~/alice-setup` in your home. Do not use a shared directory such as `/tmp/alice`: another user of
    the server could create it first and change the file. You can compare it yourself: `sha256sum alice-helper` must

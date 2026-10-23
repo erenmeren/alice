@@ -2483,6 +2483,63 @@
   ]
  },
  {
+  "id": "WIN-39",
+  "status": "test",
+  "tests": [
+   "internal/archtest:TestWindowsChangedScript",
+   "internal/archtest:TestWindowsGateDecision",
+   "internal/archtest:TestWindowsWorkflowGate"
+  ]
+ },
+ {
+  "id": "WIN-40",
+  "status": "test",
+  "tests": [
+   "internal/archtest:TestWindowsWorkflowWatchesEveryDependency",
+   "internal/archtest:TestWindowsWorkflowRequiresEveryRealTest"
+  ]
+ },
+ {
+  "id": "WIN-41",
+  "status": "test",
+  "tests": [
+   "tools/releasebuild:TestStageLayout",
+   "tools/releasebuild:TestStageRefusesAMissingInput",
+   "tools/releasebuild:TestStageListsTheWindowsHelpersInSHA256SUMS"
+  ]
+ },
+ {
+  "id": "WIN-42",
+  "status": "test",
+  "tests": [
+   "internal/archtest:TestWindowsHelperBuildFlagsAgree",
+   "internal/archtest:TestReleaseWorkflowWaitsForWindows",
+   ".github/workflows/windows.yml:Compare with the Linux build"
+  ]
+ },
+ {
+  "id": "WIN-43",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winproto:TestReleasedHelperVersion",
+   "internal/providers/windows:TestCleanupNeedsHelper030"
+  ]
+ },
+ {
+  "id": "WIN-44",
+  "status": "test",
+  "tests": [
+   "internal/api:TestACMEBindingDTOHasLocationKind",
+   "internal/inventory:TestListACMEBindingsCarriesTheLocationKind",
+   "web/src/pages/AcmeCertificatePage.test.tsx:speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)"
+  ]
+ },
+ {
+  "id": "WIN-45",
+  "status": "owner",
+  "owner": "docs/release-checklist.md section 8 (rows 8.1-8.8)"
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [

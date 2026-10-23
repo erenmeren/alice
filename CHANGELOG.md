@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Windows servers (CI and release, R63)
+
+**Added**
+- The release package carries the Windows helper: `helper/alice-winhelper-windows-amd64.exe`,
+  `helper/alice-winhelper-windows-arm64.exe` and their checksum file `helper/alice-winhelper.sha256`, all listed in the
+  signed `SHA256SUMS`. Take `alice-helper.exe` from there (see
+  [windows-host-preparation.md](docs/windows-host-preparation.md)); `make release` builds them, and the stage refuses a
+  missing or changed helper.
+- Every change to the Windows helper or provider, every night and every release tag run the helper's real-host tests on
+  Windows Server 2022 and 2025, with the helper built byte for byte as the package ships it; one check,
+  `windows-required`, reports the result (how to require it: `docs/dev/windows-ci.md` in the source repository). `release.yml`
+  stages a tag only after that check passed.
+
+**Changed**
+- `alice-helper.exe` 1.0.0, the first released Windows helper. It adds nothing over 0.3.0: a 0.3.0 helper keeps every
+  feature, a 0.2.0 helper still deploys (no cleanup). Update the helpers first, then Alice.
+- The setup script names the package's `helper\` folder when the helper is missing or does not match.
+
+**Fixed**
+- The websites of an issued certificate (ACME) speak of a Windows binding as a binding, not as a certificate file
+  (`location_kind` on the ACME binding).
+
+Rulings: `docs/superpowers/rulings/windows-iis.md` "W4 (R63)". No migration, no new error code.
+
 ## Unreleased — Windows servers (drift and cleanup, R62)
 
 **Added**

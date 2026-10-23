@@ -23,9 +23,9 @@ commands (backup, restore, database update).
  +------+-------------------+----------------+----------------+---------+
         | PostgreSQL         | keys, state,   | SSH 22 (TB3)   | HTTPS 443, SMTP, syslog (TB4)
         | internal network   | backups        v                v
-        v (TB2)              | (TB5)    Managed Linux and   Azure Key Vault, mail server,
- +-------------+             |          Nginx servers       syslog server / SIEM
- | PostgreSQL  |             v
+        v (TB2)              | (TB5)    Managed Linux,      Azure Key Vault, mail server,
+ +-------------+             |          Nginx and Windows   syslog server / SIEM
+ | PostgreSQL  |             v          servers
  | no host port|      /opt/alice/{keys,state,backups} on the host disk
  +-------------+
                        Operator media (TB6): release packages, license files, backup copies
@@ -37,6 +37,10 @@ Data flows:
 - Alice connects out to the servers it manages over SSH, with its own key; on each server a small root-owned helper
   program, allowed through a narrow sudoers rule, does the privileged file work
   ([nginx-host-preparation.md](nginx-host-preparation.md)).
+- Alice connects to the Windows servers it manages over the Windows OpenSSH Server, with the same key, as a dedicated
+  administrator account; sshd and the key line itself force `alice-helper.exe` for every sign-in with that key, so
+  Alice never gets a shell, and the helper does only its fixed list of things (read the bindings and stores, deploy,
+  restore, clean up what Alice imported) ([windows-host-preparation.md](windows-host-preparation.md)).
 - Alice reads certificates from Azure Key Vault over HTTPS when vaults are configured ([azure-setup.md](azure-setup.md)).
 - When an administrator sets up a certificate authority (ACME), Alice talks to that authority over HTTPS, calls the
   customer's DNS hook over HTTPS or the API of a built-in DNS provider (Cloudflare, Azure DNS, Amazon Route 53) with
@@ -63,7 +67,7 @@ Data flows:
 | TB0 | Browser and Alice | HTTPS (TLS 1.2 or newer), HSTS, a strict Content Security Policy, `SameSite=Strict` session cookies, a CSRF token and a same-origin check on every change, rate limits on sign-in and bad credentials. |
 | TB1 | Alice process and its database and key volume | The application uses a database role that can only add and read audit entries; database triggers block changes of the audit log; the master key is a file only the container user can read. |
 | TB2 | Database | Only on an internal Docker network, no published port, passwords from files (SCRAM-SHA-256), separate roles for the application and for schema changes, neither a superuser. |
-| TB3 | Alice and managed servers | SSH host keys pinned on first contact and confirmed by an administrator; data from servers is treated as untrusted; a server-side helper with a fixed command set; addresses checked on every connection (no link-local or metadata addresses). |
+| TB3 | Alice and managed servers | SSH host keys pinned on first contact and confirmed by an administrator; data from servers is treated as untrusted; a server-side helper with a fixed command set (on Linux behind a narrow sudoers rule, on Windows as the forced command of Alice's key and account); addresses checked on every connection (no link-local or metadata addresses). |
 | TB4 | Alice and cloud and customer services | TLS with certificate verification against the system authorities (plus a customer CA where configured); the same address rule. |
 | TB5 | Containers and host | Non-root containers, read-only root file systems, no capabilities, `no-new-privileges`; the host scripts never act on files inside the directories containers can write. |
 | TB6 | Offline media | Release packages signed (Ed25519) and verified before use; license files signed by the vendor; backups encrypted and origin-authenticated against anyone without the recovery passphrase (not against a passphrase holder: KI-14). |
@@ -188,7 +192,7 @@ for every service; limiting a person to some services comes with a later version
 | In | TCP 443 (installer option `--port`) | Web interface and API (the container listens on 8443) |
 | Internal | TCP 5432 | Database, on Docker's internal network only; not published on the host |
 | Internal | TCP 8081 | Health endpoint inside the container (127.0.0.1), for Docker's health check |
-| Out | TCP 22 | Managed Linux and Nginx servers |
+| Out | TCP 22 | Managed Linux and Nginx servers; managed Windows servers (Windows OpenSSH Server; the setup script's firewall rule `Alice-SSH-In` accepts port 22, from Alice's address when you give it) |
 | Out | TCP 443 | Azure (`login.microsoftonline.com`, `*.vault.azure.net`) when Key Vault is used; the identity provider when single sign-on is used |
 | Out | HTTPS (443 or the port in the address) | A certificate authority's ACME directory and the addresses its answers name, and the DNS hook, when an administrator set them up; never through a proxy, never following a redirect |
 | Out | TCP 443 | A built-in DNS provider when one is set up: `api.cloudflare.com`; `login.microsoftonline.com` and `management.azure.com` (and the metadata address `169.254.169.254:80` for a managed identity); `route53.amazonaws.com` and `sts.amazonaws.com`; those hosts only, never through a proxy, never following a redirect |
@@ -216,6 +220,11 @@ application; neither role is a superuser.
   key is separate from the license signing key, its fingerprint is published by the vendor, and the installer asks
   the operator to compare it ([install-guide.md](install-guide.md#3-check-the-package-before-you-extract-it)).
   Updates are accepted only when signed by a key the installation already trusts.
+- **Server helpers.** The helpers for managed servers ship in the package's `helper/` folder, listed in the signed
+  `SHA256SUMS`: `alice-helper` for Linux and `alice-helper.exe` for Windows, each with its checksum file. Alice's
+  setup commands and setup script carry the checksums built into this version and refuse any other file. The Windows
+  helper is not signed with Authenticode: allow it in WDAC or AppLocker by its hash, not by a publisher
+  ([windows-host-preparation.md](windows-host-preparation.md#code-signing)).
 - **SBOM.** CycloneDX software bills of materials for the Alice image, the database image and the source are in the
   package (`sbom/`).
 - **Pinned inputs.** Go modules (`go.sum`), npm packages (lockfile), base images and build tools are pinned by version
@@ -253,6 +262,10 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
 - **Keys on one host.** The master key is a file on the Alice server; disk encryption and root access control are
   the customer's protection. No hardware key storage in version 1.
 - **Blast radius.** Alice can reach every managed server through its key and helper.
+- **Windows servers.** Whoever controls Alice can bind any certificate it holds to every managed Windows binding and
+  remove the certificates Alice imported; the helper is not signed with Authenticode; Windows Server 2019, Server
+  Core, a domain baseline, Defender switched on and ARM64 servers are checked by hand before each release, not by the
+  automated tests (`SECURITY-REPORT.md` KI-42).
 - **Certificate authorities.** Alice's ACME account can request certificates for the names an administrator allowed;
   Alice revokes the certificates it ordered (and, in a key compromise incident, only after replacing them everywhere);
   a certificate from another source is revoked at the authority that issued it. Behaviour against real public or company authorities, real DNS

@@ -1324,3 +1324,294 @@ The final review of `e21e1ba3..d84edb61` (verdict "ready after fixes") and its f
   the next deployment rewrites it); no test of the `maxImports` trim of adopted entries; `cleanup.go` (725 lines) not
   split; the provider's plan check does not reject duplicate candidates; `UpdateTarget` writes `certificate_cleanup`
   back on every edit (harmless); a skipped incident place queues a cleanup at incident start (one extra dial).
+
+# W4 (R63)
+
+Phase W4 (real-Windows CI and release) was built on branch `windows-w4` from the plan
+`docs/superpowers/plans/2026-10-23-windows-w4-ci-and-release.md` (7 tasks), on the owner's approval of W0-W4 with the
+§15 defaults (2026-10-22). Spec: R63 in `docs/superpowers/specs/alice-v1/00-decisions.md`, `04-security.md` §14.4
+(WN-6 amended, WN-18) and §17.5, `06-quality.md` §24.7 (WIN-39..WIN-45), design §14 (F13, F14) and §19. No migration,
+no new error code. None of the rulings below is a pricing decision; the ones the owner should confirm or act on are
+listed under [Owner items (W4)](#owner-items-w4).
+
+## The plan's rulings as built (W4)
+
+The plan's 22 rulings stand as written, except where an entry says "Amended" or "Precision".
+
+1. **Decision R63: no migration, no error code.** As written: test IDs `WIN-39`..`WIN-45`, STRIDE `WN-18` added and
+   `WN-6` amended; the only product changes are the helper's version string (Ruling 2) and `location_kind` on the
+   ACME binding (Ruling 17).
+2. **Helper 1.0.0, protocol 1, minimums unchanged.** As written (`winproto.Version` `1.0.0`, `Protocol` and
+   `MinProtocol` 1, `WriteMinVersion` 0.2.0, `CleanupMinVersion` 0.3.0; `TestReleasedHelperVersion`,
+   `TestCleanupNeedsHelper030`).
+3. **`internal/api/nul.go`: nothing to do in W4.** As written: plain checkout, `TestNoWindowsReservedFileNames` keeps
+   reserved names out of the tree.
+4. **One required check, `windows-required`.** As written. Precision (Task 2): the gate checks that `changes`
+   succeeded before it reads `windows` (GitHub passes an empty output when `changes` failed), so `cancelled true
+   skipped skipped` fails; unknown job results are refused (exit 2).
+5. **Change detection without trigger filters.** Amended (controller ruling 3, Task 3 review I-1): a push to a branch
+   other than the default branch diffs `git merge-base origin/<default> HEAD`..`HEAD` (the whole branch, on every
+   push); a push to the default branch keeps `before`, and an empty, all-zeros or unknown `before` there answers
+   `true` directly (the merge base on the default branch is HEAD itself, an empty diff). Precision (controller ruling
+   4): the names come from `git diff --no-renames --name-only -z` and `windows-ci.sh changed` reads NUL-delimited
+   names only. Precision (controller ruling 1): `push` has `branches: ['**']`, so a tag push does not start the
+   workflow directly. As written otherwise: no `paths:`, no third-party filter action, every `${{ }}` value through
+   `env:`.
+6. **The watched list is complete by test.** As written (`TestWindowsWorkflowWatchesEveryDependency`); the list has
+   the seven fixed entries and the package entries the test demanded, among them `internal/providers/providertest`,
+   `apacheconf`, `haproxyconf`, `nginx/nginxconf`, `internal/secrets` and `internal/testutil/pki`.
+7. **Every real test is required by name.** As written. Precision (controller ruling 6, Task 3): nine real tests that
+   existed but were not in `$required` were added so the exact-set test holds; run 1 showed all pass on both images.
+8. **Concurrency.** Amended (controller rulings 2 and 3): `cancel-in-progress` is true only for a `push` or
+   `pull_request` that is neither a tag ref (a called workflow sees the caller's event `push`, and a release call is
+   never cancelled) nor the default branch (a cancelled default-branch run would leave its change untested). As
+   written otherwise: the literal `windows-` prefix and the `nightly` group.
+9. **Nightly stays in `windows.yml`.** As written (cron `41 2 * * *`, both legs; the 60-day pause is in
+   `docs/dev/windows-ci.md`).
+10. **Cross-host reproducibility (F13) and one set of build flags.** As written; F13 confirmed (below), so the
+    fallback warning was not built: a difference fails the leg. Precision (controller ruling 7, Task 3 review M-4):
+    `TestWindowsHelperBuildFlagsAgree` also checks `deploy/Dockerfile`'s Windows helper build, since the image embeds
+    those checksums.
+11. **Release package layout.** As written (Task 4): `helper/` carries both `.exe` files and `alice-winhelper.sha256`;
+    `make release` needs `winhelper`; the stage checks both checksum files and names the make target in its refusal.
+12. **`release.yml` waits for real Windows.** As written: job `windows` (`uses: ./.github/workflows/windows.yml`,
+    `with: { all: true }`, `permissions: contents: read`), `stage.needs: [gates, zap-full, fuzz, windows]`
+    (`TestReleaseWorkflowWaitsForWindows`); no Windows gate in `make release-gates`.
+13. **No Authenticode (§15 Q2).** As written: the gap is in the host guide ("Code signing"), the security overview,
+    `SECURITY-REPORT.md` KI-42 and WN-18; owner decision below.
+14. **The setup script's behaviour is unchanged.** As written; Task 6 made the script's header comment name "the
+    helper folder of the Alice package" as its messages do (no behaviour change).
+15. **Repository settings are the owner's.** As written: `docs/dev/windows-ci.md` holds the check names, the `gh api`
+    ruleset command and the UI steps; release-checklist row 1.47; nothing was run against the repository settings.
+16. **Pull requests run twice.** As written.
+17. **ACME bindings panel.** As written (Task 5): `inventory.ACMEBinding.LocationKind`, `acmeBindingDTO.LocationKind`
+    (`location_kind`), the panel passes `windows` for a `win_sslbinding` binding.
+18. **No new real fixture.** As written; ports 45321-45329 and `alice-w4-` stay unused.
+19. **The owner's manual matrix is a release-checklist section.** As written: section "8. Windows servers before
+    release", rows 8.1-8.8, row 1.48, `WIN-45` with status `owner`.
+20. **Every item marked for W4 in W1-W3, settled.** As written; the declined W3 minors and the W2 items carried again
+    are under [Deferred to W5+](#deferred-to-w5).
+21. **ARM64 is built but not run on real Windows.** As written: built, checksummed and byte-compared on every run;
+    row 8.8.
+22. **Docs.** As written (Task 6).
+
+## W4 facts measured on real runners
+
+Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
+2025 Datacenter, Desktop Experience).
+
+- **F13: CONFIRMED on windows-2022 and windows-2025** (run 1,
+  <https://github.com/erenmeren/alice/actions/runs/39956839820>, head `96ace632`; again in run 2). The helper built on
+  each Windows leg with the flags of `make winhelper` equals the `linux-build` job's `make winhelper` byte for byte:
+  amd64 `fd09f74e720dcb1958898091fd7f02a08c2d89232b5ea3e15fd56515dc2d8e5b`, arm64
+  `dba2d5b3962324d94c621e34f480cf5c7086701693751693145fd48688491b38`, identical on Linux, windows-2022 and windows-2025
+  and equal to a local `make winhelper` with go1.27.3. The fallback (a warning) was not needed.
+- **F14: the run path CONFIRMED, the skipped path PENDING.** Run 1: `windows-required` ran with `if: always()` after
+  green legs and passed, under exactly the context name `windows-required`. The skipped path (`changes` answers
+  `false`, both legs `skipped`, `windows-required` success) cannot be observed on `windows-w4`: with Ruling 5 as
+  amended a branch push diffs against `origin/main`, which is `e21e1ba3` (W3 not yet pushed), so `changes` always
+  answered `true`. The plan's run 2 (a rulings-only push expecting skipped legs) was dropped. It is a coordinator check
+  after `main` is pushed (controller ruling 5, [Owner items (W4)](#owner-items-w4)).
+
+### Runner runs used (2 of 6)
+
+| Run | Head | Result | What it found |
+|---|---|---|---|
+| 1 <https://github.com/erenmeren/alice/actions/runs/39956839820> | `96ace632` | **green**: `changes` (windows=true, a watched path changed since `e21e1ba3`), `linux-build`, `helper (windows-2022)`, `helper (windows-2025)`, `windows-required` | F13 confirmed on both images (the hashes above); F14's run path; the nine newly required real tests passed |
+| 2 <https://github.com/erenmeren/alice/actions/runs/39958574455> | `b7beebc6` | **green** (all five jobs) | Tasks 4-5 (the setup script texts under a watched path); F13 confirmed again with the same two hashes |
+
+The `ci.yml` runs of the branch: 39956839548 at `96ace632` (superseded by the next push: go, coverage and stack
+cancelled; web, secrets, ssh-matrix and both licensectl legs green); 39958574391 at `b7beebc6`: (pending).
+
+## Rulings made during execution (W4)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- `windows.yml`'s `push:` has `branches: ['**']` (no paths, no tags): a tag push must not start a second direct run
+  in the concurrency group of `release.yml`'s call, which could cancel the release's Windows job and skip the stage
+  (cost if wrong: a tag no longer runs `windows.yml` directly; `release.yml` calls it with `all: true`).
+- `cancel-in-progress` also requires `!startsWith(github.ref, 'refs/tags/')`: a called workflow sees the caller's
+  event `push`, and Ruling 8 says a release call is never cancelled.
+- Plan Ruling 5 amended (Task 3 review I-1): a push to a branch other than the default branch diffs the whole branch
+  from the merge base, a push to the default branch keeps `before` and is never cancelled, and on the default branch
+  an unusable `before` answers true: with `before`, a Windows push superseded (cancelled) by a docs-only push left the
+  head green without testing the Windows change (cost if wrong: every push of a branch carrying any Windows change
+  runs both legs, more runner minutes).
+- `deploy/dev/windows-ci.sh changed` reads NUL-delimited names only, and callers use `git diff --no-renames
+  --name-only -z` (Task 2 review): git quotes unusual names in plain output, which then match nothing, and a rename
+  otherwise lists only the new path; the `gate` checks a failed `changes` before it reads `windows`, because GitHub
+  passes an empty output then (cost if wrong: a hand run needs `printf '\0'`).
+- F14's skipped path is a coordinator verification after `main` is pushed and the plan's run 2 (a rulings-only push)
+  was dropped: on `windows-w4` the merge base with `origin/main` (`e21e1ba3`) always includes Windows changes (cost if
+  wrong: `windows-required` would fail every non-Windows change until the F14 fallback of the plan's table, legs that
+  always run and exit early, is applied).
+- Nine real tests that existed but were not in `$required` were added (`TestRealAppcmdSites`,
+  `TestRealAppcmdStateByEnvironment`, `TestRealCertificateFacts`, `TestRealExpiredInStore`, `TestRealForeignBinding`,
+  `TestRealIISFacts`, `TestRealStateFilesLockHolder`, `TestRealStoresListTheMachineStores`,
+  `TestRealWinFactsWithUnreadableFactFiles`): Ruling 7's exact-set test requires them; run 1 showed all pass on both
+  images.
+- `TestWindowsHelperBuildFlagsAgree` also checks `deploy/Dockerfile`'s Windows helper build (Task 3 review M-4),
+  beyond the three places Ruling 10 names: the image embeds the checksums of that build.
+- Task 2's commit trailer was corrected by amending the unpushed commit (content unchanged): the owner's instruction
+  names the trailer `Claude Fable 5.1` for this phase (this differs from W3's controller ruling on trailers).
+- Task 5 ran while Task 4's review ran (disjoint files); runner run 2 was taken at Task 5's head so one run covered
+  Tasks 4 and 5.
+- No Docker run while another `make ci` held the machine: `make shellcheck`, Task 5's `-tags integration` ACME test,
+  `make release-test`, the e2e run and `make ci` were left to Task 7 (cost: later failure discovery).
+
+### Task 1 (winproto)
+
+- No execution ruling.
+
+### Task 2 (watched list and decision script)
+
+- The gate checks `changes` = success first (any other result fails), then decides on `windows`: Ruling 4(b) as the
+  controller reads it, and it covers `cancelled true skipped skipped` → fail.
+- An entry is refused (exit 2) for more forms than the brief lists (a trailing `/`, a `.` or empty path element, and
+  `*`, `?` or `[` anywhere except the final `/**` or `/*`): all are "an entry of another form" under Ruling 6, and
+  refusing them keeps the matcher simple and literal.
+- Surrounding white space and a trailing CR on a list line or an input name are trimmed, white space inside an entry
+  is refused: tolerates editor and CRLF artefacts without accepting odd forms.
+- Blank input names are skipped: `git diff` output with a trailing separator must behave.
+- The dependency test maps an external test package's import path (`winproto_test`) to the directory of the package
+  it tests: such a path names no directory of its own.
+- A local wrapper `windowsTestDeps` is used instead of extending `goListDepsFor`: that function has no `-test`
+  support, and changing it would touch other guards.
+- The implementer's commit carried the session's trailer; superseded by the controller's trailer ruling above.
+- (Round 1) A name containing a newline under `dir/*` matches when it has no `/` after `dir/`: only `/` separates
+  directories in git paths.
+- (Round 1) A last name without a trailing NUL is still read: robust, and `-z` output always ends in a NUL anyway.
+- (Round 1) Unknown job results are validated (exit 2) before the `changes` decision; only the `windows` check moved
+  after it: GitHub never sends an empty result, only an empty output.
+
+### Task 3 (workflow)
+
+- The nine missing `TestReal*` names were added to `$required` despite the "keep `$required` unchanged" carry: Ruling
+  7 and the brief's own test require exact set equality (`TestRealStateFilesLockHolder` returns early without its
+  lock-dir variable, so it prints `--- PASS` in a plain run; run 1 confirmed all nine).
+- `changes` writes the `git diff -z` output to `$RUNNER_TEMP/changed-names` and redirects that file into
+  `windows-ci.sh changed` instead of a pipe: a failed `git diff` must answer true and never feed the matcher a partial
+  list, and under `pipefail` a pipe would make the two exit codes ambiguous.
+- `GOAMD64: v1` and `GOARM64: v8.0` are both set in the one build step's `env:`: Go reads only `GO$GOARCH`, so each
+  applies to its own architecture and the bytes stay those of `make winhelper`.
+- `${ALL:-false}` guards the `inputs.all` value, empty on events other than a call; `${WINDOWS:-false}` in the gate
+  step.
+- `linux-build` validates each SHA-256 as 64 hex digits before it outputs it, and the compare step fails on an empty
+  or malformed Linux value: an error, never a silent pass.
+- `TestWindowsWorkflowGate` reads the cron through a YAML re-marshal of `on.schedule` with a substring check: good
+  enough for one cron line.
+
+### Task 4 (release package and release.yml)
+
+- `helperSets` carries the make target (`make helper`, `make winhelper`) named in the refusal: deriving it from the
+  file name would be implicit.
+- The per-set checks live in a new `helperSetEntries`, called by `helperEntries` for each set: the Linux logic stays
+  unchanged, only parameterised.
+- Only the setup script's two thrown messages changed (Ruling 14 names only them); the header comment was aligned by
+  Task 6.
+- `TestStageRefusesAMissingInput` checks refusal texts through a `refusalNames` table (rows without an entry keep the
+  plain error check) and also pins the existing Linux row's texts.
+
+### Task 5 (ACME bindings panel)
+
+- The ACME binding web type lives in `web/src/api/acme.ts` (not `types.ts` as the brief said), so the field was added
+  there, with `LocationKind` imported from `types.ts`.
+- `npm ci` was run in `web/` (the worktree had no `node_modules`; ignored by git).
+- The integration test first changed an existing location's kind with an `UPDATE`; the review found it violates the
+  kind-shape check, and the fix (`86ae97ef`) builds a Windows location that satisfies it (run pending Task 7).
+
+### Task 6 (docs)
+
+- `docs/dev/windows-ci.md` describes the workflow as built (`.github/workflows/windows.yml`), not the plan's Ruling 5
+  table: the amended base, the default-branch rule and the tag rule changed what runs when.
+- Run 2's result was taken from the controller's ledger (`progress.md`), which records it green; the `ci.yml` run at
+  `b7beebc6` stays pending.
+- The operator guide's update step copies the new `alice-helper.exe` over `C:\Program Files\Alice\alice-helper.exe`
+  by hand instead of re-running the setup script: the script of the Alice version still installed embeds the old
+  helper's checksum and would refuse the new helper before Alice is updated (see Owner items).
+- Release-checklist section 8 is placed after section 7 with the vendor sign-off line moved to the end of the file,
+  so the sign-off stays the last line.
+- The admin guide gains "Where the helper comes from", "Helper versions" and "What is tested on real Windows" as
+  bullets of its "Windows servers" list, matching that section's form.
+- The `go test ./internal/providers/windows/ -run Docs` step of the brief matches no test (the guide's test is
+  `TestPreparationGuideQuotesTheMatchBlock`); the whole package was run instead.
+
+## Acceptance (design §13 W4)
+
+- The jobs are required for changes under the Windows paths: the one check `windows-required` passes only on green
+  legs for a Windows change or on no Windows change (Tasks 2-3: `TestWindowsChangedScript`, `TestWindowsGateDecision`,
+  `TestWindowsWorkflowGate`; runs 1 and 2 green); the watched list covers every package the Windows tests build and
+  every real test is required (`TestWindowsWorkflowWatchesEveryDependency`, `TestWindowsWorkflowRequiresEveryRealTest`);
+  the repository setting that makes it required is the owner's (row 1.47, `docs/dev/windows-ci.md`).
+- The helper in the release artifacts and `SHA256SUMS`: Task 4 (`TestStageLayout`, `TestStageRefusesAMissingInput`,
+  `TestStageListsTheWindowsHelpersInSHA256SUMS`, `TestReleaseWorkflowWaitsForWindows`); the tested bytes are the
+  shipped bytes: Task 3 (`TestWindowsHelperBuildFlagsAgree`, the legs' "Compare with the Linux build", F13).
+- Helper 1.0.0: Task 1 (`TestReleasedHelperVersion`, `TestCleanupNeedsHelper030`).
+- The ACME bindings panel: Task 5 (`TestACMEBindingDTOHasLocationKind`, `TestListACMEBindingsCarriesTheLocationKind`,
+  the web test "speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)").
+- Documentation and `make matrix-check`: Task 6 (`make matrix-check MATRIXCHECK_FLAGS=-strict`: 288 IDs, 278 by tests,
+  7 partial, 0 pending, 1 owner, 2 deferred, 0 gaps).
+- The owner's manual matrix is listed as an owner step: release-checklist section 8 (rows 8.1-8.8), row 1.48,
+  `WIN-45` status `owner`.
+- Final gates (Task 7): pending.
+
+## Owner items (W4)
+
+- **Require the check** (Ruling 15): create the ruleset of `docs/dev/windows-ci.md` (`gh api --method POST
+  repos/erenmeren/alice/rulesets ...` or the UI steps there), check it with `gh api
+  repos/erenmeren/alice/rules/branches/main`, and record release-checklist row 1.47. Choose whether `ci.yml`'s checks
+  join the same rule (listed there as a recommendation).
+- **Confirm the bypass choice**: the ruleset lets the repository admin role bypass the check (`actor_id 5`,
+  `bypass_mode: always`) so you can keep pushing `main` directly; the coordinator's flow pushes the phase branch
+  first, so a commit fast-forwarded onto `main` already has a green `windows-required`. Without the bypass, `main`
+  takes changes only through pull requests.
+- **F14's skipped path** (controller ruling 5): after `main` is pushed, the first push to `main` without a Windows
+  change (or a branch cut from that `main` with only such a change) must show `changes` → `windows=false`,
+  `linux-build` and both `helper` legs skipped, and `windows-required` success under exactly that name. If it fails,
+  apply the plan's F14 fallback (legs that always run and exit early) before requiring the check.
+- **The manual matrix** (Ruling 19): release-checklist section 8, rows 8.1-8.8 (Windows Server 2019, Server Core, a
+  domain-joined server under the security baseline with `CORP\alice-svc`, Defender or the customer's EDR on with a
+  cleanup run that removes a certificate, an RDP listener with its own CA certificate kept by cleanup, the helper from
+  the signed package, AD FS, ARM64), before each release (row 1.48).
+- **Authenticode** (Ruling 13, design §15 Q2): decide before the first customer that runs WDAC or AppLocker, and
+  before general availability, whether `alice-helper.exe` is signed (a code-signing certificate and a signing step on
+  the offline machine). Until then the guides tell customers to use a hash rule.
+- **Updating the helper before Alice**: the guidance "update the helpers first, then Alice" meets the setup script's
+  embedded checksum: the script shown by the installed (older) Alice refuses the newer helper. The operator guide
+  therefore tells the administrator to copy the checked file over `C:\Program Files\Alice\alice-helper.exe` by hand;
+  the host guide's `ALC-WIN-0002` text ("repeat steps 1 to 3 with the helper of this Alice version") fits only after
+  Alice was updated. Confirm the procedure, or ask for a script option that installs a newer helper.
+- **The image check outside CI**: `deploy/dev/check-image.sh` skips the four embedded-checksum checks when the host's
+  Go differs from the Go that built the image's binary, except in CI, where a difference fails (pre-existing). On the
+  release build machine release-checklist row 3.4 (the CI stage's binaries equal to the local ones) holds only when
+  that machine builds with the `go.mod` Go, so a skipped image check there cannot hide a mismatch; build the release
+  with the `go.mod` Go.
+- **The W3 owner decisions stay open**: cleanup while the licence is locked (`jobs.WindowsCleanup` is `ClassChange`,
+  so even an incident's at-once removal waits for the lock to end), and the accepted gaps listed under "Owner items
+  (W3)" (no audit row after `OUTCOME_UNKNOWN`, the notice dedupe limits, a shared key container, the Ruling 14
+  assumption, a duplicate incident notice).
+- **Commit trailers**: the W4 commits carry `Claude Fable 5.1` per the owner's instruction for this phase (W3 used
+  the writing model's trailer).
+
+## Deferred to W5+
+
+- **W5-W7, on demand**: CCS (`win_ccs_file`), RDP deployment (`win_rdp`), WinRM transport.
+- **Carried from W2 and W3, not decided in W4**: a third party's intermediate added after Alice's commit makes a
+  redeploy answer `unchanged` with `win.chain_differs`; the emulator's slow-host fault and the abandoned-call marking
+  it needs; deploying to a binding whose only problem is its key; IDN host headers in their U-label form; a manual
+  "roll back this deployment" action.
+- **W3's deferred minors, declined in W4 (known debt, unchanged behaviour)**: the heal step may clear a chain for a DER
+  still present in another store; no test of the `maxImports` trim of adopted entries; `cleanup.go` not split; the
+  provider's plan check accepts duplicate candidates; `UpdateTarget` writes `certificate_cleanup` back on every edit; a
+  skipped incident place queues one extra cleanup.
+- **Minors deferred during W4**: the helper version literal is asserted in several tests (the next bump touches
+  several places); `TestReleasedHelperVersion`'s "numeric, not text" case does not discriminate (for example 0.10.0
+  against 0.9.0); the dependency test's `_test` suffix strip would also strip a real directory ending in `_test` (none
+  exists); the Dockerfile subtest of `TestWindowsHelperBuildFlagsAgree` matches an exact indented string; no
+  releasebuild row for a checksum file missing one `.exe` line (the logic refuses it); the `refusalNames` table is
+  keyed by subtest names; ShellCheck of the workflow's `run:` scripts.
+- **Not built**: a real-Windows ARM64 leg (no hosted Windows Server ARM64 runner); `ci.yml` checks made required (the
+  owner's choice); a Windows gate in `make release-gates`; a `merge_group` trigger (add it if a merge queue is enabled);
+  removing intermediates Alice added to `CA` (design §6.7: never); a cleanup history page.

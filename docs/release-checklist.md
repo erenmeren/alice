@@ -75,6 +75,9 @@ Release candidate: version ______ commit ______ (40 hex) built on ______ by ____
 | 1.43 | Directory sign-in against a real Active Directory or Samba AD: **Test connection**, **Test sign-in**, a sign-in through a nested group, a disabled and a locked directory account refused | [ldap-signin.md](security/reviews/ldap-signin.md) "Open limitations" (KI-38); [admin-guide.md](admin-guide.md#ldap-and-active-directory) | B | Owner | | | |
 | 1.44 | Known issues and residual risks in `SECURITY-REPORT.md` | [SECURITY-REPORT.md](../SECURITY-REPORT.md#7-known-issues-and-residual-risks) section 7 reviewed | B | Reviewer | | | |
 | 1.45 | The vendor signs off | [section 7](#7-human-gates) | B | Vendor | | | |
+| 1.46 | Real Windows green on the release commit: the helper's real-host tests on windows-2022 and windows-2025 passed, with the helper built byte for byte as the package ships it | `release.yml` job `windows` of the release tag, or a `windows.yml` run of that commit with `windows-required` green and both `helper` legs run (not skipped); record the run's link | B | Release engineer | | | |
+| 1.47 | The check `windows-required` is required on the default branch | the ruleset of [windows-ci.md](dev/windows-ci.md) configured; `gh api repos/erenmeren/alice/rules/branches/main` lists it | B | Owner | | | |
+| 1.48 | The Windows servers before release done | [section 8](#8-windows-servers-before-release), every row | B | Owner | | | |
 
 ## 2. VM installs
 
@@ -239,6 +242,7 @@ row points to that phase's owner table; record the outcome here and in that tabl
 | 5.7 | Phase 7: alerts, dashboard, SSO | [phase-7.md](security/reviews/phase-7.md#owner-verification) | Coordinator | | | |
 | 5.7a | Audit remediation | [audit-remediation.md](security/reviews/audit-remediation.md#owner-verification) | Coordinator | | | |
 | 5.8 | Phase 8: packaging and release | [spec §26.10](superpowers/specs/alice-v1/06-quality.md#2610-phase-8-packaging-and-release) "Owner verifies" 1–6, and the owner table of `docs/security/reviews/phase-8.md` | Coordinator | | | |
+| 5.9 | Windows servers W1-W4 | the owner tables of `docs/superpowers/rulings/windows-iis.md`: "Owner items" (W1), "Owner items (W2)", "Owner items (W3)", "Owner items (W4)" | Coordinator | | | |
 
 ## 6. Long gates
 
@@ -263,5 +267,25 @@ row points to that phase's owner table; record the outcome here and in that tabl
 | 7.5 | Peer crypto review of the release signing (Ed25519 raw signatures over `SHA256SUMS` and the outer `.sha256`, key separation) | reviewer's notes on `cmd/licensectl` and the host scripts' check | Reviewer | | | |
 | 7.6 | `SECURITY-REPORT.md` signed (developer, reviewer) | [SECURITY-REPORT.md](../SECURITY-REPORT.md#10-sign-off) section 10 | Developer; reviewer | | | |
 | 7.7 | Vendor sign-off: every row of this checklist has a result, a date and initials | this file, signed below | Vendor | | | |
+
+## 8. Windows servers before release
+
+The automated real-Windows check (row 1.46) runs on Windows Server 2022 and 2025 Datacenter with Desktop Experience,
+a local account, Defender real-time protection off, and no other certificate on Remote Desktop. These cases need a
+real server the owner prepares (`docs/superpowers/rulings/windows-iis.md` "W4 (R63)" Ruling 19; test ID `WIN-45`).
+Prepare each server as [windows-host-preparation.md](windows-host-preparation.md) describes, with the helper of the
+release candidate's package, and record the outcome here. A case that cannot be run (no AD FS or ARM64 server
+available) is recorded as "not available" with the reason, and the release notes say it is not verified.
+
+| # | Case | What to do and expect | Owner | Result | Date | Initials |
+|---|---|---|---|---|---|---|
+| 8.1 | Windows Server 2019 (Desktop Experience) | The setup script, **Test connection**, a discovery (`winspike osinfo` prints the http.sys export, F2), a deployment to an SNI and an IP binding (F2, F9, F10), a deployment whose verification fails and is rolled back, one cleanup run | Owner | | | |
+| 8.2 | Server Core (2022 or 2025) | appcmd present and the IIS sites discovered (F6), the setup script, a deployment | Owner | | | |
+| 8.3 | A domain-joined server under the Microsoft security baseline, `CORP\alice-svc` in a GPO-managed Administrators group | The setup script with `$AliceUser` edited; the `Match User` line in lower case; the key line's `command=` confines the key (signing in as another administrator with Alice's key reaches only the helper); the token is elevated; a deployment | Owner | | | |
+| 8.4 | Defender (or the customer's EDR) real-time protection on | The setup script; the first **Test connection** (it may take longer on a fresh account's first sign-in); a deployment (journal and machine key written); a cleanup run that removes a certificate | Owner | | | |
+| 8.5 | A Remote Desktop listener with its own CA certificate (`SSLCertificateSHA1Hash` set) | A cleanup run keeps that certificate with reason `rdp`; Alice never changes the listener | Owner | | | |
+| 8.6 | The helper from the signed package | `helper\alice-winhelper-windows-amd64.exe` checked against the package's signed `SHA256SUMS`; the setup script accepts it; a copy with one byte changed is refused | Owner | | | |
+| 8.7 | AD FS (when available) | Discovery shows the AD FS binding as another application's with its raw application id; send that id to the developers | Owner | | | |
+| 8.8 | ARM64 Windows Server (when available) | The setup script and a deployment with `alice-winhelper-windows-arm64.exe` | Owner | | | |
 
 Vendor sign-off: name ______ signature ______ date ______

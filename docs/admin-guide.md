@@ -1522,6 +1522,22 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   and `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it) (see
   [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
   (`ALC-WIN-0002`) before changing anything.
+- **Where the helper comes from.** Each Alice package carries the Windows helper in its `helper\` folder:
+  `alice-winhelper-windows-amd64.exe` and `alice-winhelper-windows-arm64.exe` with their checksum file
+  `alice-winhelper.sha256`, all listed in the package's signed `SHA256SUMS`. Copy the file for the server's processor
+  to the server as `alice-helper.exe`, next to the setup script, which installs it as
+  `C:\Program Files\Alice\alice-helper.exe` and refuses any other file (see
+  [windows-host-preparation.md](windows-host-preparation.md)). The helper is not signed with Authenticode, so an
+  application control policy (WDAC or AppLocker) must allow it by its hash, not by a publisher.
+- **Helper versions.** 1.0.0 is the first released helper. Alice deploys with a helper of 0.2.0 or later and cleans up
+  with 0.3.0 or later, so a server with an older helper keeps working with what it supports. When you update Alice,
+  copy the new package's helper to the Windows servers first, then update Alice.
+- **What is tested on real Windows.** Every change to the helper and the Windows provider, every night and every
+  release run the helper's real-host tests (discovery, deployment, restore, cleanup, the setup script) on Windows
+  Server 2022 and 2025 (Desktop Experience), with the very helper the package ships. Windows Server 2019, Server Core, a
+  domain-joined server under the Microsoft security baseline, Defender or another EDR switched on, a Remote Desktop
+  listener with its own certificate, AD FS and ARM64 servers are checked by hand before each release (the release
+  checklist's section "Windows servers before release").
 - Alice does not manage the SSH keys of a Windows server. Not deployable in this release: Centralized Certificate
   Store bindings, bindings of other applications or other stores, a binding whose only problem is its key, and a host
   name written with non-ASCII letters (use its `xn--` form in IIS).

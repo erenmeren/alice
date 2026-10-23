@@ -349,10 +349,11 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
 
-### 24.7 Windows servers (R60, R61, R62)
+### 24.7 Windows servers (R60, R61, R62, R63)
 
 (Phase W1, read only: WIN-01..WIN-14; phase W2, deployment, verification and rollback (R61): WIN-15..WIN-28;
-phase W3, drift and cleanup (R62): WIN-29..WIN-38; design
+phase W3, drift and cleanup (R62): WIN-29..WIN-38; phase W4, real-Windows CI and release (R63): WIN-39..WIN-45;
+design
 `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
 `docs/superpowers/rulings/windows-iis.md`.) The emulated host `internal/providers/windows/wintest` runs the helper's own
 decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (windows-2022, windows-2025).
@@ -397,6 +398,13 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | WIN-36 | The helper is killed between the key's removal and the certificate's, or after the removal before its bookkeeping; a W2 helper (0.2.0) | Key first: a keyless certificate is left, which the next run removes, never an orphan key; binding-record chains are cleared before the inventory entry is dropped and the next plan heals an interrupted removal; Alice never sends `iis-cleanup` to a helper below 0.3.0 (`windows.helper_outdated`) and that helper still deploys |
 | WIN-37 | Journals and fence tombstones accumulate | Every plan removes final journals older than 7 days and `restore_failed` or undecodable ones older than 30 days, at most 1000 per run; never `writing` or `restoring` nor a journal a binding record still needs; an unreadable binding record stops pruning with `binding_record_unreadable` |
 | WIN-38 | The emulator and the real helper run `iis-cleanup` side by side; a real removal; the listeners' registry values; the runner after the tests | The answers, the import inventory and the binding records agree on windows-2022 and windows-2025; the real removal deletes the certificate and exactly one machine key file, no other key; the RDP and WinRM thumbprints read equal PowerShell's and the WinRM one equals the http.sys `0.0.0.0:5986` hash; nothing of the tests is left behind |
+| WIN-39 | A change under a watched Windows path; a change of any other file; a failed, cancelled or skipped leg; a failed `changes` job | `windows.yml`'s `changes` job answers `windows=true` only for a watched path (or the nightly run, a manual run, a release call); the legs run only then; the one required check `windows-required` passes only when both legs succeeded on a Windows change or both were skipped on no Windows change, and fails on every other combination |
+| WIN-40 | A package the Windows tests build is not on the watched list; an entry matches no file; a real-Windows test is skipped, renamed or added without being required | `.github/windows-paths.txt` must match every package `GOOS=windows go list -deps -test` names for the helper and the provider (tags `""` and `alicetest`) and the fixed entries, with no stale entry; the workflow's required list equals the set of `TestReal*` and `TestFidelity*` functions, and a test that did not print its PASS line fails the leg |
+| WIN-41 | The release stage with the Windows helpers; one of them missing or changed after `make winhelper` | The package's `helper/` holds `alice-winhelper-windows-amd64.exe`, `alice-winhelper-windows-arm64.exe` and `alice-winhelper.sha256` next to the Linux files, all listed in `SHA256SUMS`; a missing or mismatching helper refuses the stage and names `make winhelper` |
+| WIN-42 | The helper the runners test and the helper the release ships; a release tag | One set of build flags in the `Makefile`, `deploy/dev/reproducible-check.sh`, `deploy/Dockerfile` and `windows.yml`; the Windows legs' build is byte-identical to `make winhelper` on Linux or the leg fails; `release.yml` stages a tag only after its call of `windows.yml` (all legs) passed |
+| WIN-43 | Helper 1.0.0 under Alice 1.0; a 0.3.0 and a 0.2.0 helper | `winproto.Version` is `1.0.0` with protocol 1; a 0.3.0 helper keeps every feature; a 0.2.0 helper still deploys and is never sent `iis-cleanup` |
+| WIN-44 | An ACME certificate deployed to a Windows binding and to a certificate file | The ACME binding carries `location_kind`; the bindings panel speaks of a binding for a `win_sslbinding` location and keeps the file wording for a file |
+| WIN-45 | The owner's manual matrix before release: Windows Server 2019, Server Core, a domain baseline, Defender on (with a cleanup run), an RDP listener with its own certificate, the helper from the signed package, AD FS and ARM64 when available | Each case passes as `docs/release-checklist.md` section 8 describes it; the result, date and initials are recorded before release |
 
 ## 25. Security Test Plan
 

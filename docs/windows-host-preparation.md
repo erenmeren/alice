@@ -6,8 +6,8 @@ from the machine store, with its expiry and store. The bindings appear under **W
 column **IIS site**, grouped by the certificate they serve, and the certificates under **Certificates** like any
 certificate Alice found. Alice deploys certificates to the bindings IIS uses: it imports the certificate into the
 machine store and points the binding to it ([What a deployment changes](#what-a-deployment-changes)). It never
-changes IIS's own configuration (`applicationHost.config`), never removes a certificate in this release and never
-restarts a service.
+changes IIS's own configuration (`applicationHost.config`) and never restarts a service. It removes a certificate
+only when it imported it itself and nothing has used it for 7 days ([What the cleanup removes](#what-the-cleanup-removes)).
 
 Alice signs in over SSH (the OpenSSH Server of Windows) with its own key. It never gets a shell: sshd runs
 **alice-helper.exe** for every sign-in of Alice's account, and the helper does only a fixed list of things. This
@@ -44,12 +44,15 @@ the account is local.
 
 ## Steps
 
-1. Get the helper. In a development checkout run `make winhelper`; it writes `bin/alice-winhelper-windows-amd64.exe`,
-   `bin/alice-winhelper-windows-arm64.exe` and `bin/alice-winhelper.sha256`. Copy the file for the server's
-   processor (`amd64` for x64, `arm64` for ARM64) to the server as `alice-helper.exe`, in a new folder that only
-   administrators can write, for example `C:\AliceSetup`. You can compare it yourself:
-   `Get-FileHash .\alice-helper.exe -Algorithm SHA256` must print the value from `alice-winhelper.sha256` (in upper
-   case); the setup script checks it again.
+1. Get the helper. The Alice package's `helper\` folder holds `alice-winhelper-windows-amd64.exe`,
+   `alice-winhelper-windows-arm64.exe` and their checksum file `alice-winhelper.sha256`, which the package's signed
+   `SHA256SUMS` covers (`install.sh` checks that signature before it installs or updates Alice). Take the helper
+   from the package of the Alice version you run. (In a development checkout, `make winhelper` writes the same three
+   files to `bin/`.)
+   Copy the file for the server's processor (`amd64` for x64, `arm64` for ARM64) to the server as `alice-helper.exe`,
+   in a new folder that only administrators can write, for example `C:\AliceSetup`. You can compare it yourself:
+   `Get-FileHash .\alice-helper.exe -Algorithm SHA256` must print the value from `helper\alice-winhelper.sha256` (in
+   upper case); the setup script checks it again.
 2. In Alice, sign in as an administrator and open **Servers**. Under **Prepare a server for Alice** choose **Server
    type** **Windows server** and **Copy commands**. The script contains Alice's public key; **Fingerprint of Alice's
    key** above it shows its fingerprint.
@@ -89,6 +92,14 @@ install it and run the script again.
 - Package: `https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64-v10.0.0.0.msi`
 - SHA-256: `ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9` (`Get-FileHash` prints it in upper case)
 - Install: `msiexec /i OpenSSH-Win64-v10.0.0.0.msi /qn /norestart`
+
+### Code signing
+
+`alice-helper.exe` is not signed with Authenticode. Its integrity rests on the package's `SHA256SUMS`, signed
+offline with the release key, and on the checksum built into Alice that the setup script checks before it installs
+the file. If the server runs an application control policy (Windows Defender Application Control or AppLocker), allow
+`C:\Program Files\Alice\alice-helper.exe` with a hash rule (or a path rule on that folder, which only administrators
+can write); a publisher rule cannot name it. Add the new hash when you update the helper.
 
 ## The sshd configuration
 
@@ -272,7 +283,8 @@ order:
 Antivirus or endpoint protection that blocks or inspects `C:\Program Files\Alice\alice-helper.exe` can make a
 discovery or a deployment fail or time out (an interrupted deployment is finished or undone by Alice later). Allow
 the program `C:\Program Files\Alice\alice-helper.exe` and the folder `C:\ProgramData\Alice\helper` in its
-exclusions. Alice is tested with Defender real-time protection off. The first connection to a server prepared a
+exclusions. Alice's automated tests run with Defender real-time protection off; a setup, a deployment and a cleanup
+with it on are checked by hand before each release. The first connection to a server prepared a
 moment ago can take longer than later ones (Windows may still be creating the new account's profile at its first sign-in): if the
 first **Test connection** times out, choose it again.
 
