@@ -1415,15 +1415,20 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   answered `true`. The plan's run 2 (a rulings-only push expecting skipped legs) was dropped. It is a coordinator check
   after `main` is pushed (controller ruling 5, [Owner items (W4)](#owner-items-w4)).
 
-### Runner runs used (2 of 6)
+### Runner runs used (4 of 6)
 
 | Run | Head | Result | What it found |
 |---|---|---|---|
 | 1 <https://github.com/erenmeren/alice/actions/runs/39956839820> | `96ace632` | **green**: `changes` (windows=true, a watched path changed since `e21e1ba3`), `linux-build`, `helper (windows-2022)`, `helper (windows-2025)`, `windows-required` | F13 confirmed on both images (the hashes above); F14's run path; the nine newly required real tests passed |
 | 2 <https://github.com/erenmeren/alice/actions/runs/39958574455> | `b7beebc6` | **green** (all five jobs) | Tasks 4-5 (the setup script texts under a watched path); F13 confirmed again with the same two hashes |
+| 3 <https://github.com/erenmeren/alice/actions/runs/39963473648> | `53ca1185` | **green** (all five jobs) | The final review's fixes (the per-commit default-branch group, `$WINDOWS` passed as is, the `helper` checkout without a token): the code head of the branch; F13 confirmed again with the same two hashes on both images |
+| 4 | the commit recording this table | (in the hand-over report) | The docs tip: a rulings-only change, but a branch push diffs against `origin/main` (`e21e1ba3`), so the legs run again; it cannot show F14's skipped path |
 
 The `ci.yml` runs of the branch: 39956839548 at `96ace632` (superseded by the next push: go, coverage and stack
-cancelled; web, secrets, ssh-matrix and both licensectl legs green); 39958574391 at `b7beebc6`: (pending).
+cancelled; web, secrets, ssh-matrix and both licensectl legs green); 39958574391 at `b7beebc6` (coverage failed on
+`TestListACMEBindingsCarriesTheLocationKind`, the kind-shape violation fixed in `86ae97ef`; stack cancelled by the
+next push; the other jobs green); 39963473554 at `53ca1185`: **green**, all jobs (go, coverage with the integration
+tests, web, secrets, ssh-matrix, both licensectl legs, stack).
 
 ## Rulings made during execution (W4)
 
@@ -1523,7 +1528,8 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
   there, with `LocationKind` imported from `types.ts`.
 - `npm ci` was run in `web/` (the worktree had no `node_modules`; ignored by git).
 - The integration test first changed an existing location's kind with an `UPDATE`; the review found it violates the
-  kind-shape check, and the fix (`86ae97ef`) builds a Windows location that satisfies it (run pending Task 7).
+  kind-shape check, and the fix (`86ae97ef`) builds a Windows location that satisfies it (passed in `ci.yml`
+  39963473554's coverage job and in the local `make ci` at `53ca1185`).
 
 ### Task 6 (docs)
 
@@ -1592,7 +1598,29 @@ The final review of `2ec69c8c..4e786c29` (verdict "ready after fixes") and its f
   7 partial, 0 pending, 1 owner, 2 deferred, 0 gaps).
 - The owner's manual matrix is listed as an owner step: release-checklist section 8 (rows 8.1-8.8), row 1.48,
   `WIN-45` status `owner`.
-- Final gates (Task 7): pending.
+- Final gates (Task 7), at the code head `53ca1185`:
+  - **Local `make ci`** (`E2E_PROJECT=alice-e2e-w4 ALICE_E2E_PORT=9977`): exit 0 (lint, test, coverage with every
+    floor met and none lowered: `winjobs` 100.0 (floor 95), `winhelper` 97.4 (95), `winproto` 100.0 (100), `wintest`
+    97.4 (90); perf, backup cycle, ssh, build, release-symcheck, i18n, web lint and coverage (164 files, 2622 tests),
+    vuln, secrets and fs scans, e2e hardening, e2e, image check (117 checks ok) and scan).
+  - **e2e**: 158 passed, 4 skipped, 0 failed (49.8 min) in that `make ci`.
+  - **ShellCheck**: `make shellcheck` green (the new `deploy/dev/windows-ci.sh` included); the bash `run:` scripts of
+    `windows.yml` extracted and checked with the same pinned ShellCheck image: clean. `actionlint` and `pincheck` clean.
+  - **Windows build and vet**: amd64 and arm64 builds, `go vet` with and without `alicetest`, at `4e786c29` and in
+    `make ci`.
+  - **Test release**: `make release-test VERSION=1.0.0-rc.90` exit 0; the package holds
+    `alice/helper/alice-winhelper-windows-amd64.exe`, `alice/helper/alice-winhelper-windows-arm64.exe` and
+    `alice/helper/alice-winhelper.sha256`, its `SHA256SUMS` lists all three, and the two `.exe` hashes equal F13's
+    (`fd09f74e…`, `dba2d5b3…`), the bytes the runners compared; the rc.90 outputs and images were removed afterwards.
+  - **gitleaks over the whole range** `2ec69c8c..53ca1185` (v8.30.1, the repository's rules, `git log -p` exported and
+    scanned in `dir` mode as in W3): no leaks; `.gitleaksignore` needed no new fingerprint.
+  - **Real Windows**: run 3 green on windows-2022 and windows-2025 with `windows-required` green at `53ca1185`, the code
+    head; `ci.yml` 39963473554 green at the same head. 4 of the 6 budgeted runs used (run 4 is the docs tip).
+  - **Final review** of `2ec69c8c..4e786c29`: "ready after fixes" (three Important, minors); every finding fixed or
+    declined with a reason in `1437a3bb..53ca1185` and re-reviewed (all addressed). See
+    [Final review fixes (W4)](#final-review-fixes-w4).
+  - **Not proven in W4**: F14's skipped path (owner item below), a real tag run of `release.yml` (no tag is pushed in
+    W4; the call is checked by `actionlint`, `TestReleaseWorkflowWaitsForWindows` and `make release-test` only).
 
 ## Owner items (W4)
 
@@ -1608,6 +1636,9 @@ The final review of `2ec69c8c..4e786c29` (verdict "ready after fixes") and its f
   change (or a branch cut from that `main` with only such a change) must show `changes` → `windows=false`,
   `linux-build` and both `helper` legs skipped, and `windows-required` success under exactly that name. If it fails,
   apply the plan's F14 fallback (legs that always run and exit early) before requiring the check.
+- **The first release tag** (Ruling 12): no tag was pushed in W4. On the first `v*` tag, check that `release.yml`'s
+  job `windows` calls `windows.yml` with `all: true` (both legs run, `windows-required` green) and that `stage` waits
+  for it; record the run in release-checklist row 1.46.
 - **The manual matrix** (Ruling 19): release-checklist section 8, rows 8.1-8.8 (Windows Server 2019, Server Core, a
   domain-joined server under the security baseline with `CORP\alice-svc`, Defender or the customer's EDR on with a
   cleanup run that removes a certificate, an RDP listener with its own CA certificate kept by cleanup, the helper from
