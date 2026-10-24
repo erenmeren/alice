@@ -1422,7 +1422,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 1 <https://github.com/erenmeren/alice/actions/runs/39956839820> | `96ace632` | **green**: `changes` (windows=true, a watched path changed since `e21e1ba3`), `linux-build`, `helper (windows-2022)`, `helper (windows-2025)`, `windows-required` | F13 confirmed on both images (the hashes above); F14's run path; the nine newly required real tests passed |
 | 2 <https://github.com/erenmeren/alice/actions/runs/39958574455> | `b7beebc6` | **green** (all five jobs) | Tasks 4-5 (the setup script texts under a watched path); F13 confirmed again with the same two hashes |
 | 3 <https://github.com/erenmeren/alice/actions/runs/39963473648> | `53ca1185` | **green** (all five jobs) | The final review's fixes (the per-commit default-branch group, `$WINDOWS` passed as is, the `helper` checkout without a token): the code head of the branch; F13 confirmed again with the same two hashes on both images |
-| 4 | the commit recording this table | (in the hand-over report) | The docs tip: a rulings-only change, but a branch push diffs against `origin/main` (`e21e1ba3`), so the legs run again; it cannot show F14's skipped path |
+| 4 <https://github.com/erenmeren/alice/actions/runs/40071646690> | `a0931a01` | **green** (all five jobs) | The docs tip: a rulings-only change, but a branch push diffs against `origin/main` (`e21e1ba3`), so the legs ran again; F13 confirmed again. It could not show F14's skipped path; see [F14 skipped path (W4 coordinator)](#f14-skipped-path-w4-coordinator) |
 
 The `ci.yml` runs of the branch: 39956839548 at `96ace632` (superseded by the next push: go, coverage and stack
 cancelled; web, secrets, ssh-matrix and both licensectl legs green); 39958574391 at `b7beebc6` (coverage failed on
@@ -1621,6 +1621,16 @@ The final review of `2ec69c8c..4e786c29` (verdict "ready after fixes") and its f
     [Final review fixes (W4)](#final-review-fixes-w4).
   - **Not proven in W4**: F14's skipped path (owner item below), a real tag run of `release.yml` (no tag is pushed in
     W4; the call is checked by `actionlint`, `TestReleaseWorkflowWaitsForWindows` and `make release-test` only).
+
+## F14 skipped path (W4 coordinator)
+
+The check that `windows-w4` could not show (controller ruling 5). After `main` was pushed at `95873255` (W4 merged
+at `a0931a01`, then the lockfile bump `322c4d0c` and `.dockerignore` `95873255`; `ci.yml` 40083713156 and `windows.yml`
+40083713209 on that push), the branch `windows-w4-f14` was cut from it with this section as its only change (a file
+under `docs/superpowers/`, not a watched path of `.github/windows-paths.txt`). Expected on its push: `changes` with
+`windows=false`, `linux-build` and both `helper` legs `skipped`, `windows-required` success under exactly that name.
+The verdict is recorded in the next commit of this branch, and the fast-forward of the branch onto `main` is a second
+observation: a push to the default branch diffs against its before commit (`95873255`), again with no watched path.
 
 ## Owner items (W4)
 
