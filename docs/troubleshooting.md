@@ -3769,7 +3769,7 @@ the service to change its policy.
 
 ## ALC-SVC-0015: This policy setting is not available yet
 
-**Meaning.** The policy names a setting kept for a later version of Alice (`verification`, `drift`, `canary`, `windows`
+**Meaning.** The policy names a setting kept for a later version of Alice (`verification`, `drift`, `windows`
 or `thresholds`; `params.field` names it). Nothing was changed. (HTTP 422, reason
 `service.policy_field_unavailable`.)
 

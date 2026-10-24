@@ -114,6 +114,11 @@
         "title": "Bir otomasyon hesabı bir hizmetin sorumlusu olamaz.",
         "cause": "Sorumlular kişiler ve dizin gruplarıdır: hizmetin e-postalarını alırlar. Otomasyon hesabının posta kutusu yoktur ve hiçbir yerde oturum açmaz.",
         "action": "Otomasyon hesabını sorumlulardan çıkarın, yerine bir kişi ya da bir grup belirtin."
+      },
+      "canary_override_forbidden": {
+        "title": "Hizmetin ilkesi hepsine aynı anda dağıtmaya izin vermiyor.",
+        "cause": "Bu hizmet önce birkaç web sitesine dağıtır ve onları gözlemledikten sonra kalanlara dağıtır; ilkesi bu adımın atlanmasına izin vermiyor.",
+        "action": "\"Hepsine aynı anda dağıt\" seçeneği olmadan dağıtın ya da hizmetin bir Yöneticisinden ilkede buna izin vermesini isteyin."
       }
     },
     "binding": {

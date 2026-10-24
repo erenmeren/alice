@@ -586,6 +586,9 @@ var (
 	// Owners (R56, design §7.1): an automation account named as an owner (the next free number; the design says only
 	// "refused (422)"); the entry is the field. A stale version of the owners is ErrSVCVersionConflict.
 	ErrSVCOwnerNotAPerson = ErrorCode{Code: "ALC-SVC-0019", Reason: "service.owner_not_a_person", Status: http.StatusUnprocessableEntity}
+	// Canary deployment (R65, design §13.1): a person asked to deploy to all at once while the source service's policy
+	// says override "forbidden".
+	ErrSVCCanaryOverrideForbidden = ErrorCode{Code: "ALC-SVC-0020", Reason: "service.canary_override_forbidden", Status: http.StatusUnprocessableEntity}
 
 	// Role bindings (area ACC, R49 Phase 2, design §8.3): the same role on the same service or environment twice, and
 	// more bindings for one person than the bound allows.

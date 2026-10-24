@@ -5834,7 +5834,7 @@ paths:
       description: >-
         body is the whole policy document (schema 1, R55); version is the policy version the caller read (409
         ALC-SVC-0010 when it is no longer the current one). Every field is optional and an empty list is no constraint.
-        An unknown field is 400; a reserved key (verification, drift, canary, windows, thresholds) is 422 ALC-SVC-0015; an
+        An unknown field is 400; a reserved key (verification, drift, windows, thresholds) is 422 ALC-SVC-0015; an
         invalid value is 422 validation on body.<path>. Changing domains needs a global grant (403 ALC-SVC-0011 for an
         Administrator of this service only). A document equal to the current one stores nothing and answers the current
         version. Audited service.policy_changed with the changed top-level keys. Administrator of the service with a fresh
@@ -6175,6 +6175,8 @@ components:
         certificate_sources: how certificates may enter. acme: the allowed providers, challenges and key types, and the
         renewal window new ACME certificates start with. deployment.auto_deploy forbidden holds automatic deployment.
         incident.revoke_mode: the mode new incidents start with. notifications: who else receives the service's e-mails.
+        canary (R65): deploy to a subset first, observe it, then deploy to the rest; absent fields are the defaults, which
+        are not stored; first must name locations of the service's own live servers (422 validation otherwise).
       required: [schema]
       additionalProperties: false
       properties:
@@ -6214,6 +6216,39 @@ components:
                 properties:
                   email: { type: string, format: email }
                   locale: { type: string, enum: [en, tr] }
+        canary:
+          type: object
+          additionalProperties: false
+          description: >-
+            Canary deployment (R65). Durations are a number and one unit (s, m, h), stored in the largest whole unit.
+            interval <= hold; check.timeout < interval. An absent check observes the TLS probe only.
+          properties:
+            enabled: { type: boolean }
+            subset:
+              type: object
+              additionalProperties: false
+              description: Exactly one of count and percent (default count 1); wave 2 is never empty.
+              properties:
+                count: { type: integer, minimum: 1, maximum: 10 }
+                percent: { type: integer, minimum: 1, maximum: 50 }
+            first: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
+            hold: { type: string, pattern: "^[1-9][0-9]{0,4}(s|m|h)$", description: "1m..24h, default 10m" }
+            interval: { type: string, pattern: "^[1-9][0-9]{0,4}(s|m|h)$", description: "15s..10m, default 30s" }
+            failures: { type: integer, minimum: 1, maximum: 10, description: "default 2" }
+            check:
+              type: object
+              additionalProperties: false
+              required: [path]
+              description: >-
+                The HTTPS application check, sent to each location's own address (never to host): path is the request
+                target, host the TLS server name and Host header ("" = the location's name), port 0 = the location's.
+              properties:
+                path: { type: string, maxLength: 512, pattern: "^/" }
+                host: { type: string, maxLength: 253 }
+                port: { type: integer, minimum: 0, maximum: 65535 }
+                expect_status: { type: array, minItems: 1, maxItems: 10, uniqueItems: true, items: { type: integer, minimum: 100, maximum: 599 } }
+                timeout: { type: string, pattern: "^[1-9][0-9]{0,4}(s|m|h)$", description: "1s..10s, default 5s" }
+            override: { type: string, enum: [allowed, forbidden], description: "default allowed" }
     ServicePolicyList:
       type: object
       required: [items]

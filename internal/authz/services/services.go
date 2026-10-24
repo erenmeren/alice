@@ -730,6 +730,9 @@ func (s *Store) SetPolicy(ctx context.Context, a Actor, id uuid.UUID, version in
 		if err := checkPolicyProviders(ctx, tx, next); err != nil {
 			return err
 		}
+		if err := checkCanaryFirst(ctx, tx, id, next); err != nil {
+			return err
+		}
 		keys := authz.ChangedKeys(old, next)
 		if len(keys) == 0 {
 			return nil
@@ -749,6 +752,31 @@ func (s *Store) SetPolicy(ctx context.Context, a Actor, id uuid.UUID, version in
 		return Policy{}, err
 	}
 	return s.Policy(ctx, id)
+}
+
+// checkCanaryFirst refuses a canary first location that is not a location of a live server of the service (R65,
+// design §5.2), as an unknown reference: a field error on body.canary.first.N (validate.Required, as an unknown ACME
+// provider). At use, stale ids are ignored.
+func checkCanaryFirst(ctx context.Context, tx pgx.Tx, service uuid.UUID, p authz.Policy) error {
+	if p.Canary == nil || len(p.Canary.First) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT l.id FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
+WHERE l.id = ANY($1) AND t.service_id = $2`, p.Canary.First, service)
+	if err != nil {
+		return fmt.Errorf("services: read the canary locations: %w", err)
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("services: read the canary locations: %w", err)
+	}
+	var v validate.Errors
+	for i, id := range p.Canary.First {
+		if !slices.Contains(found, id) {
+			v.Add("body.canary.first."+strconv.Itoa(i), validate.Required, nil)
+		}
+	}
+	return v.Err()
 }
 
 // checkPolicyProviders refuses an ACME provider the policy names that does not exist (or was deleted), as an unknown

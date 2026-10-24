@@ -66,8 +66,8 @@ var (
 )
 
 // ReservedPolicyKeys are the top-level keys kept for later work (design §7.4): refused now with
-// ErrPolicyFieldUnavailable, so adding them later breaks no client.
-var ReservedPolicyKeys = []string{"verification", "drift", "canary", "windows", "thresholds"}
+// ErrPolicyFieldUnavailable, so adding them later breaks no client. "canary" left the list with R65 (canary.go).
+var ReservedPolicyKeys = []string{"verification", "drift", "windows", "thresholds"}
 
 // Policy is one service policy (schema 1). Every field is optional: absent (and an empty list) is no constraint, or
 // today's default. The zero value with Schema 1 is the empty policy every service starts with.
@@ -79,6 +79,7 @@ type Policy struct {
 	Deployment         *DeploymentPolicy    `json:"deployment,omitempty"`
 	Incident           *IncidentPolicy      `json:"incident,omitempty"`
 	Notifications      *NotificationsPolicy `json:"notifications,omitempty"`
+	Canary             *CanaryPolicy        `json:"canary,omitempty"`
 }
 
 // ACMEPolicy limits the service's ACME certificates (providers, challenges, key types) and sets the renewal window a
@@ -281,6 +282,9 @@ func (p *Policy) normalize(v *validate.Errors, prefix string) {
 		if n.Administrators == nil && n.Addresses == nil {
 			p.Notifications = nil
 		}
+	}
+	if c := p.Canary; c != nil && !c.normalize(v, prefix+"canary") {
+		p.Canary = nil
 	}
 	if len(p.Domains) == 0 {
 		p.Domains = nil

@@ -114,6 +114,11 @@
         "title": "An automation account cannot own a service.",
         "cause": "Owners are people and directory groups: they receive the service's e-mails. An automation account has no mailbox and signs in nowhere.",
         "action": "Remove the automation account from the owners and name a person or a group instead."
+      },
+      "canary_override_forbidden": {
+        "title": "The service's policy does not allow deploying to all at once.",
+        "cause": "This service deploys to a few websites first and observes them before it deploys to the rest, and its policy does not allow skipping that step.",
+        "action": "Deploy without \"Deploy to all at once\", or ask an Administrator of the service to allow it in the policy."
       }
     },
     "binding": {

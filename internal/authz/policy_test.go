@@ -52,6 +52,7 @@ func TestParsePolicyRefuses(t *testing.T) {
 		_, err := authz.ParsePolicy([]byte(doc), "body.")
 		assert.ErrorIs(t, err, authz.ErrPolicyMalformed, doc)
 	}
+	assert.Equal(t, []string{"verification", "drift", "windows", "thresholds"}, authz.ReservedPolicyKeys, "canary left the reserved keys (R65)")
 	for _, k := range authz.ReservedPolicyKeys {
 		_, err := authz.ParsePolicy([]byte(`{"schema":1,"`+k+`":{}}`), "body.")
 		var fu *authz.FieldUnavailableError
@@ -178,6 +179,7 @@ func TestChangedKeys(t *testing.T) {
 	b := parse(t, `{"schema":1,"domains":["a.example.com"],"deployment":{"auto_deploy":"forbidden"}}`)
 	assert.Equal(t, []string{"deployment", "incident"}, authz.ChangedKeys(a, b))
 	assert.Empty(t, authz.ChangedKeys(a, a))
+	assert.Equal(t, []string{"canary"}, authz.ChangedKeys(a, parse(t, `{"schema":1,"domains":["a.example.com"],"incident":{"revoke_mode":"now"},"canary":{"enabled":true}}`)))
 	assert.True(t, authz.SameDomains(parse(t, `{"schema":1,"domains":["x.example.com","y.example.com"]}`),
 		parse(t, `{"schema":1,"domains":["Y.example.com","x.example.com"]}`)))
 	assert.False(t, authz.SameDomains(a, authz.EmptyPolicy()))

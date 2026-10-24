@@ -128,3 +128,50 @@ ORDER BY seq DESC LIMIT 1`).Scan(&keys))
 	assert.Equal(t, 3, sv.PolicyVersion)
 	assert.Equal(t, 1, sv.Version, "the service's own version is the name, description and environment's")
 }
+
+// CAN-04 (R65, design §5.2): the canary's first locations must be locations of live servers of the service itself when
+// the policy is saved.
+func TestSetPolicyCanaryFirstMustBeTheServicesLocations(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	a, err := w.store.CreateService(ctx, w.admin, services.ServiceInput{Name: "Payments"})
+	require.NoError(t, err)
+	b, err := w.store.CreateService(ctx, w.admin, services.ServiceInput{Name: "Shop"})
+	require.NoError(t, err)
+	server, err := seed.Target(ctx, w.d.Owner, "web-1", "nginx", "ok", nil)
+	require.NoError(t, err)
+	gone, err := seed.Target(ctx, w.d.Owner, "web-2", "nginx", "ok", nil)
+	require.NoError(t, err)
+	_, err = seed.Certificate(ctx, w.d.Owner, "www.example.test", time.Now().Add(30*24*time.Hour), []uuid.UUID{server, gone})
+	require.NoError(t, err)
+	_, err = w.d.Owner.Exec(ctx, "UPDATE targets SET service_id = $1 WHERE id = ANY($2)", a.ID, []uuid.UUID{server, gone})
+	require.NoError(t, err)
+	var loc, goneLoc uuid.UUID
+	require.NoError(t, w.d.Owner.QueryRow(ctx, "SELECT id FROM certificate_locations WHERE target_id = $1", server).Scan(&loc))
+	require.NoError(t, w.d.Owner.QueryRow(ctx, "SELECT id FROM certificate_locations WHERE target_id = $1", gone).Scan(&goneLoc))
+	_, err = w.d.Owner.Exec(ctx, "UPDATE targets SET deleted_at = now() WHERE id = $1", gone)
+	require.NoError(t, err)
+
+	doc := func(ids ...uuid.UUID) json.RawMessage {
+		first, _ := json.Marshal(ids)
+		return json.RawMessage(`{"schema":1,"canary":{"enabled":true,"first":` + string(first) + `}}`)
+	}
+	p, err := w.store.SetPolicy(ctx, w.admin, a.ID, 1, doc(loc), false)
+	require.NoError(t, err)
+	assert.Equal(t, 2, p.Version)
+	var keys string
+	require.NoError(t, w.d.Owner.QueryRow(ctx, `SELECT details->>'fields' FROM audit_log WHERE action = 'service.policy_changed'`).Scan(&keys))
+	assert.Equal(t, "canary", keys)
+
+	_, err = w.store.SetPolicy(ctx, w.admin, b.ID, 1, doc(loc), false)
+	fieldErr(t, err, "body.canary.first.0", validate.Required)
+	_, err = w.store.SetPolicy(ctx, w.admin, a.ID, 2, doc(loc, uuid.New()), false)
+	fieldErr(t, err, "body.canary.first.1", validate.Required)
+	_, err = w.store.SetPolicy(ctx, w.admin, a.ID, 2, doc(goneLoc), false)
+	fieldErr(t, err, "body.canary.first.0", validate.Required)
+
+	// Switching it off keeps nothing: the document is {"schema":1} again.
+	p, err = w.store.SetPolicy(ctx, w.admin, a.ID, 2, json.RawMessage(`{"schema":1,"canary":{"enabled":false}}`), false)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"schema":1}`, string(p.Document))
+}
