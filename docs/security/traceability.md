@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-288 IDs: 278 test, 7 partial, 1 owner, 2 deferred, 0 gap.
+305 IDs: 295 test, 7 partial, 1 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -208,6 +208,23 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | WIN-43 | Helper 1.0.0 under Alice 1.0; a 0.3.0 and a 0.2.0 helper | test | `internal/providers/windows/winproto:TestReleasedHelperVersion`<br>`internal/providers/windows:TestCleanupNeedsHelper030` |
 | WIN-44 | An ACME certificate deployed to a Windows binding and to a certificate file | test | `internal/api:TestACMEBindingDTOHasLocationKind`<br>`internal/inventory:TestListACMEBindingsCarriesTheLocationKind`<br>`web/src/pages/AcmeCertificatePage.test.tsx:speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)` |
 | WIN-45 | The owner's manual matrix before release: Windows Server 2019, Server Core, a domain baseline, Defender on (with a clean... | owner | owner step: docs/release-checklist.md section 8 (rows 8.1-8.8) |
+| HB-01 | An incident place on a disabled server | test | `internal/api:TestIncidentRefusalCodesMatchTheCatalogue`<br>`internal/api:TestSSHKeyDeployRefusalsMatchTheCatalogue`<br>`internal/inventory:TestIncidentRefusalCodes`<br>`internal/inventory:TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy` |
+| HB-02 | A website-side person changes a Key Vault binding | test | `internal/api:TestPatchBindingFromTheWebsiteSide` |
+| HB-03 | A certificate file whose leaf is labelled TRUSTED CERTIFICATE or X509 CERTIFICATE | test | `cmd/alice-helper:TestCertBlocksReadsTheOpenSSLLeafLabels`<br>`cmd/alice-helper:TestCertBlocksNeverReturnAKey`<br>`cmd/alice-helper:TestEmulatorFidelityDump`<br>`internal/providers/linuxssh/helperproto:TestHelperVersion111` |
+| HB-04 | A backup whose revoked leaf is labelled TRUSTED CERTIFICATE | test | `cmd/alice-helper:TestRollbackGuardReadsATrustedLeaf` |
+| HB-05 | Incident list with state, open and paging, scoped | test | `internal/api:TestListIncidentsPassesFiltersAndAnswersTheCursor`<br>`internal/inventory:TestListIncidentsFiltersAndPagesWithinReach` |
+| HB-06 | The Incidents page | test | `web/src/pages/IncidentsPage.test.tsx:lists incidents newest first with their state and places`<br>`web/src/pages/IncidentsPage.test.tsx:sends the filter`<br>`web/src/pages/IncidentsPage.test.tsx:pages through incidents with Load more`<br>`web/src/pages/IncidentsPage.test.tsx:shows the empty states`<br>`web/src/pages/IncidentsPage.test.tsx:renders in Turkish` |
+| HB-07 | Incidents journey | test | `web/e2e/hardening1.spec.ts:start an incident, find it on the Incidents page, filter, open and close it` |
+| HB-08 | An incident needs attention or completes | test | `internal/notify:TestIncidentTemplatesRenderInBothLanguages`<br>`internal/inventory:TestIncidentNeedsAttentionMailedOncePerEntry`<br>`internal/inventory:TestIncidentNeedsAttentionMailedOnRevocationFailure`<br>`internal/inventory:TestIncidentCompletedMailedOnce`<br>`internal/inventory:TestIncidentMoveRaceMailsOnce` |
+| HB-09 | Two cleanup jobs at once; outbox pruned | test | `internal/inventory:TestCompromisedInStoreNoticeOnceUnderRace`<br>`internal/inventory:TestCompromisedInStoreNoticeSurvivesOutboxPruning`<br>`migrations:TestMigration00033BackfillsTheStoreNotices` |
+| HB-10 | An incident needs attention while the licence is locked | test | `internal/inventory:TestIncidentMailsInLock` |
+| HB-11 | OCSP good, revoked, hold, unknown, wrong signer, garbage, stale | test | `internal/revocation:TestCheckOCSPAnswers`<br>`internal/testutil/fakerevocation:TestFakeServesSignedAnswers`<br>`internal/revocation:TestFreshnessAndReasons` |
+| HB-12 | CRL listed, not listed, stale, bad signature, other issuer, PEM | test | `internal/revocation:TestCheckCRL`<br>`internal/revocation:TestCheckNotCheckable` |
+| HB-13 | OCSP or CRL addresses that are loopback, link-local, metadata, another port, a redirect, too large | test | `internal/revocation:TestFetchRefusesForbiddenAddresses`<br>`internal/revocation:TestFetchCapsTheAnswer`<br>`internal/revocation:TestFetchNeverFollowsARedirect`<br>`internal/platform/netaddr:TestDialContextExceptRefusesAtConnectTime` |
+| HB-14 | 300 due certificates on one host; failures | test | `internal/revocation:TestRunBudgetAndCache`<br>`internal/inventory:TestRevocationRunBudget`<br>`internal/inventory:TestRevocationRunNeverMarksOnFailure` |
+| HB-15 | The authority revoked an inventory certificate | test | `internal/inventory:TestRevocationRunMarksAnAuthorityRevocation`<br>`internal/inventory:TestRevocationRunRenewsARevokedACMECertificate`<br>`internal/inventory:TestRevocationRunHoldIsNotFinal`<br>`internal/inventory:TestRevocationRunChecksDiscoveredLeaves`<br>`migrations:TestMigration00034` |
+| HB-16 | The switch | test | `internal/inventory:TestRevocationRunSkipsWhenOffLockedOrUnconfigured`<br>`internal/inventory:TestRevocationSettingsDefaults`<br>`internal/api:TestRevocationSettingsRoutes`<br>`migrations:TestMigration00034` |
+| HB-17 | The certificate page and Settings | test | `internal/api:TestCertificateDTORevocationCheck`<br>`internal/api:TestRevocationCheckCodeTable`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:shows the switch on and saves it off with the version read`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:renders in Turkish`<br>`web/src/pages/CertificateDetailPage.test.tsx:shows the revocation check`<br>`web/src/pages/CertificateDetailPage.test.tsx:says the authority revoked it` |
 | S-01 | Run the full integration suite and the E2E suite with log capture (zap/slog handler wrapping a buffer, plus container st... | test | `internal/api:TestPlatformKeyNeverLeaks`<br>`internal/api:TestSecretLeakSuiteWithGeneratedKeys`<br>`internal/api:TestSecretsNeverLeak` |
 | S-02 | Response scanner middleware in test builds: every HTTP response body, header, and cookie is scanned for canaries and PEM... | test | `internal/api:TestSecretsNeverLeak` |
 | S-03 | Error paths: force failures (invalid key upload, wrong password for PFX, SSH failure, KV 403 echoing a body containing a... | test | `internal/api:TestSecretsNeverLeak` |

@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior. "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -405,6 +405,30 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | WIN-43 | Helper 1.0.0 under Alice 1.0; a 0.3.0 and a 0.2.0 helper | `winproto.Version` is `1.0.0` with protocol 1; a 0.3.0 helper keeps every feature; a 0.2.0 helper still deploys and is never sent `iis-cleanup` |
 | WIN-44 | An ACME certificate deployed to a Windows binding and to a certificate file | The ACME binding carries `location_kind`; the bindings panel speaks of a binding for a `win_sslbinding` location and keeps the file wording for a file |
 | WIN-45 | The owner's manual matrix before release: Windows Server 2019, Server Core, a domain baseline, Defender on (with a cleanup run), an RDP listener with its own certificate, the helper from the signed package, AD FS and ARM64 when available | Each case passes as `docs/release-checklist.md` section 8 describes it; the result, date and initials are recorded before release |
+
+### 24.8 Hardening batch 1 (R64)
+
+(Plan `docs/superpowers/plans/2026-10-24-hardening-batch-1.md`; rulings `docs/superpowers/rulings/hardening-2026-10-24.md`.)
+
+| ID | Case | Expected |
+|---|---|---|
+| HB-01 | An incident place on a disabled server | The place waits and fails busy, never `internal.unexpected`; the incident engine's and the key deploy job's reasons equal the API catalogue's (`target.disabled` included) |
+| HB-02 | A website-side person changes a Key Vault binding | They may release their own websites; adding, or releasing another service's website, is 403 |
+| HB-03 | A certificate file whose leaf is labelled `TRUSTED CERTIFICATE` or `X509 CERTIFICATE` | The helper reports the leaf, never the intermediate; trust settings never reach Alice |
+| HB-04 | A backup whose revoked leaf is labelled `TRUSTED CERTIFICATE` | The rollback guard refuses the restore |
+| HB-05 | Incident list with state, open and paging, scoped | Pages without repeat or gap; only incidents of the caller's services |
+| HB-06 | The Incidents page | Rows, filter, Load more and empty states in EN and TR |
+| HB-07 | Incidents journey | Start, list, filter, open, close in EN and TR |
+| HB-08 | An incident needs attention or completes | One mail per change per recipient, to the service recipients with Administrator fallback; none on close |
+| HB-09 | Two cleanup jobs at once; outbox pruned | The store notice is sent once |
+| HB-10 | An incident needs attention while the licence is locked | The mail is queued |
+| HB-11 | OCSP good, revoked, hold, unknown, wrong signer, garbage, stale | Only a signed, current answer decides; failures fall to CRL or `unavailable` |
+| HB-12 | CRL listed, not listed, stale, bad signature, other issuer, PEM | As R64 Ruling 16 |
+| HB-13 | OCSP or CRL addresses that are loopback, link-local, metadata, another port, a redirect, too large | Refused before or during the request; nothing is marked |
+| HB-14 | 300 due certificates on one host; failures | 50 per host per run, batch 200; backoff 1 h to 24 h |
+| HB-15 | The authority revoked an inventory certificate | Marked revoked (final), deployments refused, ACME renewal due, one audit row, one mail |
+| HB-16 | The switch | On for a new installation, off after an update; off, locked or unconfigured make no request |
+| HB-17 | The certificate page and Settings | The check's status and the switch shown in EN and TR |
 
 ## 25. Security Test Plan
 

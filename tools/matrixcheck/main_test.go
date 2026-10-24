@@ -93,6 +93,16 @@ func TestSpecIDsFindWindowsRows(t *testing.T) {
 	assert.Equal(t, "A Windows server is added", titles["WIN-01"])
 }
 
+// The HB prefix of section 24.8 (hardening batch 1, R64) is a matrix ID.
+func TestSpecIDsFindHardeningRows(t *testing.T) {
+	spec := "## 24. Failures\n\n### 24.8 Hardening batch 1 (R64)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
+		"| HB-01 | A place on a disabled server | busy |\n| HB-17 | The certificate page | shown |\n| HBX-01 | not a matrix prefix | ignored |\n"
+	ids, titles, err := SpecIDs(strings.NewReader(spec))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"HB-01", "HB-17"}, ids)
+	assert.Equal(t, "A place on a disabled server", titles["HB-01"])
+}
+
 func TestRefusesMissingUnknownAndBrokenEntries(t *testing.T) {
 	for name, tc := range map[string]struct{ mapJSON, want string }{
 		"missing":          {`[{"id":"L-01","status":"owner","owner":"x"}]`, "L-02: no entry"},
