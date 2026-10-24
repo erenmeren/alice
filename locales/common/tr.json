@@ -1232,6 +1232,36 @@
         "title": "Bu sertifikanın özel anahtarı ele geçirilmiş olarak işaretlendi.",
         "cause": "Bir yönetici bu sertifika ya da aynı özel anahtarla yapılmış başka bir sertifika için anahtar ele geçirme olayı başlattı. Alice ele geçirilmiş anahtarlı bir sertifikayı bir daha dağıtmaz.",
         "action": "Olayda seçilen yeni sertifikayı ya da yeni bir anahtarla yapılmış başka bir sertifikayı dağıtın. Değiştirmeyi izlemek için olayı sertifikanın sayfasından açın."
+      },
+      "revocation_unreachable": {
+        "title": "Sertifika yetkilisinin iptal hizmetine ulaşılamadı.",
+        "cause": "Alice sertifikada adı geçen OCSP yanıtlayıcısına ya da CRL adresine sertifikanın iptal edilip edilmediğini sordu ve kullanılabilir bir yanıt alamadı: adres yanıt vermedi, hata ile yanıt verdi, başka bir yere yönlendirdi ya da 10 saniyeden uzun sürdü.",
+        "action": "Alice kendisi yeniden dener: 1, 2 ve 4 saat sonra, sonra en fazla günde bir kez. Hata sürerse Alice sunucusunun yetkilinin adresine vekil sunucu olmadan HTTP veya HTTPS (80 ve 443 numaralı bağlantı noktaları) üzerinden ulaşabildiğini denetleyin."
+      },
+      "revocation_invalid_answer": {
+        "title": "Sertifika yetkilisinin iptal yanıtına güvenilemedi.",
+        "cause": "OCSP ya da CRL yanıtı sertifikayı verenin imzasını taşımıyordu, başka bir vereni adlandırıyordu, güncel değildi ya da okunamadı. Alice böyle bir yanıta göre hiçbir şey yapmaz.",
+        "action": "Alice kendisi yeniden dener. Sürerse yetkilinin yanıtlayıcısı yanlış yapılandırılmış olabilir: yetkiliye başvurun."
+      },
+      "revocation_address_refused": {
+        "title": "Alice bu sertifikadaki iptal adresine bağlanmaz.",
+        "cause": "Sertifikanın adlandırdığı OCSP ya da CRL adresi 80 veya 443 numaralı bağlantı noktasında HTTP ya da HTTPS değil, bir kullanıcı adı taşıyor ya da Alice'in kendi sunucusuna, bağlantı yerel veya meta veri adresine ya da Alice'in hiç bağlanmadığı başka bir adrese çıkıyor.",
+        "action": "Herkese açık bir sertifika yetkilisi için yapılacak bir şey yok. Bir şirket yetkilisi için OCSP yanıtlayıcısını ve CRL'yi olağan bir adreste 80 veya 443 numaralı bağlantı noktasında yayımlayın ve bu adresi adlandıran yeni sertifikalar verin."
+      },
+      "revocation_no_issuer": {
+        "title": "Sertifikayı veren bilinmiyor, bu yüzden iptali denetlenemiyor.",
+        "cause": "Alice bu sertifikayı imzalayan yetkilinin hiçbir sertifikasına sahip değil (ara sertifika zincirde eksik) ve yetkilinin yanıtını doğrulamak için veren gerekir.",
+        "action": "Ara sertifikayı sunucunun gönderdiği zincire ya da yüklenen dosyaya ekleyin, sonra Keşfet'i seçin."
+      },
+      "revocation_no_address": {
+        "title": "Sertifika hiçbir iptal adresi adlandırmıyor.",
+        "cause": "Sertifikada ne OCSP yanıtlayıcısı ne de CRL dağıtım noktası var, bu yüzden sorulacak bir yetkili yok.",
+        "action": "Yapılacak bir şey yok: böyle bir sertifikanın iptali denetlenemez. Birçok özel yetkili böyle sertifikalar verir."
+      },
+      "revocation_too_large": {
+        "title": "Sertifika yetkilisinin iptal yanıtı çok büyük.",
+        "cause": "OCSP yanıtı 64 KiB'tan ya da CRL 10 MiB'tan büyüktü; bu Alice'in okuduğundan fazla.",
+        "action": "Alice kendisi yeniden dener. Bu kadar büyük bir CRL olağan değildir: yetkiliye OCSP sunup sunmadığını sorun."
       }
     },
     "csr": {

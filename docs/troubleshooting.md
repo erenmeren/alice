@@ -2398,6 +2398,54 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **What to do.** Deploy the replacement chosen in the incident, or another certificate made with a new key. Open the incident from the certificate's page to follow the replacement.
 
+## ALC-CRT-0020: The certificate authority's revocation service could not be reached
+
+**Meaning.** Alice asked the OCSP responder or the CRL address named in the certificate whether it was revoked and got no usable answer: the address did not answer, answered with an error, redirected elsewhere or took longer than 10 seconds. (HTTP 502, reason `certificate.revocation_unreachable`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** The responder or the CRL server is down, slow, or not reachable from the Alice host (a firewall, a required proxy).
+
+**What to do.** Alice tries again by herself, 1, 2 and 4 hours later and then at most once a day. If it keeps failing, check that the Alice host may reach the authority's address over HTTP or HTTPS (ports 80 and 443) without a proxy.
+
+## ALC-CRT-0021: The certificate authority's revocation answer could not be trusted
+
+**Meaning.** The OCSP or CRL answer was not signed by the certificate's issuer, named another issuer, was out of date or could not be read. Alice never acts on such an answer. (HTTP 502, reason `certificate.revocation_invalid_answer`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** The authority's responder is misconfigured, or something between Alice and the authority changed the answer.
+
+**What to do.** Alice tries again by herself. If it keeps happening, the authority's responder may be misconfigured: ask the authority.
+
+## ALC-CRT-0022: Alice does not connect to the revocation address in this certificate
+
+**Meaning.** The OCSP or CRL address the certificate names is not HTTP or HTTPS on port 80 or 443, carries a user name, or leads to Alice's own host, a link-local or metadata address or another address Alice never connects to. (HTTP 422, reason `certificate.revocation_address_refused`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** A company authority publishes its OCSP or CRL on another port, or a certificate names an address on an internal or local network that Alice refuses (loopback, link-local, the cloud metadata address).
+
+**What to do.** Nothing to do for a public certificate authority. For a company authority, publish its OCSP responder and CRL on port 80 or 443 at a normal address and issue new certificates that name it.
+
+## ALC-CRT-0023: The certificate's issuer is not known, so its revocation cannot be checked
+
+**Meaning.** Alice holds no certificate of the authority that signed this one (the intermediate certificate is missing from the chain), and the issuer is needed to verify the authority's answer. (HTTP 422, reason `certificate.revocation_no_issuer`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** The server sends the certificate without its intermediate, or the upload had no chain.
+
+**What to do.** Add the intermediate certificate to the chain the server sends, or to the uploaded file, then choose Discover.
+
+## ALC-CRT-0024: The certificate names no revocation address
+
+**Meaning.** The certificate has neither an OCSP responder nor a CRL distribution point, so there is no authority to ask. (HTTP 422, reason `certificate.revocation_no_address`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** The authority (often a private one) does not publish revocation information in its certificates.
+
+**What to do.** Nothing to do: such a certificate cannot be checked for revocation. Many private authorities issue certificates like this.
+
+## ALC-CRT-0025: The certificate authority's revocation answer is too large
+
+**Meaning.** The OCSP answer was larger than 64 KiB or the CRL larger than 10 MiB, more than Alice reads. (HTTP 502, reason `certificate.revocation_too_large`; shown on the certificate's page as the result of its revocation check, never answered by a route.)
+
+**Likely cause.** The authority publishes one very large CRL.
+
+**What to do.** Alice tries again by herself. A CRL this large is unusual: ask the authority whether it offers OCSP.
+
 ## ALC-DEP-0001: Deployment already in progress
 
 **Meaning.** Another deployment to this website is in progress. (HTTP 409, reason `deployment.in_progress`.)

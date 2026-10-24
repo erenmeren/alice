@@ -27,6 +27,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/platform/logging"
 	"alice/internal/providers"
+	"alice/internal/revocation"
 	"alice/locales"
 )
 
@@ -49,7 +50,8 @@ var inventorySentinels = map[string]error{
 	"ErrWeakCertificate": inventory.ErrWeakCertificate, "ErrUnsupportedKey": inventory.ErrUnsupportedKey,
 	"ErrCSRMismatch": inventory.ErrCSRMismatch, "ErrCertificateTooLarge": inventory.ErrCertificateTooLarge,
 	"ErrDeploymentInProgress": inventory.ErrDeploymentInProgress, "ErrRecoveryPending": inventory.ErrRecoveryPending,
-	"ErrNoPrivateKey": inventory.ErrNoPrivateKey, "ErrKeyTypeMismatch": inventory.ErrKeyTypeMismatch,
+	"ErrRevocationSettingsVersion": inventory.ErrRevocationSettingsVersion, // the revocation check switch (R64): 412
+	"ErrNoPrivateKey":              inventory.ErrNoPrivateKey, "ErrKeyTypeMismatch": inventory.ErrKeyTypeMismatch,
 	"ErrChainUnconfirmed": inventory.ErrChainUnconfirmed, "ErrNginxConfigInvalid": inventory.ErrNginxConfigInvalid,
 	"ErrTargetNotReady": inventory.ErrTargetNotReady, "ErrDeploymentState": inventory.ErrDeploymentState,
 	"ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid, "ErrLocationNeedsDiscovery": inventory.ErrLocationNeedsDiscovery,
@@ -424,7 +426,7 @@ func troubleshootingSection(doc, code string) string {
 // scan action, labelled Discover / Keşfet (controller ruling; Task 22 creates the control with
 // exactly this label and should pin it against this list).
 var discoverKeys = []string{
-	"errors.nginx.config_invalid.action",
+	"errors.nginx.config_invalid.action", "errors.certificate.revocation_no_issuer.action",
 	"errors.apache.config_invalid.action", "errors.haproxy.config_invalid.action", "errors.nginx.config_changed.action", "errors.nginx.file_changed.action",
 	"errors.nginx.location_unsupported.action", "errors.deployment.verify_other.action", "errors.deployment.superseded.action",
 	"errors.deployment.unknown_operation.action", "errors.deployment.recovery_exhausted.action",
@@ -888,4 +890,37 @@ func TestCredentialNotTheTargetsAnswersTheInternalError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Equal(t, ErrUnexpected.Code, decodeErr(t, rec).Error.Code)
 	assert.Contains(t, logs.String(), `"msg":"request failed"`)
+}
+
+// The revocation check's codes (R64, D5): stored reasons of a check, shown through errorRef; each equals the checker's
+// closed code and has its English and Turkish texts.
+func TestRevocationCheckCodeTable(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	for i, row := range []struct {
+		ec     ErrorCode
+		reason string
+		status int
+	}{
+		{ErrCertRevocationUnreachable, revocation.CodeUnreachable, http.StatusBadGateway},
+		{ErrCertRevocationInvalidAnswer, revocation.CodeInvalidAnswer, http.StatusBadGateway},
+		{ErrCertRevocationAddressRefused, revocation.CodeAddressRefused, http.StatusUnprocessableEntity},
+		{ErrCertRevocationNoIssuer, revocation.CodeNoIssuer, http.StatusUnprocessableEntity},
+		{ErrCertRevocationNoAddress, revocation.CodeNoAddress, http.StatusUnprocessableEntity},
+		{ErrCertRevocationTooLarge, revocation.CodeTooLarge, http.StatusBadGateway},
+	} {
+		assert.Equal(t, fmt.Sprintf("ALC-CRT-%04d", 20+i), row.ec.Code)
+		assert.Equal(t, row.reason, row.ec.Reason)
+		assert.Equal(t, row.status, row.ec.Status, row.ec.Code)
+		assert.Equal(t, row.ec, codeForReason(row.reason), "registered")
+		for _, lang := range []string{"en", "tr"} {
+			for _, part := range []string{"title", "cause", "action"} {
+				key := "errors." + row.reason + "." + part
+				assert.NotEqual(t, key, cat.T(lang, key, nil), "%s %s", lang, key)
+			}
+		}
+	}
+	ec, _, ok := classify(inventory.ErrRevocationSettingsVersion)
+	require.True(t, ok)
+	assert.Equal(t, ErrPreconditionFailed, ec)
 }

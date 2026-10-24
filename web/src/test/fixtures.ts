@@ -496,6 +496,7 @@ export function certificateFixture(o: Partial<Certificate> = {}): Certificate {
     compromised_at: null,
     acme_certificate_id: null,
     capabilities: ['discover', 'deploy', 'verify'],
+    revoked_by_authority: false,
     ...o,
   };
 }
@@ -546,6 +547,7 @@ export function certificateDetailFixture(o: Partial<CertificateDetail> = {}): Ce
     pem_chain: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
     locations: [locationFixture()],
     locations_truncated: false,
+    revocation_check: null,
     ...o,
   };
 }

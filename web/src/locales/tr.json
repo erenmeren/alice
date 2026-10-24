@@ -1813,7 +1813,20 @@
       "revokedBy": "İptal eden: {{name}}.",
       "compromisedTitle": "Özel anahtarı ele geçirilmiş olarak işaretlendi",
       "compromisedText": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz. Onu yalnızca veren yetkili iptal edebilir.",
-      "compromisedTextAcme": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz ve değiştirildikten sonra sertifika yetkilisinde iptal eder."
+      "compromisedTextAcme": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz ve değiştirildikten sonra sertifika yetkilisinde iptal eder.",
+      "revokedByAuthorityText": "Bu sertifikayı veren yetkili onu {{date}} tarihinde iptal etti (neden: {{reason}}). Alice bunu yetkilinin {{method}} yanıtında buldu ve sertifikayı artık dağıtmıyor."
+    },
+    "revocationCheck": {
+      "label": "İptal denetimi",
+      "status": {
+        "good": "İptal edilmemiş ({{date}} tarihinde denetlendi, {{method}})",
+        "revoked": "Yetkilisi tarafından iptal edildi",
+        "on_hold": "{{date}} tarihinden beri yetkilisi tarafından askıya alındı",
+        "unknown": "Yetkili bu sertifikayı tanımıyor ({{date}} tarihinde denetlendi)",
+        "unavailable": "Denetlenemedi: {{reason}} (sonraki deneme {{next}})",
+        "not_checkable": "Denetlenemez: {{reason}}",
+        "none": "Henüz denetlenmedi"
+      }
     }
   },
   "locations": {
@@ -3146,6 +3159,11 @@
       "schedule": "Zamanlama",
       "directories": "Kişilerin LDAP ya da Active Directory parolalarıyla oturum açmasına izin verin ve dizin gruplarını Alice rolleriyle eşleştirin.",
       "environments": "Bir hizmetin bulunabileceği ortamlar, örneğin üretim veya hazırlık."
+    },
+    "revocationCheck": {
+      "title": "İptal denetimleri",
+      "help": "Alice her sertifikayı veren yetkiliye sertifikanın iptal edilip edilmediğini sorar (OCSP ya da CRL), sertifika başına yaklaşık günde bir kez. Alice sertifikalarda adı geçen adreslere HTTP ve HTTPS üzerinden, 80 ve 443 numaralı bağlantı noktalarından bağlanır.",
+      "enabled": "Sertifikaların iptalini denetle"
     }
   },
   "sso": {
@@ -3928,7 +3946,10 @@
           "keyCompromise": "Anahtar ele geçirildi",
           "affiliationChanged": "Bağlılık değişti",
           "superseded": "Yerine yenisi geldi",
-          "cessationOfOperation": "Faaliyet sona erdi"
+          "cessationOfOperation": "Faaliyet sona erdi",
+          "cACompromise": "Sertifika yetkilisinin ele geçirilmesi",
+          "privilegeWithdrawn": "Yetki geri alındı",
+          "aACompromise": "Öznitelik yetkilisinin ele geçirilmesi"
         },
         "understood": "Bir iptalin geri alınamayacağını anlıyorum.",
         "confirm": "Sertifikayı iptal et",

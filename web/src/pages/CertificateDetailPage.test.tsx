@@ -381,5 +381,63 @@ describe('CertificateDetailPage import into Key Vault', () => {
     await screen.findByRole('heading', { level: 1 });
     expect(screen.queryByRole('button', { name: 'Import into Key Vault' })).not.toBeInTheDocument();
   });
-});
 
+  // The revocation check (R64, D5, HB-17).
+  it('shows the revocation check', async () => {
+    certServer(
+      certificateDetailFixture({
+        id: ID,
+        revocation_check: { status: 'good', method: 'ocsp', reason: '', revoked_at: null, checked_at: '2026-10-03T08:00:00Z', next_check_at: '2026-10-04T08:00:00Z', error: null },
+      }),
+    );
+    await renderRoute(`/certificates/${ID}`);
+    const facts = await screen.findByLabelText('Certificate details');
+    expect(within(facts).getByText('Revocation check')).toBeInTheDocument();
+    expect(within(facts).getByText(/^Not revoked \(checked .*, OCSP\)$/)).toBeInTheDocument();
+  });
+
+  it('shows a revocation check that could not be made, with its reason', async () => {
+    certServer(
+      certificateDetailFixture({
+        id: ID,
+        revocation_check: {
+          status: 'unavailable',
+          method: '',
+          reason: '',
+          revoked_at: null,
+          checked_at: '2026-10-03T08:00:00Z',
+          next_check_at: '2026-10-03T09:00:00Z',
+          error: { code: 'ALC-CRT-0020', reason: 'certificate.revocation_unreachable' },
+        },
+      }),
+    );
+    await renderRoute(`/certificates/${ID}`);
+    const facts = await screen.findByLabelText('Certificate details');
+    expect(within(facts).getByText(/^Could not check: The certificate authority's revocation service could not be reached\. \(next try .*\)$/)).toBeInTheDocument();
+  });
+
+  it('says a certificate was never checked', async () => {
+    certServer(certificateDetailFixture({ id: ID, revocation_check: null }));
+    await renderRoute(`/certificates/${ID}`);
+    const facts = await screen.findByLabelText('Certificate details');
+    expect(within(facts).getByText('Not checked yet')).toBeInTheDocument();
+  });
+
+  it('says the authority revoked it', async () => {
+    certServer(
+      certificateDetailFixture({
+        id: ID,
+        revoked_at: '2026-10-02T08:00:00Z',
+        revocation_reason: 'cACompromise',
+        revoked_by_authority: true,
+        revocation_check: { status: 'revoked', method: 'ocsp', reason: 'cACompromise', revoked_at: '2026-10-02T08:00:00Z', checked_at: '2026-10-03T08:00:00Z', next_check_at: '2026-10-03T08:00:00Z', error: null },
+      }),
+    );
+    await renderRoute(`/certificates/${ID}`);
+    const notice = await screen.findByTestId('revoked-notice');
+    expect(notice).toHaveTextContent("Alice found this in the authority's OCSP answer");
+    expect(notice).toHaveTextContent('reason: CA compromise');
+    expect(notice).not.toHaveTextContent('Revoked by');
+    expect(within(screen.getByLabelText('Certificate details')).getByText('Revoked by its authority')).toBeInTheDocument();
+  });
+});

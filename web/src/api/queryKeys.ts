@@ -51,7 +51,7 @@ export const viewsKey = (page: string) => ['views', page] as const;
 
 // Phase 7 settings and single sign-on (admin pages). SETTINGS_KEY is a prefix: one invalidation reads every form again.
 export const SETTINGS_KEY = ['settings'] as const;
-export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general' | 'backups' | 'https' | 'forwarding') => ['settings', name] as const;
+export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general' | 'backups' | 'https' | 'forwarding' | 'revocation') => ['settings', name] as const;
 export const SSO_KEY = ['sso'] as const;
 export const SSO_PROVIDERS_KEY = ['sso', 'providers'] as const;
 export const SSO_SETTINGS_KEY = ['sso', 'settings'] as const;

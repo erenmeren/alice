@@ -333,6 +333,14 @@ var (
 	// a deployment's result when the mark came after the request.
 	ErrCertRevoked     = ErrorCode{Code: "ALC-CRT-0018", Reason: "certificate.revoked", Status: http.StatusConflict}
 	ErrCertCompromised = ErrorCode{Code: "ALC-CRT-0019", Reason: "certificate.compromised", Status: http.StatusConflict}
+	// The revocation check (R64, D5): the stored reasons of a check that gave no answer or cannot be made, shown through
+	// errorRef on the certificate's page (no route answers them today). They equal revocation.Code*.
+	ErrCertRevocationUnreachable    = ErrorCode{Code: "ALC-CRT-0020", Reason: "certificate.revocation_unreachable", Status: http.StatusBadGateway}
+	ErrCertRevocationInvalidAnswer  = ErrorCode{Code: "ALC-CRT-0021", Reason: "certificate.revocation_invalid_answer", Status: http.StatusBadGateway}
+	ErrCertRevocationAddressRefused = ErrorCode{Code: "ALC-CRT-0022", Reason: "certificate.revocation_address_refused", Status: http.StatusUnprocessableEntity}
+	ErrCertRevocationNoIssuer       = ErrorCode{Code: "ALC-CRT-0023", Reason: "certificate.revocation_no_issuer", Status: http.StatusUnprocessableEntity}
+	ErrCertRevocationNoAddress      = ErrorCode{Code: "ALC-CRT-0024", Reason: "certificate.revocation_no_address", Status: http.StatusUnprocessableEntity}
+	ErrCertRevocationTooLarge       = ErrorCode{Code: "ALC-CRT-0025", Reason: "certificate.revocation_too_large", Status: http.StatusBadGateway}
 
 	ErrDeployInProgress           = ErrorCode{Code: "ALC-DEP-0001", Reason: "deployment.in_progress", Status: http.StatusConflict, Retryable: true}
 	ErrDeployRecoveryPending      = ErrorCode{Code: "ALC-DEP-0002", Reason: "deployment.recovery_pending", Status: http.StatusConflict, Retryable: true}
@@ -650,6 +658,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
 		ErrCertRevoked, ErrCertCompromised,
+		ErrCertRevocationUnreachable, ErrCertRevocationInvalidAnswer, ErrCertRevocationAddressRefused, ErrCertRevocationNoIssuer,
+		ErrCertRevocationNoAddress, ErrCertRevocationTooLarge,
 		ErrDeployInProgress, ErrDeployRecoveryPending, ErrDeployVerifyFailed, ErrDeployVerifyOther, ErrDeployVerifyUnreachable,
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
@@ -809,6 +819,7 @@ var errorMap = []struct {
 	{inventory.ErrCertificateExpired, ErrCertExpired, nil},
 	{inventory.ErrCertificateRevoked, ErrCertRevoked, nil},
 	{inventory.ErrCertificateCompromised, ErrCertCompromised, nil},
+	{inventory.ErrRevocationSettingsVersion, ErrPreconditionFailed, nil}, // the revocation check switch changed since it was read (R64)
 	{inventory.ErrNotACMEVersion, ErrACMNotThisCertificate, nil},
 	{inventory.ErrIncidentOpen, ErrINCOpen, nil},
 	{inventory.ErrIncidentState, ErrINCState, nil},

@@ -1,5 +1,6 @@
 import { Anchor, Button, Code, CopyButton, Group, Progress, Stack, Table, Text, Title } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
+import type { i18n as I18n, TFunction } from 'i18next';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
@@ -8,7 +9,7 @@ import { keyAlgorithmKey } from '../api/enums';
 import { getCertificate, listDeployments } from '../api/endpoints';
 import { getCertificateImpact } from '../api/incidents';
 import { certificateImpactKey, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
-import type { CertificateDetail } from '../api/types';
+import type { CertificateDetail, RevocationCheck } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
@@ -21,6 +22,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { daysLeft, expiryState, useNow } from '../components/Expiry';
 import { ImportHistory } from '../components/ImportHistory';
 import { ImportToKeyVaultDialog } from '../components/ImportToKeyVaultDialog';
+import { reasonTitle } from '../components/JobErrorAlert';
 import { MoveDialog } from '../components/services/MoveDialog';
 import { HiddenCount, ServiceBadge } from '../components/services/shared';
 import { expiryTone, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
@@ -42,6 +44,24 @@ function lifeLeft(c: CertificateDetail, now: number): number {
 // CertificateDetailPage is one certificate (public data only: the private key never reaches the
 // browser) with the websites that use it and its latest deployments. Deploy opens the dialog for
 // the websites that already use the certificate; a new certificate is deployed from a server's page.
+// methodName is how the revocation check's answer is named (OCSP or CRL; "OCSP" when an older answer names none).
+function methodName(method: string | undefined): string {
+  return method === 'crl' ? 'CRL' : 'OCSP';
+}
+
+// revocationCheckText is the last revocation check of the certificate in words (R64, D5).
+function revocationCheckText(t: TFunction, i18n: I18n, rc: RevocationCheck | null): string {
+  if (!rc) return t('certificates.revocationCheck.status.none');
+  const lang = i18n.language;
+  const reason = rc.error ? reasonTitle(t, i18n, rc.error.reason, rc.error.params ?? {}) : '';
+  return t(`certificates.revocationCheck.status.${rc.status}`, {
+    date: formatDateTime(rc.status === 'on_hold' ? rc.revoked_at : rc.checked_at, lang),
+    method: methodName(rc.method),
+    reason,
+    next: formatDateTime(rc.next_check_at, lang),
+  });
+}
+
 export function CertificateDetailPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
@@ -91,6 +111,7 @@ export function CertificateDetailPage() {
   const name = c.label || c.subject_cn;
 
   const facts: Fact[] = [
+    { key: 'revocationCheck', label: t('certificates.revocationCheck.label'), value: revocationCheckText(t, i18n, c.revocation_check) },
     { key: 'subject', label: t('certificates.detail.subject'), value: <Code translate="no" style={WRAP}>{c.subject}</Code> },
     { key: 'issuer', label: t('certificates.detail.issuer'), value: <Code translate="no" style={WRAP}>{c.issuer}</Code> },
     {
@@ -200,11 +221,17 @@ export function CertificateDetailPage() {
       />
       {c.revoked_at && (
         <Notice tone="danger" title={t('certificates.revocation.revokedTitle')} testId="revoked-notice">
-          {t('certificates.revocation.revokedText', {
-            date: formatDateTime(c.revoked_at, i18n.language),
-            reason: t(`acme.issued.revoke.reasons.${c.revocation_reason || 'unspecified'}`),
-          })}
-          {c.revoked_by_name ? ` ${t('certificates.revocation.revokedBy', { name: c.revoked_by_name })}` : ''}
+          {c.revoked_by_authority
+            ? t('certificates.revocation.revokedByAuthorityText', {
+                date: formatDateTime(c.revoked_at, i18n.language),
+                reason: t(`acme.issued.revoke.reasons.${c.revocation_reason || 'unspecified'}`),
+                method: methodName(c.revocation_check?.method),
+              })
+            : t('certificates.revocation.revokedText', {
+                date: formatDateTime(c.revoked_at, i18n.language),
+                reason: t(`acme.issued.revoke.reasons.${c.revocation_reason || 'unspecified'}`),
+              })}
+          {!c.revoked_by_authority && c.revoked_by_name ? ` ${t('certificates.revocation.revokedBy', { name: c.revoked_by_name })}` : ''}
         </Notice>
       )}
       {c.compromised_at && (

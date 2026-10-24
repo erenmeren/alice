@@ -1813,7 +1813,20 @@
       "revokedBy": "Revoked by {{name}}.",
       "compromisedTitle": "Its private key is marked compromised",
       "compromisedText": "Marked on {{date}}. Alice never deploys it again. Only the authority that issued it can revoke it.",
-      "compromisedTextAcme": "Marked on {{date}}. Alice never deploys it again and revokes it at its certificate authority once it is replaced."
+      "compromisedTextAcme": "Marked on {{date}}. Alice never deploys it again and revokes it at its certificate authority once it is replaced.",
+      "revokedByAuthorityText": "The authority that issued this certificate revoked it on {{date}} (reason: {{reason}}). Alice found this in the authority's {{method}} answer and no longer deploys it."
+    },
+    "revocationCheck": {
+      "label": "Revocation check",
+      "status": {
+        "good": "Not revoked (checked {{date}}, {{method}})",
+        "revoked": "Revoked by its authority",
+        "on_hold": "Suspended by its authority since {{date}}",
+        "unknown": "The authority does not know this certificate (checked {{date}})",
+        "unavailable": "Could not check: {{reason}} (next try {{next}})",
+        "not_checkable": "Cannot be checked: {{reason}}",
+        "none": "Not checked yet"
+      }
     }
   },
   "locations": {
@@ -3146,6 +3159,11 @@
       "schedule": "Schedule",
       "directories": "Let people sign in with their LDAP or Active Directory password and map directory groups to Alice roles.",
       "environments": "The environments a service can be in, such as production or staging."
+    },
+    "revocationCheck": {
+      "title": "Revocation checks",
+      "help": "Alice asks the authority that issued each certificate whether it was revoked (OCSP or CRL), about once a day per certificate. Alice connects to the addresses named in the certificates over HTTP and HTTPS, ports 80 and 443.",
+      "enabled": "Check certificates for revocation"
     }
   },
   "sso": {
@@ -3928,7 +3946,10 @@
           "keyCompromise": "Key compromise",
           "affiliationChanged": "Affiliation changed",
           "superseded": "Superseded",
-          "cessationOfOperation": "Cessation of operation"
+          "cessationOfOperation": "Cessation of operation",
+          "cACompromise": "CA compromise",
+          "privilegeWithdrawn": "Privilege withdrawn",
+          "aACompromise": "AA compromise"
         },
         "understood": "I understand that a revocation cannot be undone.",
         "confirm": "Revoke the certificate",

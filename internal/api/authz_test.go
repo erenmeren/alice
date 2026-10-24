@@ -678,6 +678,8 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"PUT /api/v1/settings/alerts",
 		"GET /api/v1/settings/general",
 		"PUT /api/v1/settings/general",
+		"GET /api/v1/settings/revocation-checks",
+		"PUT /api/v1/settings/revocation-checks",
 		"GET /api/v1/sso/providers",
 		"POST /api/v1/sso/providers",
 		"GET /api/v1/sso/providers/{id}",

@@ -415,6 +415,7 @@ type Deps struct {
 	ACME           ACMEService       // ACME issuance (inventory.Service)
 	Discovery      DiscoveryService  // network certificate discovery (discoverysvc.Service)
 	Incidents      IncidentService   // the impact of a certificate and key-compromise incidents (inventory.Service)
+	Revocation     RevocationService // R64: the revocation check switch (inventory.Service); nil leaves its routes unavailable
 	Services       ServicesService   // R49: services, environments, trusts and assignment (authz/services.Store)
 	Automation     AutomationService // R54: automation accounts and their tokens (auth.Service)
 	TLSStore       HTTPSService      // Phase 8: the HTTPS certificate
@@ -859,6 +860,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.acmeRoutes()...)
 	routes = append(routes, s.discoveryRoutes()...)
 	routes = append(routes, s.incidentRoutes()...)
+	routes = append(routes, s.revocationSettingsRoutes()...)
 	routes = append(routes, s.serviceRoutes()...)
 	routes = append(routes, s.accessRoutes()...)
 	return routes

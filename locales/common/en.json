@@ -1232,6 +1232,36 @@
         "title": "This certificate's private key is marked compromised.",
         "cause": "An administrator started a key compromise incident for this certificate or for another certificate made with the same private key. Alice never deploys a certificate with a compromised key again.",
         "action": "Deploy the replacement chosen in the incident, or another certificate made with a new key. Open the incident from the certificate's page to follow the replacement."
+      },
+      "revocation_unreachable": {
+        "title": "The certificate authority's revocation service could not be reached.",
+        "cause": "Alice asked the OCSP responder or the CRL address named in the certificate whether it was revoked and got no usable answer: the address did not answer, answered with an error, redirected elsewhere or took longer than 10 seconds.",
+        "action": "Alice tries again by herself, 1, 2 and 4 hours later and then at most once a day. If it keeps failing, check that the Alice host may reach the authority's address over HTTP or HTTPS (ports 80 and 443) without a proxy."
+      },
+      "revocation_invalid_answer": {
+        "title": "The certificate authority's revocation answer could not be trusted.",
+        "cause": "The OCSP or CRL answer was not signed by the certificate's issuer, named another issuer, was out of date or could not be read. Alice never acts on such an answer.",
+        "action": "Alice tries again by herself. If it keeps happening, the authority's responder may be misconfigured: ask the authority."
+      },
+      "revocation_address_refused": {
+        "title": "Alice does not connect to the revocation address in this certificate.",
+        "cause": "The OCSP or CRL address the certificate names is not HTTP or HTTPS on port 80 or 443, carries a user name, or leads to Alice's own host, a link-local or metadata address or another address Alice never connects to.",
+        "action": "Nothing to do for a public certificate authority. For a company authority, publish its OCSP responder and CRL on port 80 or 443 at a normal address and issue new certificates that name it."
+      },
+      "revocation_no_issuer": {
+        "title": "The certificate's issuer is not known, so its revocation cannot be checked.",
+        "cause": "Alice holds no certificate of the authority that signed this one (the intermediate certificate is missing from the chain), and the issuer is needed to verify the authority's answer.",
+        "action": "Add the intermediate certificate to the chain the server sends, or to the uploaded file, then choose Discover."
+      },
+      "revocation_no_address": {
+        "title": "The certificate names no revocation address.",
+        "cause": "The certificate has neither an OCSP responder nor a CRL distribution point, so there is no authority to ask.",
+        "action": "Nothing to do: such a certificate cannot be checked for revocation. Many private authorities issue certificates like this."
+      },
+      "revocation_too_large": {
+        "title": "The certificate authority's revocation answer is too large.",
+        "cause": "The OCSP answer was larger than 64 KiB or the CRL larger than 10 MiB, more than Alice reads.",
+        "action": "Alice tries again by herself. A CRL this large is unusual: ask the authority whether it offers OCSP."
       }
     },
     "csr": {
