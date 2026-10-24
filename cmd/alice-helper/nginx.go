@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -566,16 +567,94 @@ func (s *sys) dirProblem(p string, err error) error {
 	return err
 }
 
-var (
-	pemCertBegin = []byte("-----BEGIN CERTIFICATE-----")
-	pemCertEnd   = []byte("-----END CERTIFICATE-----")
+// The PEM labels OpenSSL reads as a certificate (KI-39, R64). Nginx, Apache (mod_ssl) and HAProxy read the first
+// certificate of a file with PEM_read_bio_X509_AUX, which takes all three; the chain after it with PEM_read_bio_X509,
+// which takes CERTIFICATE and X509 CERTIFICATE and skips any other block.
+const (
+	labelCertificate = "CERTIFICATE"
+	labelX509        = "X509 CERTIFICATE"
+	labelTrusted     = "TRUSTED CERTIFICATE" // a certificate followed by OpenSSL's X509_CERT_AUX trust settings
 )
 
+var certLabels = []string{labelCertificate, labelX509, labelTrusted}
+
+// pemSpan finds the earliest begin line of one of the certificate labels in data. It answers the label, the text from
+// that begin line to the end line of the same label (span; nil when the block is unterminated) and the text after
+// it. found is false when data holds no begin line of any of them.
+func pemSpan(data []byte) (label string, span, rest []byte, found bool) {
+	at := -1
+	for _, l := range certLabels {
+		if i := bytes.Index(data, []byte("-----BEGIN "+l+"-----")); i >= 0 && (at < 0 || i < at) {
+			at, label = i, l
+		}
+	}
+	if at < 0 {
+		return "", nil, nil, false
+	}
+	data = data[at:]
+	endLine := []byte("-----END " + label + "-----")
+	end := bytes.Index(data, endLine)
+	if end < 0 {
+		return label, nil, nil, true // unterminated: OpenSSL reads nothing more
+	}
+	return label, data[:end+len(endLine)], data[end+len(endLine):], true
+}
+
+// certDER is the DER certificate of a decoded block of the given label: the body of a CERTIFICATE or X509 CERTIFICATE
+// block; the first DER element of a TRUSTED CERTIFICATE block, whose trust settings after it are cleared and never
+// returned (TLS never sends them). ok is false when the block is of another type, has PEM headers or is not an X.509
+// certificate; its bytes are then cleared (a key labelled as a certificate does not stay in memory).
+func certDER(blk *pem.Block, label string) (der []byte, ok bool) {
+	der = blk.Bytes
+	if blk.Type == labelTrusted {
+		var raw asn1.RawValue
+		if rest, err := asn1.Unmarshal(blk.Bytes, &raw); err == nil {
+			der = raw.FullBytes
+			clear(rest)
+		} else {
+			der = nil
+		}
+	}
+	if blk.Type != label || len(blk.Headers) != 0 || der == nil {
+		clear(blk.Bytes)
+		return nil, false
+	}
+	if _, err := x509.ParseCertificate(der); err != nil {
+		clear(blk.Bytes)
+		return nil, false
+	}
+	return der, true
+}
+
+// leafDER is the DER of the certificate Nginx serves from the PEM text p: its first block labelled CERTIFICATE, X509
+// CERTIFICATE or TRUSTED CERTIFICATE (nil when there is none or it is not a certificate). The rollback guard reads
+// the same leaf (R48 G5).
+func leafDER(p []byte) []byte {
+	label, span, _, found := pemSpan(p)
+	if !found || span == nil {
+		return nil
+	}
+	blk, _ := pem.Decode(span)
+	if blk == nil {
+		return nil
+	}
+	der, _ := certDER(blk, label)
+	return der
+}
+
 // certBlocks returns the X.509 certificates of data, re-encoded as CERTIFICATE blocks, whether
-// a block was dropped (not a certificate, or with PEM headers), and whether the first CERTIFICATE
-// block (the leaf Nginx serves) was among them (firstDropped, REM-4). Only the text from a
-// CERTIFICATE begin line to the next CERTIFICATE end line is handed to pem.Decode. A private key
-// elsewhere in the file is never decoded; one inside that span (an unterminated CERTIFICATE block,
+// a block was dropped (not a certificate, with PEM headers, or a later TRUSTED CERTIFICATE), and
+// whether the first block (the leaf Nginx serves) was among them (firstDropped, REM-4).
+//   - The first block may be labelled CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE, as
+//     PEM_read_bio_X509_AUX reads it; a later one CERTIFICATE or X509 CERTIFICATE, as
+//     PEM_read_bio_X509 reads the chain, which skips a later TRUSTED CERTIFICATE (dropped here).
+//   - The begin and end lines are matched per label: a block whose end line names another label is
+//     unterminated, and nothing after it is read (KI-39, R64).
+//   - Of a TRUSTED CERTIFICATE only the certificate is kept; the trust settings after it are
+//     cleared and never returned.
+//
+// Only the text from a begin line to the next end line of its label is handed to pem.Decode. A
+// private key elsewhere in the file is never decoded; one inside that span (an unterminated block,
 // then a key, then a certificate) can be decoded by pem.Decode's retry, and is then dropped by the
 // type and X.509 checks and its bytes cleared. A private key is never returned.
 func certBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
@@ -585,28 +664,30 @@ func certBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
 		firstDropped = firstDropped || first
 	}
 	for rest, first := data, true; ; first = false {
-		i := bytes.Index(rest, pemCertBegin)
-		if i < 0 {
+		label, span, next, found := pemSpan(rest)
+		if !found {
 			break
 		}
-		rest = rest[i:]
-		end := bytes.Index(rest, pemCertEnd)
-		if end < 0 {
+		if span == nil {
 			drop(first)
 			break
 		}
-		blk, _ := pem.Decode(rest[:end+len(pemCertEnd)])
-		rest = rest[end+len(pemCertEnd):]
+		rest = next
+		if label == labelTrusted && !first {
+			drop(false) // PEM_read_bio_X509 skips it: Nginx does not send it
+			continue
+		}
+		blk, _ := pem.Decode(span)
 		if blk == nil {
 			drop(first)
 			continue
 		}
-		if _, err := x509.ParseCertificate(blk.Bytes); err != nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
-			clear(blk.Bytes) // whatever it was (a key labelled CERTIFICATE), it does not stay in memory
+		der, ok := certDER(blk, label)
+		if !ok {
 			drop(first)
 			continue
 		}
-		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes})
+		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 	}
 	return b.String(), dropped, firstDropped
 }

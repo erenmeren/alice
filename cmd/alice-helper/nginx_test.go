@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -223,6 +225,8 @@ func TestCertBlocksNeverReturnAKey(t *testing.T) {
 	for name, in := range map[string]string{
 		"key after an unterminated certificate": "-----BEGIN CERTIFICATE-----\nAAAA\n" + key,
 		"key labelled as a certificate":         strings.ReplaceAll(key, privateKeyMarker, "CERTIFICATE"),
+		"key labelled TRUSTED CERTIFICATE":      strings.ReplaceAll(key, privateKeyMarker, "TRUSTED CERTIFICATE"),
+		"key labelled X509 CERTIFICATE":         strings.ReplaceAll(key, privateKeyMarker, "X509 CERTIFICATE"),
 		"certificate with headers":              strings.Replace(string(leaf.CertPEM), "-----\n", "-----\nProc-Type: 4,ENCRYPTED\n\n", 1),
 		"unterminated certificate, key, certificate": "-----BEGIN CERTIFICATE-----\nAAAA\n" + string(leaf.KeyPEM) +
 			string(leaf.CertPEM),
@@ -1007,4 +1011,71 @@ func TestNginxUntrustedProgram(t *testing.T) {
 	code, m := w.f.run("nginx-test")
 	require.Equal(t, 0, code, "%v", m)
 	assert.Equal(t, map[string]any{"ok": true, "valid": false, "error": helperproto.ConfigErrUntrusted}, m)
+}
+
+// trustAux is a minimal X509_CERT_AUX (trust settings OpenSSL appends to a TRUSTED CERTIFICATE): SEQUENCE { SEQUENCE {
+// OID serverAuth } }.
+func trustAux(t *testing.T) []byte {
+	t.Helper()
+	aux, err := asn1.Marshal(struct{ Trust []asn1.ObjectIdentifier }{[]asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 1}}})
+	require.NoError(t, err)
+	return aux
+}
+
+// trustedPEM is the certificate as OpenSSL writes it with trust settings (openssl x509 -trustout).
+func trustedPEM(t *testing.T, der []byte) string {
+	t.Helper()
+	body := append(append([]byte(nil), der...), trustAux(t)...)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "TRUSTED CERTIFICATE", Bytes: body}))
+}
+
+// relabel is the certificate PEM with another label.
+func relabel(certPEM []byte, label string) string {
+	return strings.ReplaceAll(string(certPEM), " CERTIFICATE-----", " "+label+"-----")
+}
+
+// KI-39 (R64): the leaf Nginx serves is the first block labelled CERTIFICATE, X509 CERTIFICATE or TRUSTED CERTIFICATE
+// (PEM_read_bio_X509_AUX); the chain is read with PEM_read_bio_X509, which takes CERTIFICATE and X509 CERTIFICATE and
+// skips a TRUSTED CERTIFICATE. Every block is handed to Alice labelled CERTIFICATE; trust settings never are.
+func TestCertBlocksReadsTheOpenSSLLeafLabels(t *testing.T) {
+	leaf := newNginxWorld(t).leaf
+	inter := leaf.FullchainPEM[len(leaf.CertPEM):]
+	want := string(leaf.FullchainPEM)
+
+	blocks, dropped, firstDropped := certBlocks([]byte(relabel(leaf.CertPEM, "X509 CERTIFICATE") + string(inter)))
+	assert.Equal(t, want, blocks, "X509 CERTIFICATE leaf")
+	assert.False(t, dropped)
+	assert.False(t, firstDropped)
+
+	blocks, dropped, firstDropped = certBlocks([]byte(trustedPEM(t, leaf.Cert.Raw) + string(inter)))
+	assert.Equal(t, want, blocks, "TRUSTED CERTIFICATE leaf")
+	assert.NotContains(t, blocks, base64.StdEncoding.EncodeToString(trustAux(t)))
+	assert.False(t, dropped)
+	assert.False(t, firstDropped)
+
+	interCert, _ := pem.Decode(inter)
+	require.NotNil(t, interCert)
+	blocks, dropped, firstDropped = certBlocks([]byte(string(leaf.CertPEM) + trustedPEM(t, interCert.Bytes)))
+	assert.Equal(t, string(leaf.CertPEM), blocks, "a later TRUSTED CERTIFICATE is skipped, as PEM_read_bio_X509 skips it")
+	assert.True(t, dropped)
+	assert.False(t, firstDropped)
+
+	blocks, dropped, _ = certBlocks([]byte(string(leaf.CertPEM) + relabel(inter, "X509 CERTIFICATE")))
+	assert.Equal(t, want, blocks, "a later X509 CERTIFICATE is kept")
+	assert.False(t, dropped)
+
+	notACert := string(pem.EncodeToMemory(&pem.Block{Type: "TRUSTED CERTIFICATE", Bytes: append([]byte{0x30, 0x03, 0x02, 0x01, 0x01},
+		trustAux(t)...)}))
+	for name, in := range map[string]string{
+		"TRUSTED CERTIFICATE whose first element is not a certificate": notACert + string(inter),
+		"TRUSTED CERTIFICATE with nothing after the begin line":        "-----BEGIN TRUSTED CERTIFICATE-----\n",
+		"TRUSTED CERTIFICATE that is not DER":                          string(pem.EncodeToMemory(&pem.Block{Type: "TRUSTED CERTIFICATE", Bytes: []byte("junk")})) + string(inter),
+		"mismatched markers": strings.Replace(relabel(leaf.CertPEM, "X509 CERTIFICATE"), "END X509 CERTIFICATE", "END CERTIFICATE", 1) +
+			string(inter),
+	} {
+		blocks, dropped, firstDropped := certBlocks([]byte(in))
+		assert.True(t, dropped, name)
+		assert.True(t, firstDropped, name)
+		assert.NotContains(t, blocks, string(leaf.CertPEM), name)
+	}
 }

@@ -373,7 +373,7 @@ func TestProtocol6WireShapes(t *testing.T) {
 	assert.NotContains(t, s[strings.Index(s, `"/x"`):], "content_b64", "an empty content is omitted")
 	assert.Contains(t, s, `"truncated":true`)
 	assert.Equal(t, 6, MinProtocol, "protocol 6 stays the minimum for every existing operation (A1)")
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 	assert.Equal(t, "name", UnlistedName)
 	assert.Equal(t, "home", UnlistedHome)
 	assert.Equal(t, "account_name_unsupported", WarnAccountNameUnsupported)
@@ -468,14 +468,14 @@ func TestServerDumpWireNamesAreUnchanged(t *testing.T) {
 	assert.Equal(t, 1000, MaxServerFiles)
 	assert.Equal(t, 16<<20, ServerDumpOutput)
 	assert.Equal(t, 11, Protocol)
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 }
 
 // Protocol 8 (Apache, Phase B): apache-dump and SOFTWARE_NOT_FOUND; a protocol 6 helper still serves
 // every other operation.
 func TestProtocol8(t *testing.T) {
 	assert.Equal(t, 11, Protocol)
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.LessOrEqual(t, HTTP01MinProtocol, ApacheMinProtocol)
@@ -487,7 +487,7 @@ func TestProtocol8(t *testing.T) {
 // Protocol 9 (HAProxy, Phase C): haproxy-dump and config_dir_not_read; nothing else changed.
 func TestProtocol9(t *testing.T) {
 	assert.Equal(t, 11, Protocol)
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.Equal(t, 9, HAProxyMinProtocol)
@@ -499,7 +499,7 @@ func TestProtocol9(t *testing.T) {
 // stdin, and the restore_forbidden phase; nothing else changed.
 func TestProtocol10(t *testing.T) {
 	assert.Equal(t, 11, Protocol)
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 	assert.Equal(t, 6, MinProtocol, "an older helper serves every other operation")
 	assert.Equal(t, 10, RollbackGuardMinProtocol)
 	assert.Equal(t, "restore_forbidden", PhaseRestoreForbidden)
@@ -520,7 +520,7 @@ func TestProtocol10(t *testing.T) {
 // Protocol 11 (R51): tls-probe answers the presented chain; an answer without it (an older helper) is still read.
 func TestProtocol11(t *testing.T) {
 	assert.Equal(t, 11, Protocol)
-	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, "1.11.0", Version)
 	assert.Equal(t, 6, MinProtocol, "an older helper serves every other operation")
 	b, err := json.Marshal(TLSProbeResponse{OK: true, LeafSHA256: "l", ChainLength: 1, NotAfter: "n"})
 	require.NoError(t, err)
@@ -574,4 +574,11 @@ func TestDumpServerSectionIsOmittedWhenEmpty(t *testing.T) {
 	b, err = json.Marshal(s)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"section":"fe_https"`)
+}
+
+// 1.11.0 (R64, KI-39) reads a leaf labelled TRUSTED CERTIFICATE or X509 CERTIFICATE; the protocol is unchanged.
+func TestHelperVersion111(t *testing.T) {
+	assert.Equal(t, "1.11.0", Version)
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, 6, MinProtocol)
 }

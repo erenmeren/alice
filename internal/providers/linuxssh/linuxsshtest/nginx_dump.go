@@ -3,6 +3,7 @@ package linuxsshtest
 import (
 	"bytes"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -734,10 +735,56 @@ func keyOpen(m *emuFile) bool {
 	return m.owner != "root" || (m.mode&0o040 != 0 && m.group != "root") || m.mode&0o004 != 0
 }
 
-var (
-	pemCertBegin = []byte("-----BEGIN CERTIFICATE-----")
-	pemCertEnd   = []byte("-----END CERTIFICATE-----")
+// The PEM labels OpenSSL reads as a certificate, as the helper's (KI-39, R64): any of the three for the first block,
+// CERTIFICATE and X509 CERTIFICATE for the chain (a later TRUSTED CERTIFICATE is skipped).
+const (
+	labelCertificate = "CERTIFICATE"
+	labelX509        = "X509 CERTIFICATE"
+	labelTrusted     = "TRUSTED CERTIFICATE"
 )
+
+var certLabels = []string{labelCertificate, labelX509, labelTrusted}
+
+// pemSpan is the helper's: the earliest begin line of a certificate label, the text to the end line of the same label
+// (nil when unterminated) and the text after it.
+func pemSpan(data []byte) (label string, span, rest []byte, found bool) {
+	at := -1
+	for _, l := range certLabels {
+		if i := bytes.Index(data, []byte("-----BEGIN "+l+"-----")); i >= 0 && (at < 0 || i < at) {
+			at, label = i, l
+		}
+	}
+	if at < 0 {
+		return "", nil, nil, false
+	}
+	data = data[at:]
+	endLine := []byte("-----END " + label + "-----")
+	end := bytes.Index(data, endLine)
+	if end < 0 {
+		return label, nil, nil, true
+	}
+	return label, data[:end+len(endLine)], data[end+len(endLine):], true
+}
+
+// certDER is the helper's: the certificate of a block of the given label (of a TRUSTED CERTIFICATE its first DER
+// element only).
+func certDER(blk *pem.Block, label string) ([]byte, bool) {
+	der := blk.Bytes
+	if blk.Type == labelTrusted {
+		var raw asn1.RawValue
+		if _, err := asn1.Unmarshal(blk.Bytes, &raw); err != nil {
+			return nil, false
+		}
+		der = raw.FullBytes
+	}
+	if blk.Type != label || len(blk.Headers) != 0 {
+		return nil, false
+	}
+	if _, err := x509.ParseCertificate(der); err != nil {
+		return nil, false
+	}
+	return der, true
+}
 
 // certPEMBlocks is the helper's certBlocks: the X.509 certificates of data re-encoded as
 // CERTIFICATE blocks, whether a block was dropped, and whether it was the first one. A private key
@@ -749,27 +796,30 @@ func certPEMBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
 		firstDropped = firstDropped || first
 	}
 	for rest, first := data, true; ; first = false {
-		i := bytes.Index(rest, pemCertBegin)
-		if i < 0 {
+		label, span, next, found := pemSpan(rest)
+		if !found {
 			break
 		}
-		rest = rest[i:]
-		end := bytes.Index(rest, pemCertEnd)
-		if end < 0 {
+		if span == nil {
 			drop(first)
 			break
 		}
-		blk, _ := pem.Decode(rest[:end+len(pemCertEnd)])
-		rest = rest[end+len(pemCertEnd):]
+		rest = next
+		if label == labelTrusted && !first {
+			drop(false)
+			continue
+		}
+		blk, _ := pem.Decode(span)
 		if blk == nil {
 			drop(first)
 			continue
 		}
-		if _, err := x509.ParseCertificate(blk.Bytes); err != nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
+		der, ok := certDER(blk, label)
+		if !ok {
 			drop(first)
 			continue
 		}
-		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes})
+		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 	}
 	return b.String(), dropped, firstDropped
 }

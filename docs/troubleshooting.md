@@ -283,7 +283,8 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   block of a file, that website is **Not supported** with "The first certificate in the file cannot be read, so Alice
   does not know which certificate this website serves." (`leaf_unreadable`): replace the certificate (for example one
   with a negative serial number, which Nginx loads but Alice cannot read) and choose **Discover**. A server whose
-  `alice-helper` is older than 1.6.1 instead shows the next certificate of that file, usually the intermediate.
+  `alice-helper` is older than 1.6.1 (or, before 1.11.0, a first certificate labelled TRUSTED CERTIFICATE or X509
+  CERTIFICATE) instead shows the next certificate of that file, usually the intermediate.
 - **"These websites may be out of date".** The last scan could not read the websites (the reason is shown); the list
   is the one Alice read at the time shown. Fix the reason and choose **Discover**.
 - **A website shows "The certificate changed outside Alice."** Its file holds a certificate Alice did not deploy (for

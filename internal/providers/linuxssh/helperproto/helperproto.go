@@ -51,8 +51,9 @@ const (
 	// (TLSProbeResponse.Chain), so that Alice checks its trust like the chain its own probe sees.
 	// Nothing else changed: a protocol 6 helper serves every other operation (MinProtocol), and Alice
 	// reads an answer without a chain as "trust not checked". 1.10.0 is the first helper that names it.
+	// 1.11.0 (R64) reads a leaf labelled TRUSTED CERTIFICATE or X509 CERTIFICATE; protocol unchanged.
 	Protocol   = 11
-	Version    = "1.10.0"
+	Version    = "1.11.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
