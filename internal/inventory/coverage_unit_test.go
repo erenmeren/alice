@@ -18,7 +18,7 @@ import (
 )
 
 // The incident engine keeps a closed code on a location for every refusal of RequestDeployment that belongs to the
-// location or the certificate (isRefusal), and a database failure is never one. Each refusal, bare or wrapped in the
+// location or the certificate (IsIncidentRefusal), and a database failure is never one. Each refusal, bare or wrapped in the
 // *LocationRefusalError that names its location, maps to the API's reason of the same error.
 func TestIncidentRefusalCodes(t *testing.T) {
 	loc := uuid.New()
@@ -39,19 +39,19 @@ func TestIncidentRefusalCodes(t *testing.T) {
 		{ErrCertificateRevoked, true, ReasonCertificateRevoked},
 		{ErrCertificateCompromised, true, ReasonCertificateCompromised},
 		{ErrNotFound, true, "system.not_found"},
-		{ErrTargetDisabled, true, "internal.unexpected"},
+		{ErrTargetDisabled, true, "target.disabled"},
 		{ErrTargetNotReady, false, "deployment.target_not_ready"},
 		{ErrACMEAccountState, false, "acme.account_state"},
 		{ErrACMERolloverPending, false, "acme.rollover_pending"},
 		{errors.New("connection reset"), false, "internal.unexpected"},
 	} {
-		assert.Equal(t, tc.refusal, isRefusal(tc.err), "%v", tc.err)
-		assert.Equal(t, tc.code, codeOf(tc.err), "%v", tc.err)
+		assert.Equal(t, tc.refusal, IsIncidentRefusal(tc.err), "%v", tc.err)
+		assert.Equal(t, tc.code, IncidentRefusalCode(tc.err), "%v", tc.err)
 		wrapped := &LocationRefusalError{LocationID: loc, Err: tc.err}
-		assert.True(t, isRefusal(wrapped), "a refusal naming a location is always the location's: %v", tc.err)
-		assert.Equal(t, tc.code, codeOf(wrapped), "%v", tc.err)
+		assert.True(t, IsIncidentRefusal(wrapped), "a refusal naming a location is always the location's: %v", tc.err)
+		assert.Equal(t, tc.code, IncidentRefusalCode(wrapped), "%v", tc.err)
 	}
-	assert.True(t, isRefusal(fmt.Errorf("context: %w", ErrNotFound)))
+	assert.True(t, IsIncidentRefusal(fmt.Errorf("context: %w", ErrNotFound)))
 }
 
 // A failed revocation is recorded with a closed code: the CA's reason, an inventory refusal, an unreachable CA for a

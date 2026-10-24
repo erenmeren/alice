@@ -335,6 +335,16 @@ var deployRefusals = []struct {
 	{inventory.ErrServiceUntrusted, inventory.ReasonServiceUntrusted}, // a trust removed after the request (R49)
 }
 
+// DeployRefusalReasons is a copy of the reasons DeployJob records for its refusals, keyed by the sentinel (the API test
+// locks each to the API's reason of the same error, R64).
+func DeployRefusalReasons() map[error]string {
+	out := make(map[error]string, len(deployRefusals))
+	for _, r := range deployRefusals {
+		out[r.err] = r.reason
+	}
+	return out
+}
+
 // deployRefusal classifies an error of DeployJob: a refusal of the deploy's rules is permanent; a
 // provider refusal (foreign options, S7) keeps its code; anything else (the database) is retried.
 func deployRefusal(err error) error {

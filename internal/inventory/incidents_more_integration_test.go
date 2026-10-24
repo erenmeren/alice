@@ -353,3 +353,35 @@ func TestACMEIncidentOfARevokedVersionAndItsPlaces(t *testing.T) {
 	d := w.h.auditDetails("incident.started")[0]
 	assert.Equal(t, inventory.IncidentRevocationRevoked, d["revocation"])
 }
+
+// A place on a disabled server (HB-01, R64 ruling 23): RequestDeployment refuses a disabled server as not ready (F-31),
+// before any key-change rule, so the incident waits for it like a busy place and fails it busy after its last attempt;
+// it never stores internal.unexpected. ErrTargetDisabled itself does not reach the incident engine on this path; its
+// code (target.disabled) is locked against the API catalogue by internal/api:TestIncidentRefusalCodesMatchTheCatalogue.
+func TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy(t *testing.T) {
+	f := newDeployFixture(t)
+	h := f.h
+	h.installLicense("LIC-INCIDENT-DISABLED", 5, 365)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	w := &acmeDeployWorld{deployFixture: f}
+	_, _, err := h.svc.UploadCertificate(h.ctx, f.admin, pemUpload(f.old))
+	require.NoError(t, err)
+	old := f.certByFingerprint(t, pki.Fingerprint(f.old.Cert))
+	i, err := h.svc.StartIncident(h.ctx, f.admin, old.ID, inventory.IncidentInput{})
+	require.NoError(t, err)
+	f.setTargetStatus(f.target2, inventory.StatusDisabled)
+	_, err = h.svc.ChooseIncidentReplacement(h.ctx, f.admin, i.ID, f.cert.ID)
+	require.NoError(t, err)
+	w.advance()
+	i = w.incident(i.ID)
+	assert.Equal(t, "pending", locationStatus(i)[f.loc2], "a disabled server's place waits")
+	assert.Positive(t, incidentLocation(t, i, f.loc2).Attempts)
+	assert.Equal(t, "deploying", locationStatus(i)[f.loc1], "the places of an enabled server go ahead")
+
+	_, err = h.db.Owner.Exec(h.ctx, `UPDATE certificate_incident_locations SET attempts = 29 WHERE incident_id = $1
+AND location_id IN (SELECT id FROM certificate_locations WHERE target_id = $2)`, i.ID, f.target2)
+	require.NoError(t, err)
+	w.advance()
+	i = w.incident(i.ID)
+	assert.Equal(t, "failed:"+inventory.IncidentCodeLocationBusy, locationStatus(i)[f.loc2])
+}
