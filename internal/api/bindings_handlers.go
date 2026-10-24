@@ -25,7 +25,10 @@ func (s *server) bindingRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", scope: scopeList, perm: rbac.Read, handler: s.listDeployableLocations},
 		{method: http.MethodPost, pattern: "/api/v1/bindings", scope: scopeCross, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.createBinding},
 		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", scope: scopeResource, resolve: &resolver{kind: services.KindKVBinding, param: "id", anyVisible: true}, perm: rbac.Read, handler: s.getBinding},
-		{method: http.MethodPatch, pattern: "/api/v1/bindings/{id}", scope: scopeCross, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.updateBinding},
+		// Design §5.6 "either side": a person of a website's service may release its own websites (R64 ruling 9), so the
+		// guard lets in certificates.operate on any service the binding is visible from; bindingChange then refuses an
+		// addition and the release of a website the caller holds no right on unless the caller is the vault's side.
+		{method: http.MethodPatch, pattern: "/api/v1/bindings/{id}", scope: scopeCross, resolve: &resolver{kind: services.KindKVBinding, param: "id", anyVisible: true}, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.updateBinding},
 		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CredentialsManage, lic: license.ClassAlways, handler: s.setAutoDeploy},
 		{method: http.MethodDelete, pattern: "/api/v1/bindings/{id}", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassAlways, handler: s.deleteBinding},
 		{method: http.MethodPost, pattern: "/api/v1/bindings/{id}/actions/deploy", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployBinding},
