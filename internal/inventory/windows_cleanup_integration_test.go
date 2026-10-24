@@ -5,6 +5,7 @@ package inventory_test
 import (
 	"crypto/x509"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -380,4 +381,53 @@ func TestRecordCleanupAuditsAndNotifiesOnce(t *testing.T) {
 	assert.Zero(t, h.emails(inventory.TemplateWindowsCompromisedInStore), "a compromised certificate the job removed is not reported")
 	assert.Equal(t, map[string]string{"store": "My", "sha1": thumbprint(gone), "sha256": derSHA(gone), "reason": providers.CleanupIncident,
 		"incident_id": incident.String()}, h.auditDetails("windows.certificate_removed")[2], "an incident's removal names the incident")
+}
+
+// The store notice under a race (HB-09, R64 Ruling 12): two cleanup jobs of the same incident record the same still-bound
+// certificate at the same moment; one notice set is queued and one incident_notices row written.
+func TestCompromisedInStoreNoticeOnceUnderRace(t *testing.T) {
+	ca := pki.NewCA("Cleanup race", pki.ECDSA256, start)
+	held := ca.Issue(pki.Opts{CommonName: "held.example.test", SANs: []string{"held.example.test"}}, start)
+	f := newCleanupFixture(t, held, held)
+	h := f.h
+	kept := f.issue("kept")
+	f.compromise(kept)
+	incident := f.incident(kept)
+	plan := providers.CleanupPlan{Watched: []providers.CleanupWatched{watched(kept, providers.WatchKept, "bound")}}
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for n := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[n] = h.svc.RecordCleanup(h.ctx, f.win, &incident, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{})
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	sets := h.count(`SELECT count(DISTINCT to_address) FROM notifications_outbox WHERE template_key = $1`, inventory.TemplateWindowsCompromisedInStore)
+	require.Positive(t, sets)
+	assert.Equal(t, sets, h.emails(inventory.TemplateWindowsCompromisedInStore), "one e-mail per recipient, not one per job")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM incident_notices WHERE incident_id = $1", incident))
+}
+
+// The store notice after the outbox's retention pruning (HB-09, R64 Ruling 12): the record is the notice's, not the
+// outbox's, so a later job does not send it again.
+func TestCompromisedInStoreNoticeSurvivesOutboxPruning(t *testing.T) {
+	ca := pki.NewCA("Cleanup prune", pki.ECDSA256, start)
+	held := ca.Issue(pki.Opts{CommonName: "held.example.test", SANs: []string{"held.example.test"}}, start)
+	f := newCleanupFixture(t, held, held)
+	h := f.h
+	kept := f.issue("kept")
+	f.compromise(kept)
+	incident := f.incident(kept)
+	plan := providers.CleanupPlan{Watched: []providers.CleanupWatched{watched(kept, providers.WatchKept, "bound")}}
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	require.Positive(t, h.emails(inventory.TemplateWindowsCompromisedInStore))
+	_, err := h.db.Owner.Exec(h.ctx, "DELETE FROM notifications_outbox")
+	require.NoError(t, err)
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	assert.Zero(t, h.emails(inventory.TemplateWindowsCompromisedInStore), "never sent twice")
 }

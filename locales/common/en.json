@@ -2488,6 +2488,20 @@
         "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}} (later if the rotation is paused because of the license)."
       }
     },
+    "incident": {
+      "needs_attention": {
+        "subject": "Key compromise incident needs attention: {{certificate_name}}",
+        "body": "The key compromise incident of the certificate {{certificate_name}} is waiting for a person. Reason: {{reason}}.\n\nAlice does nothing more on this incident until an administrator acts on its page in Alice (Incidents): Retry, Revoke now regardless, choose the replacement, or Close.\n\nPlaces replaced and checked: {{verified}}. Places that failed: {{failed}}. Places skipped: {{skipped}}.\n\nIncident: {{incident_id}}"
+      },
+      "completed": {
+        "subject": "Key compromise incident completed: {{certificate_name}}",
+        "body": "Alice replaced the certificate {{certificate_name}} at every place it could replace it and checked each one, and the compromised certificate is revoked at its certificate authority (or had nothing left to revoke).\n\nPlaces replaced and checked: {{verified}}. Places skipped: {{skipped}}; the incident's page says why for each one, and those you replace yourself.\n\nIncident: {{incident_id}}"
+      },
+      "completed_not_revocable": {
+        "subject": "Key compromise incident completed: {{certificate_name}}",
+        "body": "Alice replaced the certificate {{certificate_name}} at every place it could replace it and checked each one. Alice cannot revoke this certificate: ask the authority that issued it to revoke it.\n\nPlaces replaced and checked: {{verified}}. Places skipped: {{skipped}}; the incident's page says why for each one, and those you replace yourself.\n\nIncident: {{incident_id}}"
+      }
+    },
     "windows": {
       "compromised_in_store": {
         "subject": "A compromised certificate is still on {{target_name}}",

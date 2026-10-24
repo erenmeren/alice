@@ -2488,6 +2488,20 @@
         "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}} (yenileme lisans nedeniyle duraklatılırsa daha sonra)."
       }
     },
+    "incident": {
+      "needs_attention": {
+        "subject": "Anahtar ele geçirme olayı ilgi bekliyor: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasının anahtar ele geçirme olayı bir kişiyi bekliyor. Neden: {{reason}}.\n\nBir yönetici olayın Alice'teki sayfasında (Olaylar) işlem yapana kadar Alice bu olayda başka bir şey yapmaz: Yeniden dene, Yine de şimdi iptal et, yeni sertifikayı seç ya da Kapat.\n\nDeğiştirilip denetlenen yerler: {{verified}}. Başarısız olan yerler: {{failed}}. Atlanan yerler: {{skipped}}.\n\nOlay: {{incident_id}}"
+      },
+      "completed": {
+        "subject": "Anahtar ele geçirme olayı tamamlandı: {{certificate_name}}",
+        "body": "Alice {{certificate_name}} sertifikasını değiştirebildiği her yerde değiştirdi ve her birini denetledi; ele geçirilmiş sertifika sertifika yetkilisinde iptal edildi (ya da iptal edilecek bir şey kalmamıştı).\n\nDeğiştirilip denetlenen yerler: {{verified}}. Atlanan yerler: {{skipped}}; olayın sayfası her birinin nedenini söyler, bunları siz değiştirirsiniz.\n\nOlay: {{incident_id}}"
+      },
+      "completed_not_revocable": {
+        "subject": "Anahtar ele geçirme olayı tamamlandı: {{certificate_name}}",
+        "body": "Alice {{certificate_name}} sertifikasını değiştirebildiği her yerde değiştirdi ve her birini denetledi. Alice bu sertifikayı iptal edemez: iptal etmesi için sertifikayı veren yetkiliye başvurun.\n\nDeğiştirilip denetlenen yerler: {{verified}}. Atlanan yerler: {{skipped}}; olayın sayfası her birinin nedenini söyler, bunları siz değiştirirsiniz.\n\nOlay: {{incident_id}}"
+      }
+    },
     "windows": {
       "compromised_in_store": {
         "subject": "Ele geçirilmiş bir sertifika hâlâ sunucuda: {{target_name}}",

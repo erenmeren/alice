@@ -303,12 +303,14 @@ WHERE il.incident_id = $1 AND l.target_id = $2 AND il.status = ANY ($3))`, *inci
 // job ended) finds the notice already in the outbox by its incident_id and thumbprint, as the key preview e-mail finds
 // its last one (sshkeys lastPreviewMail).
 func (s *Service) compromisedInStore(ctx context.Context, tx pgx.Tx, target, incident uuid.UUID, fp, store, thumbprint string) error {
-	var told bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM notifications_outbox WHERE template_key = $1 AND params->>'incident_id' = $2
-    AND params->>'thumbprint' = $3)`, TemplateWindowsCompromisedInStore, incident.String(), thumbprint).Scan(&told); err != nil {
-		return fmt.Errorf("inventory: read whether the incident's notice was queued: %w", err)
+	// Recorded once per incident and certificate (incident_notices, R64 Ruling 12): of two jobs at the same moment only the
+	// one that inserts the row queues the notice, and a notice whose outbox rows were pruned is never sent again.
+	tag, err := tx.Exec(ctx, `INSERT INTO incident_notices (incident_id, notice, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		incident, TemplateWindowsCompromisedInStore+":"+thumbprint, s.clock.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("inventory: record the incident's notice: %w", err)
 	}
-	if told {
+	if tag.RowsAffected() == 0 {
 		return nil
 	}
 	var name string
@@ -316,7 +318,7 @@ func (s *Service) compromisedInStore(ctx context.Context, tx pgx.Tx, target, inc
 		return fmt.Errorf("inventory: read the server's name: %w", err)
 	}
 	var certName string
-	err := tx.QueryRow(ctx, `SELECT coalesce(nullif(label, ''), nullif(subject_cn, ''), left(fingerprint_sha256, 16)) FROM certificates
+	err = tx.QueryRow(ctx, `SELECT coalesce(nullif(label, ''), nullif(subject_cn, ''), left(fingerprint_sha256, 16)) FROM certificates
 WHERE fingerprint_sha256 = $1`, fp).Scan(&certName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		certName = fp[:min(16, len(fp))]

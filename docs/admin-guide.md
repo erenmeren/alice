@@ -2259,6 +2259,11 @@ refused, **Close** works. Audit: `certificate.compromised`, `incident.started`, 
 `incident.deployed`, `incident.revoked`, `acme.certificate.revoked`, `incident.needs_attention`,
 `incident.revoke_failed`, `incident.retried`, `incident.revoke_now`, `incident.completed`, `incident.closed`.
 
+Alice e-mails the certificate's service recipients when an incident needs attention and when it completes, also while the
+licence is locked: once each time it needs attention (a **Retry** that fails again sends a new e-mail) and once when it
+completes. Starting and closing an incident send nothing. **Incidents** in the navigation lists every incident of your
+services, newest first, with a filter (open, needs attention, completed, closed).
+
 ### What Alice keeps, and the audit log
 
 The account keys, the external account keys and the hook secrets are stored encrypted with the master key, each

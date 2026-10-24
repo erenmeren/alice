@@ -153,6 +153,8 @@ var explicitGrants = map[string][]string{
 	// Key-compromise incidents (00021): history, never deleted; a finished incident is frozen (Z1023).
 	"public.certificate_incidents":          {"INSERT", "SELECT"},
 	"public.certificate_incident_locations": {"INSERT", "SELECT"},
+	// Notices an incident sends once (00033, R64): history, inserted and read.
+	"public.incident_notices": {"INSERT", "SELECT"},
 	// Services (00026, R49): a service's policy history is append-only.
 	"public.service_policies": {"INSERT", "SELECT"},
 	// Held backups (00031, R59): written once before a change, deleted by the retention (never while the deployment is
