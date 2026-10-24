@@ -257,7 +257,7 @@ var testMailer notify.Mailer = e2eMailbox
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
-certificate_incident_locations, certificate_incidents,
+incident_notices, certificate_incident_locations, certificate_incidents, revocation_checks,
 acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers,
 discovery_endpoints, discovery_certificates, discovery_scans, discovery_scopes,
 rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,
