@@ -1408,7 +1408,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   amd64 `fd09f74e720dcb1958898091fd7f02a08c2d89232b5ea3e15fd56515dc2d8e5b`, arm64
   `dba2d5b3962324d94c621e34f480cf5c7086701693751693145fd48688491b38`, identical on Linux, windows-2022 and windows-2025
   and equal to a local `make winhelper` with go1.27.3. The fallback (a warning) was not needed.
-- **F14: the run path CONFIRMED, the skipped path PENDING.** Run 1: `windows-required` ran with `if: always()` after
+- **F14: the run path CONFIRMED (W4), the skipped path CONFIRMED after the push of `main` ([F14 skipped path (W4 coordinator)](#f14-skipped-path-w4-coordinator)).** Run 1: `windows-required` ran with `if: always()` after
   green legs and passed, under exactly the context name `windows-required`. The skipped path (`changes` answers
   `false`, both legs `skipped`, `windows-required` success) cannot be observed on `windows-w4`: with Ruling 5 as
   amended a branch push diffs against `origin/main`, which is `e21e1ba3` (W3 not yet pushed), so `changes` always
@@ -1619,8 +1619,9 @@ The final review of `2ec69c8c..4e786c29` (verdict "ready after fixes") and its f
   - **Final review** of `2ec69c8c..4e786c29`: "ready after fixes" (three Important, minors); every finding fixed or
     declined with a reason in `1437a3bb..53ca1185` and re-reviewed (all addressed). See
     [Final review fixes (W4)](#final-review-fixes-w4).
-  - **Not proven in W4**: F14's skipped path (owner item below), a real tag run of `release.yml` (no tag is pushed in
-    W4; the call is checked by `actionlint`, `TestReleaseWorkflowWaitsForWindows` and `make release-test` only).
+  - **Not proven in W4**: a real tag run of `release.yml` (no tag is pushed in W4; the call is checked by `actionlint`,
+    `TestReleaseWorkflowWaitsForWindows` and `make release-test` only). F14's skipped path, left open by the branch,
+    was confirmed by the coordinator after the push of `main` ([F14 skipped path (W4 coordinator)](#f14-skipped-path-w4-coordinator)).
 
 ## F14 skipped path (W4 coordinator)
 
@@ -1632,6 +1633,13 @@ under `docs/superpowers/`, not a watched path of `.github/windows-paths.txt`). E
 The verdict is recorded in the next commit of this branch, and the fast-forward of the branch onto `main` is a second
 observation: a push to the default branch diffs against its before commit (`95873255`), again with no watched path.
 
+**Verdict: CONFIRMED.** `windows.yml` run <https://github.com/erenmeren/alice/actions/runs/40083821806> at `c3070656`
+(2026-10-24 09:54 UTC): `changes` success with the output `windows=false: no watched path changed since 95873255`,
+`linux-build` skipped, `helper` skipped (the matrix shows as one skipped check run named `helper`), `windows-required`
+**success**, listed on the commit's check runs under exactly that name. The plan's F14 fallback (legs that always run
+and exit early) is not needed. The check can be required (owner item, Ruling 15). The default-branch observation (the
+fast-forward of this branch onto `main`) is recorded below when it has run.
+
 ## Owner items (W4)
 
 - **Require the check** (Ruling 15): create the ruleset of `docs/dev/windows-ci.md` (`gh api --method POST
@@ -1642,10 +1650,11 @@ observation: a push to the default branch diffs against its before commit (`9587
   `bypass_mode: always`) so you can keep pushing `main` directly; the coordinator's flow pushes the phase branch
   first, so a commit fast-forwarded onto `main` already has a green `windows-required`. Without the bypass, `main`
   takes changes only through pull requests.
-- **F14's skipped path** (controller ruling 5): after `main` is pushed, the first push to `main` without a Windows
-  change (or a branch cut from that `main` with only such a change) must show `changes` → `windows=false`,
-  `linux-build` and both `helper` legs skipped, and `windows-required` success under exactly that name. If it fails,
-  apply the plan's F14 fallback (legs that always run and exit early) before requiring the check.
+- **F14's skipped path** (controller ruling 5): **done by the coordinator**, no owner action. The branch
+  `windows-w4-f14` cut from the pushed `main` with a docs-only change showed `changes` → `windows=false`, `linux-build`
+  and `helper` skipped and `windows-required` success under exactly that name (run 40083821806; see
+  [F14 skipped path (W4 coordinator)](#f14-skipped-path-w4-coordinator)). The fallback is not needed; the check can be
+  required.
 - **The first release tag** (Ruling 12): no tag was pushed in W4. On the first `v*` tag, check that `release.yml`'s
   job `windows` calls `windows.yml` with `all: true` (both legs run, `windows-required` green) and that `stage` waits
   for it; record the run in release-checklist row 1.46.
