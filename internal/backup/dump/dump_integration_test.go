@@ -353,6 +353,10 @@ SELECT 'e1000000-0000-4000-8000-000000000001', id, public_key_sha256, 'awaiting_
 FROM certificates WHERE public_key_sha256 ~ '^[0-9a-f]{64}$' LIMIT 1;
 INSERT INTO certificate_incident_locations (incident_id, location_id, status, updated_at)
 SELECT 'e1000000-0000-4000-8000-000000000001', id, 'pending', now() FROM certificate_locations LIMIT 1;
+INSERT INTO incident_notices (incident_id, notice, created_at)
+VALUES ('e1000000-0000-4000-8000-000000000001', 'windows.compromised_in_store:' || repeat('a', 40), now());
+INSERT INTO revocation_checks (fingerprint_sha256, status, method, error_code, failures, checked_at, next_check_at)
+VALUES (repeat('e', 64), 'unavailable', '', 'certificate.revocation_unreachable', 2, now(), now() + interval '2 hours');
 INSERT INTO services (id, name, environment_id, created_at, updated_at)
 VALUES ('e2000000-0000-4000-8000-000000000001', 'Payments', (SELECT id FROM environments WHERE key = 'production'), now(), now());
 INSERT INTO service_trusts (id, source_service_id, target_service_id, created_at)
