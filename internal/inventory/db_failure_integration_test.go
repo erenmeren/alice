@@ -59,7 +59,10 @@ func TestServicePathsReportADatabaseFailure(t *testing.T) {
 		"RequestRecovery":      func() error { _, err := svc.RequestRecovery(ctx, id); return err },
 		"MarkRecovering":       func() error { return svc.MarkRecovering(ctx, id, time.Now(), false) },
 		"RollbackGuard":        func() error { _, err := svc.RollbackGuard(ctx, id); return err },
-		"ListIncidentsIn":      func() error { _, err := svc.ListIncidentsIn(ctx, nil, false, 0, authz.Reach{}); return err },
+		"ListIncidentsIn": func() error {
+			_, err := svc.ListIncidentsIn(ctx, inventory.IncidentFilter{}, authz.Reach{})
+			return err
+		},
 		// drift
 		"LocationObservation":       func() error { _, err := svc.LocationObservation(ctx, id); return err },
 		"SetDriftMode":              func() error { _, err := svc.SetDriftMode(ctx, a, id, inventory.DriftModeObserve, false); return err },

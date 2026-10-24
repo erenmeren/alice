@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,7 +34,7 @@ type IncidentService interface {
 	CertificateImpact(ctx context.Context, id uuid.UUID) (inventory.CertificateImpact, error)
 	StartIncident(ctx context.Context, a inventory.Actor, certificateID uuid.UUID, in inventory.IncidentInput) (inventory.Incident, error)
 	GetIncident(ctx context.Context, id uuid.UUID) (inventory.Incident, error)
-	ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, reach authz.Reach) ([]inventory.Incident, error)
+	ListIncidentsIn(ctx context.Context, f inventory.IncidentFilter, reach authz.Reach) (inventory.IncidentPage, error)
 	RetryIncident(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	RevokeIncidentNow(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	ChooseIncidentReplacement(ctx context.Context, a inventory.Actor, id, certificateID uuid.UUID) (inventory.Incident, error)
@@ -381,20 +383,37 @@ func (s *server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("certificate_id"); raw != "" {
 		cert = parseOptionalID(&raw, "certificate_id", &v)
 	}
+	state := q.Get("state")
+	if state != "" && !slices.Contains(inventory.IncidentStates, state) {
+		v.Add("state", validate.OneOf, map[string]string{"values": strings.Join(inventory.IncidentStates, ", ")})
+	}
+	var cursor *inventory.IncidentCursor
+	if c := cursorParam(q.Get("cursor"), func(raw string) (inventory.IncidentCursor, bool) {
+		at, id, ok := parseACMECertCursor(raw)
+		return inventory.IncidentCursor{CreatedAt: at, ID: id}, ok
+	}, &v); c != nil {
+		cursor = c
+	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	list, err := s.deps.Incidents.ListIncidentsIn(r.Context(), cert, open, limit, s.reachOf(r, rbac.Read)) // R49 Phase 2: the caller's services
+	page, err := s.deps.Incidents.ListIncidentsIn(r.Context(), inventory.IncidentFilter{CertificateID: cert, OpenOnly: open, State: state,
+		Cursor: cursor, Limit: limit}, s.reachOf(r, rbac.Read)) // R49 Phase 2: the caller's services
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	items := make([]incidentDTO, 0, len(list))
-	for _, i := range list {
+	items := make([]incidentDTO, 0, len(page.Items))
+	for _, i := range page.Items {
 		items = append(items, incidentJSON(i, false))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	var next *string
+	if page.Next != nil {
+		c := timeIDCursor(page.Next.CreatedAt, page.Next.ID)
+		next = &c
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (s *server) getIncident(w http.ResponseWriter, r *http.Request) {

@@ -14,7 +14,7 @@ type fakeIncidents struct {
 	CertificateImpactFn         func(ctx context.Context, id uuid.UUID) (inventory.CertificateImpact, error)
 	StartIncidentFn             func(ctx context.Context, a inventory.Actor, certificateID uuid.UUID, in inventory.IncidentInput) (inventory.Incident, error)
 	GetIncidentFn               func(ctx context.Context, id uuid.UUID) (inventory.Incident, error)
-	ListIncidentsFn             func(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int) ([]inventory.Incident, error)
+	ListIncidentsFn             func(ctx context.Context, f inventory.IncidentFilter) (inventory.IncidentPage, error)
 	RetryIncidentFn             func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	RevokeIncidentNowFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	ChooseIncidentReplacementFn func(ctx context.Context, a inventory.Actor, id, certificateID uuid.UUID) (inventory.Incident, error)
@@ -42,11 +42,11 @@ func (f *fakeIncidents) GetIncident(ctx context.Context, id uuid.UUID) (inventor
 	return inventory.Incident{}, errNotConfigured
 }
 
-func (f *fakeIncidents) ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, _ authz.Reach) ([]inventory.Incident, error) {
+func (f *fakeIncidents) ListIncidentsIn(ctx context.Context, filter inventory.IncidentFilter, _ authz.Reach) (inventory.IncidentPage, error) {
 	if f.ListIncidentsFn != nil {
-		return f.ListIncidentsFn(ctx, certificateID, openOnly, limit)
+		return f.ListIncidentsFn(ctx, filter)
 	}
-	return nil, errNotConfigured
+	return inventory.IncidentPage{}, errNotConfigured
 }
 
 func (f *fakeIncidents) RetryIncident(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error) {

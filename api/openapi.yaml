@@ -5093,10 +5093,12 @@ paths:
       parameters:
         - { name: open, in: query, schema: { type: string, enum: ["true", "false"] }, description: Open incidents only }
         - { name: certificate_id, in: query, schema: { type: string, format: uuid } }
+        - { name: state, in: query, schema: { type: string, enum: [awaiting_replacement, ordering, deploying, revoking, needs_attention, completed, closed] } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 }, description: next_cursor of the previous page }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200":
-          description: The incidents, newest first (without their locations)
+          description: The incidents, newest first (without their locations), one page within the caller's services
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IncidentList" }
@@ -7884,9 +7886,10 @@ components:
         locations: { type: array, maxItems: 1000, items: { $ref: "#/components/schemas/IncidentLocation" } }
     IncidentList:
       type: object
-      required: [items]
+      required: [items, next_cursor]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Incident" } }
+        next_cursor: { type: [string, "null"], description: The cursor of the next page; null on the last page }
     ErrorRef:
       type: [object, "null"]
       required: [code, reason]

@@ -428,10 +428,11 @@ func TestIncidentRefusals(t *testing.T) {
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 	assert.Zero(t, f.h.count("SELECT count(*) FROM certificate_incidents"))
 	assert.Zero(t, f.h.count("SELECT count(*) FROM certificates WHERE compromised_at IS NOT NULL"))
-	list, err := f.h.svc.ListIncidents(f.h.ctx, nil, true, 0)
+	list, err := f.h.svc.ListIncidents(f.h.ctx, inventory.IncidentFilter{OpenOnly: true})
 	require.NoError(t, err)
-	assert.Empty(t, list)
-	_, err = f.h.svc.ListIncidents(f.h.ctx, nil, false, 1000)
+	assert.Empty(t, list.Items)
+	assert.Nil(t, list.Next)
+	_, err = f.h.svc.ListIncidents(f.h.ctx, inventory.IncidentFilter{Limit: 1000})
 	var verr validate.Errors
 	require.True(t, errors.As(err, &verr))
 }
