@@ -54,6 +54,10 @@ type Opts struct {
 	NotBefore  time.Time     // default now-1h
 	NotAfter   time.Time     // default now+90d
 	Key        crypto.Signer // reuse a key (CSR completion tests)
+	// The revocation addresses a leaf names (revocation check tests, R64): the OCSP responders (AIA) and the CRL
+	// distribution points.
+	OCSPServer            []string
+	CRLDistributionPoints []string
 }
 
 // Leaf is an issued certificate with its key.
@@ -165,6 +169,9 @@ func leafTemplate(o Opts, pub crypto.PublicKey, now time.Time) *x509.Certificate
 		KeyUsage:     usage,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		SubjectKeyId: ski(pub),
+
+		OCSPServer:            o.OCSPServer,
+		CRLDistributionPoints: o.CRLDistributionPoints,
 	}
 	for _, s := range o.SANs {
 		if ip := net.ParseIP(s); ip != nil {

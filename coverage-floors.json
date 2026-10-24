@@ -40,6 +40,7 @@
   "alice/internal/setup": 85,
   "alice/internal/platform/tlscert": 86,
   "alice/internal/platform/netaddr": 97,
+  "alice/internal/revocation": 95,
   "alice/internal/discovery": 98,
   "alice/internal/discovery/tlsprobe": 97,
   "alice/internal/discovery/discoverysvc": 85,
