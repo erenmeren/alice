@@ -397,6 +397,9 @@ func (s *Service) revocationNews(ctx context.Context, tx pgx.Tx, c revocationCan
 // revocationMail queues a revocation e-mail: an inventory certificate's to its service and the services of the servers
 // holding it, a discovered leaf's to the services of the scopes presenting it (the Administrators when none).
 func (s *Service) revocationMail(ctx context.Context, tx pgx.Tx, c revocationCandidate, res revocation.Result, reason, template string) error {
+	if s.notifier == nil {
+		return nil // no e-mails (Config.Notifier nil)
+	}
 	var name string
 	var svcs []uuid.UUID
 	var err error

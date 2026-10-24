@@ -358,3 +358,36 @@ func TestRevocationSettingsDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, set, got)
 }
+
+// Without a notifier (Config.Notifier nil: no e-mails) the incident engine and the revocation check still move and
+// mark; nothing is queued and nothing panics (final review, R64).
+func TestIncidentAndRevocationWorkWithoutANotifier(t *testing.T) {
+	noMail := func(c *inventory.Config) { c.Notifier = nil }
+	rf := &revFake{}
+	h := newHarness(t, withRevocation(t, rf), noMail)
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	l := rf.leaf(h, "www.example.test", []string{revOCSP}, nil)
+	c := h.uploadLeaf(admin, l)
+	rf.fake.Revoke(l.Cert.SerialNumber, 1, h.clock.Now().Add(-time.Hour))
+	assert.Equal(t, 1, h.runRevocation().Revoked)
+	got, err := h.svc.GetCertificate(h.ctx, c.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.RevokedAt)
+
+	f := newDeployFixture(t, noMail)
+	f.h.installLicense("LIC-NO-MAIL", 5, 365)
+	require.NoError(t, f.h.lic.Tick(f.h.ctx))
+	w := &acmeDeployWorld{deployFixture: f}
+	_, _, err = f.h.svc.UploadCertificate(f.h.ctx, f.admin, pemUpload(f.old))
+	require.NoError(t, err)
+	old := f.certByFingerprint(t, pki.Fingerprint(f.old.Cert))
+	i, err := f.h.svc.StartIncident(f.h.ctx, f.admin, old.ID, inventory.IncidentInput{})
+	require.NoError(t, err)
+	_, err = f.h.svc.ChooseIncidentReplacement(f.h.ctx, f.admin, i.ID, f.cert.ID)
+	require.NoError(t, err)
+	w.advance()
+	require.Positive(t, w.endRunning(i.ID, inventory.DeployStatusFailed))
+	w.advance()
+	assert.Equal(t, inventory.IncidentNeedsAttention, w.incident(i.ID).State)
+	assert.Zero(t, f.h.count("SELECT count(*) FROM notifications_outbox"))
+}

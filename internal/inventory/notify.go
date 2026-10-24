@@ -163,6 +163,9 @@ func IncidentTemplates() []string {
 // notifyIncident queues an incident e-mail in tx (the incident's move): the certificate's name and the places by status as
 // tx sees them, for the incident's services.
 func (s *Service) notifyIncident(ctx context.Context, tx pgx.Tx, id uuid.UUID, template, attentionCode string) error {
+	if s.notifier == nil {
+		return nil // no e-mails (Config.Notifier nil)
+	}
 	i, err := getIncident(ctx, tx, id)
 	if err != nil {
 		return err
