@@ -59,6 +59,9 @@ var rules = map[string][]string{
 	// now) and netaddr (Alice's own probe dials through the target rule, AUD-25 a). No transport, no other provider.
 	"alice/internal/providers/tlsverify": {"alice/internal/providers", "alice/internal/providers/linuxssh/helperproto",
 		"alice/internal/platform/clock", "alice/internal/platform/netaddr"},
+	// The canary's HTTPS application check (R65, design §9.3): of the platform only netaddr (it dials the location's own
+	// address through the SEC-065 rule) and the clock (the latency). No provider, no database, no secret.
+	"alice/internal/providers/httpcheck": {"alice/internal/platform/netaddr", "alice/internal/platform/clock"},
 	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
