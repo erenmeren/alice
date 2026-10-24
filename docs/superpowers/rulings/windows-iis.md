@@ -1637,8 +1637,13 @@ observation: a push to the default branch diffs against its before commit (`9587
 (2026-10-24 09:54 UTC): `changes` success with the output `windows=false: no watched path changed since 95873255`,
 `linux-build` skipped, `helper` skipped (the matrix shows as one skipped check run named `helper`), `windows-required`
 **success**, listed on the commit's check runs under exactly that name. The plan's F14 fallback (legs that always run
-and exit early) is not needed. The check can be required (owner item, Ruling 15). The default-branch observation (the
-fast-forward of this branch onto `main`) is recorded below when it has run.
+and exit early) is not needed. The check can be required (owner item, Ruling 15).
+
+**The default-branch route, also CONFIRMED.** The fast-forward of the branch onto `main` (`c7a3096e`, before
+`95873255`) ran `windows.yml` <https://github.com/erenmeren/alice/actions/runs/40083935311>: `changes` success with
+`windows=false`, `linux-build` and `helper` skipped, `windows-required` success. Both bases of Ruling 5 as amended (the
+merge base for a branch, the before commit for the default branch) skip the legs for a non-Windows change and run them
+for a Windows one (the push of `main` at `95873255`, before `2ec69c8c`, ran all five jobs).
 
 ## Owner items (W4)
 
