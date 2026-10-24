@@ -5,3 +5,4 @@ web/playwright-report
 internal/webui/dist/app
 deploy/.env
 bin
+.claude
