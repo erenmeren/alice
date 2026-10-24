@@ -783,7 +783,10 @@
       "automation_updated": "Otomasyon hesabı değiştirildi",
       "access_directory_group_added": "Dizin grubu eklendi",
       "access_directory_group_removed": "Dizin grubu kaldırıldı",
-      "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı"
+      "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı",
+      "certificate_revoked_by_authority": "Sertifika yetkilisi tarafından iptal edildi (iptal denetimi)",
+      "certificate_revocation_on_hold": "Sertifika yetkilisi tarafından askıya alındı (iptal denetimi)",
+      "settings_revocation_check_changed": "İptal denetimi açıldı veya kapatıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1485,6 +1488,9 @@
       "windows": {
         "cleanup": "Alice'in bir Windows sunucusuna içe aktardığı sertifikaların temizliği",
         "cleanup_schedule": "Windows sunucularının sertifikalarının zamanlanmış temizlikleri"
+      },
+      "revocation": {
+        "check": "Sertifika yetkililerinde iptal denetimleri"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",

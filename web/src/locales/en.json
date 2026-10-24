@@ -783,7 +783,10 @@
       "automation_updated": "Automation account changed",
       "access_directory_group_added": "Directory group added",
       "access_directory_group_removed": "Directory group removed",
-      "user_groups_truncated": "Only the first 1000 groups of a sign-in were kept"
+      "user_groups_truncated": "Only the first 1000 groups of a sign-in were kept",
+      "certificate_revoked_by_authority": "Certificate revoked by its authority (revocation check)",
+      "certificate_revocation_on_hold": "Certificate suspended by its authority (revocation check)",
+      "settings_revocation_check_changed": "Revocation check switched on or off"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1485,6 +1488,9 @@
       "windows": {
         "cleanup": "Cleanup of the certificates Alice imported on a Windows server",
         "cleanup_schedule": "Scheduled cleanups of Windows servers' certificates"
+      },
+      "revocation": {
+        "check": "Revocation checks at the certificate authorities"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",

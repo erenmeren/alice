@@ -2488,6 +2488,20 @@
         "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}} (yenileme lisans nedeniyle duraklatılırsa daha sonra)."
       }
     },
+    "certificate": {
+      "revoked_by_authority": {
+        "subject": "Sertifika yetkilisi tarafından iptal edildi: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikanın {{revoked_at}} tarihinde iptal edildiğini söylüyor (SHA-256 {{fingerprint}}). Yetkilinin bildirdiği neden: {{reason}}. Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nTarayıcılar ve diğer istemciler iptal edilmiş bir sertifikayı reddeder: kullanıldığı her yerde değiştirin. Alice onu artık dağıtmaz; otomatik yenilemesi açık verilmiş bir sertifika (ACME) hemen yenilenir. Neden keyCompromise ise özel anahtarı artık gizli değildir: sertifikanın sayfasından bir anahtar ele geçirme olayı başlatın."
+      },
+      "revoked_by_authority_discovered": {
+        "subject": "Sertifika yetkilisi tarafından iptal edildi: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikanın {{revoked_at}} tarihinde iptal edildiğini söylüyor (SHA-256 {{fingerprint}}). Yetkilinin bildirdiği neden: {{reason}}. Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nAğ keşfi onu şuralarda buldu: {{endpoints}}. Tarayıcılar ve diğer istemciler iptal edilmiş bir sertifikayı reddeder: kullanıldığı her yerde değiştirin."
+      },
+      "on_hold_by_authority": {
+        "subject": "Sertifika yetkilisi tarafından askıya alındı: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikayı {{revoked_at}} tarihinde askıya aldığını söylüyor (certificateHold, SHA-256 {{fingerprint}}). Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nİstemciler askı sürdükçe askıya alınmış bir sertifikayı reddeder. Yetkili askıyı kaldırabilir; Alice birkaç saatte bir yeniden denetler ve sertifikayı iptal edilmiş olarak işaretlemez. Yetkiliye sertifikayı neden askıya aldığını sorun ya da sertifikayı değiştirin."
+      }
+    },
     "incident": {
       "needs_attention": {
         "subject": "Anahtar ele geçirme olayı ilgi bekliyor: {{certificate_name}}",

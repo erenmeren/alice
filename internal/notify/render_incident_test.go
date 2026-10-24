@@ -48,3 +48,32 @@ func TestIncidentTemplatesRenderInBothLanguages(t *testing.T) {
 	revoked := s.Render("ada@example.com", inventory.TemplateIncidentCompleted, "en", params)
 	assert.Contains(t, revoked.Body, "is revoked at its certificate authority")
 }
+
+// The revocation check e-mails (D5, R64): the certificate's name, the fingerprint, when and why the authority revoked
+// or suspended it and by which answer, in both languages; the discovered one names where discovery found it.
+func TestRevocationTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"certificate_name": "www.example.test (İzmir)", "fingerprint": "ab12", "revoked_at": "2026-10-20 08:00 UTC",
+		"reason": "keyCompromise", "method": "OCSP", "endpoints": "10.0.0.9:443"}
+	require.Equal(t, []string{"certificate.revoked_by_authority", "certificate.revoked_by_authority_discovered", "certificate.on_hold_by_authority"},
+		inventory.RevocationTemplates())
+	for _, tpl := range inventory.RevocationTemplates() {
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			text := m.Subject + "\n" + m.Body
+			assert.NotContains(t, text, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, text, "email.", "%s %s", tpl, lang)
+			assert.Contains(t, m.Subject, "www.example.test (İzmir)", "%s %s", tpl, lang)
+			for _, v := range []string{"ab12", "2026-10-20 08:00 UTC", "OCSP"} {
+				assert.Contains(t, m.Body, v, "%s %s", tpl, lang)
+			}
+			if tpl == inventory.TemplateCertificateRevokedByAuthorityDiscovered {
+				assert.Contains(t, m.Body, "10.0.0.9:443", "%s %s", tpl, lang)
+			}
+		}
+	}
+	assert.Contains(t, s.Render("a@example.com", inventory.TemplateCertificateRevokedByAuthority, "en", params).Body, "Alice no longer deploys it")
+	assert.NotContains(t, s.Render("a@example.com", inventory.TemplateCertificateRevokedByAuthorityDiscovered, "en", params).Body, "deploys")
+}

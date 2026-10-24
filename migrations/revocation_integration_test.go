@@ -31,7 +31,8 @@ func TestMigration00021Revocation(t *testing.T) {
 
 	// The marks: a reason only with a time, then never changed or cleared.
 	assert.Equal(t, checkViolation, sqlState(exec(t, d.App, "UPDATE certificates SET revocation_reason = 'keyCompromise' WHERE id = $1", w.cert)))
-	assert.Equal(t, checkViolation, sqlState(exec(t, d.App, "UPDATE certificates SET revoked_at = now(), revocation_reason = 'cACompromise' WHERE id = $1", w.cert)))
+	// 00034 (R64) accepts the authority's final reasons (cACompromise among them); a hold is never a revocation.
+	assert.Equal(t, checkViolation, sqlState(exec(t, d.App, "UPDATE certificates SET revoked_at = now(), revocation_reason = 'certificateHold' WHERE id = $1", w.cert)))
 	assert.Equal(t, checkViolation, sqlState(exec(t, d.App, "UPDATE certificates SET compromised_by = $2 WHERE id = $1", w.cert, user)))
 	require.NoError(t, exec(t, d.App, "UPDATE certificates SET revoked_at = now(), revocation_reason = 'keyCompromise', revoked_by = $2 WHERE id = $1",
 		w.cert, user))

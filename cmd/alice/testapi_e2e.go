@@ -80,6 +80,10 @@ const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
 // journeys run it with POST /test/scheduler/run {"task": "incident.advance"}.
 const incidentAdvanceEvery = 100 * 365 * 24 * time.Hour
 
+// revocationCheckEvery is the revocation check's interval in the e2e build: in effect never (no authority is reachable
+// from the compose stack; R64 Ruling 22).
+const revocationCheckEvery = 100 * 365 * 24 * time.Hour
+
 // driftScheduleEvery and driftRepairEvery are the intervals of the certificate drift tasks in the e2e build: in effect
 // never, like the ACME planners (the demo clock would otherwise observe and repair between two Playwright steps). The
 // journeys run them with POST /test/scheduler/run {"task": "drift.schedule"} and {"task": "drift.repair"}.

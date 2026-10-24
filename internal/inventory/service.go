@@ -58,6 +58,8 @@ type Config struct {
 	// (R57) when it returns a pool (the provider's or hook's own bundle is still added). nil, or a nil pool, means the
 	// system roots. Only the e2e build sets it (cmd/alice acmeRoots: its fake CA); a release build's returns nil.
 	ACMERoots func() (*x509.CertPool, error)
+	// Revocation checks certificates at their authorities (R64, D5: RunRevocationChecks); nil means no checks.
+	Revocation RevocationChecker
 }
 
 // Service is the inventory module.
@@ -79,6 +81,7 @@ type Service struct {
 
 	acmeRoots   func() (*x509.CertPool, error)
 	acmeKeygens chan struct{} // the slots of concurrent ACME order key generations (BeginACMEOrderKey)
+	revocation  RevocationChecker
 
 	rolloverSeam rolloverOutcome // tests only: replaces the CA's rollover outcome (crash simulation)
 	keygenSeam   func()          // tests only: runs inside a keygen slot, before an order's key is generated
@@ -89,7 +92,7 @@ func New(c Config) *Service {
 	s := &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, license: c.License,
 		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, roots: c.Roots,
 		kvSlots: make(chan struct{}, MaxConcurrentKVPolls), acmeRoots: c.ACMERoots,
-		acmeKeygens: make(chan struct{}, MaxConcurrentACMEKeygens)}
+		acmeKeygens: make(chan struct{}, MaxConcurrentACMEKeygens), revocation: c.Revocation}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}

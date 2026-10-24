@@ -42,9 +42,9 @@ func newACMEDeployWorld(t *testing.T) *acmeDeployWorld {
 }
 
 // newACMEDeployWorldLicensed is newACMEDeployWorld, on the 30-day evaluation when licensed is false.
-func newACMEDeployWorldLicensed(t *testing.T, licensed bool) *acmeDeployWorld {
+func newACMEDeployWorldLicensed(t *testing.T, licensed bool, opts ...harnessOption) *acmeDeployWorld {
 	t.Helper()
-	f := newDeployFixture(t)
+	f := newDeployFixture(t, opts...)
 	h := f.h
 	fake, err := fakeacme.New(fakeacme.Options{Now: h.clock.Now, NoTerms: true})
 	require.NoError(t, err)

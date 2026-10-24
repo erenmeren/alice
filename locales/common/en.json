@@ -2488,6 +2488,20 @@
         "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}} (later if the rotation is paused because of the license)."
       }
     },
+    "certificate": {
+      "revoked_by_authority": {
+        "subject": "Certificate revoked by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it was revoked on {{revoked_at}}. Reason given by the authority: {{reason}}. Alice learned this from the authority's {{method}} answer.\n\nBrowsers and other clients refuse a revoked certificate: replace it wherever it is used. Alice no longer deploys it, and an issued certificate (ACME) with automatic renewal on is renewed at once. If the reason is keyCompromise, its private key is no longer secret: start a key compromise incident from the certificate's page."
+      },
+      "revoked_by_authority_discovered": {
+        "subject": "Certificate revoked by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it was revoked on {{revoked_at}}. Reason given by the authority: {{reason}}. Alice learned this from the authority's {{method}} answer.\n\nNetwork discovery found it at: {{endpoints}}. Browsers and other clients refuse a revoked certificate: replace it wherever it is used."
+      },
+      "on_hold_by_authority": {
+        "subject": "Certificate suspended by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it suspended the certificate on {{revoked_at}} (certificateHold). Alice learned this from the authority's {{method}} answer.\n\nClients refuse a suspended certificate while the suspension lasts. The authority can lift a suspension; Alice checks again every few hours and does not mark the certificate revoked. Ask the authority why it suspended the certificate, or replace it."
+      }
+    },
     "incident": {
       "needs_attention": {
         "subject": "Key compromise incident needs attention: {{certificate_name}}",

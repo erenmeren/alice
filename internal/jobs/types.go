@@ -308,6 +308,12 @@ func MaxRunningFor(t Type) (int, bool) {
 // equals inventory.JobIncidentAdvance.
 var IncidentAdvance = Register("incident.advance", license.ClassAlways)
 
+// The revocation check (R64, D5): the periodic task that asks the authorities whether the due certificates were revoked
+// (inventory.RunRevocationChecks). ClassReadOnly: recurring read-only work that goes out to third parties, paused in lock
+// as discovery is (R64 Ruling 20). The name is a literal (the web's label guard reads literal Register calls) and equals
+// inventory.JobRevocationCheck.
+var RevocationCheck = Register("revocation.check", license.ClassReadOnly)
+
 // Certificate drift (R52, docs/superpowers/rulings/certificate-drift.md). drift.schedule is the periodic task that queues
 // the observation of the bound locations that are due, and drift.observe observes one server (a scan of its certificate
 // files and a probe of its websites): both only read managed systems (ClassReadOnly: paused in lock). drift.repair is
