@@ -94,7 +94,7 @@ export const certificateImpactKey = (id: string) => ['certificates', id, 'impact
 export const CERTIFICATE_CAPABILITIES_KEY = ['certificate-capabilities'] as const;
 export const INCIDENTS_KEY = ['incidents'] as const;
 export const incidentKey = (id: string) => ['incidents', id] as const;
-export const incidentListKey = (filters: { open?: boolean; certificate_id?: string }) => ['incidents', 'list', filters] as const;
+export const incidentListKey = (filters: { open?: boolean; certificate_id?: string; state?: string }) => ['incidents', 'list', filters] as const;
 
 // Network discovery. DISCOVERY_KEY is the prefix of everything; the lists sit under 'list' segments, so no id or
 // fingerprint can address the same entry. The scope preview is never cached (it is read with the form's own abort).

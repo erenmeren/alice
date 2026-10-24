@@ -40,6 +40,7 @@
     "acme": "Issued certificates",
     "discovery": "Network discovery",
     "deployments": "Deployments",
+    "incidents": "Incidents",
     "keyVaults": "Key Vaults",
     "dashboard": "Overview",
     "settings": "Settings",
@@ -4487,6 +4488,31 @@
       "uploadHint": "Not listed? Upload it first on the Certificates page.",
       "openCertificates": "Open Certificates",
       "confirm": "Use this certificate"
+    },
+    "list": {
+      "title": "Key compromise incidents",
+      "description": "Every key compromise incident, newest first.",
+      "tableLabel": "Incidents",
+      "filterLabel": "Show",
+      "filter": {
+        "all": "All",
+        "open": "Open",
+        "needs_attention": "Needs attention",
+        "completed": "Completed",
+        "closed": "Closed"
+      },
+      "columns": {
+        "certificate": "Certificate",
+        "state": "State",
+        "revocation": "Revocation",
+        "places": "Places",
+        "started": "Started",
+        "finished": "Finished"
+      },
+      "places": "{{verified}} of {{total}} replaced",
+      "empty": "No incidents.",
+      "emptyFiltered": "No incidents match this filter.",
+      "loadMore": "Show more incidents"
     }
   },
   "services": {

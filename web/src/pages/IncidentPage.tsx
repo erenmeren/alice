@@ -2,7 +2,7 @@ import { Anchor, Button, Code, Group, Loader, NativeSelect, Stack, Table, Text }
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useParams } from 'react-router';
 import { listCertificates } from '../api/endpoints';
 import {
   chooseIncidentReplacement,
@@ -29,27 +29,9 @@ import { useStepUp } from '../components/StepUpProvider';
 import { DialogActions, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact, type Tone } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
-import type { IconName } from '../design/Icon';
 import { Icon } from '../design/Icon';
+import { STATE_ICON, STATE_TONE } from './incidentStates';
 
-const STATE_TONE: Record<Incident['state'], Tone> = {
-  awaiting_replacement: 'warning',
-  ordering: 'info',
-  deploying: 'info',
-  revoking: 'info',
-  needs_attention: 'danger',
-  completed: 'success',
-  closed: 'neutral',
-};
-const STATE_ICON: Record<Incident['state'], IconName> = {
-  awaiting_replacement: 'Clock3',
-  ordering: 'RefreshCw',
-  deploying: 'Rocket',
-  revoking: 'ShieldAlert',
-  needs_attention: 'CircleAlert',
-  completed: 'CircleCheck',
-  closed: 'CircleDot',
-};
 const LOCATION_TONE: Record<IncidentLocationStatus, Tone> = {
   pending: 'neutral',
   deploying: 'info',
@@ -67,6 +49,8 @@ type Action = 'retry' | 'revokeNow' | 'close' | 'replacement';
 export function IncidentPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
+  // Opened from the Incidents list: the back link returns there (D2, R64); else to the certificate.
+  const fromList = (useLocation().state as { from?: string } | null)?.from === 'incidents';
   const { session } = useAuth();
   // The incident's actions need certificates.incident (an Administrator's, with step-up).
   const admin = can(session, 'certificates.incident');
@@ -149,7 +133,7 @@ export function IncidentPage() {
   return (
     <Stack gap="md">
       <PageHeader
-        back={{ to: `/certificates/${i.certificate_id}`, label: t('incidents.backToCertificate') }}
+        back={fromList ? { to: '/incidents', label: t('nav.incidents') } : { to: `/certificates/${i.certificate_id}`, label: t('incidents.backToCertificate') }}
         icon="ShieldAlert"
         title={t('incidents.title')}
         description={

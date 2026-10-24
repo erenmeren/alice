@@ -71,9 +71,9 @@ describe('AppLayout single sign-on refusal', () => {
 
 describe('AppLayout shell', () => {
   it.each([
-    [adminSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']],
-    [operatorSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Services', 'Your account', 'API tokens']],
-    [auditorSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'Services', 'License', 'Your account', 'API tokens']],
+    [adminSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']],
+    [operatorSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Services', 'Your account', 'API tokens']],
+    [auditorSession, ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Audit trail', 'Services', 'License', 'Your account', 'API tokens']],
   ])('renders the destinations of each role, in the design’s groups', async (session, expected) => {
     server.use(...sessionHandlers(session));
     await renderRoute('/');
@@ -82,12 +82,12 @@ describe('AppLayout shell', () => {
   });
 
   it.each([
-    [globalSession('admin'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']],
-    [globalSession('auditor'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'Services', 'License', 'Your account', 'API tokens']],
+    [globalSession('admin'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']],
+    [globalSession('auditor'), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Audit trail', 'Services', 'License', 'Your account', 'API tokens']],
     // A role on a service never opens a platform page: an Administrator of one service sees no People, Settings, Audit
     // or License.
-    [scopedSession(['admin']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Services', 'Your account', 'API tokens']],
-    [scopedSession(['auditor']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Services', 'Your account', 'API tokens']],
+    [scopedSession(['admin']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Services', 'Your account', 'API tokens']],
+    [scopedSession(['auditor']), ['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Incidents', 'Key rotations', 'Services', 'Your account', 'API tokens']],
   ])('renders the destinations from the session’s access (%#)', async (session, expected) => {
     server.use(...sessionHandlers(session));
     await renderRoute('/');
@@ -196,6 +196,9 @@ describe('AppLayout shell', () => {
   it('activates Key rotations for run pages through match', () => {
     expect(isActive({ to: '/rotations', labelKey: 'nav.rotations', icon: 'RotateCw', group: 'operations', match: ['/rotation/'] }, '/rotation/runs/1')).toBe(true);
     expect(isActive(NAV_ITEMS[0], '/servers')).toBe(false);
+    const incidents = NAV_ITEMS.find((i) => i.to === '/incidents');
+    expect(incidents).toBeDefined();
+    expect(isActive(incidents!, '/incidents/abc')).toBe(true);
     expect(ACCOUNT_ITEMS.map((i) => i.to)).toEqual(['/account', '/tokens']);
   });
 });

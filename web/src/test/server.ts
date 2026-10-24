@@ -37,6 +37,8 @@ export const handlers = [
   // Phase 9: the Key rotations page and the run page read every policy; the rotations page reads the runs.
   http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
+  // D2 (R64): the Incidents page; no incident unless a test says otherwise.
+  http.get('/api/v1/incidents', () => HttpResponse.json({ items: [], next_cursor: null })),
   // Network discovery: the Certificates page reads the summary for its link (no scope by default: no link).
   // Services (R49): the list toolbars read the services and the environments for their filters.
   http.get('/api/v1/services', () => HttpResponse.json({ items: [] })),

@@ -40,6 +40,7 @@
     "acme": "Verilen sertifikalar",
     "discovery": "Ağ keşfi",
     "deployments": "Dağıtımlar",
+    "incidents": "Olaylar",
     "keyVaults": "Key Vault kasaları",
     "dashboard": "Genel bakış",
     "settings": "Ayarlar",
@@ -4487,6 +4488,31 @@
       "uploadHint": "Listede yok mu? Önce Sertifikalar sayfasında yükleyin.",
       "openCertificates": "Sertifikaları aç",
       "confirm": "Bu sertifikayı kullan"
+    },
+    "list": {
+      "title": "Anahtar ele geçirme olayları",
+      "description": "Tüm anahtar ele geçirme olayları, en yenisi önce.",
+      "tableLabel": "Olaylar",
+      "filterLabel": "Göster",
+      "filter": {
+        "all": "Tümü",
+        "open": "Açık",
+        "needs_attention": "İlgi gerekiyor",
+        "completed": "Tamamlandı",
+        "closed": "Kapatıldı"
+      },
+      "columns": {
+        "certificate": "Sertifika",
+        "state": "Durum",
+        "revocation": "İptal",
+        "places": "Yerler",
+        "started": "Başladı",
+        "finished": "Bitti"
+      },
+      "places": "{{total}} yerin {{verified}} tanesi değiştirildi",
+      "empty": "Olay yok.",
+      "emptyFiltered": "Bu filtreye uyan olay yok.",
+      "loadMore": "Daha fazla olay göster"
     }
   },
   "services": {

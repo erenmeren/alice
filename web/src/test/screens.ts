@@ -112,6 +112,7 @@ export const SCREENS: Screen[] = [
   { path: `/services/${SERVICE_ID}?tab=trusts`, session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Accepts certificates and keys from', tr: 'Şu hizmetten sertifika ve anahtar kabul eder' } },
   { path: '/settings?tab=environments', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Add environment', tr: 'Ortam ekle' } },
   // A key compromise incident that needs attention (2026-10-20).
+  { path: '/incidents', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Show more incidents', tr: 'Daha fazla olay göster' } },
   { path: `/incidents/${INCIDENT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Affected places', tr: 'Etkilenen yerler' } },
   // Network discovery: the Results, the Scopes with the no-network banner, and the Scans with a failed scan.
   { path: '/discovery', session: sessionFor('admin'), status: installedStatus, ready: { en: 'What “unmanaged” means', tr: '“Yönetilmiyor” ne demek?' } },
