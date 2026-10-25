@@ -179,6 +179,12 @@ func (c HTTPChecker) check(ctx context.Context, r Request) Result {
 		res.Reason = classify(ctx, err, true)
 		return res
 	}
+	if ctx.Err() != nil {
+		// The deadline ended the body: the transport may close the connection under the read and report a clean end of
+		// the body (seen on CI with a slow-loris server); a check that outlived its timeout is a timeout either way.
+		res.Reason = ReasonTimeout
+		return res
+	}
 	expect := r.ExpectStatus
 	if len(expect) == 0 {
 		expect = []int{defaultStatusOK}

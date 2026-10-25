@@ -248,6 +248,11 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   Intended: the stricter, fail-closed behaviour; the owner may relax it later. The re-review of `917c568a..465205c3`
   confirmed the planner budget, the one-hour limit, the cap of 19, `preemptPlan` for every state and the lock order.
 
+- **Gate fix: a check whose deadline ended the body is a timeout.** On the GitHub runners `TestCheckTimeouts/slow-loris
+  body` answered no reason: when the deadline passes during the body read, the transport can close the connection under
+  the read and report a clean end of the body. `httpcheck` now answers `canary.timeout` whenever its context ended,
+  whatever the copy returned. Cost if wrong: none (a check that outlived its timeout never passed).
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.
