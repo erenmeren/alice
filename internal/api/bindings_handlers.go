@@ -79,6 +79,15 @@ func (s *server) listDeployableLocations(w http.ResponseWriter, r *http.Request)
 	var v validate.Errors
 	f := inventory.LocationFilter{Query: q.Get("q"), KeyType: q.Get("key_type"), Unbound: parseBool(q.Get("unbound"), "unbound", &v),
 		Cursor: q.Get("cursor"), Limit: pageLimit(q.Get("limit"), &v), Reach: s.reachOf(r, rbac.Read)}
+	// R65: service_id (repeatable) keeps the websites of these services (the canary editor's first picker).
+	for i, raw := range q["service_id"] {
+		id, err := uuid.Parse(raw)
+		if err != nil || id == uuid.Nil || i >= maxServiceFilter {
+			v.Add("service_id", validate.Pattern, nil)
+			break
+		}
+		f.ServiceIDs = append(f.ServiceIDs, id)
+	}
 	if f.KeyType != "" && f.KeyType != "rsa" && f.KeyType != "ecdsa" {
 		v.Add("key_type", validate.OneOf, map[string]string{"values": "rsa, ecdsa"})
 	}
@@ -361,8 +370,9 @@ func (s *server) deployBinding(w http.ResponseWriter, r *http.Request) {
 		VersionID              string   `json:"version_id"`
 		LocationIDs            []string `json:"location_ids"`
 		ConfirmIncompleteChain bool     `json:"confirm_incomplete_chain"`
+		CanaryOverride         bool     `json:"canary_override"`
 	}
-	if !s.decodeExact(w, r, &req, maxKVDeployBody, "version_id", "location_ids", "confirm_incomplete_chain") {
+	if !s.decodeExact(w, r, &req, maxKVDeployBody, "version_id", "location_ids", "confirm_incomplete_chain", "canary_override") {
 		return
 	}
 	var v validate.Errors
@@ -389,19 +399,18 @@ func (s *server) deployBinding(w http.ResponseWriter, r *http.Request) {
 	if admin && held && !s.strictAction(w, r) {
 		return
 	}
-	got, err := s.deps.Inventory.RequestKVDeployment(r.Context(), s.actor(r), inventory.KVDeployInput{
+	if !s.canaryOverrideAllowed(w, r, req.CanaryOverride) {
+		return
+	}
+	got, rollout, err := s.deps.Inventory.RequestKVDeploymentWithRollout(r.Context(), s.actor(r), inventory.KVDeployInput{
 		BindingID: id, VersionID: version, LocationIDs: ids, ConfirmIncompleteChain: req.ConfirmIncompleteChain && admin,
-		StrictSession: s.strictSession(r),
+		StrictSession: s.strictSession(r), CanaryOverride: req.CanaryOverride,
 	})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	items := make([]requestedDeploymentDTO, 0, len(got))
-	for _, d := range got {
-		items = append(items, requestedDeploymentJSON(d))
-	}
-	writeJSON(w, http.StatusAccepted, map[string][]requestedDeploymentDTO{"deployments": items})
+	writeJSON(w, http.StatusAccepted, deployAnswer(got, rollout))
 }
 
 // versionHeld reads the binding's certificate and says whether the named version is held; ErrNotFound when
@@ -422,3 +431,6 @@ func (s *server) versionHeld(r *http.Request, bindingID, version uuid.UUID) (boo
 	}
 	return false, inventory.ErrNotFound
 }
+
+// maxServiceFilter bounds the service_id values of a website list.
+const maxServiceFilter = 50

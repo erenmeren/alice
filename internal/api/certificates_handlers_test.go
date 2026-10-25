@@ -319,7 +319,7 @@ func TestDeployAnswersAcceptedWithJobs(t *testing.T) {
 		{"id":"`+deployID.String()+`","job_id":"`+job1.String()+`","location_id":"`+locationID.String()+`","status_url":"/api/v1/jobs/`+job1.String()+`",
 		 "deployment_url":"/api/v1/deployments/`+deployID.String()+`","warnings":["san_mismatch"]},
 		{"id":"`+dep2.String()+`","job_id":"`+job2.String()+`","location_id":"`+loc2.String()+`","status_url":"/api/v1/jobs/`+job2.String()+`",
-		 "deployment_url":"/api/v1/deployments/`+dep2.String()+`","warnings":[]}]}`, rec.Body.String())
+		 "deployment_url":"/api/v1/deployments/`+dep2.String()+`","warnings":[]}],"rollout":null}`, rec.Body.String())
 	assert.Equal(t, inventory.DeployRequestInput{CertificateID: certID, LocationIDs: []uuid.UUID{locationID, loc2}, ConfirmIncompleteChain: true}, got,
 		"an Operator's confirm_incomplete_chain is passed on as sent (the inventory decides)")
 	assert.Equal(t, operatorID, actor.UserID)

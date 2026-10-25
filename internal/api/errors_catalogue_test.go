@@ -55,6 +55,7 @@ var inventorySentinels = map[string]error{
 	"ErrChainUnconfirmed": inventory.ErrChainUnconfirmed, "ErrNginxConfigInvalid": inventory.ErrNginxConfigInvalid,
 	"ErrTargetNotReady": inventory.ErrTargetNotReady, "ErrDeploymentState": inventory.ErrDeploymentState,
 	"ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid, "ErrLocationNeedsDiscovery": inventory.ErrLocationNeedsDiscovery,
+	"ErrRolloutNotFound": inventory.ErrRolloutNotFound, "ErrRolloutState": inventory.ErrRolloutState, "ErrCanaryOverrideForbidden": inventory.ErrCanaryOverrideForbidden,
 	"ErrDriftNotBound": inventory.ErrDriftNotBound, "ErrDriftNotDrifted": inventory.ErrDriftNotDrifted, "ErrDriftNotRepairable": inventory.ErrDriftNotRepairable,
 	"ErrDriftRepairSuperseded": inventory.ErrDriftRepairSuperseded, "ErrDriftRepairOff": inventory.ErrDriftRepairOff,
 	"ErrClaimLost": inventory.ErrClaimLost, "ErrCSRBusy": inventory.ErrCSRBusy, "ErrTooManyPendingCSRs": inventory.ErrTooManyPendingCSRs,

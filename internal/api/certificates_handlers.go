@@ -223,8 +223,9 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LocationIDs            []string `json:"location_ids"`
 		ConfirmIncompleteChain bool     `json:"confirm_incomplete_chain"`
+		CanaryOverride         bool     `json:"canary_override"`
 	}
-	if !s.decodeExact(w, r, &req, maxDeployBody, "location_ids", "confirm_incomplete_chain") {
+	if !s.decodeExact(w, r, &req, maxDeployBody, "location_ids", "confirm_incomplete_chain", "canary_override") {
 		return
 	}
 	var v validate.Errors
@@ -254,20 +255,20 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 	if !s.checkDestinationsOf(w, r, rbac.CertificatesOperate, services.KindLocation, ids) {
 		return
 	}
+	// R65: "deploy to all at once" needs a fresh step-up in a browser session (design §13.1).
+	if !s.canaryOverrideAllowed(w, r, req.CanaryOverride) {
+		return
+	}
 	// confirm_incomplete_chain is passed on as sent: the inventory counts it for an Administrator
 	// only (F-17) and refuses an Operator's incomplete chain with ALC-CRT-0011.
-	got, err := s.deps.Inventory.RequestDeployment(r.Context(), s.actor(r), inventory.DeployRequestInput{
-		CertificateID: id, LocationIDs: ids, ConfirmIncompleteChain: req.ConfirmIncompleteChain,
+	got, rollout, err := s.deps.Inventory.RequestDeploymentWithRollout(r.Context(), s.actor(r), inventory.DeployRequestInput{
+		CertificateID: id, LocationIDs: ids, ConfirmIncompleteChain: req.ConfirmIncompleteChain, CanaryOverride: req.CanaryOverride,
 	})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	items := make([]requestedDeploymentDTO, 0, len(got))
-	for _, d := range got {
-		items = append(items, requestedDeploymentJSON(d))
-	}
-	writeJSON(w, http.StatusAccepted, map[string][]requestedDeploymentDTO{"deployments": items})
+	writeJSON(w, http.StatusAccepted, deployAnswer(got, rollout))
 }
 
 func (s *server) listCSRs(w http.ResponseWriter, r *http.Request) {

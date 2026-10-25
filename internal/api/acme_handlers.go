@@ -1159,8 +1159,9 @@ func (s *server) deployACME(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LocationIDs            []string `json:"location_ids"`
 		ConfirmIncompleteChain bool     `json:"confirm_incomplete_chain"`
+		CanaryOverride         bool     `json:"canary_override"`
 	}
-	if !s.decodeExactOptional(w, r, &req, maxACMEDeployBody, "location_ids", "confirm_incomplete_chain") {
+	if !s.decodeExactOptional(w, r, &req, maxACMEDeployBody, "location_ids", "confirm_incomplete_chain", "canary_override") {
 		return
 	}
 	var v validate.Errors
@@ -1172,15 +1173,14 @@ func (s *server) deployACME(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	got, err := s.deps.ACME.DeployACMENow(r.Context(), s.actor(r), id, inventory.ACMEDeployInput{LocationIDs: ids,
-		ConfirmIncompleteChain: req.ConfirmIncompleteChain})
+	if !s.canaryOverrideAllowed(w, r, req.CanaryOverride) {
+		return
+	}
+	got, rollout, err := s.deps.ACME.DeployACMENowWithRollout(r.Context(), s.actor(r), id, inventory.ACMEDeployInput{LocationIDs: ids,
+		ConfirmIncompleteChain: req.ConfirmIncompleteChain, CanaryOverride: req.CanaryOverride})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	items := make([]requestedDeploymentDTO, 0, len(got))
-	for _, d := range got {
-		items = append(items, requestedDeploymentJSON(d))
-	}
-	writeJSON(w, http.StatusAccepted, map[string][]requestedDeploymentDTO{"deployments": items})
+	writeJSON(w, http.StatusAccepted, deployAnswer(got, rollout))
 }

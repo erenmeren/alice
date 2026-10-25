@@ -161,9 +161,13 @@ type InventoryService interface {
 	// R52: the repair mode of a bound location and its one-action repair.
 	SetDriftMode(ctx context.Context, a inventory.Actor, id uuid.UUID, mode string, strictSession bool) (inventory.LocationObservation, error)
 	RepairDrift(ctx context.Context, a inventory.Actor, id uuid.UUID, strictSession bool) ([]inventory.RequestedDeployment, error)
-	RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
+	RequestDeploymentWithRollout(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
 	ListDeployments(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+	// R65: canary rollouts.
+	RolloutDetail(ctx context.Context, id uuid.UUID) (inventory.RolloutDetail, error)
+	ContinueRollout(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error)
+	AbortRollout(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error)
 
 	// Phase 5: Key Vault vaults, their inventory, bindings, deployments of vault versions and imports.
 	CreateVault(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
@@ -180,7 +184,7 @@ type InventoryService interface {
 	SetAutoDeploy(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, enabled bool) (inventory.Binding, error)
 	DeleteBinding(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	Binding(ctx context.Context, id uuid.UUID) (inventory.Binding, error)
-	RequestKVDeployment(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, error)
+	RequestKVDeploymentWithRollout(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
 	ReleaseVersion(ctx context.Context, a inventory.Actor, in inventory.ReleaseInput) (inventory.KVVersion, error)
 	RequestImport(ctx context.Context, a inventory.Actor, in inventory.ImportInput) (inventory.KVImport, error)
 	Import(ctx context.Context, vault, id uuid.UUID) (inventory.KVImport, error)
@@ -221,7 +225,7 @@ type ACMEService interface {
 	ListACMEBindings(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
 	AddACMEBindingStrict(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
-	DeployACMENow(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
+	DeployACMENowWithRollout(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
 	RevokeACMECertificate(ctx context.Context, a inventory.Actor, acmeCertID uuid.UUID, in inventory.ACMERevokeInput) (inventory.Certificate, error)
 }
 
@@ -846,6 +850,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.locationRoutes()...)
 	routes = append(routes, s.driftRoutes()...)
 	routes = append(routes, s.deploymentRoutes()...)
+	routes = append(routes, s.rolloutRoutes()...)
 	routes = append(routes, s.vaultRoutes()...)
 	routes = append(routes, s.bindingRoutes()...)
 	routes = append(routes, s.importRoutes()...)

@@ -146,6 +146,12 @@ var notReasons = map[string]bool{
 	// The revocation check (R64): its e-mail templates and audit actions
 	"certificate.revoked_by_authority": true, "certificate.revoked_by_authority_discovered": true, "certificate.on_hold_by_authority": true,
 	"certificate.revocation_on_hold": true,
+	// Canary deployment (R65): audit actions and the stopped-rollout e-mail template
+	"deployment.holding": true, "deployment.revert_requested": true, "deployment.rollout_started": true, "deployment.canary_overridden": true,
+	"deployment.canary_skipped": true, "deployment.rollout_hold_started": true, "deployment.rollout_check_failed": true,
+	"deployment.rollout_continued": true, "deployment.rollout_released": true, "deployment.rollout_wave2_started": true,
+	"deployment.rollout_aborted": true, "deployment.rollout_failed": true, "deployment.rollout_stopped": true,
+	"deployment.rollout_preempted": true, "deployment.rollout_completed": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

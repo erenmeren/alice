@@ -2339,6 +2339,7 @@ paths:
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: certificate_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: location_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: rollout_id, in: query, required: false, schema: { type: string, format: uuid }, description: 'R65: the deployments of one canary rollout' }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
@@ -2364,6 +2365,69 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/DeploymentDetail" }
         "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/deployment-rollouts/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getDeploymentRollout
+      summary: One canary rollout with its waves and the latest observations (R65)
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The rollout
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Rollout" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/deployment-rollouts/{id}/actions/continue:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: continueDeploymentRollout
+      summary: Release wave 1 before the hold ends and deploy wave 2 (R65)
+      description: >-
+        Allowed in hold (or in wave1 once every wave-1 deployment holds or ended unchanged) when every holding deployment's
+        last round passed; otherwise 409 ALC-DEP-0034 (params.state). Needs certificates.operate on the source service and
+        on every wave-2 website's service (403 ALC-SVC-0012), and a fresh step-up in a browser session (403 ALC-AUTH-0003;
+        an API token 403). Audited deployment.rollout_continued with the remaining hold. Refused with 403 ALC-LIC-0001
+        while the license is locked.
+      x-permission: certificates.operate
+      x-scope: cross
+      responses:
+        "200":
+          description: The rollout after the release
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Rollout" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/deployment-rollouts/{id}/actions/abort:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: abortDeploymentRollout
+      summary: Stop a canary rollout and put wave 1 back (R65)
+      description: >-
+        Allowed in wave1 and hold; otherwise 409 ALC-DEP-0034 (params.state). Every holding wave-1 deployment is reverted
+        through the recovery path (error deployment.canary_aborted), a queued one ends without a change, a sending one is
+        reverted once it holds; wave 2 is never deployed. Needs certificates.operate on the source service, no step-up (a
+        safety action). Works while the license is locked. Audited deployment.rollout_aborted.
+      x-permission: certificates.operate
+      x-scope: resource
+      responses:
+        "200":
+          description: The rollout after the abort
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Rollout" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/key-vaults:
     post:
@@ -2618,6 +2682,13 @@ paths:
       parameters:
         - { name: key_type, in: query, required: false, schema: { type: string, enum: [rsa, ecdsa] } }
         - { name: unbound, in: query, required: false, schema: { type: boolean } }
+        - name: service_id
+          in: query
+          required: false
+          description: 'R65: keeps the websites on servers of these services (repeatable, at most 50)'
+          schema: { type: array, maxItems: 50, items: { type: string, format: uuid } }
+          style: form
+          explode: true
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -7139,6 +7210,7 @@ components:
       properties:
         location_ids: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
         confirm_incomplete_chain: { type: boolean, description: Counts for an Administrator only (F-17) }
+        canary_override: { type: boolean, description: 'R65: deploy to all at once although the source service''s policy asks for a canary; needs a fresh step-up in a browser session (403 ALC-AUTH-0003; a token 403) and the policy''s override allowed (422 ALC-SVC-0020); ignored when no canary would apply' }
     HoldRule:
       type: string
       enum: [gate_closed, created_before_reopening, unconfirmed_since_reopening, detected_before_reopening]
@@ -7399,6 +7471,7 @@ components:
         version_id: { type: string, format: uuid }
         location_ids: { type: array, minItems: 1, maxItems: 200, uniqueItems: true, items: { type: string, format: uuid } }
         confirm_incomplete_chain: { type: boolean, description: Counts for an Administrator only (F-17) }
+        canary_override: { type: boolean, description: 'R65: deploy to all at once although the source service''s policy asks for a canary; needs a fresh step-up in a browser session (403 ALC-AUTH-0003; a token 403) and the policy''s override allowed (422 ALC-SVC-0020); ignored when no canary would apply' }
     BindingLocation:
       type: object
       required: [location_id, target_id, target_name, cert_path, state, version, deployment_id]
@@ -9030,10 +9103,18 @@ components:
       properties:
         location_ids: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
         confirm_incomplete_chain: { type: boolean, description: 'Counts for an Administrator only' }
+        canary_override: { type: boolean, description: 'R65: deploy to all at once although the source service''s policy asks for a canary; needs a fresh step-up in a browser session (403 ALC-AUTH-0003; a token 403) and the policy''s override allowed (422 ALC-SVC-0020); ignored when no canary would apply' }
     DeployAccepted:
       type: object
-      required: [deployments]
+      required: [deployments, rollout]
       properties:
+        rollout:
+          description: >-
+            R65: the canary rollout the request became (null when it deploys to all at once): deployments then lists wave 1
+            only; wave 2 is deployed by Alice once wave 1 passed its observation.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/RolloutRequested"
         deployments:
           type: array
           items:
@@ -9083,8 +9164,18 @@ components:
       required: [id, certificate_id, certificate_name, location_id, target_id, target_name, cert_path, key_path, job_id, job_status,
         trigger, state, status, result, phase, new_fingerprint, previous_fingerprint, confirm_incomplete_chain, verified,
         verify_failed, error, failed_step, cause_step, helper_error, backup_dir, location_kind, requested_by, requested_by_name, recovery_attempts,
-        recover_after, created_at, started_at, finished_at, source, binding_id, kv_version, vault_name, verification]
+        recover_after, created_at, started_at, finished_at, source, binding_id, kv_version, vault_name, verification, rollout]
       properties:
+        rollout:
+          description: 'R65: the canary rollout the deployment belongs to (null outside one)'
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, wave, state]
+              properties:
+                id: { type: string, format: uuid }
+                wave: { type: integer, enum: [1, 2] }
+                state: { $ref: "#/components/schemas/RolloutState" }
         id: { type: string, format: uuid }
         certificate_id: { type: string, format: uuid }
         certificate_name: { type: string, description: 'The label, else the subject CN, else the start of the fingerprint' }
@@ -9096,7 +9187,7 @@ components:
         job_id: { type: [string, "null"], format: uuid }
         job_status: { type: string, description: 'The job''s status ("" once it was pruned); blocked_license means held in lock' }
         trigger: { type: string, examples: [manual] }
-        state: { type: string, enum: [queued, precheck, deploying, recovering, done] }
+        state: { type: string, enum: [queued, precheck, deploying, holding, recovering, done], description: 'holding (R65): a wave-1 deployment of a canary rollout, sent and verified, under observation' }
         status: { type: string, enum: [pending, running, succeeded, unchanged, failed, rolled_back, rollback_failed, needs_attention] }
         result: { type: string, enum: ["", committed, unchanged, no_change, rolled_back, rollback_failed, uncertain] }
         phase: { type: string, enum: ["", none, prepared, writing, committed, unchanged, restoring, restored, restore_failed, restore_forbidden] }
@@ -9171,9 +9262,132 @@ components:
       allOf:
         - { $ref: "#/components/schemas/Deployment" }
         - type: object
-          required: [steps]
+          required: [steps, canary]
           properties:
             steps: { type: array, items: { $ref: "#/components/schemas/DeploymentStep" } }
+            canary:
+              description: 'R65: the latest observation of a wave-1 hold (null when it never held)'
+              oneOf:
+                - type: "null"
+                - $ref: "#/components/schemas/CanaryCheck"
+    RolloutState:
+      type: string
+      enum: [wave1, hold, wave2, completed, failed, aborted, stopped, preempted]
+    CanaryCheck:
+      type: object
+      required: [rounds, passes, consecutive_failures, last_at, last_result, last_reason, last_tls, last_http_status, last_latency_ms, next_check_at]
+      properties:
+        rounds: { type: integer, minimum: 0 }
+        passes: { type: integer, minimum: 0 }
+        consecutive_failures: { type: integer, minimum: 0 }
+        last_at: { type: [string, "null"], format: date-time }
+        last_result: { type: string, enum: ["", pass, fail, unknown] }
+        last_reason: { type: string, description: 'canary.http_status, canary.served_other, canary.unreachable, canary.not_allowed, canary.timeout, canary.protocol, a provider deployment.verify_* reason, or the reason an observation could not run' }
+        last_tls: { type: string, enum: ["", pass, fail, skipped, unknown] }
+        last_http_status: { type: [integer, "null"] }
+        last_latency_ms: { type: [integer, "null"] }
+        next_check_at: { type: string, format: date-time }
+    RolloutSettings:
+      type: object
+      required: [count, percent, hold, interval, failures, check, override_allowed]
+      properties:
+        count: { type: integer, minimum: 0, maximum: 10 }
+        percent: { type: integer, minimum: 0, maximum: 50 }
+        hold: { type: string }
+        interval: { type: string }
+        failures: { type: integer, minimum: 1, maximum: 10 }
+        check:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [path, host, port, expect_status, timeout]
+              properties:
+                path: { type: string }
+                host: { type: string }
+                port: { type: integer }
+                expect_status: { type: array, items: { type: integer } }
+                timeout: { type: string }
+        override_allowed: { type: boolean }
+    RolloutRequested:
+      type: object
+      required: [id, state, wave1, wave2, settings]
+      properties:
+        id: { type: string, format: uuid }
+        state: { $ref: "#/components/schemas/RolloutState" }
+        wave1: { type: array, items: { type: string, format: uuid } }
+        wave2: { type: array, items: { type: string, format: uuid } }
+        settings: { $ref: "#/components/schemas/RolloutSettings" }
+    Rollout:
+      type: object
+      description: >-
+        A canary rollout (R65): wave 1 deployed first and observed for the hold, then wave 2. Websites on servers outside
+        the caller's reach are counted in hidden_count, never listed. allowed_actions are those the state and the
+        caller's rights allow (a fresh step-up is still needed to continue). now is the server's clock (for the
+        countdown).
+      required: [id, state, reason, reason_params, origin, certificate, service, policy_version, settings, hold_started_at, hold_until, now,
+        waves, skipped, allowed_actions, hidden_count, created_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        state: { $ref: "#/components/schemas/RolloutState" }
+        reason: { type: string, description: 'canary.check_failed, canary.check_unavailable, canary.wave1_failed, canary.certificate_revoked, canary.aborted, canary.wave_gone, canary.preempted_by_incident, license.locked, lock_due, unverified, or ""' }
+        reason_params: { type: object, additionalProperties: { type: string } }
+        origin: { type: string, enum: [manual, acme, key_vault] }
+        certificate:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+        service:
+          description: 'The source service whose policy applied: its name, or {outside: true} when the caller does not see it; null once deleted'
+          oneOf:
+            - type: "null"
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+                outside: { type: boolean }
+        policy_version: { type: integer, minimum: 1 }
+        settings: { $ref: "#/components/schemas/RolloutSettings" }
+        hold_started_at: { type: [string, "null"], format: date-time }
+        hold_until: { type: [string, "null"], format: date-time }
+        now: { type: string, format: date-time }
+        waves:
+          type: array
+          items:
+            type: object
+            required: [wave, locations]
+            properties:
+              wave: { type: integer, enum: [1, 2] }
+              locations:
+                type: array
+                items:
+                  type: object
+                  required: [location_id, target_id, target_name, site, deployment_id, deployment_state, deployment_status, canary]
+                  properties:
+                    location_id: { type: string, format: uuid }
+                    target_id: { type: string, format: uuid }
+                    target_name: { type: string }
+                    site: { type: string }
+                    deployment_id: { type: [string, "null"], format: uuid }
+                    deployment_state: { type: [string, "null"] }
+                    deployment_status: { type: [string, "null"] }
+                    canary:
+                      oneOf:
+                        - type: "null"
+                        - $ref: "#/components/schemas/CanaryCheck"
+        skipped:
+          type: array
+          items:
+            type: object
+            required: [location_id, reason]
+            properties:
+              location_id: { type: string, format: uuid }
+              reason: { type: string, description: 'Why a wave-2 website was not deployed (the reason of a refused deployment: target_not_ready, service_untrusted, ...)' }
+        allowed_actions: { type: array, items: { type: string, enum: [continue, abort] } }
+        hidden_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
     DeploymentPage:
       type: object
       required: [items, next_cursor]

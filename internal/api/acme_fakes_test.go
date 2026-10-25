@@ -42,6 +42,7 @@ type fakeACME struct {
 	AddACMEBindingFn        func(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBindingFn     func(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
 	DeployACMENowFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
+	DeployACMENowRolloutFn  func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
 	RevokeACMECertificateFn func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMERevokeInput) (inventory.Certificate, error)
 }
 
@@ -255,6 +256,14 @@ func (f *fakeACME) RemoveACMEBinding(ctx context.Context, a inventory.Actor, id,
 		return f.RemoveACMEBindingFn(ctx, a, id, location)
 	}
 	return errNotConfigured
+}
+
+func (f *fakeACME) DeployACMENowWithRollout(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error) {
+	if f.DeployACMENowRolloutFn != nil {
+		return f.DeployACMENowRolloutFn(ctx, a, id, in)
+	}
+	got, err := f.DeployACMENow(ctx, a, id, in)
+	return got, nil, err
 }
 
 func (f *fakeACME) DeployACMENow(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error) {

@@ -1377,6 +1377,31 @@
         "cause": "A repair mode and a repair need the certificate the location should have: an issued (ACME) certificate or a Key Vault binding that the location is bound to.",
         "action": "Bind the location to a certificate first."
       },
+      "canary_check_failed": {
+        "title": "The canary check failed, so this website was put back.",
+        "cause": "This website received the new certificate first, as a canary. The checks after the deployment failed, so Alice restored the previous certificate here and did not deploy to the other websites.",
+        "action": "Open the rollout on the deployment's page to see which check failed, fix the cause, then deploy again."
+      },
+      "canary_aborted": {
+        "title": "The canary deployment was stopped.",
+        "cause": "A person stopped the canary deployment. The websites that had received the new certificate first were put back to the previous certificate; the other websites were not touched.",
+        "action": "Deploy again when you are ready."
+      },
+      "canary_wave_failed": {
+        "title": "The canary deployment failed, so this website was put back.",
+        "cause": "This website received the new certificate first, as a canary, but the canary deployment failed for another reason (another first website failed, the checks could not run, the certificate was revoked, or the websites went away). Alice restored the previous certificate here.",
+        "action": "Open the rollout on the deployment's page to see why, fix the cause, then deploy again."
+      },
+      "rollout_state": {
+        "title": "The canary deployment cannot do this now.",
+        "cause": "Continue and stop are possible only while the first websites are being deployed or observed.",
+        "action": "Refresh the page to see the canary deployment's current state."
+      },
+      "rollout_not_found": {
+        "title": "This canary deployment was not found.",
+        "cause": "No canary deployment has this id, or you cannot see it.",
+        "action": "Open it from the deployment's page."
+      },
       "not_drifted": {
         "title": "This location does not need a repair.",
         "cause": "The newest checks of the location agree with the certificate it should have, or the certificate has not been deployed there yet.",
@@ -2159,6 +2184,10 @@
       }
     },
     "deployment": {
+      "rollout_stopped": {
+        "subject": "Canary deployment of {{certificate_name}} stopped before its second wave",
+        "body": "The first websites received the certificate {{certificate_name}}, passed their checks and keep it. The licence does not allow changes now, so Alice did not deploy to the other websites: {{websites}}.\n\nAfter the licence is renewed, deploy the certificate to these websites again. Canary deployment: {{rollout_id}}"
+      },
       "failed": {
         "subject": "Certificate deployment failed on {{target_name}}",
         "body": "Alice could not deploy a certificate on the server {{target_name}} (file {{cert_path}}). The server keeps its previous certificate.\n\nThe deployment history in Alice shows each step, the reason and what to do. Deployment: {{deployment_id}}"

@@ -1377,6 +1377,31 @@
         "cause": "Bir onarım kipi ve bir onarım, konumda olması gereken sertifikayı gerektirir: konumun bağlı olduğu, bir yetkiliden alınmış (ACME) sertifika ya da bir Key Vault bağlantısı.",
         "action": "Önce konumu bir sertifikaya bağlayın."
       },
+      "canary_check_failed": {
+        "title": "Kanarya denetimi başarısız oldu, bu web sitesi geri alındı.",
+        "cause": "Bu web sitesi yeni sertifikayı kanarya olarak ilk aldı. Dağıtım sonrası denetimler başarısız oldu; Alice burada önceki sertifikayı geri yükledi ve diğer web sitelerine dağıtmadı.",
+        "action": "Hangi denetimin başarısız olduğunu görmek için dağıtımın sayfasında yayılımı açın, nedeni giderin, sonra yeniden dağıtın."
+      },
+      "canary_aborted": {
+        "title": "Kanarya dağıtımı durduruldu.",
+        "cause": "Bir kişi kanarya dağıtımını durdurdu. Yeni sertifikayı ilk alan web siteleri önceki sertifikaya geri alındı; diğer web sitelerine dokunulmadı.",
+        "action": "Hazır olduğunuzda yeniden dağıtın."
+      },
+      "canary_wave_failed": {
+        "title": "Kanarya dağıtımı başarısız oldu, bu web sitesi geri alındı.",
+        "cause": "Bu web sitesi yeni sertifikayı kanarya olarak ilk aldı, ancak kanarya dağıtımı başka bir nedenle başarısız oldu (ilk web sitelerinden biri başarısız oldu, denetimler çalışamadı, sertifika iptal edildi ya da web siteleri kaldırıldı). Alice burada önceki sertifikayı geri yükledi.",
+        "action": "Nedenini görmek için dağıtımın sayfasında yayılımı açın, nedeni giderin, sonra yeniden dağıtın."
+      },
+      "rollout_state": {
+        "title": "Kanarya dağıtımı bunu şu anda yapamaz.",
+        "cause": "Devam etme ve durdurma yalnızca ilk web siteleri dağıtılırken ya da gözlemlenirken mümkündür.",
+        "action": "Kanarya dağıtımının güncel durumunu görmek için sayfayı yenileyin."
+      },
+      "rollout_not_found": {
+        "title": "Bu kanarya dağıtımı bulunamadı.",
+        "cause": "Bu kimliğe sahip bir kanarya dağıtımı yok ya da onu göremiyorsunuz.",
+        "action": "Onu dağıtımın sayfasından açın."
+      },
       "not_drifted": {
         "title": "Bu konumun onarıma ihtiyacı yok.",
         "cause": "Konumun en yeni denetimleri olması gereken sertifikayla uyuşuyor ya da sertifika oraya henüz dağıtılmadı.",
@@ -2159,6 +2184,10 @@
       }
     },
     "deployment": {
+      "rollout_stopped": {
+        "subject": "{{certificate_name}} kanarya dağıtımı ikinci dalgadan önce durdu",
+        "body": "İlk web siteleri {{certificate_name}} sertifikasını aldı, denetimlerini geçti ve onu koruyor. Lisans şu anda değişikliğe izin vermediği için Alice diğer web sitelerine dağıtmadı: {{websites}}.\n\nLisans yenilendikten sonra sertifikayı bu web sitelerine yeniden dağıtın. Kanarya dağıtımı: {{rollout_id}}"
+      },
       "failed": {
         "subject": "{{target_name}} sunucusunda sertifika dağıtımı başarısız oldu",
         "body": "Alice {{target_name}} sunucusunda bir sertifikayı dağıtamadı (dosya: {{cert_path}}). Sunucu önceki sertifikasını kullanmaya devam ediyor.\n\nAlice'teki dağıtım geçmişi her adımı, nedeni ve yapılması gerekenleri gösterir. Dağıtım: {{deployment_id}}"

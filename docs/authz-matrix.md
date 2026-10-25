@@ -123,6 +123,9 @@ never a platform one. A resource outside the caller's services answers the opera
 | POST | `/api/v1/locations/{id}/actions/repair` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
 | GET | `/api/v1/deployments` | `read` | list | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/deployments/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/deployment-rollouts/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/deployment-rollouts/{id}/actions/continue` | `certificates.operate` | cross | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/deployment-rollouts/{id}/actions/abort` | `certificates.operate` | resource | no | yes | yes | no | operate | no | yes |
 | POST | `/api/v1/key-vaults` | `credentials.manage` | create | no | yes | no | no | no | yes | no |
 | PUT | `/api/v1/targets/{id}/vault-credentials` | `credentials.manage` | resource | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/targets/{id}/kv/certificates` | `read` | resource | no | yes | yes | yes | read | no | yes |

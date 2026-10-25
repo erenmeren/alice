@@ -910,6 +910,8 @@ var (
 		// Directory groups and automation accounts (R54): Alice's own records like the bindings.
 		"/api/v1/directory-groups", "/api/v1/automation-accounts"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
+		// Canary rollouts (R65): continuing one deploys wave 2 (abort is listed below: it reverts, and works in lock).
+		"/api/v1/deployment-rollouts",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.
 		"/api/v1/acme",
@@ -926,7 +928,9 @@ var (
 	// Phase 6: the private key download changes nothing outside Alice; a lock must not hold the customer's own access
 	// keys hostage (R41 row 5).
 	lockAvailableRoutes = map[string]bool{"POST /api/v1/jobs/{id}/actions/discard": true,
-		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true,
+		// R65: aborting a canary rollout puts wave 1 back (a safety action, like a recovery).
+		"POST /api/v1/deployment-rollouts/{id}/actions/abort": true,
+		"PUT /api/v1/bindings/{id}/auto-deploy":               true, "DELETE /api/v1/bindings/{id}": true,
 		"POST /api/v1/ssh-keys/{id}/actions/download-private-key": true,
 		// Stop and undo takes back what a run added; its undo runs in lock (L-86).
 		"POST /api/v1/rotation/runs/{id}/actions/abort": true,

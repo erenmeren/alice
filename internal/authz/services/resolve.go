@@ -49,6 +49,9 @@ const (
 	KindRotationReach = "rotation_reach"
 	// KindKVCertificate is a certificate in a Key Vault: its vault's service (the source of a new Key Vault binding).
 	KindKVCertificate = "kv_certificate"
+	// KindRollout is a canary rollout (R65): its source service; visible from it, the certificate's and every service of
+	// a server of its websites (as a deployment).
+	KindRollout = "rollout"
 )
 
 // resolvers is one indexed query per resource kind: the owning service, then every service the row is visible from.
@@ -117,6 +120,12 @@ FROM certificates c WHERE c.id = $1`,
 FROM rotation_policies p JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE p.id = $1 AND p.deleted_at IS NULL`,
 	KindKVCertificate: `SELECT v.service_id, ARRAY[v.service_id] FROM kv_certificates kc JOIN targets v ON v.id = kc.target_id
 WHERE kc.id = $1 AND v.deleted_at IS NULL`,
+	KindRollout: `SELECT r.service_id, ARRAY(
+    SELECT r.service_id WHERE r.service_id IS NOT NULL
+    UNION SELECT c.service_id
+    UNION SELECT t.service_id FROM certificate_locations l JOIN targets t ON t.id = l.target_id
+        WHERE l.id = ANY (r.wave1_location_ids || r.wave2_location_ids))
+FROM deployment_rollouts r JOIN certificates c ON c.id = r.certificate_id WHERE r.id = $1`,
 	KindService:      `SELECT id, ARRAY[id] FROM services WHERE id = $1`,
 	KindServiceTrust: `SELECT target_service_id, ARRAY[source_service_id, target_service_id] FROM service_trusts WHERE id = $1`,
 }

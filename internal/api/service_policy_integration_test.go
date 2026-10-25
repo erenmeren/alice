@@ -44,7 +44,7 @@ func TestServicePolicyThroughTheAPI(t *testing.T) {
 	assert.EqualValues(t, 3, decodeBody[map[string]any](t, rec)["version"], "the service's Administrator changes the other fields")
 	requireError(t, c.do(http.MethodPut, path, map[string]any{"version": 2, "body": map[string]any{"schema": 1}}),
 		http.StatusConflict, ErrSVCVersionConflict.Code)
-	requireError(t, c.do(http.MethodPut, path, map[string]any{"version": 3, "body": map[string]any{"schema": 1, "canary": map[string]any{}}}),
+	requireError(t, c.do(http.MethodPut, path, map[string]any{"version": 3, "body": map[string]any{"schema": 1, "drift": map[string]any{}}}),
 		http.StatusUnprocessableEntity, ErrSVCPolicyFieldUnavailable.Code)
 	requireError(t, c.do(http.MethodPut, path, map[string]any{"version": 3, "body": map[string]any{"schema": 1, "nope": 1}}),
 		http.StatusBadRequest, ErrBadRequest.Code)

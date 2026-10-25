@@ -536,8 +536,14 @@ type fakeInventory struct {
 	SetDriftModeFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, mode string, strict bool) (inventory.LocationObservation, error)
 	RepairDriftFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID, strict bool) ([]inventory.RequestedDeployment, error)
 	RequestDeploymentFn func(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
-	ListDeploymentsFn   func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
-	DeploymentFn        func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
+	// R65: the deploy routes' rollout answer (nil: the plain fakes above, no rollout) and the rollout routes.
+	RequestDeploymentWithRolloutFn   func(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
+	RequestKVDeploymentWithRolloutFn func(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error)
+	RolloutDetailFn                  func(ctx context.Context, id uuid.UUID) (inventory.RolloutDetail, error)
+	ContinueRolloutFn                func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error)
+	AbortRolloutFn                   func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error)
+	ListDeploymentsFn                func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
+	DeploymentFn                     func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
 
 	CreateVaultFn                  func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
@@ -649,6 +655,43 @@ func (f *fakeInventory) RequestDeployment(ctx context.Context, a inventory.Actor
 		return f.RequestDeploymentFn(ctx, a, in)
 	}
 	return nil, errNotConfigured
+}
+
+func (f *fakeInventory) RequestDeploymentWithRollout(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error) {
+	if f.RequestDeploymentWithRolloutFn != nil {
+		return f.RequestDeploymentWithRolloutFn(ctx, a, in)
+	}
+	got, err := f.RequestDeployment(ctx, a, in)
+	return got, nil, err
+}
+
+func (f *fakeInventory) RequestKVDeploymentWithRollout(ctx context.Context, a inventory.Actor, in inventory.KVDeployInput) ([]inventory.RequestedDeployment, *inventory.Rollout, error) {
+	if f.RequestKVDeploymentWithRolloutFn != nil {
+		return f.RequestKVDeploymentWithRolloutFn(ctx, a, in)
+	}
+	got, err := f.RequestKVDeployment(ctx, a, in)
+	return got, nil, err
+}
+
+func (f *fakeInventory) RolloutDetail(ctx context.Context, id uuid.UUID) (inventory.RolloutDetail, error) {
+	if f.RolloutDetailFn != nil {
+		return f.RolloutDetailFn(ctx, id)
+	}
+	return inventory.RolloutDetail{}, errNotConfigured
+}
+
+func (f *fakeInventory) ContinueRollout(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error) {
+	if f.ContinueRolloutFn != nil {
+		return f.ContinueRolloutFn(ctx, a, id)
+	}
+	return inventory.Rollout{}, errNotConfigured
+}
+
+func (f *fakeInventory) AbortRollout(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Rollout, error) {
+	if f.AbortRolloutFn != nil {
+		return f.AbortRolloutFn(ctx, a, id)
+	}
+	return inventory.Rollout{}, errNotConfigured
 }
 
 func (f *fakeInventory) ListDeployments(ctx context.Context, fl inventory.DeploymentFilter) (inventory.DeploymentPage, error) {

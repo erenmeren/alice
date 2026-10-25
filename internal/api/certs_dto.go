@@ -325,6 +325,8 @@ type deploymentDTO struct {
 	VaultName string  `json:"vault_name"`
 	// Verification (R51): what the verification of the new certificate proved and found.
 	Verification deploymentVerificationDTO `json:"verification"`
+	// R65: the canary rollout the deployment belongs to (null outside one).
+	Rollout *rolloutRefDTO `json:"rollout"`
 }
 
 // deploymentVerificationDTO is a deployment's verification evidence (R51): the level a finished deployment proved
@@ -384,6 +386,8 @@ func verificationJSON(d inventory.Deployment) deploymentVerificationDTO {
 type deploymentDetailDTO struct {
 	deploymentDTO
 	Steps []deploymentStepDTO `json:"steps"`
+	// R65: the latest observation of a wave-1 hold (null when it never held).
+	Canary *canaryDTO `json:"canary"`
 }
 
 // codeValueRE is the shape of the fixed codes a deployment record and its steps carry (a step,
@@ -527,7 +531,7 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 		BackupStore:  backupStore, BackupSHA1: backupSHA1, RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
 		RecoverAfter: utcPtr(d.RecoverAfter), CreatedAt: d.CreatedAt.UTC(), StartedAt: utcPtr(d.StartedAt), FinishedAt: utcPtr(d.FinishedAt),
 		Source: deploymentSource(d), BindingID: idPtr(d.BindingID), KVVersion: versionOrBlank(d.KVVersion), VaultName: d.VaultName,
-		Verification: verificationJSON(d),
+		Verification: verificationJSON(d), Rollout: rolloutRefJSON(d),
 	}
 }
 
@@ -542,7 +546,7 @@ func deploymentSource(d inventory.Deployment) string {
 }
 
 func deploymentDetailJSON(d inventory.Deployment) deploymentDetailDTO {
-	out := deploymentDetailDTO{deploymentDTO: deploymentJSON(d), Steps: make([]deploymentStepDTO, 0, len(d.Steps))}
+	out := deploymentDetailDTO{deploymentDTO: deploymentJSON(d), Steps: make([]deploymentStepDTO, 0, len(d.Steps)), Canary: canaryJSON(d.Canary)}
 	for _, st := range d.Steps {
 		out.Steps = append(out.Steps, deploymentStepDTO{N: st.N, Name: codeOrBlank(st.Name), Status: codeOrBlank(st.Status), At: st.At.UTC(),
 			Params: stepParams(st.Params)})

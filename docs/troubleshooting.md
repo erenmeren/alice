@@ -2727,6 +2727,46 @@ The usual reason is that the website does not send the file Alice wrote: another
 
 **What to do.** Reload the page. To deploy the certificate anyway, use **Deploy now** on the certificate's page.
 
+## ALC-DEP-0031: The canary check failed, so this website was put back
+
+**Meaning.** This website was in wave 1 of a canary deployment (R65): it received the new certificate first and was observed. A check failed as many times in a row as the service's policy allows (`failures`), so Alice rolled the website back to its previous certificate and did not deploy to wave 2. (HTTP 502, reason `deployment.canary_check_failed`.)
+
+**Likely cause.** The website no longer served the new certificate (the TLS check), or the application check of the policy answered a status that is not expected, did not answer in time, or served another certificate. The rollout on the deployment's page shows the round that failed it (`canary.http_status`, `canary.timeout`, `canary.unreachable`, `canary.served_other`, `canary.not_allowed`, `canary.protocol`, or the provider's `deployment.verify_*`).
+
+**What to do.** Open the deployment, read the canary panel, fix what the check found (the application behind the certificate, a client that pins the old chain, the check's path or expected statuses in the service's policy), then deploy again.
+
+## ALC-DEP-0032: The canary deployment was stopped
+
+**Meaning.** A person stopped (aborted) a canary deployment. Every wave-1 website that had received the new certificate was rolled back to its previous certificate; a wave-1 deployment that had not started ended without a change; wave 2 was never deployed. (HTTP 409, reason `deployment.canary_aborted`.)
+
+**Likely cause.** Someone with the right to operate certificates of the service chose **Abort** on the canary panel.
+
+**What to do.** Nothing is needed. Deploy again when you are ready.
+
+## ALC-DEP-0033: The canary deployment failed, so this website was put back
+
+**Meaning.** This website was in wave 1 of a canary deployment that failed for a reason other than its own checks: another wave-1 deployment failed, the checks could not run until the hold and its grace had passed, the new certificate was revoked or its key marked compromised, or every wave-1 website went away. Alice rolled this website back to its previous certificate; `params.cause` names the reason. (HTTP 409, reason `deployment.canary_wave_failed`.)
+
+**Likely cause.** See `cause`: `deployment_failed` (another wave-1 website failed: its own deployment says why), `check_unavailable` (Alice could not reach the servers to observe them: an unknown result never counts as a pass), `certificate_revoked`, `wave_gone`.
+
+**What to do.** Fix the cause shown on the canary panel, then deploy again.
+
+## ALC-DEP-0034: The canary deployment cannot do this now
+
+**Meaning.** **Continue now** or **Abort** was asked of a canary deployment whose state does not allow it (`params.state`): continue only while wave 1 is observed and its last checks passed, abort only while wave 1 is deployed or observed. (HTTP 409, reason `deployment.rollout_state`.)
+
+**Likely cause.** The canary deployment moved on meanwhile (released, failed, completed, or another person acted first), or the page showed an older state.
+
+**What to do.** Refresh the page to see the canary deployment's current state.
+
+## ALC-DEP-0035: This canary deployment was not found
+
+**Meaning.** No canary deployment (rollout) has this id, or it is outside what you can see. (HTTP 404, reason `deployment.rollout_not_found`.)
+
+**Likely cause.** A mistyped or old link.
+
+**What to do.** Open the canary deployment from its deployment's page.
+
 ## ALC-AKV-0001: Azure sign-in refused
 
 **Meaning.** Azure refused Alice's sign-in with the details of this vault (the parameter `aadsts` carries Entra's AADSTS number when Azure sent one). (HTTP 502, reason `azure.auth_failed`.)
@@ -3841,6 +3881,14 @@ Nothing was changed. (HTTP 422, reason `service.owner_not_a_person`.)
 **What to do.** Remove the automation account from the owners and name a person or a directory group instead. To
 let an automation account act on the service, give it a role binding on the service (People & access, Automation
 accounts).
+
+## ALC-SVC-0020: The service's policy does not allow deploying to all at once
+
+**Meaning.** The deployment asked to skip the canary ("Deploy to all at once"), and the source service's policy says `canary.override: forbidden`. Nothing was deployed. (HTTP 422, reason `service.canary_override_forbidden`.)
+
+**Likely cause.** The service deploys a few websites first and observes them before the rest, and its Administrators chose that this step may not be skipped.
+
+**What to do.** Deploy without "Deploy to all at once" (the canary runs), or ask an Administrator of the service to allow it in the policy.
 
 ## ALC-ACC-0001: This person already holds this role there
 

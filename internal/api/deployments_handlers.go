@@ -27,6 +27,7 @@ func (s *server) listDeployments(w http.ResponseWriter, r *http.Request) {
 		TargetID:      optionalUUID(q.Get("target_id"), "target_id", &v),
 		CertificateID: optionalUUID(q.Get("certificate_id"), "certificate_id", &v),
 		LocationID:    optionalUUID(q.Get("location_id"), "location_id", &v),
+		RolloutID:     optionalUUID(q.Get("rollout_id"), "rollout_id", &v),
 		Cursor:        q.Get("cursor"),
 		Limit:         pageLimit(q.Get("limit"), &v),
 		Reach:         s.reachOf(r, rbac.Read), // R49 Phase 2: the deployments the caller sees

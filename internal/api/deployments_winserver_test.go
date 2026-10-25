@@ -20,7 +20,7 @@ import (
 var deploymentKeys = []string{"backup_dir", "binding_id", "cause_step", "cert_path", "certificate_id", "certificate_name",
 	"confirm_incomplete_chain", "created_at", "error", "failed_step", "finished_at", "helper_error", "id", "job_id", "job_status",
 	"key_path", "kv_version", "location_id", "location_kind", "new_fingerprint", "phase", "previous_fingerprint", "recover_after",
-	"recovery_attempts", "requested_by", "requested_by_name", "result", "source", "started_at", "state", "status", "target_id",
+	"recovery_attempts", "requested_by", "requested_by_name", "result", "rollout", "source", "started_at", "state", "status", "target_id",
 	"target_name", "trigger", "vault_name", "verification", "verified", "verify_failed"}
 
 func deploymentMap(t *testing.T, v any) map[string]any {

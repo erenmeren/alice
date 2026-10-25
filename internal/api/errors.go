@@ -395,6 +395,13 @@ var (
 	ErrDeployDriftRepairOff        = ErrorCode{Code: "ALC-DEP-0028", Reason: "deployment.drift_repair_off", Status: http.StatusConflict}
 	ErrDeployDriftNotBound         = ErrorCode{Code: "ALC-DEP-0029", Reason: "deployment.drift_not_bound", Status: http.StatusConflict}
 	ErrDeployNotDrifted            = ErrorCode{Code: "ALC-DEP-0030", Reason: "deployment.not_drifted", Status: http.StatusConflict}
+	// Canary deployment (R65, design §17.2): the error codes of a wave-1 deployment the canary reverted (or never sent),
+	// a continue or abort the rollout's state does not allow (params.state), and an unknown rollout.
+	ErrDeployCanaryCheckFailed = ErrorCode{Code: "ALC-DEP-0031", Reason: "deployment.canary_check_failed", Status: http.StatusBadGateway}
+	ErrDeployCanaryAborted     = ErrorCode{Code: "ALC-DEP-0032", Reason: "deployment.canary_aborted", Status: http.StatusConflict}
+	ErrDeployCanaryWaveFailed  = ErrorCode{Code: "ALC-DEP-0033", Reason: "deployment.canary_wave_failed", Status: http.StatusConflict}
+	ErrDeployRolloutState      = ErrorCode{Code: "ALC-DEP-0034", Reason: "deployment.rollout_state", Status: http.StatusConflict}
+	ErrDeployRolloutNotFound   = ErrorCode{Code: "ALC-DEP-0035", Reason: "deployment.rollout_not_found", Status: http.StatusNotFound}
 
 	// Phase 5: Azure Key Vault (R40). ALC-AKV-0001..0027 are the contract's table; 0028 and later
 	// cover what the code stores or answers that the table did not name (the reasons of a deployment
@@ -672,6 +679,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
 		ErrDeployRollbackForbidden, ErrDeployVerifyUntrusted, ErrDeployDriftRepairSuperseded, ErrDeployDriftRepairOff, ErrDeployDriftNotBound,
 		ErrDeployNotDrifted,
+		ErrDeployCanaryCheckFailed, ErrDeployCanaryAborted, ErrDeployCanaryWaveFailed, ErrDeployRolloutState, ErrDeployRolloutNotFound,
 		ErrAzureAuthFailed, ErrAzureCredentialsExpired, ErrAzureForbidden, ErrAzureFirewall, ErrAzureVaultNotFound, ErrAzureUnreachable,
 		ErrAzureThrottled, ErrAzureUnexpectedResponse, ErrAzureClockSkew, ErrAzureManagedIdentityGone, ErrAzureAddressNotAllowed,
 		ErrAzureTLSUntrusted, ErrKVNotExportable, ErrKVVersionDisabled, ErrKVCertificateNotFound, ErrKVSecretUnreadable, ErrKVSecretMismatch,
@@ -700,7 +708,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrSVCNotFound, ErrSVCNameTaken, ErrSVCNotEmpty, ErrSVCDefaultProtected, ErrSVCUntrusted, ErrSVCEnvironmentInUse,
 		ErrSVCEnvironmentTaken, ErrSVCTrustExists, ErrSVCRequired, ErrSVCNotAllowed, ErrSVCSpansServices,
 		ErrSVCDomainNotAllowed, ErrSVCSourceNotAllowed, ErrSVCVersionConflict, ErrSVCDomainsGlobalOnly, ErrSVCAutoDeployForbidden,
-		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable, ErrSVCOwnerNotAPerson,
+		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable, ErrSVCOwnerNotAPerson, ErrSVCCanaryOverrideForbidden,
 		ErrACCBindingDuplicate, ErrACCBindingLimit, ErrBreakGlassGlobalRole,
 		ErrACCRoleNotAllowed, ErrACCGroupNotFound, ErrACCAutomationAccount, ErrACCAutomationDisabled, ErrACCGroupExists, ErrTokenServiceNotAllowed,
 	}
@@ -851,6 +859,10 @@ var errorMap = []struct {
 	{inventory.ErrDriftNotBound, ErrDeployDriftNotBound, nil},
 	{inventory.ErrDriftNotDrifted, ErrDeployNotDrifted, nil},
 	{inventory.ErrDriftNotRepairable, ErrWINDriftNotRepairable, nil}, // R62 Ruling 14
+	// Canary deployment (R65).
+	{inventory.ErrRolloutNotFound, ErrDeployRolloutNotFound, nil},
+	{inventory.ErrRolloutState, ErrDeployRolloutState, nil},
+	{inventory.ErrCanaryOverrideForbidden, ErrSVCCanaryOverrideForbidden, nil},
 	// Phase 5. *inventory.ImportConfirmError is matched in classify with its certificate_name; the bare
 	// sentinel still gets its code. ErrNotAVault and ErrNotAServer name a target of the wrong kind on
 	// a route of the other: the route does not exist for it (404). ErrAdminRequired is a matter of
@@ -1217,6 +1229,11 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 	var limit *license.TargetLimitError
 	if errors.As(err, &limit) {
 		return ErrLicenseTargetLimit, map[string]string{"used": strconv.Itoa(limit.Used), "max": strconv.Itoa(limit.Max)}, true
+	}
+	var rolloutState *inventory.RolloutStateError
+	if errors.As(err, &rolloutState) {
+		// A closed state name of Alice's own (deployment_rollouts.state).
+		return ErrDeployRolloutState, map[string]string{"state": codeOrBlank(rolloutState.State)}, true
 	}
 	var keyType *inventory.KeyTypeMismatchError
 	if errors.As(err, &keyType) {

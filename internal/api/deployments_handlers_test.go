@@ -48,9 +48,9 @@ func TestDeploymentDTOHasTheDocumentedFields(t *testing.T) {
 		"job_id", "job_status", "trigger", "state", "status", "result", "phase", "new_fingerprint", "previous_fingerprint",
 		"confirm_incomplete_chain", "verified", "verify_failed", "error", "failed_step", "cause_step", "helper_error", "backup_dir",
 		"requested_by", "requested_by_name", "recovery_attempts", "recover_after", "created_at", "started_at", "finished_at",
-		"source", "binding_id", "kv_version", "vault_name", "verification"}
+		"source", "binding_id", "kv_version", "vault_name", "verification", "rollout"}
 	assert.Equal(t, sorted(listFields...), jsonKeys(t, deploymentJSON(sampleDeployment())))
-	assert.Equal(t, sorted(append(listFields, "steps")...), jsonKeys(t, deploymentDetailJSON(sampleDeployment())))
+	assert.Equal(t, sorted(append(listFields, "steps", "canary")...), jsonKeys(t, deploymentDetailJSON(sampleDeployment())))
 }
 
 func TestGetDeploymentRendersStepsAndError(t *testing.T) {
