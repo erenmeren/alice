@@ -458,6 +458,14 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 WHERE id = $2`, incidentID, ids["/api/v1/certificates/"])
 	require.NoError(t, err)
 	ids["/api/v1/incidents/"] = incidentID
+	// Canary deployment (R65): one finished rollout of the Phase 4 certificate, stored directly.
+	rolloutID := uuid.NewString()
+	_, err = s.db.Owner.Exec(context.Background(), `INSERT INTO deployment_rollouts (id, certificate_id, policy_version, settings, origin,
+    state, reason, wave1_location_ids, wave2_location_ids, created_at, finished_at)
+SELECT $1, certificate_id, 1, '{}', 'manual', 'aborted', 'canary.aborted', ARRAY[id], ARRAY[id], now(), now()
+FROM certificate_locations WHERE certificate_id = $2 LIMIT 1`, rolloutID, ids["/api/v1/certificates/"])
+	require.NoError(t, err)
+	ids["/api/v1/deployment-rollouts/"] = rolloutID
 	// Services (R49): the Default service the migration seeds.
 	var defaultService string
 	require.NoError(t, s.db.Owner.QueryRow(context.Background(), "SELECT id::text FROM services WHERE is_default").Scan(&defaultService))

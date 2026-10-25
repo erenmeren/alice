@@ -144,6 +144,11 @@ VALUES ($1, 'test.job', 'always', 'system', '{}', decode(repeat('07', 32), 'hex'
 	require.NoError(t, err)
 	s.mustExec(`UPDATE jobs SET service_id = $2 WHERE id = $1`, job, w.a)
 	s.mustExec(`UPDATE certificate_incidents SET service_ids = ARRAY[$2::uuid] WHERE id = $1`, incident, w.a)
+	// A canary rollout of A's certificate (R65), finished.
+	rollout := uuid.New()
+	s.mustExec(`INSERT INTO deployment_rollouts (id, certificate_id, service_id, policy_version, settings, origin, state, reason,
+    wave1_location_ids, wave2_location_ids, created_at, finished_at)
+VALUES ($1, $2, $3, 1, '{}', 'manual', 'aborted', 'canary.aborted', ARRAY[$4::uuid], ARRAY[$4::uuid], now(), now())`, rollout, cert, w.a, loc)
 	trust, err := s.serviceStore.CreateTrust(ctx, sysActor, w.a, w.c)
 	require.NoError(t, err)
 	// A's owner (R56): GET /services/{id}/owners of A answers as an absent service, and no answer to B names them.
@@ -162,10 +167,10 @@ VALUES ($1, 'alpha-owner', 'Alpha Owner', 'alpha-owner@example.test', '$argon2id
 		services.KindDiscoveredCert: fp, services.KindDeployment: dep, services.KindKVBinding: binding, services.KindIncident: incident,
 		services.KindJob: job, services.KindRotationPolicy: policy, services.KindRotationRun: run, services.KindService: w.a,
 		services.KindServiceTrust: trust.ID, services.KindIncidentReach: cert, services.KindRotationReach: policy,
-		services.KindKVCertificate: kvCert,
+		services.KindKVCertificate: kvCert, services.KindRollout: rollout,
 	}
 	for _, v := range []any{server, vault, cert, cert2, loc, acmeLoc, kvCert, binding, dep, csr, sshKey, sshLoc, policy, run, acme, scope, scan,
-		incident, job, trust.ID, w.a, fp, owner} {
+		incident, job, trust.ID, w.a, fp, owner, rollout} {
 		w.aIDs = append(w.aIDs, fmt.Sprint(v))
 	}
 	w.aIDs = append(w.aIDs, "alpha-web", "alpha-kv", "alpha.example.test", "alpha-acme.example.test", "alpha-csr.example.test", "Alpha", "alpha-owner")

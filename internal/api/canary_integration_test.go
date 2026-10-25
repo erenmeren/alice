@@ -42,6 +42,10 @@ func TestCanaryThroughTheAPI(t *testing.T) {
 	rec := n.admin.do(http.MethodPut, "/api/v1/services/"+def.String()+"/policy", map[string]any{"version": 1, "body": map[string]any{"schema": 1,
 		"canary": map[string]any{"enabled": true, "hold": "1m", "interval": "15s"}}})
 	requireStatus(t, rec, http.StatusOK)
+	// A browser session of the Operator whose sign-in step-up has lapsed (5 minutes).
+	stale := n.freshClient()
+	n.signIn(stale, n.opAcct)
+	n.clock.Advance(6 * time.Minute)
 
 	leaf := n.issue()
 	certID := n.uploadCertificate(n.op, certBody(leaf, "Canary"))
@@ -75,9 +79,10 @@ func TestCanaryThroughTheAPI(t *testing.T) {
 	rv = decodeBody[rolloutView](t, n.op.do(http.MethodGet, path, nil))
 	assert.Equal(t, []string{"continue", "abort"}, rv.AllowedActions)
 
-	requireError(t, n.op.do(http.MethodPost, path+"/actions/continue", nil), http.StatusForbidden, ErrStepUpRequired.Code)
-	n.stepUp(n.op, n.opAcct)
-	rv = decodeBody[rolloutView](t, n.op.do(http.MethodPost, path+"/actions/continue", nil))
+	// Without a fresh step-up Continue is refused; with one it releases wave 1.
+	requireError(t, stale.do(http.MethodPost, path+"/actions/continue", nil), http.StatusForbidden, ErrStepUpRequired.Code)
+	n.stepUp(stale, n.opAcct)
+	rv = decodeBody[rolloutView](t, stale.do(http.MethodPost, path+"/actions/continue", nil))
 	assert.Equal(t, "wave2", rv.State)
 	require.Len(t, rv.Waves, 2)
 	require.Len(t, rv.Waves[1].Locations, 1)
@@ -102,6 +107,7 @@ func TestCanaryThroughTheAPI(t *testing.T) {
 	otherID := n.uploadCertificate(n.op, certBody(other, "All at once"))
 	oc := n.freshClient()
 	n.signIn(oc, n.opAcct)
+	n.clock.Advance(6 * time.Minute)
 	requireError(t, oc.do(http.MethodPost, "/api/v1/certificates/"+otherID+"/deploy", map[string]any{"location_ids": []string{n.locs[wwwCert],
 		n.locs[apiCert]}, "canary_override": true}), http.StatusForbidden, ErrStepUpRequired.Code)
 	n.stepUp(oc, n.opAcct)
