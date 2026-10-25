@@ -47,6 +47,9 @@ const acmeAutoDeployEvery = time.Minute
 // incidentAdvanceEvery is the interval of the key-compromise incident task (incident.advance).
 const incidentAdvanceEvery = 30 * time.Second
 
+// revocationCheckEvery is the interval of the revocation check (revocation.check, R64 Ruling 17).
+const revocationCheckEvery = 15 * time.Minute
+
 // driftScheduleEvery and driftRepairEvery are the intervals of the certificate drift tasks (R52): the observation
 // schedule (each bound location is observed every inventory.DriftObserveInterval; the schedule only finds the due ones)
 // and the repair planner.

@@ -41,6 +41,7 @@ import (
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/reports"
+	"alice/internal/revocation"
 	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
@@ -151,6 +152,8 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		// The trust of ACME CAs and DNS hooks: nil (the system roots) in a release build, only the fake CA in the e2e
 		// build (testapi_*.go); each provider's and hook's own bundle is added.
 		ACMERoots: acmeRoots,
+		// The revocation check's guarded client (R64, D5: http and https on 80 and 443, netaddr and never this host).
+		Revocation: inventory.RevocationCheckerOf(revocation.New(clk)),
 	})
 	sshPool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clk, HostKeys: inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
@@ -525,6 +528,12 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		// queues windows.cleanup jobs, which change a server and are held in lock). The e2e build never ticks it: a journey
 		// runs it with POST /test/scheduler/run.
 		winjobs.ScheduleTask(svc.inventory, windowsCleanupScheduleEvery, log),
+		// The revocation check (R64, D5): asks the authorities about the due certificates (ReadOnly: paused in lock; the
+		// inventory also asks the gate and reads the switch). The e2e build never ticks it.
+		jobs.Task{Type: jobs.RevocationCheck, Every: revocationCheckEvery, Run: func(ctx context.Context) error {
+			_, err := svc.inventory.RunRevocationChecks(ctx)
+			return err
+		}},
 	)
 }
 

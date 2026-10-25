@@ -71,8 +71,13 @@ var rules = map[string][]string{
 		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew",
 		// The DNS providers of R57: the inventory builds a publisher's solver configuration and reads the providers' limits.
 		"alice/internal/acme/solver/dnssolver", "alice/internal/acme/solver/dnsapi/...",
-		"alice/internal/alerts/expiry", "alice/internal/authz"},
-	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz"},
+		"alice/internal/alerts/expiry", "alice/internal/authz",
+		// The revocation checker of D5 (R64): the inventory runs it and records its results.
+		"alice/internal/revocation"},
+	// The OCSP and CRL checker (R64, D5) is pure apart from its guarded HTTP client: netaddr's connect-time check and
+	// the clock; it never reaches the inventory or a database.
+	"alice/internal/revocation": {"alice/internal/platform/netaddr", "alice/internal/platform/clock"},
+	"alice/internal/jobs/...":   {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz"},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
 	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
@@ -147,6 +152,9 @@ var rules = map[string][]string{
 	// with the test PKI, reads the real clock and imports nothing else of Alice: it cannot drift towards the
 	// discovery code it tests.
 	"alice/internal/testutil/fakefleet": {"alice/internal/testutil/pki", "alice/internal/platform/clock"},
+	// The fake OCSP responder and CRL server of the revocation check tests (R64) build their answers with the test PKI and
+	// read the clock; they import nothing else of Alice, so they cannot drift towards the checker they test.
+	"alice/internal/testutil/fakerevocation": {"alice/internal/testutil/pki", "alice/internal/platform/clock"},
 	// Network certificate discovery (plan 2026-10-13-network-discovery): the scope model, its expansion and the
 	// scanner know the platform (netaddr's scan policy above all) and the license gate (the scanner asks it before every
 	// batch, amendment A5); the probe knows the platform only.
@@ -412,6 +420,13 @@ func TestAllowed(t *testing.T) {
 		{"fakefleet to netaddr denied", "alice/internal/testutil/fakefleet", "alice/internal/platform/netaddr", false},
 		{"fakefleet to the scan policy helper denied", "alice/internal/testutil/fakefleet", "alice/internal/testutil/scanpolicy", false},
 		{"fakefleet to the clock allowed", "alice/internal/testutil/fakefleet", "alice/internal/platform/clock", true},
+		{"revocation to netaddr allowed", "alice/internal/revocation", "alice/internal/platform/netaddr", true},
+		{"revocation to the clock allowed", "alice/internal/revocation", "alice/internal/platform/clock", true},
+		{"revocation to inventory denied", "alice/internal/revocation", "alice/internal/inventory", false},
+		{"revocation to the database denied", "alice/internal/revocation", "alice/internal/platform/db", false},
+		{"inventory to revocation allowed", "alice/internal/inventory", "alice/internal/revocation", true},
+		{"fakerevocation to revocation denied", "alice/internal/testutil/fakerevocation", "alice/internal/revocation", false},
+		{"fakerevocation to the test PKI allowed", "alice/internal/testutil/fakerevocation", "alice/internal/testutil/pki", true},
 		{"discovery to the license gate allowed", "alice/internal/discovery", "alice/internal/license", true},
 		{"vconsole to the license format allowed", "alice/internal/vconsole/issue", "alice/internal/license/issuer", true},
 		{"vconsole to the platform allowed", "alice/internal/vconsole/store", "alice/internal/platform/db", true},

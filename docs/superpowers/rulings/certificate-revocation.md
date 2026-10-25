@@ -137,12 +137,12 @@ ALC-INC-0001..0013).
 
 - D1: revocation signed with the certificate's own key (for a certificate whose ordering account is gone). The fake
   supports it; the client and the UI do not.
-- D2: an incident list page (the API lists incidents; the web reaches an incident from its certificate's page).
-- D3: e-mails about incidents (needs attention, completed); the audit log and the page are the record.
+- D2: an incident list page (the API lists incidents; the web reaches an incident from its certificate's page). Done in R64 (`docs/superpowers/rulings/hardening-2026-10-24.md`).
+- D3: e-mails about incidents (needs attention, completed); the audit log and the page are the record. Done in R64 (`docs/superpowers/rulings/hardening-2026-10-24.md`).
 - D4: replacing places that hold another certificate made with the same key in the same incident (they are skipped
   with the reason; one incident per certificate).
 - D5: OCSP/CRL checking of certificates found on servers or by discovery (Alice does not learn about revocations it did
-  not make).
+  not make). Done in R64 (`docs/superpowers/rulings/hardening-2026-10-24.md`).
 - The revocation was exercised only against `fakeacme`; no public or company CA, no real CRL/OCSP publication.
 
 ## Rollback guard (R48)

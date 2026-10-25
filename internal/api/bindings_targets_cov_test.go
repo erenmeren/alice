@@ -312,3 +312,92 @@ func TestCovBTargetRoutesRefusals(t *testing.T) {
 	assert.Equal(t, "fingerprint", errorDetails(t, rec)[0].Field)
 	assert.Zero(t, repins+confirms, "nothing reached the inventory")
 }
+
+// Design §5.6 "either side" (HB-02, R64 ruling 9): a person of a website's service may release its own websites from a
+// Key Vault binding of another service it can see, and nothing else: adding a website, or releasing a website of a
+// service it only reads, is 403 before the inventory. The person holds Operator on svcPay (the websites) and Auditor on
+// svcDefault (the vault, and website C), so it sees website C but holds no right on it. A binding not visible from
+// svcPay stays unknown (404) to a person of svcPay only.
+func TestPatchBindingFromTheWebsiteSide(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	svc := &covBServices{fakeServices: &fakeServices{targetServices: map[uuid.UUID]uuid.UUID{targetID: svcPay, covBOtherTarget: svcDefault}}}
+	d.Services = svc
+	fa := d.Auth.(*fakeAuth)
+	prev := fa.AuthenticateFn
+	fa.AuthenticateFn = func(ctx context.Context, tok string) (auth.Principal, error) {
+		if tok == "website-side" {
+			return auth.Principal{Kind: rbac.UserSession, UserID: operatorID, Username: "web", DisplayName: "web", Role: auth.NoGlobalRole,
+				Locale: "en", SessionHash: []byte("website-side"), StepUpUntil: testNow.Add(5 * time.Minute),
+				Grants: []rbac.ScopedGrant{{Role: rbac.Operator, Services: []uuid.UUID{svcPay}}, {Role: rbac.Auditor, Services: []uuid.UUID{svcDefault}}}}, nil
+		}
+		return prev(ctx, tok)
+	}
+	h := NewHandler(d)
+	visible := []uuid.UUID{svcDefault, svcPay}
+	svc.ResolveFn = func(kind string, id any) (services.Resolution, error) {
+		switch kind {
+		case services.KindKVBinding:
+			return services.Resolution{Owning: svcDefault, Visible: visible}, nil // the vault's service owns the binding
+		case services.KindLocation:
+			if id == covBLocationC {
+				return services.Resolution{Owning: svcDefault, Visible: []uuid.UUID{svcDefault}}, nil
+			}
+			return services.Resolution{Owning: svcPay, Visible: []uuid.UUID{svcPay}}, nil
+		}
+		return services.Resolution{}, services.ErrResourceNotFound
+	}
+	binding := sampleBinding(false)
+	binding.Locations = append(binding.Locations,
+		inventory.BindingLocation{LocationID: locationB, TargetID: targetID, TargetName: "web-01", CertPath: "/etc/ssl/b.pem",
+			State: inventory.BindingLocationDeployed},
+		inventory.BindingLocation{LocationID: covBLocationC, TargetID: covBOtherTarget, TargetName: "db-01", CertPath: "/etc/ssl/c.pem",
+			State: inventory.BindingLocationDeployed})
+	inv.BindingFn = func(context.Context, uuid.UUID) (inventory.Binding, error) { return binding, nil }
+	var got [][]uuid.UUID
+	inv.UpdateBindingLocationsStrictFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, _ int, l []uuid.UUID, _ bool) (inventory.Binding, error) {
+		got = append(got, l)
+		return binding, nil
+	}
+	path := "/api/v1/bindings/" + bindingA.String()
+	hdr := map[string]string{"If-Match": `"4"`}
+	body := func(locs ...uuid.UUID) string {
+		ids := make([]string, len(locs))
+		for i, l := range locs {
+			ids[i] = `"` + l.String() + `"`
+		}
+		return `{"location_ids":[` + strings.Join(ids, ",") + `]}`
+	}
+
+	// (a) Releasing its own website B.
+	rec := callWith(h, http.MethodPatch, path, "website-side", body(locationA, covBLocationC), hdr)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, got, 1)
+	assert.Equal(t, []uuid.UUID{locationA, covBLocationC}, got[0])
+
+	// (b) Adding a website, even one of its own service, is the vault side's.
+	locationD := uuid.MustParse("0192d000-0000-7000-8000-0000000000d4")
+	rec = callWith(h, http.MethodPatch, path, "website-side", body(locationA, locationB, covBLocationC, locationD), hdr)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Equal(t, ErrForbidden.Code, decodeErr(t, rec).Error.Code)
+	assert.Len(t, got, 1, "nothing reached the inventory")
+
+	// (c) Releasing website C, which it sees but holds no right on.
+	rec = callWith(h, http.MethodPatch, path, "website-side", body(locationA, locationB), hdr)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Equal(t, ErrForbidden.Code, decodeErr(t, rec).Error.Code)
+	assert.Len(t, got, 1, "nothing reached the inventory")
+
+	// (d) A binding visible from svcDefault only is unknown to a person of svcPay only (the guard, unchanged).
+	hs, invS, svcS := covBScoped(t, rbac.Operator)
+	svcS.ResolveFn = func(kind string, _ any) (services.Resolution, error) {
+		if kind == services.KindKVBinding {
+			return services.Resolution{Owning: svcDefault, Visible: []uuid.UUID{svcDefault}}, nil
+		}
+		return services.Resolution{}, services.ErrResourceNotFound
+	}
+	var calls int
+	invS.BindingFn = func(context.Context, uuid.UUID) (inventory.Binding, error) { calls++; return binding, nil }
+	rec = callWith(hs, http.MethodPatch, path, "covb-scoped", body(locationA), hdr)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	assert.Zero(t, calls)
+}

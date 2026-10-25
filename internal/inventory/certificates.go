@@ -59,7 +59,12 @@ type Certificate struct {
 	RevokedAt        *time.Time
 	RevocationReason string
 	RevokedByName    string // the display name of the person who revoked it ("" for none or Alice herself)
-	CompromisedAt    *time.Time
+	// RevokedByAuthority: the authority revoked it and Alice learned it by the revocation check (R64, D5), not at Alice's
+	// request.
+	RevokedByAuthority bool
+	// RevocationCheck is the last revocation check (GetCertificate only; nil when never checked).
+	RevocationCheck *RevocationCheck
+	CompromisedAt   *time.Time
 	// ACMECertificateID is the ACME certificate whose order produced this version (nil for another source or an
 	// unknown one).
 	ACMECertificateID *uuid.UUID
@@ -257,14 +262,14 @@ c.key_algorithm, c.key_bits, c.chain_complete, c.self_signed, c.source, c.label,
  WHERE l.certificate_id = c.id AND l.missing_since IS NULL),
 c.public_key_sha256, c.revoked_at, c.revocation_reason, coalesce((SELECT u.display_name FROM users u WHERE u.id = c.revoked_by), ''),
 c.compromised_at, (SELECT o.acme_certificate_id FROM acme_orders o WHERE o.certificate_id = c.id ORDER BY o.started_at DESC LIMIT 1),
-c.service_id`
+c.service_id, c.revocation_seen <> ''`
 
 func scanCertificate(row pgx.Row, extra ...any) (Certificate, error) {
 	var c Certificate
 	dest := []any{&c.ID, &c.Fingerprint, &c.SubjectCN, &c.Subject, &c.Issuer, &c.Serial, &c.SANs, &c.NotBefore, &c.NotAfter,
 		&c.KeyAlgorithm, &c.KeyBits, &c.ChainComplete, &c.SelfSigned, &c.Source, &c.Label, &c.HasPrivateKey, &c.FirstSeenAt, &c.LastSeenAt,
 		&c.LocationCount, &c.PublicKeySHA256, &c.RevokedAt, &c.RevocationReason, &c.RevokedByName, &c.CompromisedAt, &c.ACMECertificateID,
-		&c.ServiceID}
+		&c.ServiceID, &c.RevokedByAuthority}
 	err := row.Scan(append(dest, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Certificate{}, ErrNotFound
@@ -388,6 +393,9 @@ func (s *Service) GetCertificate(ctx context.Context, id uuid.UUID) (Certificate
 		return Certificate{}, err
 	}
 	c.PEMChain = pemChain
+	if c.RevocationCheck, err = revocationCheckOf(ctx, s.pool, c.Fingerprint); err != nil {
+		return Certificate{}, err
+	}
 	rows, err := s.pool.Query(ctx, certLocationSelect+` WHERE l.certificate_id = $1
 ORDER BY l.missing_since IS NOT NULL, l.last_seen_at DESC, l.first_seen_at DESC, l.id DESC
 LIMIT $2`, id, MaxListedLocations+1)

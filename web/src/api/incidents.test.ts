@@ -75,6 +75,7 @@ describe('the incident client', () => {
       [() => inc.startIncident('c1', 'after_verified'), 'POST', '/api/v1/certificates/c1/incidents', { revoke_mode: 'after_verified' }],
       [() => inc.listIncidents(), 'GET', '/api/v1/incidents'],
       [() => inc.listIncidents({ open: true, certificate_id: 'c1' }), 'GET', '/api/v1/incidents?open=true&certificate_id=c1'],
+      [() => inc.listIncidents({ state: 'closed', cursor: 'c2', limit: 50 }), 'GET', '/api/v1/incidents?state=closed&cursor=c2&limit=50'],
       [() => inc.getIncident('i1'), 'GET', '/api/v1/incidents/i1'],
       [() => inc.retryIncident('i1'), 'POST', '/api/v1/incidents/i1/retry'],
       [() => inc.revokeIncidentNow('i1'), 'POST', '/api/v1/incidents/i1/revoke-now'],

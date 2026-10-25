@@ -541,6 +541,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		ACME:           acmeAPI(svc),
 		Discovery:      discoveryAPI(svc),
 		Incidents:      incidentAPI(svc),
+		Revocation:     revocationAPI(svc),
 		Services:       servicesAPI(svc),
 		Automation:     svc.auth,
 		Jobs:           svc.queue,
@@ -601,6 +602,14 @@ func acmeAPI(svc *services) api.ACMEService {
 
 // incidentAPI is the incident service (the inventory); a nil inventory stays a nil interface, as acmeAPI does.
 func incidentAPI(svc *services) api.IncidentService {
+	if svc.inventory == nil {
+		return nil
+	}
+	return svc.inventory
+}
+
+// revocationAPI is the revocation check switch (R64); a nil inventory stays a nil interface, as incidentAPI does.
+func revocationAPI(svc *services) api.RevocationService {
 	if svc.inventory == nil {
 		return nil
 	}

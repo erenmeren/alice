@@ -51,7 +51,7 @@ export const viewsKey = (page: string) => ['views', page] as const;
 
 // Phase 7 settings and single sign-on (admin pages). SETTINGS_KEY is a prefix: one invalidation reads every form again.
 export const SETTINGS_KEY = ['settings'] as const;
-export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general' | 'backups' | 'https' | 'forwarding') => ['settings', name] as const;
+export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general' | 'backups' | 'https' | 'forwarding' | 'revocation') => ['settings', name] as const;
 export const SSO_KEY = ['sso'] as const;
 export const SSO_PROVIDERS_KEY = ['sso', 'providers'] as const;
 export const SSO_SETTINGS_KEY = ['sso', 'settings'] as const;
@@ -94,7 +94,7 @@ export const certificateImpactKey = (id: string) => ['certificates', id, 'impact
 export const CERTIFICATE_CAPABILITIES_KEY = ['certificate-capabilities'] as const;
 export const INCIDENTS_KEY = ['incidents'] as const;
 export const incidentKey = (id: string) => ['incidents', id] as const;
-export const incidentListKey = (filters: { open?: boolean; certificate_id?: string }) => ['incidents', 'list', filters] as const;
+export const incidentListKey = (filters: { open?: boolean; certificate_id?: string; state?: string }) => ['incidents', 'list', filters] as const;
 
 // Network discovery. DISCOVERY_KEY is the prefix of everything; the lists sit under 'list' segments, so no id or
 // fingerprint can address the same entry. The scope preview is never cached (it is read with the form's own abort).

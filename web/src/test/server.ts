@@ -32,11 +32,15 @@ export const handlers = [
   http.get('/api/v1/settings/backups', () => HttpResponse.json(backupScheduleFixture())),
   http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture())),
   http.get('/api/v1/settings/audit-forwarding', () => HttpResponse.json(forwardingFixture())),
+  // R64: Settings, General shows the revocation check switch (on by default).
+  http.get('/api/v1/settings/revocation-checks', () => HttpResponse.json({ enabled: true, version: 0 })),
   // The wizard's mail step is the Settings mail form.
   http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
   // Phase 9: the Key rotations page and the run page read every policy; the rotations page reads the runs.
   http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
+  // D2 (R64): the Incidents page; no incident unless a test says otherwise.
+  http.get('/api/v1/incidents', () => HttpResponse.json({ items: [], next_cursor: null })),
   // Network discovery: the Certificates page reads the summary for its link (no scope by default: no link).
   // Services (R49): the list toolbars read the services and the environments for their filters.
   http.get('/api/v1/services', () => HttpResponse.json({ items: [] })),

@@ -15,6 +15,7 @@ import { DeploymentDetailPage } from './pages/DeploymentDetailPage';
 import { DeploymentsPage } from './pages/DeploymentsPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
 import { IncidentPage } from './pages/IncidentPage';
+import { IncidentsPage } from './pages/IncidentsPage';
 import { KeyVaultDetailPage } from './pages/KeyVaultDetailPage';
 import { KeyVaultsPage } from './pages/KeyVaultsPage';
 import { KVCertificatePage } from './pages/KVCertificatePage';
@@ -76,6 +77,7 @@ export function routes(): RouteObject[] {
             // Issued certificates (ACME): every role reads them (acme.view); the pages hide what a role cannot do.
             { path: 'acme', element: <AcmeCertificatesPage /> },
             { path: 'acme/:id', element: <AcmeCertificatePage /> },
+            { path: 'incidents', element: <IncidentsPage /> },
             { path: 'incidents/:id', element: <IncidentPage /> },
             // Network discovery: every role reads it (discovery.view); the page hides what a role cannot do.
             { path: 'discovery', element: <DiscoveryPage /> },

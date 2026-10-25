@@ -80,6 +80,10 @@ const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
 // journeys run it with POST /test/scheduler/run {"task": "incident.advance"}.
 const incidentAdvanceEvery = 100 * 365 * 24 * time.Hour
 
+// revocationCheckEvery is the revocation check's interval in the e2e build: in effect never (no authority is reachable
+// from the compose stack; R64 Ruling 22).
+const revocationCheckEvery = 100 * 365 * 24 * time.Hour
+
 // driftScheduleEvery and driftRepairEvery are the intervals of the certificate drift tasks in the e2e build: in effect
 // never, like the ACME planners (the demo clock would otherwise observe and repair between two Playwright steps). The
 // journeys run them with POST /test/scheduler/run {"task": "drift.schedule"} and {"task": "drift.repair"}.
@@ -253,7 +257,7 @@ var testMailer notify.Mailer = e2eMailbox
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
-certificate_incident_locations, certificate_incidents,
+incident_notices, certificate_incident_locations, certificate_incidents, revocation_checks,
 acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers,
 discovery_endpoints, discovery_certificates, discovery_scans, discovery_scopes,
 rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,

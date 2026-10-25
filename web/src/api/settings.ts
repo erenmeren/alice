@@ -75,5 +75,14 @@ export const saveThresholds = (version: number, thresholds_days: number[]) =>
   apiFetch<AlertThresholds>(`${v1}/alerts`, { method: 'PUT', body: { thresholds_days }, headers: ifMatch(version) });
 
 export const getGeneral = () => apiFetch<GeneralSettings>(`${v1}/general`);
+
+// The revocation check switch (R64, D5): absent reads as on; an updated installation starts off.
+export interface RevocationCheckSettings {
+  enabled: boolean;
+  version: number;
+}
+export const getRevocationChecks = () => apiFetch<RevocationCheckSettings>(`${v1}/revocation-checks`);
+export const saveRevocationChecks = (version: number, enabled: boolean) =>
+  apiFetch<RevocationCheckSettings>(`${v1}/revocation-checks`, { method: 'PUT', body: { enabled }, headers: ifMatch(version) });
 export const saveGeneral = (version: number, body: Omit<GeneralSettings, 'version'>) =>
   apiFetch<GeneralSettings>(`${v1}/general`, { method: 'PUT', body, headers: ifMatch(version) });

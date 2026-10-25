@@ -649,6 +649,20 @@ export interface Certificate {
   compromised_at: string | null;
   acme_certificate_id: string | null;
   capabilities: SourceCapability[];
+  // R64: the authority revoked it and Alice learned it by the revocation check (not at her request).
+  revoked_by_authority: boolean;
+}
+
+// RevocationCheck is the last revocation check of a certificate (R64, D5); error names why it gave no answer.
+export type RevocationCheckStatus = 'good' | 'revoked' | 'on_hold' | 'unknown' | 'unavailable' | 'not_checkable';
+export interface RevocationCheck {
+  status: RevocationCheckStatus;
+  method: '' | 'ocsp' | 'crl';
+  reason: string;
+  revoked_at: string | null;
+  checked_at: string;
+  next_check_at: string;
+  error: ErrorRef | null;
 }
 
 // SourceCapability is one thing Alice can do with a certificate of a source (internal/inventory/source_capabilities.go;
@@ -658,7 +672,8 @@ export const SOURCE_CAPABILITIES: readonly SourceCapability[] = ['discover', 'ob
 
 // RevocationReason is an RFC 5280 reason a certificate owner gives (internal/acme/revoke.go).
 export type RevocationReason = 'unspecified' | 'keyCompromise' | 'affiliationChanged' | 'superseded' | 'cessationOfOperation';
-export type RevocationReasonOrEmpty = '' | RevocationReason;
+// The final reasons only an authority reports (R64): a certificate revoked by its authority may carry them.
+export type RevocationReasonOrEmpty = '' | RevocationReason | 'cACompromise' | 'privilegeWithdrawn' | 'aACompromise';
 export const REVOCATION_REASONS: readonly RevocationReason[] = ['unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation'];
 
 // CertificateDetail is GET /certificates/{id} and the certificate of an upload or a completion.
@@ -668,6 +683,8 @@ export interface CertificateDetail extends Certificate {
   locations_truncated: boolean;
   // Locations on servers outside the reader's services, left out of locations (R49 Phase 2; absent from older answers).
   hidden_count?: number;
+  // The last revocation check (R64); null before the first.
+  revocation_check: RevocationCheck | null;
 }
 
 export interface CertificateRef {

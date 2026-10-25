@@ -71,7 +71,7 @@ reads its SSH keys and shows "The Apache permissions are not installed on this s
 
 ## The helper version
 
-Reading Apache needs `alice-helper` 1.7.0 (protocol 8) or newer; the helper of this release is 1.10.0 (protocol 11),
+Reading Apache needs `alice-helper` 1.7.0 (protocol 8) or newer; this release ships 1.11.0 (protocol 11),
 which also reads HAProxy. `alice-helper` 1.7.0 added `apache-dump`; nothing changes for Linux and Nginx servers,
 which keep working with `alice-helper` 1.6.x. A server added as an Apache
 server whose helper is older keeps working for its SSH keys: **Test connection** succeeds with the warning "The

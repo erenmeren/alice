@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — Hardening batch 1 (R64)
+
+**Added**
+- **Incidents** in the navigation: every key compromise incident of your services, newest first, with a filter (all,
+  open, needs attention, completed, closed) and paging. An incident opened from the list goes back to it.
+- E-mails when a key compromise incident needs attention and when it completes, to the certificate's service
+  recipients (the Administrators when nobody else is named), once per change and also while the licence is locked.
+- Revocation checks: Alice asks the authority that issued each certificate (OCSP, then CRL) whether it was revoked,
+  about once a day per certificate, and certificates found by network discovery too. A revocation the authority signed
+  marks the certificate revoked for good (never deployed again, an issued certificate renewed at once) and is e-mailed
+  once; a suspension is shown and e-mailed but not marked; unknown and unreachable answers are only shown. The
+  certificate's page shows the last check; the switch is in **Settings**, **General**. New codes `ALC-CRT-0020` to
+  `ALC-CRT-0026` (see [troubleshooting.md](docs/troubleshooting.md)).
+
+**Changed**
+- `alice-helper` 1.11.0 (protocol 11, same sudoers file) reads a first certificate labelled `TRUSTED CERTIFICATE` or
+  `X509 CERTIFICATE`, as Nginx does; before, such a file showed its intermediate as the website's certificate. The
+  rollback guard reads the same leaf.
+- A person of a website's service may release its own websites from a Key Vault binding of another service.
+- The incident list API takes `state` and `cursor` and answers `next_cursor`.
+
+**Fixed**
+- An incident's Windows store notice is recorded once per incident and certificate, so two cleanup jobs at once, or a
+  pruned outbox, never send it twice.
+- A refusal of a disabled server is stored with its own code (`target.disabled`) where the incident engine stores it,
+  locked against the API catalogue with the key deploy job's reasons.
+
+**Update note.** After an update the revocation check is off; switch it on in Settings, General, once the Alice host may
+reach your certificate authorities over HTTP and HTTPS. Update the helpers to 1.11.0.
+
+Rulings: `docs/superpowers/rulings/hardening-2026-10-24.md`. Migrations `00033_incident_notices.sql`,
+`00034_revocation_checks.sql`; codes `ALC-CRT-0020`..`ALC-CRT-0026`; KI-43.
+
 ## Unreleased — Windows servers (CI and release, R63)
 
 **Added**

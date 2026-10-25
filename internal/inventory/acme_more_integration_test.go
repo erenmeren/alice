@@ -111,7 +111,7 @@ func TestACMEAndIncidentPathsReportADatabaseFailure(t *testing.T) {
 		"AdvanceIncidents": func() error { _, err := svc.AdvanceIncidents(ctx); return err },
 		"AdvanceIncident":  func() error { _, err := svc.AdvanceIncident(ctx, id); return err },
 		"GetIncident":      func() error { _, err := svc.GetIncident(ctx, id); return err },
-		"ListIncidents":    func() error { _, err := svc.ListIncidents(ctx, nil, false, 0); return err },
+		"ListIncidents":    func() error { _, err := svc.ListIncidents(ctx, inventory.IncidentFilter{}); return err },
 		"StartIncident":    func() error { _, err := svc.StartIncident(ctx, a, id, inventory.IncidentInput{}); return err },
 		"RetryIncident":    func() error { _, err := svc.RetryIncident(ctx, a, id); return err },
 		"RevokeIncidentNow": func() error {

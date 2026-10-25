@@ -139,12 +139,23 @@ export const getCertificateImpact = (id: string, signal?: AbortSignal) => apiFet
 export const getCertificateCapabilities = (signal?: AbortSignal) => apiFetch<SourceCapabilities>(`${v1}/certificates/capabilities`, { signal });
 export const startIncident = (certificateId: string, revokeMode: IncidentRevokeMode) =>
   apiFetch<Incident>(`${v1}/certificates/${enc(certificateId)}/incidents`, { method: 'POST', body: { revoke_mode: revokeMode } });
-export function listIncidents(q: { open?: boolean; certificate_id?: string } = {}, signal?: AbortSignal) {
+// One page of incidents, newest first, within the reader's services (D2, R64): next_cursor is null on the last page.
+export interface IncidentListQuery {
+  open?: boolean;
+  certificate_id?: string;
+  state?: IncidentState;
+  cursor?: string | null;
+  limit?: number;
+}
+export function listIncidents(q: IncidentListQuery = {}, signal?: AbortSignal) {
   const p = new URLSearchParams();
   if (q.open) p.set('open', 'true');
   if (q.certificate_id) p.set('certificate_id', q.certificate_id);
+  if (q.state) p.set('state', q.state);
+  if (q.cursor) p.set('cursor', q.cursor);
+  if (q.limit) p.set('limit', String(q.limit));
   const qs = p.toString();
-  return apiFetch<{ items: Incident[] }>(`${v1}/incidents${qs ? `?${qs}` : ''}`, { signal });
+  return apiFetch<{ items: Incident[]; next_cursor: string | null }>(`${v1}/incidents${qs ? `?${qs}` : ''}`, { signal });
 }
 export const getIncident = (id: string, signal?: AbortSignal) => apiFetch<Incident>(`${v1}/incidents/${enc(id)}`, { signal });
 export const retryIncident = (id: string) => apiFetch<Incident>(`${v1}/incidents/${enc(id)}/retry`, { method: 'POST' });

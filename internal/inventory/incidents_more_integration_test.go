@@ -3,6 +3,7 @@
 package inventory_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"alice/internal/acme"
 	"alice/internal/authz"
 	"alice/internal/inventory"
+	"alice/internal/platform/validate"
+	"alice/internal/rbac"
 	"alice/internal/testutil/fakeacme"
 	"alice/internal/testutil/pki"
 )
@@ -77,14 +80,14 @@ cert_path, key_path, created_at) VALUES ($1, $2, $3, $4, 'manual', 'queued', 'pe
 	assert.Empty(t, i.AttentionCode)
 
 	// Visible from the certificate's service only.
-	in, err := h.svc.ListIncidentsIn(h.ctx, &old.ID, true, 0, authz.Only(h.defaultService()))
+	in, err := h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{CertificateID: &old.ID, OpenOnly: true}, authz.Only(h.defaultService()))
 	require.NoError(t, err)
-	require.Len(t, in, 1)
-	assert.Equal(t, i.ID, in[0].ID)
-	assert.Equal(t, i.Counts, in[0].Counts)
-	out, err := h.svc.ListIncidentsIn(h.ctx, nil, false, 0, authz.Only(h.newService("Payments")))
+	require.Len(t, in.Items, 1)
+	assert.Equal(t, i.ID, in.Items[0].ID)
+	assert.Equal(t, i.Counts, in.Items[0].Counts)
+	out, err := h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{}, authz.Only(h.newService("Payments")))
 	require.NoError(t, err)
-	assert.Empty(t, out)
+	assert.Empty(t, out.Items)
 
 	i, err = h.svc.ChooseIncidentReplacement(h.ctx, f.admin, i.ID, f.cert.ID)
 	require.NoError(t, err)
@@ -352,4 +355,115 @@ func TestACMEIncidentOfARevokedVersionAndItsPlaces(t *testing.T) {
 	assert.Equal(t, "skipped:"+inventory.IncidentCodeNotDeployable, status[w.loc5])
 	d := w.h.auditDetails("incident.started")[0]
 	assert.Equal(t, inventory.IncidentRevocationRevoked, d["revocation"])
+}
+
+// A place on a disabled server (HB-01, R64 ruling 23): RequestDeployment refuses a disabled server as not ready (F-31),
+// before any key-change rule, so the incident waits for it like a busy place and fails it busy after its last attempt;
+// it never stores internal.unexpected. ErrTargetDisabled itself does not reach the incident engine on this path; its
+// code (target.disabled) is locked against the API catalogue by internal/api:TestIncidentRefusalCodesMatchTheCatalogue.
+func TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy(t *testing.T) {
+	f := newDeployFixture(t)
+	h := f.h
+	h.installLicense("LIC-INCIDENT-DISABLED", 5, 365)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	w := &acmeDeployWorld{deployFixture: f}
+	_, _, err := h.svc.UploadCertificate(h.ctx, f.admin, pemUpload(f.old))
+	require.NoError(t, err)
+	old := f.certByFingerprint(t, pki.Fingerprint(f.old.Cert))
+	i, err := h.svc.StartIncident(h.ctx, f.admin, old.ID, inventory.IncidentInput{})
+	require.NoError(t, err)
+	f.setTargetStatus(f.target2, inventory.StatusDisabled)
+	_, err = h.svc.ChooseIncidentReplacement(h.ctx, f.admin, i.ID, f.cert.ID)
+	require.NoError(t, err)
+	w.advance()
+	i = w.incident(i.ID)
+	assert.Equal(t, "pending", locationStatus(i)[f.loc2], "a disabled server's place waits")
+	assert.Positive(t, incidentLocation(t, i, f.loc2).Attempts)
+	assert.Equal(t, "deploying", locationStatus(i)[f.loc1], "the places of an enabled server go ahead")
+
+	_, err = h.db.Owner.Exec(h.ctx, `UPDATE certificate_incident_locations SET attempts = 29 WHERE incident_id = $1
+AND location_id IN (SELECT id FROM certificate_locations WHERE target_id = $2)`, i.ID, f.target2)
+	require.NoError(t, err)
+	w.advance()
+	i = w.incident(i.ID)
+	assert.Equal(t, "failed:"+inventory.IncidentCodeLocationBusy, locationStatus(i)[f.loc2])
+}
+
+// D2 (HB-05, R64): the incident list pages newest first without a repeat or a gap, filters by state and open, and a
+// scoped caller sees only the incidents of its services on every page.
+func TestListIncidentsFiltersAndPagesWithinReach(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	payments := h.newService("Payments")
+	ca := pki.NewCA("List", pki.ECDSA256, h.clock.Now())
+	type row struct {
+		svc   uuid.UUID
+		state string
+	}
+	rows := []row{{h.defaultService(), inventory.IncidentDeploying}, {payments, inventory.IncidentNeedsAttention},
+		{h.defaultService(), inventory.IncidentClosed}, {payments, inventory.IncidentAwaitingReplacement}, {h.defaultService(), inventory.IncidentDeploying}}
+	var ids []uuid.UUID // oldest first
+	for n, r := range rows {
+		leaf := ca.Issue(pki.Opts{CommonName: fmt.Sprintf("list-%d.example.test", n)}, h.clock.Now())
+		c, _, err := h.svc.UploadCertificate(h.ctx, admin, pemUpload(leaf))
+		require.NoError(t, err)
+		_, err = h.db.Owner.Exec(h.ctx, "UPDATE certificates SET service_id = $2 WHERE id = $1", c.ID, r.svc)
+		require.NoError(t, err)
+		id := uuid.Must(uuid.NewV7())
+		at := h.clock.Now().Add(time.Duration(n) * time.Minute)
+		var finished *time.Time
+		if r.state == inventory.IncidentClosed {
+			finished = &at
+		}
+		code := ""
+		if r.state == inventory.IncidentNeedsAttention {
+			code = inventory.IncidentCodeDeploymentsFailed
+		}
+		_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO certificate_incidents (id, certificate_id, public_key_sha256, state, revocation, attention_code,
+created_at, updated_at, finished_at, service_ids) VALUES ($1, $2, $3, $4, 'not_possible', $5, $6, $6, $7, ARRAY[$8::uuid])`,
+			id, c.ID, c.PublicKeySHA256, r.state, code, at, finished, r.svc)
+		require.NoError(t, err)
+		ids = append(ids, id)
+	}
+
+	var seen []uuid.UUID
+	var sizes []int
+	f := inventory.IncidentFilter{Limit: 2}
+	for {
+		page, err := h.svc.ListIncidentsIn(h.ctx, f, authz.Everywhere())
+		require.NoError(t, err)
+		sizes = append(sizes, len(page.Items))
+		for _, i := range page.Items {
+			seen = append(seen, i.ID)
+		}
+		if page.Next == nil {
+			break
+		}
+		f.Cursor = page.Next
+	}
+	assert.Equal(t, []int{2, 2, 1}, sizes)
+	assert.Equal(t, []uuid.UUID{ids[4], ids[3], ids[2], ids[1], ids[0]}, seen, "newest first, no repeat, no gap")
+
+	page, err := h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{State: inventory.IncidentNeedsAttention}, authz.Everywhere())
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, ids[1], page.Items[0].ID)
+	page, err = h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{OpenOnly: true, State: inventory.IncidentClosed}, authz.Everywhere())
+	require.NoError(t, err)
+	assert.Empty(t, page.Items)
+
+	first, err := h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{Limit: 1}, authz.Only(payments))
+	require.NoError(t, err)
+	require.Len(t, first.Items, 1)
+	require.NotNil(t, first.Next)
+	second, err := h.svc.ListIncidentsIn(h.ctx, inventory.IncidentFilter{Limit: 1, Cursor: first.Next}, authz.Only(payments))
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Nil(t, second.Next)
+	assert.Equal(t, []uuid.UUID{ids[3], ids[1]}, []uuid.UUID{first.Items[0].ID, second.Items[0].ID}, "the Payments incidents only")
+
+	_, err = h.svc.ListIncidents(h.ctx, inventory.IncidentFilter{State: "broken"})
+	var verr validate.Errors
+	require.ErrorAs(t, err, &verr)
+	assert.Equal(t, "state", verr[0].Field)
 }

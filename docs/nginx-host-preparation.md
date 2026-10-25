@@ -23,7 +23,7 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release ships
-   `alice-helper` 1.10.0 (protocol 11, which reports the certificate chain a website presents in Alice's check from the
+   `alice-helper` 1.11.0 (protocol 11, which reports the certificate chain a website presents in Alice's check from the
    server itself; protocol 10 added the check of "An undo never puts back a revoked or compromised
    certificate"; protocol 9 added `haproxy-dump` for HAProxy servers; protocol 8 added `apache-dump` for Apache servers; protocol 7 added the two HTTP-01
    challenge commands of "Publishing HTTP-01 challenges") and still works with a protocol 6 helper (`alice-helper` 1.5.0) for everything else. Protocol 6:
@@ -448,7 +448,7 @@ server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `
 removal, no deployment, no recovery. A protocol 6 helper is enough for everything but the HTTP-01 challenge commands
 (protocol 7): only a certificate request that uses that method on the server asks you to reinstall the helper.
 
-**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.10.0, protocol 11) also works
+**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.11.0, protocol 11) also works
 with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
 server whose helper is older shows "The alice-helper on this server is outdated." and a deployment that was being
 finished waits (**Confirming the outcome**) until that server's helper is updated. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
@@ -458,7 +458,7 @@ server's page. The commands install the new helper and the new sudoers file toge
 a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
 **Confirming the outcome** until the lines are back.
 
-`alice-helper` 1.10.0 (protocol 11) answers the check of a website from the server itself (`tls-probe`) with the
+`alice-helper` 1.10.0 and later (protocol 11) answer the check of a website from the server itself (`tls-probe`) with the
 certificate chain the website presents, so that Alice verifies its trust like the chain its own check sees (see
 [admin-guide.md](admin-guide.md#how-alice-verifies-a-deployment)). The sudoers file is the same. An older helper keeps
 working: a deployment checked from the server then shows **Certificate chain: Not checked**, never a failure.
@@ -483,6 +483,10 @@ certificate the helper cannot read (for example one with a negative serial numbe
 reported with the reason `leaf_unreadable` and no certificates. Before, the helper skipped that certificate, so Alice
 took the next one in the file (usually the intermediate) as the website's certificate and showed its expiry date. A
 server whose helper is still 1.6.0 keeps working; update it to get the correct reason for such a file.
+
+`alice-helper` 1.11.0 keeps protocol 11 and the same sudoers file. It reads a first certificate labelled `TRUSTED
+CERTIFICATE` or `X509 CERTIFICATE`, as Nginx does; before, such a file showed its intermediate as the website's
+certificate. Trust settings after a `TRUSTED CERTIFICATE` are not sent to Alice.
 
 Protocol 7 (`alice-helper` 1.6.0) adds `acme-challenge-put` and `acme-challenge-rm` and their two sudoers lines in
 the `nginx` profile; nothing else changed. Protocol 6 (`alice-helper` 1.5.0) changed what the helper reports about

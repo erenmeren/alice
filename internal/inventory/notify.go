@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -140,6 +142,45 @@ const (
 func ACMETemplates() []string {
 	return []string{TemplateACMERenewalFailed, TemplateACMEAutoRenewStopped, TemplateACMERenewalExpiringTransient,
 		TemplateACMERenewalExpiringPermanent, TemplateACMERenewalExpiringStopped, TemplateACMERenewalCAWait}
+}
+
+// The e-mails of a key compromise incident (D3, R64 Rulings 5, 6, 11 and 13): queued in the transaction that moves the
+// incident, so each move sends exactly one set, also while the licence is locked. Params: certificate_name (at most 200
+// runes), incident_id, verified, failed, skipped (the places by status) and, when it needs attention, error_reason (the
+// attention code: notify.Sender renders it as the plain title of the code in the reader's language, param reason). The
+// recipients are those of the incident's services (incidentServices).
+const (
+	TemplateIncidentNeedsAttention        = "incident.needs_attention"
+	TemplateIncidentCompleted             = "incident.completed"
+	TemplateIncidentCompletedNotRevocable = "incident.completed_not_revocable"
+)
+
+// IncidentTemplates lists the incident e-mails (render tests; their params differ from Templates' target_name).
+func IncidentTemplates() []string {
+	return []string{TemplateIncidentNeedsAttention, TemplateIncidentCompleted, TemplateIncidentCompletedNotRevocable}
+}
+
+// notifyIncident queues an incident e-mail in tx (the incident's move): the certificate's name and the places by status as
+// tx sees them, for the incident's services.
+func (s *Service) notifyIncident(ctx context.Context, tx pgx.Tx, id uuid.UUID, template, attentionCode string) error {
+	if s.notifier == nil {
+		return nil // no e-mails (Config.Notifier nil)
+	}
+	i, err := getIncident(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	svcs, err := incidentServices(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	params := map[string]string{"certificate_name": truncRunes(strings.TrimSpace(i.CertificateName), 200), "incident_id": id.String(),
+		"verified": strconv.Itoa(i.Counts[IncidentLocationVerified]), "failed": strconv.Itoa(i.Counts[IncidentLocationFailed]),
+		"skipped": strconv.Itoa(i.Counts[IncidentLocationSkipped])}
+	if attentionCode != "" {
+		params["error_reason"] = attentionCode
+	}
+	return s.notifier.NotifyServices(ctx, tx, svcs, template, params)
 }
 
 // Templates lists the inventory's email templates (render tests).
@@ -285,6 +326,14 @@ func (s *Service) notifyLocation(ctx context.Context, tx pgx.Tx, o LocationObser
 // targetServices is a server's or a Key Vault's service (target.*, kv.*).
 func targetServices(ctx context.Context, q db.Querier, target uuid.UUID) ([]uuid.UUID, error) {
 	return servicesOf(ctx, q, "SELECT service_id FROM targets WHERE id = $1", target)
+}
+
+// incidentServices are an incident's services (incident.*; R56 meets design §5.6): those fixed at its start (service_ids:
+// the certificate's and every service holding an affected place) and the certificate's own.
+func incidentServices(ctx context.Context, q db.Querier, incident uuid.UUID) ([]uuid.UUID, error) {
+	return servicesOf(ctx, q, `SELECT c.service_id FROM certificate_incidents i JOIN certificates c ON c.id = i.certificate_id WHERE i.id = $1
+UNION ALL
+SELECT unnest(i.service_ids) FROM certificate_incidents i WHERE i.id = $1`, incident)
 }
 
 // acmeServices is an ACME certificate's service (acme.*).

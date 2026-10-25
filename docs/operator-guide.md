@@ -174,6 +174,11 @@ package's `helper/alice-winhelper-windows-amd64.exe` (or `-arm64.exe`), check it
 ones), and copy it to the server as `C:\Program Files\Alice\alice-helper.exe` in an elevated PowerShell
 ([windows-host-preparation.md](windows-host-preparation.md)); then choose **Test connection** on the server's page.
 
+**Revocation checks after an update (R64).** An installation updated to this release has the revocation check switched
+off: Alice asks no certificate authority anything until an Administrator switches it on in **Settings**, **General**. Do
+that once the Alice host may reach your certificate authorities' OCSP and CRL addresses over HTTP and HTTPS (ports 80 and
+443, no proxy). A new installation has it on. See [admin-guide.md](admin-guide.md#revocation-checks).
+
 ## Logs
 
 | What | Where |

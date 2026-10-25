@@ -246,6 +246,8 @@ never a platform one. A resource outside the caller's services answers the opera
 | POST | `/api/v1/incidents/{id}/revoke-now` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/incidents/{id}/replacement` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/incidents/{id}/close` | `certificates.incident` | cross | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/revocation-checks` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/revocation-checks` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/environments` | `read` | any | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/environments` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
 | PATCH | `/api/v1/environments/{id}` | `services.manage` | platform | no | yes | no | no | no | yes | yes |

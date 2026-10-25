@@ -566,6 +566,26 @@ func TestEmulatorFidelityDump(t *testing.T) {
 			assert.Equal(t, "", asList(d["files"])[0]["pem"])
 			assert.Equal(t, []any{helperproto.WarnCertificateBlockDropped}, d["warnings"])
 		}},
+		{"a leaf labelled X509 CERTIFICATE (KI-39)", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s })
+			inter := tw.w.leaf.FullchainPEM[len(tw.w.leaf.CertPEM):]
+			tw.put(fidCrt, []byte(relabel(tw.w.leaf.CertPEM, "X509 CERTIFICATE")+string(inter)))
+			d := tw.dump().m
+			assert.Equal(t, string(tw.w.leaf.FullchainPEM), asList(d["files"])[0]["pem"])
+			assert.Equal(t, []any{}, d["warnings"])
+		}},
+		{"a leaf labelled TRUSTED CERTIFICATE, and a later one skipped (KI-39)", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s })
+			inter := tw.w.leaf.FullchainPEM[len(tw.w.leaf.CertPEM):]
+			tw.put(fidCrt, []byte(trustedPEM(t, tw.w.leaf.Cert.Raw)+string(inter)))
+			d := tw.dump().m
+			assert.Equal(t, string(tw.w.leaf.FullchainPEM), asList(d["files"])[0]["pem"])
+			assert.Equal(t, []any{}, d["warnings"])
+			tw.put(fidCrt, []byte(string(tw.w.leaf.CertPEM)+trustedPEM(t, tw.w.leaf.Cert.Raw)))
+			d = tw.dump().m
+			assert.Equal(t, string(tw.w.leaf.CertPEM), asList(d["files"])[0]["pem"])
+			assert.Equal(t, []any{helperproto.WarnCertificateBlockDropped}, d["warnings"])
+		}},
 		{"certificate file problems: the directory is not root controlled", true, func(t *testing.T, tw *twin) {
 			tw.dirNotRootControlled()
 			assert.Equal(t, helperproto.FileNotRootControlled, asList(tw.dump().m["files"])[0]["problem"])

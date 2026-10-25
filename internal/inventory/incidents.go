@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -244,38 +246,84 @@ WHERE l.incident_id = $1 ORDER BY t.name, cl.cert_path, l.location_id LIMIT $2`,
 // MaxIncidentsListed bounds ListIncidents.
 const MaxIncidentsListed = 200
 
-// ListIncidents returns the newest incidents (open ones only when openOnly), of one certificate when certificateID is
-// not nil; at most limit (1..MaxIncidentsListed, 0 = 50).
-func (s *Service) ListIncidents(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int) ([]Incident, error) {
-	return s.ListIncidentsIn(ctx, certificateID, openOnly, limit, authz.Everywhere())
+// IncidentStates are the seven states of an incident, in the order of its life.
+var IncidentStates = []string{IncidentAwaitingReplacement, IncidentOrdering, IncidentDeploying, IncidentRevoking, IncidentNeedsAttention,
+	IncidentCompleted, IncidentClosed}
+
+// IncidentFilter selects a page of ListIncidents (D2, R64).
+type IncidentFilter struct {
+	CertificateID *uuid.UUID
+	OpenOnly      bool
+	State         string          // "" or one of IncidentStates
+	Cursor        *IncidentCursor // the last item of the previous page (newest first)
+	Limit         int             // 1..MaxIncidentsListed, 0 = 50
+}
+
+// IncidentCursor is the position of an incident in the list (created_at DESC, id DESC).
+type IncidentCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// IncidentPage is one page of incidents; Next is nil on the last page.
+type IncidentPage struct {
+	Items []Incident
+	Next  *IncidentCursor
+}
+
+// ListIncidents returns a page of the newest incidents (see IncidentFilter).
+func (s *Service) ListIncidents(ctx context.Context, f IncidentFilter) (IncidentPage, error) {
+	return s.ListIncidentsIn(ctx, f, authz.Everywhere())
 }
 
 // ListIncidentsIn is ListIncidents over the incidents visible from the services in reach (R49 Phase 2: the
-// certificate's service or one in service_ids); the limit counts those only.
-func (s *Service) ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, reach authz.Reach) ([]Incident, error) {
+// certificate's service or one in service_ids); the limit and the pages count those only. Keyset paging: the page
+// after the cursor, newest first; one row more than the limit is read to know whether another page follows.
+func (s *Service) ListIncidentsIn(ctx context.Context, f IncidentFilter, reach authz.Reach) (IncidentPage, error) {
+	limit := f.Limit
 	if limit == 0 {
 		limit = 50
 	}
+	var v validate.Errors
 	if limit < 1 || limit > MaxIncidentsListed {
-		return nil, validate.Errors{{Field: "limit", Code: validate.OutOfRange,
-			Params: map[string]string{"min": "1", "max": strconv.Itoa(MaxIncidentsListed)}}}
+		v.Add("limit", validate.OutOfRange, map[string]string{"min": "1", "max": strconv.Itoa(MaxIncidentsListed)})
+	}
+	if f.State != "" && !slices.Contains(IncidentStates, f.State) {
+		v.Add("state", validate.OneOf, map[string]string{"values": strings.Join(IncidentStates, ", ")})
+	}
+	if err := v.Err(); err != nil {
+		return IncidentPage{}, err
+	}
+	var curAt *time.Time
+	var curID *uuid.UUID
+	if f.Cursor != nil {
+		curAt, curID = &f.Cursor.CreatedAt, &f.Cursor.ID
 	}
 	rows, err := s.pool.Query(ctx, incidentSelect+`
-WHERE ($1::uuid IS NULL OR i.certificate_id = $1) AND (NOT $2 OR i.finished_at IS NULL) AND `+authz.IncidentVisible("i", "$4")+`
-ORDER BY i.created_at DESC, i.id DESC LIMIT $3`, certificateID, openOnly, limit, reach.SQL())
+WHERE ($1::uuid IS NULL OR i.certificate_id = $1) AND (NOT $2 OR i.finished_at IS NULL) AND ($5 = '' OR i.state = $5)
+  AND ($6::timestamptz IS NULL OR (i.created_at, i.id) < ($6, $7::uuid)) AND `+authz.IncidentVisible("i", "$4")+`
+ORDER BY i.created_at DESC, i.id DESC LIMIT $3`, f.CertificateID, f.OpenOnly, limit+1, reach.SQL(), f.State, curAt, curID)
 	if err != nil {
-		return nil, fmt.Errorf("inventory: list incidents: %w", err)
+		return IncidentPage{}, fmt.Errorf("inventory: list incidents: %w", err)
 	}
 	defer rows.Close()
-	out := []Incident{}
+	out := IncidentPage{Items: []Incident{}}
 	for rows.Next() {
 		i, err := scanIncident(rows)
 		if err != nil {
-			return nil, err
+			return IncidentPage{}, err
 		}
-		out = append(out, i)
+		out.Items = append(out.Items, i)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return IncidentPage{}, err
+	}
+	if len(out.Items) > limit {
+		out.Items = out.Items[:limit]
+		last := out.Items[limit-1]
+		out.Next = &IncidentCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	return out, nil
 }
 
 // incidentACME is the live ACME certificate that ordered the certificate (nil for another source or a deleted one).

@@ -3333,6 +3333,53 @@ paths:
         "412": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/revocation-checks:
+    get:
+      operationId: getRevocationCheckSettings
+      summary: Whether Alice asks the certificate authorities whether certificates were revoked (R64)
+      description: >-
+        Absent (a new installation) reads as on; an installation updated to this release starts off until an administrator
+        switches it on.
+      x-permission: settings.manage
+      x-scope: platform
+      responses:
+        "200":
+          description: The switch
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationCheckSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putRevocationCheckSettings
+      summary: Switch the revocation check on or off (If-Match required; "0" before the first save)
+      x-permission: settings.manage
+      x-scope: platform
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: The stored switch
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationCheckSettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/oidc/providers:
     get:
       operationId: listPublicIdentityProviders
@@ -5093,10 +5140,12 @@ paths:
       parameters:
         - { name: open, in: query, schema: { type: string, enum: ["true", "false"] }, description: Open incidents only }
         - { name: certificate_id, in: query, schema: { type: string, format: uuid } }
+        - { name: state, in: query, schema: { type: string, enum: [awaiting_replacement, ordering, deploying, revoking, needs_attention, completed, closed] } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 }, description: next_cursor of the previous page }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200":
-          description: The incidents, newest first (without their locations)
+          description: The incidents, newest first (without their locations), one page within the caller's services
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IncidentList" }
@@ -7745,8 +7794,8 @@ components:
       enum: [unspecified, keyCompromise, affiliationChanged, superseded, cessationOfOperation]
     RevocationReasonOrEmpty:
       type: string
-      description: The RFC 5280 reason of a revocation, "" when not revoked
-      enum: ["", unspecified, keyCompromise, affiliationChanged, superseded, cessationOfOperation]
+      description: The RFC 5280 reason of a revocation, "" when not revoked (the last three only as an authority reported them, R64)
+      enum: ["", unspecified, keyCompromise, affiliationChanged, superseded, cessationOfOperation, cACompromise, privilegeWithdrawn, aACompromise]
     SourceCapability:
       type: string
       description: >-
@@ -7919,9 +7968,10 @@ components:
         locations: { type: array, maxItems: 1000, items: { $ref: "#/components/schemas/IncidentLocation" } }
     IncidentList:
       type: object
-      required: [items]
+      required: [items, next_cursor]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Incident" } }
+        next_cursor: { type: [string, "null"], description: The cursor of the next page; null on the last page }
     ErrorRef:
       type: [object, "null"]
       required: [code, reason]
@@ -8621,7 +8671,7 @@ components:
       description: A certificate (public data). A held private key is only indicated by has_private_key.
       required: [id, fingerprint, subject_cn, subject, issuer, serial, sans, not_before, not_after, key_algorithm, key_bits, source,
         label, has_private_key, chain_complete, self_signed, location_count, first_seen_at, last_seen_at, public_key_sha256, revoked_at,
-        revocation_reason, revoked_by_name, compromised_at, acme_certificate_id, capabilities]
+        revocation_reason, revoked_by_name, compromised_at, acme_certificate_id, capabilities, revoked_by_authority]
       properties:
         service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
@@ -8653,15 +8703,37 @@ components:
           type: array
           description: What Alice can do with this certificate (its source's capabilities, less deploy and verify without a key or once revoked or compromised, less revoke once revoked)
           items: { $ref: "#/components/schemas/SourceCapability" }
+        revoked_by_authority: { type: boolean, description: 'R64: the authority revoked it and Alice learned it by the revocation check (not at her request)' }
+    RevocationCheck:
+      type: [object, "null"]
+      description: >-
+        R64: the last revocation check of a certificate (null before the first). error is the reason of an unavailable or
+        not checkable check (ALC-CRT-0020 to ALC-CRT-0026).
+      required: [status, method, reason, revoked_at, checked_at, next_check_at, error]
+      properties:
+        status: { type: string, enum: [good, revoked, on_hold, unknown, unavailable, not_checkable] }
+        method: { type: string, enum: ["", ocsp, crl] }
+        reason: { type: string, description: The RFC 5280 name the authority gave (revoked and on_hold) }
+        revoked_at: { type: [string, "null"], format: date-time }
+        checked_at: { type: string, format: date-time }
+        next_check_at: { type: string, format: date-time }
+        error: { $ref: "#/components/schemas/ErrorRef" }
+    RevocationCheckSettings:
+      type: object
+      required: [enabled, version]
+      properties:
+        enabled: { type: boolean }
+        version: { type: integer }
     CertificateDetail:
       allOf:
         - { $ref: "#/components/schemas/Certificate" }
         - type: object
-          required: [pem_chain, locations, locations_truncated]
+          required: [pem_chain, locations, locations_truncated, revocation_check]
           properties:
             pem_chain: { type: string, description: 'Leaf first, then the chain (public PEM)' }
             locations: { type: array, items: { $ref: "#/components/schemas/CertificateLocation" }, maxItems: 1000 }
             locations_truncated: { type: boolean }
+            revocation_check: { $ref: "#/components/schemas/RevocationCheck" }
     CertificatePage:
       type: object
       required: [items, next_cursor]

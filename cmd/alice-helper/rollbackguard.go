@@ -75,23 +75,18 @@ func spkiSHA256(pub crypto.PublicKey, raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// firstCertificate parses the first CERTIFICATE block of a PEM text (nil when there is none or it
-// does not parse).
+// firstCertificate parses the leaf of a PEM text as Nginx reads it (leafDER: the first block labelled CERTIFICATE,
+// X509 CERTIFICATE or TRUSTED CERTIFICATE; nil when there is none or it does not parse).
 func firstCertificate(p []byte) *x509.Certificate {
-	for rest := p; ; {
-		var b *pem.Block
-		b, rest = pem.Decode(rest)
-		if b == nil {
-			return nil
-		}
-		if b.Type == "CERTIFICATE" {
-			c, err := x509.ParseCertificate(b.Bytes)
-			if err != nil {
-				return nil
-			}
-			return c
-		}
+	der := leafDER(p)
+	if der == nil {
+		return nil
 	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // keyPublic is the public key of the first private key block of a PEM text (nil when there is none

@@ -153,6 +153,8 @@ var explicitGrants = map[string][]string{
 	// Key-compromise incidents (00021): history, never deleted; a finished incident is frozen (Z1023).
 	"public.certificate_incidents":          {"INSERT", "SELECT"},
 	"public.certificate_incident_locations": {"INSERT", "SELECT"},
+	// Notices an incident sends once (00033, R64): history, inserted and read.
+	"public.incident_notices": {"INSERT", "SELECT"},
 	// Services (00026, R49): a service's policy history is append-only.
 	"public.service_policies": {"INSERT", "SELECT"},
 	// Held backups (00031, R59): written once before a change, deleted by the retention (never while the deployment is
@@ -184,7 +186,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// never updated; the lists are the columns the inventory and deployment services write.
 	// 00021 adds the revocation and compromise marks (final once set: Z1022).
 	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
-		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
+		"revocation_reason", "revocation_seen", "revoked_at", "revoked_by", "service_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
 	// 00026 adds the binding attention mark (a website whose service does not accept the vault's keys, R49); 00027 adds
 	// file_observed_at (when a scan last read the file's content, R52); 00031 adds the kind's details and the probe
@@ -307,6 +309,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	apache := hasApacheType(t, d)
 	recovery := hasColumn(t, d, "acme_certificates", "last_failure_class")
 	revocation := hasColumn(t, d, "certificates", "revoked_at")
+	seen := hasColumn(t, d, "certificates", "revocation_seen")
 	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
 	guard := hasColumn(t, d, "deployments", "rollback_leaf_sha256")
 	ari := hasColumn(t, d, "acme_certificates", "ari_renew_at")
@@ -363,6 +366,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00021 the revocation, compromise and public key columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return slices.Contains([]string{"compromised_at", "compromised_by", "revocation_reason", "revoked_at", "revoked_by", "public_key_sha256"}, c)
+			})}
+		}
+		if name == "public.certificates" && !seen {
+			// Below 00034 how a revocation was seen does not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "revocation_seen"
 			})}
 		}
 		if name == "public.deployments" && !guard {

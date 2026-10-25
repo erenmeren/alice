@@ -321,3 +321,24 @@ func TestDeployRefusesAnInvalidGuard(t *testing.T) {
 	w.assertPair(t, false)
 	assert.NoDirExists(t, w.opPath(opA))
 }
+
+// KI-39 (R64, R48 G5): a backup whose revoked leaf is labelled TRUSTED CERTIFICATE (or X509 CERTIFICATE) is read as
+// Nginx reads it, so the guard compares the leaf, never the intermediate, and refuses the restore.
+func TestRollbackGuardReadsATrustedLeaf(t *testing.T) {
+	w := newDeployWorld(t)
+	inter := w.leaf.FullchainPEM[len(w.leaf.CertPEM):]
+	listed := guard{Leaf: []string{leafOf(w.leaf.Cert)}}
+	assert.True(t, listed.forbids([]byte(trustedPEM(t, w.leaf.Cert.Raw)+string(inter)), w.leaf.KeyPEM))
+	assert.True(t, listed.forbids([]byte(relabel(w.leaf.CertPEM, "X509 CERTIFICATE")+string(inter)), w.leaf.KeyPEM))
+	assert.Equal(t, w.leaf.Cert.Raw, leafDER([]byte(trustedPEM(t, w.leaf.Cert.Raw)+string(inter))))
+	assert.Nil(t, leafDER([]byte("no certificate")))
+
+	trusted := trustedPEM(t, w.leaf.Cert.Raw) + string(inter)
+	w.f.write("/etc/nginx/ssl/www.crt", trusted, 0o644)
+	w.testFail = 1
+	in := guardedInput(w.newLeaf.FullchainPEM, w.newLeaf.KeyPEM, nil, []string{leafOf(w.leaf.Cert)})
+	code, m := w.deploy(opA, in, hexOf(trusted))
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, helperproto.PhaseRestoreForbidden, m["phase"])
+	assert.NotEqual(t, trusted, w.f.read("/etc/nginx/ssl/www.crt"), "the revoked leaf is never put back")
+}

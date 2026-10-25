@@ -1237,6 +1237,41 @@
         "title": "Bu sertifikanın özel anahtarı ele geçirilmiş olarak işaretlendi.",
         "cause": "Bir yönetici bu sertifika ya da aynı özel anahtarla yapılmış başka bir sertifika için anahtar ele geçirme olayı başlattı. Alice ele geçirilmiş anahtarlı bir sertifikayı bir daha dağıtmaz.",
         "action": "Olayda seçilen yeni sertifikayı ya da yeni bir anahtarla yapılmış başka bir sertifikayı dağıtın. Değiştirmeyi izlemek için olayı sertifikanın sayfasından açın."
+      },
+      "revocation_unreachable": {
+        "title": "Sertifika yetkilisinin iptal hizmetine ulaşılamadı.",
+        "cause": "Alice sertifikada adı geçen OCSP yanıtlayıcısına ya da CRL adresine sertifikanın iptal edilip edilmediğini sordu ve kullanılabilir bir yanıt alamadı: adres yanıt vermedi, hata ile yanıt verdi, başka bir yere yönlendirdi ya da 10 saniyeden uzun sürdü.",
+        "action": "Alice kendisi yeniden dener: 1, 2 ve 4 saat sonra, sonra en fazla günde bir kez. Hata sürerse Alice sunucusunun yetkilinin adresine vekil sunucu olmadan HTTP veya HTTPS (80 ve 443 numaralı bağlantı noktaları) üzerinden ulaşabildiğini denetleyin."
+      },
+      "revocation_invalid_answer": {
+        "title": "Sertifika yetkilisinin iptal yanıtına güvenilemedi.",
+        "cause": "OCSP ya da CRL yanıtı sertifikayı verenin imzasını taşımıyordu, başka bir vereni adlandırıyordu, güncel değildi ya da okunamadı. Alice böyle bir yanıta göre hiçbir şey yapmaz.",
+        "action": "Alice kendisi yeniden dener. Sürerse yetkilinin yanıtlayıcısı yanlış yapılandırılmış olabilir: yetkiliye başvurun."
+      },
+      "revocation_address_refused": {
+        "title": "Alice bu sertifikadaki iptal adresine bağlanmaz.",
+        "cause": "Sertifikanın adlandırdığı OCSP ya da CRL adresi 80 veya 443 numaralı bağlantı noktasında HTTP ya da HTTPS değil, bir kullanıcı adı taşıyor ya da Alice'in kendi sunucusuna, bağlantı yerel veya meta veri adresine ya da Alice'in hiç bağlanmadığı başka bir adrese çıkıyor.",
+        "action": "Herkese açık bir sertifika yetkilisi için yapılacak bir şey yok. Bir şirket yetkilisi için OCSP yanıtlayıcısını ve CRL'yi olağan bir adreste 80 veya 443 numaralı bağlantı noktasında yayımlayın ve bu adresi adlandıran yeni sertifikalar verin."
+      },
+      "revocation_no_issuer": {
+        "title": "Sertifikayı veren bilinmiyor, bu yüzden iptali denetlenemiyor.",
+        "cause": "Alice bu sertifikayı imzalayan yetkilinin hiçbir sertifikasına sahip değil (ara sertifika zincirde eksik) ve yetkilinin yanıtını doğrulamak için veren gerekir.",
+        "action": "Ara sertifikayı sunucunun gönderdiği zincire ya da yüklenen dosyaya ekleyin, sonra Keşfet'i seçin."
+      },
+      "revocation_no_address": {
+        "title": "Sertifika hiçbir iptal adresi adlandırmıyor.",
+        "cause": "Sertifikada ne OCSP yanıtlayıcısı ne de CRL dağıtım noktası var, bu yüzden sorulacak bir yetkili yok.",
+        "action": "Yapılacak bir şey yok: böyle bir sertifikanın iptali denetlenemez. Birçok özel yetkili böyle sertifikalar verir."
+      },
+      "revocation_too_large": {
+        "title": "Sertifika yetkilisinin iptal yanıtı çok büyük.",
+        "cause": "OCSP yanıtı 64 KiB'tan ya da CRL 10 MiB'tan büyüktü; bu Alice'in okuduğundan fazla.",
+        "action": "Alice kendisi yeniden dener. Bu kadar büyük bir CRL olağan değildir: yetkiliye OCSP sunup sunmadığını sorun."
+      },
+      "revocation_untrusted_issuer": {
+        "title": "Sertifikayı verene güvenilmiyor, bu yüzden iptali denetlenmiyor.",
+        "cause": "Bu sertifikayı ağ keşfi buldu ve sunucusunun sunduğu zincir güvenilen bir köke ulaşmıyor; vereni de Alice'in elindeki bir sertifika değil. Taranan bir aralıkta TLS sunucusu çalıştıran herkes böyle bir sertifikayı ve adlandırdığı adresleri seçebilir; bu yüzden Alice onlara bağlanmaz.",
+        "action": "Kendinden imzalı ya da özel bir deneme sertifikası için yapılacak bir şey yok. Bir şirket yetkilisi için onun sertifikasını Alice'e yükleyin ya da sunucunun, Alice sunucusunun güvendiği bir köke kadar tüm zinciri göndermesini sağlayın."
       }
     },
     "csr": {
@@ -2491,6 +2526,34 @@
       "decision_needed": {
         "subject": "SSH anahtarı yenilemesi bir karar bekliyor: {{key_label}}",
         "body": "Alice {{key_label}} için yeni anahtarı ekledi ancak bazı yerlerde anahtarla oturum açmayı deneyemedi (sayı: {{count}}). Yenilemenin sayfasında, eski anahtarın oralarda kalmasına mı yoksa yenilemenin durdurulup geri alınmasına mı karar verin. Karar verilmezse Alice yenilemeyi şu zamanda geri alır: {{decision_due}} (yenileme lisans nedeniyle duraklatılırsa daha sonra)."
+      }
+    },
+    "certificate": {
+      "revoked_by_authority": {
+        "subject": "Sertifika yetkilisi tarafından iptal edildi: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikanın {{revoked_at}} tarihinde iptal edildiğini söylüyor (SHA-256 {{fingerprint}}). Yetkilinin bildirdiği neden: {{reason}}. Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nTarayıcılar ve diğer istemciler iptal edilmiş bir sertifikayı reddeder: kullanıldığı her yerde değiştirin. Alice onu artık dağıtmaz; otomatik yenilemesi açık verilmiş bir sertifika (ACME) hemen yenilenir. Neden keyCompromise ise özel anahtarı artık gizli değildir: sertifikanın sayfasından bir anahtar ele geçirme olayı başlatın."
+      },
+      "revoked_by_authority_discovered": {
+        "subject": "Sertifika yetkilisi tarafından iptal edildi: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikanın {{revoked_at}} tarihinde iptal edildiğini söylüyor (SHA-256 {{fingerprint}}). Yetkilinin bildirdiği neden: {{reason}}. Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nAğ keşfi onu şuralarda buldu: {{endpoints}}. Tarayıcılar ve diğer istemciler iptal edilmiş bir sertifikayı reddeder: kullanıldığı her yerde değiştirin."
+      },
+      "on_hold_by_authority": {
+        "subject": "Sertifika yetkilisi tarafından askıya alındı: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasını veren sertifika yetkilisi sertifikayı {{revoked_at}} tarihinde askıya aldığını söylüyor (certificateHold, SHA-256 {{fingerprint}}). Alice bunu yetkilinin {{method}} yanıtından öğrendi.\n\nİstemciler askı sürdükçe askıya alınmış bir sertifikayı reddeder. Yetkili askıyı kaldırabilir; Alice birkaç saatte bir yeniden denetler ve sertifikayı iptal edilmiş olarak işaretlemez. Yetkiliye sertifikayı neden askıya aldığını sorun ya da sertifikayı değiştirin."
+      }
+    },
+    "incident": {
+      "needs_attention": {
+        "subject": "Anahtar ele geçirme olayı ilgi bekliyor: {{certificate_name}}",
+        "body": "{{certificate_name}} sertifikasının anahtar ele geçirme olayı bir kişiyi bekliyor. Neden: {{reason}}.\n\nBir yönetici olayın Alice'teki sayfasında (Olaylar) işlem yapana kadar Alice bu olayda başka bir şey yapmaz: Yeniden dene, Yine de şimdi iptal et, yeni sertifikayı seç ya da Kapat.\n\nDeğiştirilip denetlenen yerler: {{verified}}. Başarısız olan yerler: {{failed}}. Atlanan yerler: {{skipped}}.\n\nOlay: {{incident_id}}"
+      },
+      "completed": {
+        "subject": "Anahtar ele geçirme olayı tamamlandı: {{certificate_name}}",
+        "body": "Alice {{certificate_name}} sertifikasını değiştirebildiği her yerde değiştirdi ve her birini denetledi; ele geçirilmiş sertifika sertifika yetkilisinde iptal edildi (ya da iptal edilecek bir şey kalmamıştı).\n\nDeğiştirilip denetlenen yerler: {{verified}}. Atlanan yerler: {{skipped}}; olayın sayfası her birinin nedenini söyler, bunları siz değiştirirsiniz.\n\nOlay: {{incident_id}}"
+      },
+      "completed_not_revocable": {
+        "subject": "Anahtar ele geçirme olayı tamamlandı: {{certificate_name}}",
+        "body": "Alice {{certificate_name}} sertifikasını değiştirebildiği her yerde değiştirdi ve her birini denetledi. Alice bu sertifikayı iptal edemez: iptal etmesi için sertifikayı veren yetkiliye başvurun.\n\nDeğiştirilip denetlenen yerler: {{verified}}. Atlanan yerler: {{skipped}}; olayın sayfası her birinin nedenini söyler, bunları siz değiştirirsiniz.\n\nOlay: {{incident_id}}"
       }
     },
     "windows": {

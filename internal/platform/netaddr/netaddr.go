@@ -126,6 +126,22 @@ func DialContext(ctx context.Context, d *net.Dialer, network, address string) (n
 	return guardedDial(ctx, d, network, address, Control, ErrNotAllowed)
 }
 
+// DialContextExcept is DialContext with a further refusal: a candidate address Allowed accepts but except reports
+// (given the address without an IPv4 mapping) is refused the same way, at connect time, with an error that matches
+// ErrNotAllowed. The revocation check refuses loopback with it (R64): a certificate names its OCSP and CRL addresses,
+// and Alice's own host is never one of them.
+func DialContextExcept(ctx context.Context, d *net.Dialer, network, address string, except func(netip.Addr) bool) (net.Conn, error) {
+	return guardedDial(ctx, d, network, address, func(network, address string, c syscall.RawConn) error {
+		if err := Control(network, address, c); err != nil {
+			return err
+		}
+		if ap := netip.MustParseAddrPort(address); except(ap.Addr().Unmap()) { // Control parsed it
+			return fmt.Errorf("%w: %s", ErrNotAllowed, ap.Addr())
+		}
+		return nil
+	}, ErrNotAllowed)
+}
+
 // guardedDial dials through a copy of d whose only control hook is check; when the dial failed and
 // check refused a candidate, the error matches refusedErr.
 func guardedDial(ctx context.Context, d *net.Dialer, network, address string,

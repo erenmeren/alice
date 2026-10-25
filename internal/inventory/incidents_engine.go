@@ -126,8 +126,11 @@ func (s *Service) attention(ctx context.Context, i Incident, code string) (bool,
 		if err != nil || !moved {
 			return err
 		}
-		return s.incidentAudit(ctx, tx, incidentActor, "incident.needs_attention", i.ID, audit.Failure,
-			map[string]string{"reason": code, "previous_state": i.State})
+		if err := s.incidentAudit(ctx, tx, incidentActor, "incident.needs_attention", i.ID, audit.Failure,
+			map[string]string{"reason": code, "previous_state": i.State}); err != nil {
+			return err
+		}
+		return s.notifyIncident(ctx, tx, i.ID, TemplateIncidentNeedsAttention, code) // once per entry (R64 Ruling 11)
 	})
 	return moved, err
 }
@@ -159,7 +162,7 @@ func (s *Service) incidentOrdering(ctx context.Context, i Incident) (bool, error
 		})
 		switch {
 		case errors.Is(err, ErrACMEAccountState), errors.Is(err, ErrACMERolloverPending), errors.Is(err, ErrNotFound):
-			return s.attention(ctx, i, codeOf(err))
+			return s.attention(ctx, i, IncidentRefusalCode(err))
 		case err != nil:
 			return false, err
 		}
@@ -355,8 +358,15 @@ func (s *Service) complete(ctx context.Context, i Incident) (bool, error) {
 		if err != nil || !moved {
 			return err
 		}
-		return s.incidentAudit(ctx, tx, incidentActor, "incident.completed", i.ID, audit.Success,
-			map[string]string{"revocation": i.Revocation})
+		if err := s.incidentAudit(ctx, tx, incidentActor, "incident.completed", i.ID, audit.Success,
+			map[string]string{"revocation": i.Revocation}); err != nil {
+			return err
+		}
+		template := TemplateIncidentCompleted
+		if i.Revocation == IncidentRevocationNotPossible {
+			template = TemplateIncidentCompletedNotRevocable
+		}
+		return s.notifyIncident(ctx, tx, i.ID, template, "")
 	})
 	return moved, err
 }
@@ -421,10 +431,10 @@ func (s *Service) requestIncidentDeployment(ctx context.Context, i Incident, l i
 		}
 		return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationPending, nil, "", l.attempts+1)
 	}
-	if !isRefusal(err) {
+	if !IsIncidentRefusal(err) {
 		return false, err
 	}
-	return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationFailed, nil, codeOf(err), l.attempts+1)
+	return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationFailed, nil, IncidentRefusalCode(err), l.attempts+1)
 }
 
 // followIncidentDeployment settles a location whose deployment ended (setLocation queues a Windows server's cleanup).
@@ -504,11 +514,14 @@ WHERE id = $1 AND revocation = 'pending' AND finished_at IS NULL`, i.ID, at)
 			return err
 		}
 		if i.State == IncidentRevoking {
-			_, err = incidentUpdate(ctx, tx, i.ID, IncidentRevoking, "state = 'completed', updated_at = $3, finished_at = $3", at)
-			if err != nil {
+			done, err := incidentUpdate(ctx, tx, i.ID, IncidentRevoking, "state = 'completed', updated_at = $3, finished_at = $3", at)
+			if err != nil || !done {
 				return err
 			}
-			return s.incidentAudit(ctx, tx, incidentActor, "incident.completed", i.ID, audit.Success, map[string]string{"revocation": "revoked"})
+			if err := s.incidentAudit(ctx, tx, incidentActor, "incident.completed", i.ID, audit.Success, map[string]string{"revocation": "revoked"}); err != nil {
+				return err
+			}
+			return s.notifyIncident(ctx, tx, i.ID, TemplateIncidentCompleted, "") // the revocation completes it (R64 D3)
 		}
 		return nil
 	})
@@ -537,16 +550,21 @@ WHERE id = $1 AND finished_at IS NULL`, i.ID, attempts, s.clock.Now().UTC().Add(
 	var moved bool
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		now := s.clock.Now().UTC()
+		// Conditional on the state read, as every move (incidentUpdate): a second engine changes nothing and mails nothing.
 		tag, err := tx.Exec(ctx, `UPDATE certificate_incidents SET revocation = 'failed', revoke_attempts = $2, next_attempt_at = NULL,
-    state = 'needs_attention', attention_code = $3, updated_at = $4 WHERE id = $1 AND finished_at IS NULL`, i.ID, attempts, code, now)
+    state = 'needs_attention', attention_code = $3, updated_at = $4 WHERE id = $1 AND state = $5 AND finished_at IS NULL`, i.ID, attempts, code, now,
+			i.State)
 		if err != nil {
 			return fmt.Errorf("inventory: record the failed revocation: %w", err)
 		}
 		if moved = tag.RowsAffected() == 1; !moved {
 			return nil
 		}
-		return s.incidentAudit(ctx, tx, incidentActor, "incident.revoke_failed", i.ID, audit.Failure,
-			map[string]string{"reason": code, "attempts": strconv.Itoa(attempts)})
+		if err := s.incidentAudit(ctx, tx, incidentActor, "incident.revoke_failed", i.ID, audit.Failure,
+			map[string]string{"reason": code, "attempts": strconv.Itoa(attempts)}); err != nil {
+			return err
+		}
+		return s.notifyIncident(ctx, tx, i.ID, TemplateIncidentNeedsAttention, code)
 	})
 	return moved, err
 }
@@ -707,9 +725,9 @@ func (s *Service) CloseIncident(ctx context.Context, a Actor, id uuid.UUID) (Inc
 	return s.GetIncident(ctx, id)
 }
 
-// isRefusal reports a refusal of RequestDeployment that belongs to the location or the certificate (a code is kept on
+// IsIncidentRefusal reports a refusal of RequestDeployment that belongs to the location or the certificate (a code is kept on
 // the location), as opposed to a failure of the database.
-func isRefusal(err error) bool {
+func IsIncidentRefusal(err error) bool {
 	var lr *LocationRefusalError
 	var km *KeyTypeMismatchError
 	return errors.As(err, &lr) || errors.As(err, &km) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrLocationUnsupported) ||
@@ -719,8 +737,9 @@ func isRefusal(err error) bool {
 		errors.Is(err, ErrTargetDisabled)
 }
 
-// codeOf is the closed code of an inventory refusal (the API's reason of the same error).
-func codeOf(err error) string {
+// IncidentRefusalCode is the closed code of an inventory refusal (the API's reason of the same error; locked against the
+// API catalogue by internal/api:TestIncidentRefusalCodesMatchTheCatalogue, R64).
+func IncidentRefusalCode(err error) string {
 	var km *KeyTypeMismatchError
 	switch {
 	case errors.As(err, &km):
@@ -745,6 +764,8 @@ func codeOf(err error) string {
 		return ReasonCertificateRevoked
 	case errors.Is(err, ErrCertificateCompromised):
 		return ReasonCertificateCompromised
+	case errors.Is(err, ErrTargetDisabled):
+		return "target.disabled"
 	case errors.Is(err, ErrTargetNotReady):
 		return "deployment.target_not_ready"
 	case errors.Is(err, ErrACMEAccountState):

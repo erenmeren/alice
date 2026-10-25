@@ -472,9 +472,15 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       const nav = page.getByRole('navigation', { name: c.navLabel });
       const usersLink = nav.getByRole('link', { name: c.navUsers, exact: true });
       await expect(usersLink).not.toBeInViewport();
+      await usersLink.scrollIntoViewIfNeeded();
+      await expect(usersLink, 'a closed navigation stays off screen, scrolled or not').not.toBeInViewport();
 
       // The page content is reachable: a button in the main area takes the click.
       await page.getByRole('button', { name: c.openNav }).click();
+      // The open navigation scrolls: at 800 px high its last group (Administration) is below the fold since the Incidents
+      // entry (R64). Scrolling it into view proves the link is reachable in the open drawer; a closed drawer is moved off
+      // screen, where no scroll brings it into the viewport.
+      await usersLink.scrollIntoViewIfNeeded();
       await expect(usersLink).toBeInViewport();
       await usersLink.click();
       await expect(page.getByRole('heading', { name: c.usersHeading })).toBeVisible();

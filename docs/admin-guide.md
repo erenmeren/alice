@@ -2259,6 +2259,50 @@ refused, **Close** works. Audit: `certificate.compromised`, `incident.started`, 
 `incident.deployed`, `incident.revoked`, `acme.certificate.revoked`, `incident.needs_attention`,
 `incident.revoke_failed`, `incident.retried`, `incident.revoke_now`, `incident.completed`, `incident.closed`.
 
+Alice e-mails the certificate's service recipients when an incident needs attention and when it completes, also while the
+licence is locked: once each time it needs attention (a **Retry** that fails again sends a new e-mail) and once when it
+completes. Starting and closing an incident send nothing. **Incidents** in the navigation lists every incident of your
+services, newest first, with a filter (open, needs attention, completed, closed).
+
+### Revocation checks
+
+Alice asks the authority that issued each certificate whether it was revoked, so a certificate the authority revoked by
+itself (a mass revocation, a mis-issuance, a key reported compromised to the authority) does not stay in use unnoticed.
+
+- **What is checked.** Every certificate Alice holds that is not expired, not revoked and not self-signed, whatever its
+  source (found on a server, uploaded, from a signing request, from a Key Vault or issued by a certificate authority
+  over ACME), and every leaf certificate network discovery found that is not in Alice's inventory, when the chain its
+  endpoint presented reaches a root the Alice host trusts or its issuer is a certificate Alice holds (uploaded, not
+  found by discovery). Any other discovered certificate is shown as not checkable (`ALC-CRT-0026`): whoever runs a
+  server in a scanned range chooses it and the addresses it names.
+- **How.** Alice asks the certificate's OCSP responder first and reads its CRL when OCSP gives no answer. Only an answer
+  signed by the certificate's issuer and still current counts. Alice needs the issuer: a certificate whose server sends
+  no intermediate cannot be checked.
+- **How often.** The check runs every 15 minutes and takes at most 200 certificates per run and at most 50 requests to one
+  authority's host per run. A certificate that is not revoked is checked again after a day; one the authority does not
+  know after a day; a suspended one after 6 hours; one that cannot be checked after 7 days. When the authority cannot
+  be reached, Alice tries again after 1, 2 and 4 hours and then at most once a day.
+- **What you see.** The certificate's page shows **Revocation check** with the last result: not revoked, revoked by its
+  authority, suspended, unknown to the authority, could not check (with the reason, `ALC-CRT-0020` to `ALC-CRT-0026` in
+  [troubleshooting.md](troubleshooting.md)) or not checked yet.
+- **What a revocation does.** A revocation the authority signed marks the certificate revoked for good, as a revocation
+  Alice asked for: Alice never deploys it again, a rollback never puts it back, and an issued certificate (ACME) with
+  automatic renewal on is renewed at once. Alice e-mails the certificate's service recipients once (audit
+  `certificate.revoked_by_authority`). Alice never starts a key compromise incident by itself: when the reason is
+  `keyCompromise`, start one from the certificate's page. A leaf found by network discovery is only e-mailed, to the
+  services of the scopes that found it, at most 20 such e-mails per run (the others are recorded and shown on the
+  results, not e-mailed).
+- **Suspensions.** A certificate the authority suspended (`certificateHold`) is shown and e-mailed once per suspension
+  (audit `certificate.revocation_on_hold`) but not marked: the authority can lift a suspension.
+- **Unknown and unreachable answers** are shown and never acted on: no mark, no e-mail.
+- **The switch.** **Settings**, **General**, **Check certificates for revocation** (Administrator with a fresh
+  authenticator code; audit `settings.revocation_check_changed`). It is on for a new installation and off after an
+  update until an Administrator switches it on. The check pauses while the licence is locked.
+- **Outbound connections.** Alice connects to the addresses named in the certificates over HTTP and HTTPS, ports 80 and
+  443 only, without a proxy and without following redirects. It never connects to its own host, to link-local or
+  cloud metadata addresses or to the other addresses it refuses for servers; private network addresses are allowed
+  (company authorities live there). Switch the check off if outbound HTTP from the Alice host is not wanted.
+
 ### What Alice keeps, and the audit log
 
 The account keys, the external account keys and the hook secrets are stored encrypted with the master key, each

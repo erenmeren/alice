@@ -53,6 +53,8 @@ type certificateDTO struct {
 	CompromisedAt     *time.Time `json:"compromised_at"`
 	ACMECertificateID *string    `json:"acme_certificate_id"`
 	Capabilities      []string   `json:"capabilities"`
+	// RevokedByAuthority: the authority revoked it and Alice learned it by the revocation check (R64, D5).
+	RevokedByAuthority bool `json:"revoked_by_authority"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
 	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
@@ -77,6 +79,27 @@ type certificateDetailDTO struct {
 	LocationsTruncated bool          `json:"locations_truncated"`
 	// HiddenCount is how many locations are on servers outside the caller's services (R49 Phase 2, design §5.8).
 	HiddenCount int `json:"hidden_count"`
+	// RevocationCheck is the last revocation check (R64, D5); null before the first.
+	RevocationCheck *revocationCheckDTO `json:"revocation_check"`
+}
+
+// revocationCheckDTO is a certificate's last revocation check; error is the reason of an unavailable or not checkable one.
+type revocationCheckDTO struct {
+	Status      string       `json:"status"`
+	Method      string       `json:"method"`
+	Reason      string       `json:"reason"`
+	RevokedAt   *time.Time   `json:"revoked_at"`
+	CheckedAt   time.Time    `json:"checked_at"`
+	NextCheckAt time.Time    `json:"next_check_at"`
+	Error       *errorRefDTO `json:"error"`
+}
+
+func revocationCheckJSON(rc *inventory.RevocationCheck) *revocationCheckDTO {
+	if rc == nil {
+		return nil
+	}
+	return &revocationCheckDTO{Status: rc.Status, Method: rc.Method, Reason: rc.Reason, RevokedAt: utcPtr(rc.RevokedAt), CheckedAt: rc.CheckedAt.UTC(),
+		NextCheckAt: rc.NextCheckAt.UTC(), Error: errorRef(rc.ErrorCode, nil)}
 }
 
 func certificateJSON(c inventory.Certificate, refs serviceRefs) certificateDTO {
@@ -86,14 +109,14 @@ func certificateJSON(c inventory.Certificate, refs serviceRefs) certificateDTO {
 		Source: c.Source, Label: c.Label, HasPrivateKey: c.HasPrivateKey, ChainComplete: c.ChainComplete, SelfSigned: c.SelfSigned,
 		LocationCount: c.LocationCount, FirstSeenAt: c.FirstSeenAt.UTC(), LastSeenAt: c.LastSeenAt.UTC(),
 		PublicKeySHA256: c.PublicKeySHA256, RevokedAt: utcPtr(c.RevokedAt), RevocationReason: c.RevocationReason, RevokedByName: c.RevokedByName,
-		CompromisedAt: utcPtr(c.CompromisedAt), ACMECertificateID: idPtr(c.ACMECertificateID),
+		CompromisedAt: utcPtr(c.CompromisedAt), ACMECertificateID: idPtr(c.ACMECertificateID), RevokedByAuthority: c.RevokedByAuthority,
 		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)), Service: refs.of(c.ServiceID), AllowedActions: refs.actions(c.ServiceID),
 	}
 }
 
 func certificateDetailJSON(c inventory.Certificate, refs serviceRefs) certificateDetailDTO {
 	d := certificateDetailDTO{certificateDTO: certificateJSON(c, refs), PEMChain: c.PEMChain, Locations: make([]locationDTO, 0, len(c.Locations)),
-		LocationsTruncated: c.LocationsTruncated}
+		LocationsTruncated: c.LocationsTruncated, RevocationCheck: revocationCheckJSON(c.RevocationCheck)}
 	for _, l := range c.Locations {
 		d.Locations = append(d.Locations, locationJSON(l))
 	}

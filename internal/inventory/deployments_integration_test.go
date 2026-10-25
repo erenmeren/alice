@@ -49,12 +49,12 @@ type deployFixture struct {
 	rsaCert, incomplete         inventory.Certificate
 }
 
-func newDeployFixture(t *testing.T) *deployFixture {
+func newDeployFixture(t *testing.T, opts ...harnessOption) *deployFixture {
 	t.Helper()
 	ca := pki.NewCA("Dep", pki.ECDSA256, start)
 	roots := x509.NewCertPool()
 	roots.AddCert(ca.Root)
-	h := newHarness(t, withNginxProvider(), withRoots(roots))
+	h := newHarness(t, append([]harnessOption{withNginxProvider(), withRoots(roots)}, opts...)...)
 	h.jobs.next = jobs.NewQueue(jobs.QueueConfig{Pool: h.db.App, Keyring: h.keyring, Audit: h.audit, Clock: h.clock, Gate: h.lic})
 	f := &deployFixture{h: h, ca: ca}
 	f.admin = h.user("ada", rbac.Admin, "ada@example.com")

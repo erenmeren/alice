@@ -143,6 +143,9 @@ var notReasons = map[string]bool{
 	"rotation.preview": true, "rotation.preview_after_license": true, "rotation.overlap_started": true, "rotation.overlap_ending": true,
 	"rotation.completed": true, "rotation.completed_partial": true, "rotation.aborted": true, "rotation.needs_attention": true,
 	"rotation.decision_needed": true,
+	// The revocation check (R64): its e-mail templates and audit actions
+	"certificate.revoked_by_authority": true, "certificate.revoked_by_authority_discovered": true, "certificate.on_hold_by_authority": true,
+	"certificate.revocation_on_hold": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

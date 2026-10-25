@@ -40,6 +40,7 @@
     "acme": "Verilen sertifikalar",
     "discovery": "Ağ keşfi",
     "deployments": "Dağıtımlar",
+    "incidents": "Olaylar",
     "keyVaults": "Key Vault kasaları",
     "dashboard": "Genel bakış",
     "settings": "Ayarlar",
@@ -782,7 +783,10 @@
       "automation_updated": "Otomasyon hesabı değiştirildi",
       "access_directory_group_added": "Dizin grubu eklendi",
       "access_directory_group_removed": "Dizin grubu kaldırıldı",
-      "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı"
+      "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı",
+      "certificate_revoked_by_authority": "Sertifika yetkilisi tarafından iptal edildi (iptal denetimi)",
+      "certificate_revocation_on_hold": "Sertifika yetkilisi tarafından askıya alındı (iptal denetimi)",
+      "settings_revocation_check_changed": "İptal denetimi açıldı veya kapatıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1484,6 +1488,9 @@
       "windows": {
         "cleanup": "Alice'in bir Windows sunucusuna içe aktardığı sertifikaların temizliği",
         "cleanup_schedule": "Windows sunucularının sertifikalarının zamanlanmış temizlikleri"
+      },
+      "revocation": {
+        "check": "Sertifika yetkililerinde iptal denetimleri"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -1806,7 +1813,20 @@
       "revokedBy": "İptal eden: {{name}}.",
       "compromisedTitle": "Özel anahtarı ele geçirilmiş olarak işaretlendi",
       "compromisedText": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz. Onu yalnızca veren yetkili iptal edebilir.",
-      "compromisedTextAcme": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz ve değiştirildikten sonra sertifika yetkilisinde iptal eder."
+      "compromisedTextAcme": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz ve değiştirildikten sonra sertifika yetkilisinde iptal eder.",
+      "revokedByAuthorityText": "Bu sertifikayı veren yetkili onu {{date}} tarihinde iptal etti (neden: {{reason}}). Alice bunu yetkilinin {{method}} yanıtında buldu ve sertifikayı artık dağıtmıyor."
+    },
+    "revocationCheck": {
+      "label": "İptal denetimi",
+      "status": {
+        "good": "İptal edilmemiş ({{date}} tarihinde denetlendi, {{method}})",
+        "revoked": "Yetkilisi tarafından iptal edildi",
+        "on_hold": "{{date}} tarihinden beri yetkilisi tarafından askıya alındı",
+        "unknown": "Yetkili bu sertifikayı tanımıyor ({{date}} tarihinde denetlendi)",
+        "unavailable": "Denetlenemedi: {{reason}} (sonraki deneme {{next}})",
+        "not_checkable": "Denetlenemez: {{reason}}",
+        "none": "Henüz denetlenmedi"
+      }
     }
   },
   "locations": {
@@ -3139,6 +3159,11 @@
       "schedule": "Zamanlama",
       "directories": "Kişilerin LDAP ya da Active Directory parolalarıyla oturum açmasına izin verin ve dizin gruplarını Alice rolleriyle eşleştirin.",
       "environments": "Bir hizmetin bulunabileceği ortamlar, örneğin üretim veya hazırlık."
+    },
+    "revocationCheck": {
+      "title": "İptal denetimleri",
+      "help": "Alice her sertifikayı veren yetkiliye sertifikanın iptal edilip edilmediğini sorar (OCSP ya da CRL), sertifika başına yaklaşık günde bir kez. Alice sertifikalarda adı geçen adreslere HTTP ve HTTPS üzerinden, 80 ve 443 numaralı bağlantı noktalarından bağlanır.",
+      "enabled": "Sertifikaların iptalini denetle"
     }
   },
   "sso": {
@@ -3921,7 +3946,10 @@
           "keyCompromise": "Anahtar ele geçirildi",
           "affiliationChanged": "Bağlılık değişti",
           "superseded": "Yerine yenisi geldi",
-          "cessationOfOperation": "Faaliyet sona erdi"
+          "cessationOfOperation": "Faaliyet sona erdi",
+          "cACompromise": "Sertifika yetkilisinin ele geçirilmesi",
+          "privilegeWithdrawn": "Yetki geri alındı",
+          "aACompromise": "Öznitelik yetkilisinin ele geçirilmesi"
         },
         "understood": "Bir iptalin geri alınamayacağını anlıyorum.",
         "confirm": "Sertifikayı iptal et",
@@ -4487,6 +4515,31 @@
       "uploadHint": "Listede yok mu? Önce Sertifikalar sayfasında yükleyin.",
       "openCertificates": "Sertifikaları aç",
       "confirm": "Bu sertifikayı kullan"
+    },
+    "list": {
+      "title": "Anahtar ele geçirme olayları",
+      "description": "Tüm anahtar ele geçirme olayları, en yenisi önce.",
+      "tableLabel": "Olaylar",
+      "filterLabel": "Göster",
+      "filter": {
+        "all": "Tümü",
+        "open": "Açık",
+        "needs_attention": "İlgi gerekiyor",
+        "completed": "Tamamlandı",
+        "closed": "Kapatıldı"
+      },
+      "columns": {
+        "certificate": "Sertifika",
+        "state": "Durum",
+        "revocation": "İptal",
+        "places": "Yerler",
+        "started": "Başladı",
+        "finished": "Bitti"
+      },
+      "places": "{{total}} yerin {{verified}} tanesi değiştirildi",
+      "empty": "Olay yok.",
+      "emptyFiltered": "Bu filtreye uyan olay yok.",
+      "loadMore": "Daha fazla olay göster"
     }
   },
   "services": {

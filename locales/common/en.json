@@ -1237,6 +1237,41 @@
         "title": "This certificate's private key is marked compromised.",
         "cause": "An administrator started a key compromise incident for this certificate or for another certificate made with the same private key. Alice never deploys a certificate with a compromised key again.",
         "action": "Deploy the replacement chosen in the incident, or another certificate made with a new key. Open the incident from the certificate's page to follow the replacement."
+      },
+      "revocation_unreachable": {
+        "title": "The certificate authority's revocation service could not be reached.",
+        "cause": "Alice asked the OCSP responder or the CRL address named in the certificate whether it was revoked and got no usable answer: the address did not answer, answered with an error, redirected elsewhere or took longer than 10 seconds.",
+        "action": "Alice tries again by herself, 1, 2 and 4 hours later and then at most once a day. If it keeps failing, check that the Alice host may reach the authority's address over HTTP or HTTPS (ports 80 and 443) without a proxy."
+      },
+      "revocation_invalid_answer": {
+        "title": "The certificate authority's revocation answer could not be trusted.",
+        "cause": "The OCSP or CRL answer was not signed by the certificate's issuer, named another issuer, was out of date or could not be read. Alice never acts on such an answer.",
+        "action": "Alice tries again by herself. If it keeps happening, the authority's responder may be misconfigured: ask the authority."
+      },
+      "revocation_address_refused": {
+        "title": "Alice does not connect to the revocation address in this certificate.",
+        "cause": "The OCSP or CRL address the certificate names is not HTTP or HTTPS on port 80 or 443, carries a user name, or leads to Alice's own host, a link-local or metadata address or another address Alice never connects to.",
+        "action": "Nothing to do for a public certificate authority. For a company authority, publish its OCSP responder and CRL on port 80 or 443 at a normal address and issue new certificates that name it."
+      },
+      "revocation_no_issuer": {
+        "title": "The certificate's issuer is not known, so its revocation cannot be checked.",
+        "cause": "Alice holds no certificate of the authority that signed this one (the intermediate certificate is missing from the chain), and the issuer is needed to verify the authority's answer.",
+        "action": "Add the intermediate certificate to the chain the server sends, or to the uploaded file, then choose Discover."
+      },
+      "revocation_no_address": {
+        "title": "The certificate names no revocation address.",
+        "cause": "The certificate has neither an OCSP responder nor a CRL distribution point, so there is no authority to ask.",
+        "action": "Nothing to do: such a certificate cannot be checked for revocation. Many private authorities issue certificates like this."
+      },
+      "revocation_too_large": {
+        "title": "The certificate authority's revocation answer is too large.",
+        "cause": "The OCSP answer was larger than 64 KiB or the CRL larger than 10 MiB, more than Alice reads.",
+        "action": "Alice tries again by herself. A CRL this large is unusual: ask the authority whether it offers OCSP."
+      },
+      "revocation_untrusted_issuer": {
+        "title": "The certificate's issuer is not trusted, so its revocation is not checked.",
+        "cause": "Network discovery found this certificate, and the chain its server presented reaches no trusted root, nor is its issuer a certificate Alice holds. Anyone who runs a TLS server in a scanned range chooses such a certificate and the addresses it names, so Alice does not connect to them.",
+        "action": "Nothing to do for a self-signed or private test certificate. For a company authority, upload its certificate to Alice, or have the server send the full chain to a root the Alice host trusts."
       }
     },
     "csr": {
@@ -2491,6 +2526,34 @@
       "decision_needed": {
         "subject": "SSH key rotation waits for a decision: {{key_label}}",
         "body": "Alice added the new key for {{key_label}} but could not test a login with it in some places (count: {{count}}). On the rotation's page, decide whether to keep the old key there or to stop and undo the rotation. Without a decision Alice undoes the rotation at {{decision_due}} (later if the rotation is paused because of the license)."
+      }
+    },
+    "certificate": {
+      "revoked_by_authority": {
+        "subject": "Certificate revoked by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it was revoked on {{revoked_at}}. Reason given by the authority: {{reason}}. Alice learned this from the authority's {{method}} answer.\n\nBrowsers and other clients refuse a revoked certificate: replace it wherever it is used. Alice no longer deploys it, and an issued certificate (ACME) with automatic renewal on is renewed at once. If the reason is keyCompromise, its private key is no longer secret: start a key compromise incident from the certificate's page."
+      },
+      "revoked_by_authority_discovered": {
+        "subject": "Certificate revoked by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it was revoked on {{revoked_at}}. Reason given by the authority: {{reason}}. Alice learned this from the authority's {{method}} answer.\n\nNetwork discovery found it at: {{endpoints}}. Browsers and other clients refuse a revoked certificate: replace it wherever it is used."
+      },
+      "on_hold_by_authority": {
+        "subject": "Certificate suspended by its authority: {{certificate_name}}",
+        "body": "The certificate authority that issued {{certificate_name}} (SHA-256 {{fingerprint}}) says it suspended the certificate on {{revoked_at}} (certificateHold). Alice learned this from the authority's {{method}} answer.\n\nClients refuse a suspended certificate while the suspension lasts. The authority can lift a suspension; Alice checks again every few hours and does not mark the certificate revoked. Ask the authority why it suspended the certificate, or replace it."
+      }
+    },
+    "incident": {
+      "needs_attention": {
+        "subject": "Key compromise incident needs attention: {{certificate_name}}",
+        "body": "The key compromise incident of the certificate {{certificate_name}} is waiting for a person. Reason: {{reason}}.\n\nAlice does nothing more on this incident until an administrator acts on its page in Alice (Incidents): Retry, Revoke now regardless, choose the replacement, or Close.\n\nPlaces replaced and checked: {{verified}}. Places that failed: {{failed}}. Places skipped: {{skipped}}.\n\nIncident: {{incident_id}}"
+      },
+      "completed": {
+        "subject": "Key compromise incident completed: {{certificate_name}}",
+        "body": "Alice replaced the certificate {{certificate_name}} at every place it could replace it and checked each one, and the compromised certificate is revoked at its certificate authority (or had nothing left to revoke).\n\nPlaces replaced and checked: {{verified}}. Places skipped: {{skipped}}; the incident's page says why for each one, and those you replace yourself.\n\nIncident: {{incident_id}}"
+      },
+      "completed_not_revocable": {
+        "subject": "Key compromise incident completed: {{certificate_name}}",
+        "body": "Alice replaced the certificate {{certificate_name}} at every place it could replace it and checked each one. Alice cannot revoke this certificate: ask the authority that issued it to revoke it.\n\nPlaces replaced and checked: {{verified}}. Places skipped: {{skipped}}; the incident's page says why for each one, and those you replace yourself.\n\nIncident: {{incident_id}}"
       }
     },
     "windows": {

@@ -174,3 +174,24 @@ func TestDialContextReportsARefusalAmongFailures(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, netaddr.ErrNotAllowed, "a name that does not resolve is not a refusal")
 }
+
+// DialContextExcept (R64): an address the further rule refuses is refused at connect time like a netaddr refusal,
+// a name that resolves to it included; the netaddr rule still applies; an address neither refuses connects.
+func TestDialContextExceptRefusesAtConnectTime(t *testing.T) {
+	srv := listen(t)
+	r := table(map[string][]string{"loop.alice.test": {"127.0.0.1"}, "metadata.alice.test": {"169.254.169.254"}})
+	loopback := func(a netip.Addr) bool { return a.IsLoopback() }
+	dialExcept := func(address string, except func(netip.Addr) bool) (net.Conn, error) {
+		return netaddr.DialContextExcept(context.Background(), &net.Dialer{Timeout: 5 * time.Second, Resolver: r}, "tcp", address, except)
+	}
+	for _, a := range []string{"127.0.0.1:" + srv.port(), "loop.alice.test:" + srv.port(), "[::ffff:127.0.0.1]:" + srv.port()} {
+		_, err := dialExcept(a, loopback)
+		require.ErrorIs(t, err, netaddr.ErrNotAllowed, a)
+	}
+	_, err := dialExcept("metadata.alice.test:"+srv.port(), func(netip.Addr) bool { return false })
+	require.ErrorIs(t, err, netaddr.ErrNotAllowed, "the netaddr rule still applies")
+	c, err := dialExcept("loop.alice.test:"+srv.port(), func(netip.Addr) bool { return false })
+	require.NoError(t, err)
+	_ = c.Close()
+	srv.settled(t, 1) // only the allowed dial reached the listener
+}

@@ -160,3 +160,15 @@ func TestStoreStopAnswers(t *testing.T) {
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, jobs.Retryable, f.Class)
 }
+
+// DeployRefusalReasons is a copy of the job's refusal reasons by sentinel (the API test locks each to its catalogue,
+// R64): every refusal is listed with the reason deployRefusal records, and changing the copy changes nothing.
+func TestDeployRefusalReasonsIsACopy(t *testing.T) {
+	got := DeployRefusalReasons()
+	require.Len(t, got, len(deployRefusals))
+	for _, r := range deployRefusals {
+		assert.Equal(t, r.reason, got[r.err], "%v", r.err)
+	}
+	got[inventory.ErrTargetDisabled] = "changed"
+	assert.Equal(t, "target.disabled", DeployRefusalReasons()[inventory.ErrTargetDisabled])
+}

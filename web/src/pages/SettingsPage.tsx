@@ -8,6 +8,7 @@ import { BackupsTab } from '../components/settings/BackupsTab';
 import { ForwardingTab } from '../components/settings/ForwardingTab';
 import { HttpsTab } from '../components/settings/HttpsTab';
 import { GeneralSettings } from '../components/settings/GeneralSettings';
+import { RevocationCheckSettings } from '../components/settings/RevocationCheckSettings';
 import { MailSettings } from '../components/settings/MailSettings';
 import { RecipientsSettings } from '../components/settings/RecipientsSettings';
 import { SSOSettings } from '../components/sso/SSOSettings';
@@ -40,7 +41,12 @@ const BODIES: Record<Tab, () => ReactNode> = {
   mail: () => <MailSettings />,
   recipients: () => <RecipientsSettings />,
   alerts: () => <AlertSettings />,
-  general: () => <GeneralSettings />,
+  general: () => (
+    <>
+      <GeneralSettings />
+      <RevocationCheckSettings />
+    </>
+  ),
   backups: () => <BackupsTab />,
   https: () => <HttpsTab />,
   acme: () => <AcmeSettings />,

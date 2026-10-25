@@ -19,7 +19,7 @@ var periodicTypes = []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.Audi
 	jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.AlertsScan,
 	jobs.BackupSchedule, jobs.TLSRenew, jobs.AuditForward, jobs.JobsHeartbeat,
 	jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep, jobs.NetdiscoSchedule, jobs.NetdiscoRetention, jobs.IncidentAdvance,
-	jobs.DriftSchedule, jobs.DriftRepair, jobs.WindowsCleanupSchedule}
+	jobs.DriftSchedule, jobs.DriftRepair, jobs.WindowsCleanupSchedule, jobs.RevocationCheck}
 
 // checkWiring refuses to start a server that is not completely wired: a provider this build ships
 // is not registered, a queue job type has no handler on the runner (a queued job of that type is

@@ -87,9 +87,11 @@ func sorted(keys ...string) []string {
 func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	certFields := []string{"id", "fingerprint", "subject_cn", "subject", "issuer", "serial", "sans", "not_before", "not_after", "key_algorithm",
 		"key_bits", "source", "label", "has_private_key", "chain_complete", "self_signed", "location_count", "first_seen_at", "last_seen_at",
-		"public_key_sha256", "revoked_at", "revocation_reason", "revoked_by_name", "compromised_at", "acme_certificate_id", "capabilities"}
+		"public_key_sha256", "revoked_at", "revocation_reason", "revoked_by_name", "compromised_at", "acme_certificate_id", "capabilities",
+		"revoked_by_authority"}
 	assert.Equal(t, sorted(certFields...), jsonKeys(t, certificateJSON(sampleCertificate(), serviceRefs{})))
-	assert.Equal(t, sorted(append(certFields, "pem_chain", "locations", "locations_truncated", "hidden_count")...), jsonKeys(t, certificateDetailJSON(sampleCertificate(), serviceRefs{})))
+	assert.Equal(t, sorted(append(certFields, "pem_chain", "locations", "locations_truncated", "hidden_count", "revocation_check")...),
+		jsonKeys(t, certificateDetailJSON(sampleCertificate(), serviceRefs{})))
 	assert.Equal(t, sorted("id", "target_id", "target_name", "cert_path", "key_path", "resolved_cert_path", "key_type", "certificate", "servers",
 		"supported", "unsupported_reason", "problem", "key_problem", "inherited", "custom_location", "symlinked", "key_exists", "key_mode",
 		"key_owner", "key_group", "warnings", "deployed_fingerprint", "changed_outside_at", "verify_port", "verify_sni", "skip_verify",
@@ -788,4 +790,33 @@ func TestCertificateChangesByRole(t *testing.T) {
 		}
 		assert.Equal(t, want, got, "identity %q", id)
 	}
+}
+
+// The revocation check on the certificate page (R64, D5, HB-17): whether the authority revoked it, and the last check
+// with its error as an errorRef (null before the first check).
+func TestCertificateDTORevocationCheck(t *testing.T) {
+	c := sampleCertificate()
+	raw, err := json.Marshal(certificateDetailJSON(c, serviceRefs{}))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"revocation_check":null`)
+	assert.Contains(t, string(raw), `"revoked_by_authority":false`)
+
+	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.FixedZone("x", 3600))
+	c.RevokedByAuthority = true
+	c.RevocationCheck = &inventory.RevocationCheck{Status: "unavailable", ErrorCode: "certificate.revocation_unreachable", CheckedAt: at,
+		NextCheckAt: at.Add(time.Hour)}
+	d := certificateDetailJSON(c, serviceRefs{})
+	require.NotNil(t, d.RevocationCheck)
+	require.NotNil(t, d.RevocationCheck.Error)
+	assert.Equal(t, "ALC-CRT-0020", d.RevocationCheck.Error.Code)
+	raw, err = json.Marshal(d)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"revoked_by_authority":true`)
+	assert.Contains(t, string(raw), `"revocation_check":{"status":"unavailable","method":"","reason":"","revoked_at":null,"checked_at":"2026-10-24T11:00:00Z","next_check_at":"2026-10-24T12:00:00Z","error":{"code":"ALC-CRT-0020","reason":"certificate.revocation_unreachable"}}`)
+
+	c.RevocationCheck = &inventory.RevocationCheck{Status: "revoked", Method: "ocsp", Reason: "keyCompromise", RevokedAt: &at, CheckedAt: at, NextCheckAt: at}
+	raw, err = json.Marshal(certificateDetailJSON(c, serviceRefs{}))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"revoked_at":"2026-10-24T11:00:00Z"`)
+	assert.Contains(t, string(raw), `"error":null`)
 }

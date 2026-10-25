@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/acme"
 	"alice/internal/inventory"
+	"alice/internal/platform/validate"
 )
 
 var (
@@ -177,9 +178,9 @@ func TestIncidentHandlers(t *testing.T) {
 	// The list: query validation, then the incidents without their locations.
 	var gotOpen bool
 	var gotCert *uuid.UUID
-	inc.ListIncidentsFn = func(_ context.Context, cert *uuid.UUID, open bool, _ int) ([]inventory.Incident, error) {
-		gotOpen, gotCert = open, cert
-		return []inventory.Incident{sampleIncident()}, nil
+	inc.ListIncidentsFn = func(_ context.Context, f inventory.IncidentFilter) (inventory.IncidentPage, error) {
+		gotOpen, gotCert = f.OpenOnly, f.CertificateID
+		return inventory.IncidentPage{Items: []inventory.Incident{sampleIncident()}}, nil
 	}
 	rec = call(h, http.MethodGet, "/api/v1/incidents?open=true&certificate_id="+incCertID.String(), "alice_read_auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -234,4 +235,41 @@ func TestIncidentHandlers(t *testing.T) {
 	rec = call(h, http.MethodGet, base, "alice_read_auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, jsonObj(t, rec), "locations")
+}
+
+// D2 (HB-05, R64): the incident list passes its state, open, limit and cursor to the inventory as one filter, answers
+// the next page's cursor (null on the last page) and refuses a state or cursor it does not know.
+func TestListIncidentsPassesFiltersAndAnswersTheCursor(t *testing.T) {
+	h, _, inc := incidentDeps(t)
+	at := time.Date(2026, 10, 20, 9, 30, 0, 123, time.UTC)
+	cursorID := uuid.MustParse("0192d000-0000-7000-8000-0000000000e1")
+	var got inventory.IncidentFilter
+	next := &inventory.IncidentCursor{CreatedAt: at.Add(time.Hour), ID: incidentID}
+	inc.ListIncidentsFn = func(_ context.Context, f inventory.IncidentFilter) (inventory.IncidentPage, error) {
+		got = f
+		return inventory.IncidentPage{Items: []inventory.Incident{sampleIncident()}, Next: next}, nil
+	}
+	rec := call(h, http.MethodGet, "/api/v1/incidents?state=needs_attention&open=true&limit=2&cursor="+timeIDCursor(at, cursorID), "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.IncidentFilter{OpenOnly: true, State: inventory.IncidentNeedsAttention, Limit: 2,
+		Cursor: &inventory.IncidentCursor{CreatedAt: at, ID: cursorID}}, got)
+	body := jsonObj(t, rec)
+	assert.Equal(t, timeIDCursor(next.CreatedAt, next.ID), body["next_cursor"])
+	assert.Len(t, body["items"], 1)
+
+	next = nil
+	rec = call(h, http.MethodGet, "/api/v1/incidents", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"next_cursor":null`)
+	assert.Equal(t, inventory.IncidentFilter{}, got)
+
+	for q, field := range map[string]string{"state=broken": "state", "cursor=x": "cursor"} {
+		rec = call(h, http.MethodGet, "/api/v1/incidents?"+q, "auditor", "")
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, q)
+		assert.Equal(t, field, errorDetails(t, rec)[0].Field, q)
+	}
+	rec = call(h, http.MethodGet, "/api/v1/incidents?state=broken", "auditor", "")
+	assert.Equal(t, validate.OneOf, errorDetails(t, rec)[0].Code)
+	assert.Equal(t, "awaiting_replacement, ordering, deploying, revoking, needs_attention, completed, closed",
+		errorDetails(t, rec)[0].Params["values"])
 }
