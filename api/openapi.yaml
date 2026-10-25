@@ -6660,6 +6660,7 @@ components:
         last_seen: { type: string, format: date-time }
         endpoints: { type: array, items: { $ref: "#/components/schemas/DiscoveredEndpoint" }, description: The detail only }
         more_endpoints: { type: boolean, description: The detail only }
+        revocation_check: { $ref: "#/components/schemas/RevocationCheck", description: 'R66: the detail only; null before the first check (the list and the CSV leave it out)' }
     DiscoveredCertificatePage:
       type: object
       required: [items, next_cursor]

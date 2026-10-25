@@ -80,6 +80,15 @@ type CertificateRow struct {
 	SeenOn       int
 	Status       string
 	ManagedID    uuid.NullUUID
+	Revocation   *RevocationCheck // the detail only; nil when never checked (and always nil in a list)
+}
+
+// RevocationCheck is a leaf's last revocation check (revocation_checks, by fingerprint; R64 ruling 14, R66 ruling 7):
+// ErrorCode is the stored reason of an unavailable or not checkable one, times are UTC.
+type RevocationCheck struct {
+	Status, Method, Reason, ErrorCode string
+	RevokedAt                         *time.Time
+	CheckedAt, NextCheckAt            time.Time
 }
 
 // CertificateCursor is the position after a row, in the order of the list (not_after, fingerprint).

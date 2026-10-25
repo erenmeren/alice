@@ -11,6 +11,7 @@ import { CodeText } from '../CodeText';
 import { ErrorAlert } from '../ErrorAlert';
 import { Expiry } from '../Expiry';
 import { LoadingIndicator } from '../LoadingIndicator';
+import { revocationCheckText } from '../revocationCheck';
 import { FactList, StatusBadge } from '../ui';
 import { WRAP } from '../wrap';
 import classes from './discovery.module.css';
@@ -97,6 +98,7 @@ function Detail({ c, onAddServer }: { c: DiscoveredCertificate; onAddServer: (e:
           { label: t('discovery.drawer.issuer'), value: <span translate="no">{c.issuer_cn || '–'}</span> },
           { label: t('discovery.drawer.validFrom'), value: formatDateTime(c.not_before, lang) },
           { label: t('discovery.drawer.expires'), value: <Expiry notAfter={c.not_after} /> },
+          { label: t('certificates.revocationCheck.label'), value: revocationCheckText(t, i18n, c.revocation_check) },
           { label: t('discovery.drawer.algorithm'), value: t(keyAlgorithmKey(c.key_algorithm)) },
           { label: t('discovery.drawer.fingerprint'), value: <Code translate="no" style={WRAP}>{c.fingerprint_sha256}</Code> },
           { label: t('discovery.drawer.firstSeen'), value: formatDateTime(c.first_seen, lang) },

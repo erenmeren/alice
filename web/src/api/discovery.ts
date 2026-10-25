@@ -1,5 +1,5 @@
 import { ApiError, apiFetch } from './client';
-import type { OwnerService } from './types';
+import type { OwnerService, RevocationCheck } from './types';
 
 // Network certificate discovery (api/openapi.yaml, /api/v1/discovery). The names follow the API's snake_case schemas.
 // Nothing here is secret: scopes, scans and the certificates found are public facts of the network. The map of the
@@ -140,6 +140,8 @@ export interface DiscoveredCertificate {
   // The detail only (at most 200).
   endpoints?: DiscoveredEndpoint[];
   more_endpoints?: boolean;
+  // The detail only: the last revocation check, null before the first (R66).
+  revocation_check?: RevocationCheck | null;
 }
 
 export interface DiscoverySettings {
