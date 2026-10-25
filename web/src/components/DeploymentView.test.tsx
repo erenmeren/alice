@@ -107,6 +107,15 @@ describe('DeploymentOutcome', () => {
     expectTone(alert, 'warning');
   });
 
+  it('holding (R65): in place and under observation, never "live" and never a failure', async () => {
+    const alert = await outcome(
+      deploymentFixture({ status: 'running', state: 'holding', finished_at: null, rollout: { id: 'r1', wave: 1, state: 'hold' } }),
+      'The new certificate is in place and verified; it is under observation before the other websites follow.',
+    );
+    expectTone(alert, 'info');
+    expect(screen.queryByText('The new certificate is live and verified.')).not.toBeInTheDocument();
+  });
+
   it('recovering: a warning with the next attempt', async () => {
     const alert = await outcome(
       deploymentFixture({ status: 'needs_attention', state: 'recovering', recover_after: '2026-10-04T13:15:00Z', finished_at: null }),

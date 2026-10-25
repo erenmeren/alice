@@ -54,7 +54,7 @@ export function deploymentStatusKey(status: string): string {
 // Each list is checked against api/openapi.yaml and the Go sources by enums.test.ts. A value a newer
 // server adds (or '') gets the neutral text of its kind, never a raw code in a sentence.
 
-export const DEPLOYMENT_STATES: readonly DeploymentState[] = ['queued', 'precheck', 'deploying', 'recovering', 'done'];
+export const DEPLOYMENT_STATES: readonly DeploymentState[] = ['queued', 'precheck', 'deploying', 'holding', 'recovering', 'done'];
 export const STEP_STATUSES: readonly StepStatus[] = ['started', 'ok', 'failed', 'skipped'];
 
 // DEPLOYMENT_STEP_NAMES are the steps a deployment reports: the helper's (helperproto.Step*), the

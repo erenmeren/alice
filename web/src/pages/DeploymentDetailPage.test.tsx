@@ -500,6 +500,38 @@ describe('DeploymentDetailPage', () => {
   });
 });
 
+describe('DeploymentDetailPage of a canary deployment (R65)', () => {
+  it('shows the observation, the round summary and the rollout panel', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        status: 'running',
+        state: 'holding',
+        finished_at: null,
+        rollout: { id: 'r1', wave: 1, state: 'hold' },
+        canary: { rounds: 3, passes: 3, consecutive_failures: 0, last_at: '2026-10-04T12:00:00Z', last_result: 'pass', last_reason: '', last_tls: 'pass', last_http_status: 200, last_latency_ms: 9, next_check_at: '2026-10-04T12:00:30Z' },
+      }),
+      'operator',
+    );
+    server.use(
+      http.get('/api/v1/deployment-rollouts/r1', () =>
+        HttpResponse.json({
+          id: 'r1', state: 'hold', reason: '', reason_params: {}, origin: 'manual', certificate: null, service: null, policy_version: 1,
+          settings: { count: 1, percent: 0, hold: '10m', interval: '30s', failures: 2, check: null, override_allowed: true },
+          hold_started_at: '2026-10-04T12:00:00Z', hold_until: '2026-10-04T12:10:00Z', now: '2026-10-04T12:01:00Z',
+          waves: [], skipped: [], allowed_actions: ['continue', 'abort'], hidden_count: 0, created_at: '2026-10-04T11:59:00Z', finished_at: null,
+        }),
+      ),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('The new certificate is in place and verified; it is under observation before the other websites follow.')).toBeInTheDocument();
+    expect(await screen.findByTestId('rollout-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('rollout-state')).toHaveTextContent('Observing the first wave');
+    expect(screen.getByTestId('rollout-continue')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+});
+
 describe('DeploymentDetailPage from Key Vault', () => {
   it('shows the kv_secret step first, the vault and the version; an upload shows neither', async () => {
     server.use(

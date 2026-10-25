@@ -55,6 +55,28 @@ describe('DeploymentsPage', () => {
     expect(within(main).queryByRole('list', { name: /summary/i })).not.toBeInTheDocument();
   });
 
+  it('marks a canary deployment with its wave and a held one as under observation (R65)', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/deployments', () =>
+        HttpResponse.json({
+          items: [
+            deploymentFixture({ id: 'w1', status: 'running', state: 'holding', finished_at: null, rollout: { id: 'r1', wave: 1, state: 'hold' } }),
+            deploymentFixture({ id: 'w2', rollout: { id: 'r1', wave: 2, state: 'wave2' } }),
+            deploymentFixture({ id: 'plain' }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await renderRoute('/deployments');
+    const rows = await screen.findAllByTestId('deployment-row');
+    expect(within(rows[0]).getByText('Canary · wave 1')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Under observation')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('Canary · wave 2')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText(/Canary/)).not.toBeInTheDocument();
+  });
+
   it('shows state and hold for deployments that are being recovered or held, and Unknown for an unknown status', async () => {
     server.use(
       ...sessionHandlers(sessionFor('operator')),

@@ -765,7 +765,7 @@ export interface CertificateLocationList {
 
 export type DeploymentStatus = 'pending' | 'running' | 'succeeded' | 'unchanged' | 'failed' | 'rolled_back' | 'rollback_failed' | 'needs_attention';
 // The API shows '' for a code it does not recognise (codeOrBlank), so state and status can be ''.
-export type DeploymentState = '' | 'queued' | 'precheck' | 'deploying' | 'recovering' | 'done';
+export type DeploymentState = '' | 'queued' | 'precheck' | 'deploying' | 'holding' | 'recovering' | 'done';
 export type StepStatus = '' | 'started' | 'ok' | 'failed' | 'skipped';
 
 export interface DeploymentStep {
@@ -829,6 +829,73 @@ export interface Deployment {
   started_at: string | null;
   finished_at: string | null;
   verification: DeploymentVerification;
+  // R65: the canary rollout the deployment belongs to (null outside one).
+  rollout?: DeploymentRolloutRef | null;
+}
+
+export interface DeploymentRolloutRef {
+  id: string;
+  wave: 1 | 2;
+  state: RolloutState;
+}
+
+export type RolloutState = 'wave1' | 'hold' | 'wave2' | 'completed' | 'failed' | 'aborted' | 'stopped' | 'preempted';
+
+// CanaryCheck is the latest observation of a wave-1 hold (R65).
+export interface CanaryCheck {
+  rounds: number;
+  passes: number;
+  consecutive_failures: number;
+  last_at: string | null;
+  last_result: '' | 'pass' | 'fail' | 'unknown';
+  last_reason: string;
+  last_tls: '' | 'pass' | 'fail' | 'skipped' | 'unknown';
+  last_http_status: number | null;
+  last_latency_ms: number | null;
+  next_check_at: string;
+}
+
+export interface RolloutSettings {
+  count: number;
+  percent: number;
+  hold: string;
+  interval: string;
+  failures: number;
+  check: { path: string; host: string; port: number; expect_status: number[]; timeout: string } | null;
+  override_allowed: boolean;
+}
+
+export interface RolloutLocation {
+  location_id: string;
+  target_id: string;
+  target_name: string;
+  site: string;
+  deployment_id: string | null;
+  deployment_state: string | null;
+  deployment_status: string | null;
+  canary: CanaryCheck | null;
+}
+
+// Rollout is a canary deployment (R65): wave 1 observed for the hold, then wave 2.
+export interface Rollout {
+  id: string;
+  state: RolloutState;
+  reason: string;
+  reason_params: Record<string, string>;
+  origin: 'manual' | 'acme' | 'key_vault';
+  certificate: { id: string; name: string };
+  service: { id?: string; name?: string; outside?: boolean } | null;
+  policy_version: number;
+  settings: RolloutSettings;
+  hold_started_at: string | null;
+  hold_until: string | null;
+  now: string;
+  waves: { wave: 1 | 2; locations: RolloutLocation[] }[];
+  skipped: { location_id: string; reason: string }[];
+  allowed_actions: ('continue' | 'abort')[];
+  hidden_count: number;
+  created_at: string;
+  finished_at: string | null;
 }
 
 // DeploymentVerification is what the verification of the new certificate proved and found (R51): level 0 none (not
@@ -852,6 +919,8 @@ export interface DeploymentTrust {
 
 export interface DeploymentDetail extends Deployment {
   steps: DeploymentStep[];
+  // R65: the latest observation of a wave-1 hold (null when it never held).
+  canary?: CanaryCheck | null;
 }
 
 export interface CSR {
@@ -907,6 +976,8 @@ export interface UploadResult {
 
 export interface DeployResult {
   deployments: { id: string; job_id: string; location_id: string; status_url: string; deployment_url: string; warnings: string[] }[];
+  // R65: the canary rollout the request became (deployments is then wave 1 only); null when none.
+  rollout?: { id: string; state: RolloutState; wave1: string[]; wave2: string[]; settings: RolloutSettings } | null;
 }
 
 export interface CSRCreateRequest {

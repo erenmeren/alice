@@ -9,6 +9,11 @@ import {
   errorResponse,
   kvCertificateDetailFixture,
   kvVersionFixture,
+  SERVICE_ID,
+  serviceRef,
+  servicePolicyFixture,
+  targetFixture,
+  VAULT_ID,
   sessionFor,
   sessionHandlers,
   stepFixture,
@@ -18,6 +23,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { KVDeployDialog } from './KVDeployDialog';
+import { targetKey } from '../api/queryKeys';
 import deploy from './deploy.module.css';
 
 const V_NEW = kvVersionFixture({ id: 'v-new', version: 'aaaaaaaa11111111aaaaaaaa11111111', detected_at: '2026-10-05T00:00:00Z' });
@@ -233,6 +239,29 @@ describe('KVDeployDialog', () => {
     await waitFor(() => expect(document.querySelector('[data-refused="true"]')).toHaveTextContent('web-02'));
     expect(document.querySelector('[data-refused="true"]')).toHaveClass(deploy.refused);
     expect(document.querySelector('[data-refused="true"]')?.getAttribute('style') ?? '').not.toMatch(/border/);
+  });
+
+  it('says a canary goes first for the vault service and sends the override when chosen (R65)', async () => {
+    asRole('operator');
+    const bodies: unknown[] = [];
+    server.use(
+      http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(servicePolicyFixture({ body: { schema: 1, canary: { enabled: true, hold: '20m' } } }))),
+      http.post(`/api/v1/bindings/${BINDING_ID}/actions/deploy`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(accepted(['d1', bindingLocationFixture().location_id], ['d2', 'loc-2']), { status: 202 });
+      }),
+      http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(deploymentDetailFixture({ id: String(params.id), source: 'key_vault' }))),
+    );
+    const { client } = await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert()} onClose={vi.fn()} />);
+    client.setQueryData(targetKey(VAULT_ID), { ...targetFixture, id: VAULT_ID, service: serviceRef });
+    // The vault as last read gives the service; a change of the choice renders the dialog again.
+    const second = screen.getAllByRole('checkbox')[1];
+    await userEvent.click(second);
+    await userEvent.click(second);
+    expect(await screen.findByTestId('canary-note')).toHaveTextContent('Deploys to 1 website(s) first, then waits 20m before the rest.');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Deploy to all at once/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy now' }));
+    await waitFor(() => expect(bodies).toEqual([{ version_id: 'v-new', location_ids: [bindingLocationFixture().location_id, 'loc-2'], canary_override: true }]));
   });
 
   it('is complete in Turkish', async () => {

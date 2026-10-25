@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { deploymentDetailFixture, jobFixture, statusWith, targetFixture } from '../test/fixtures';
 import { server } from '../test/server';
 import { watchDeployments } from './deployments';
-import { getDeployment, getLicenseStatus, getTarget, listAudit, listJobs } from './endpoints';
+import { getDeployment, getLicenseStatus, getRollout, getTarget, listAudit, listJobs } from './endpoints';
 import { waitForJob } from './jobs';
 import { getKVImport } from './keyvault';
 import { getACMECertificate, listACMEOrders } from './acme';
@@ -50,6 +50,8 @@ describe('polling', () => {
       'components/KVDeployDialog.tsx',
       'components/NotificationsBanner.tsx',
       'components/RemoveKeyDialog.tsx',
+      // a canary rollout while it is active (getRollout: a GET, R65)
+      'components/RolloutPanel.tsx',
       // the scans while one is queued or running (listDiscoveryScans: a GET)
       'components/discovery/ScansTab.tsx',
       // an issued certificate and its orders while an order runs (getACMECertificate, listACMEOrders: GETs)
@@ -85,6 +87,7 @@ describe('polling', () => {
       http.get('/api/v1/discovery/scopes', () => HttpResponse.json({ items: [], next_cursor: null })),
       http.get('/api/v1/discovery/scans', () => HttpResponse.json({ items: [], next_cursor: null })),
       http.get('/api/v1/incidents/:id', () => HttpResponse.json({})),
+      http.get('/api/v1/deployment-rollouts/:id', () => HttpResponse.json({})),
     );
     await getLicenseStatus();
     await getLicenseStatus({ keepalive: true });
@@ -98,7 +101,8 @@ describe('polling', () => {
     await listAllDiscoveryScopes();
     await listDiscoveryScans();
     await getIncident('i1');
-    expect(methods.length).toBeGreaterThanOrEqual(10);
+    await getRollout('r1');
+    expect(methods.length).toBeGreaterThanOrEqual(11);
     expect(methods.filter((m) => !m.startsWith('GET '))).toEqual([]);
   });
 });

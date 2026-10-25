@@ -21,6 +21,9 @@ import {
   LOCATION_ID,
   nginxTargetFixture,
   observationFixture,
+  SERVICE_ID,
+  serviceRef,
+  servicePolicyFixture,
   sessionFor,
   sessionHandlers,
 } from '../test/fixtures';
@@ -679,6 +682,54 @@ describe('websites using an issued certificate', () => {
     expect(body).not.toHaveProperty('confirm_incomplete_chain');
     expect(client.getQueryState(['deployments', 'probe'])?.isInvalidated).toBe(true);
     expect(deploymentReads).toBe(0);
+  });
+
+  it('says a canary goes first and sends the override when "Deploy to all at once" is chosen (R65)', async () => {
+    const bodies: unknown[] = [];
+    base({
+      session: sessionFor('operator'),
+      cert: issued({ service: serviceRef }),
+      bindings: [acmeBindingFixture(), acmeBindingFixture({ location_id: 'loc-2', target_name: 'web-2', cert_path: '/c2.crt' })],
+      extra: [
+        http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(servicePolicyFixture({ body: { schema: 1, canary: { enabled: true, subset: { percent: 50 } } } }))),
+        http.post(`${BASE}/deploy`, async ({ request }) => {
+          bodies.push(await request.json());
+          return HttpResponse.json(
+            {
+              deployments: [{ id: 'd1', job_id: 'j1', location_id: LOCATION_ID, status_url: '', deployment_url: '', warnings: [] }],
+              rollout: { id: 'r1', state: 'hold', wave1: [LOCATION_ID], wave2: ['loc-2'], settings: { count: 0, percent: 50, hold: '10m', interval: '30s', failures: 2, check: null, override_allowed: true } },
+            },
+            { status: 202 },
+          );
+        }),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Deploy now' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Deploy now' });
+    expect(await within(dialog).findByTestId('canary-note')).toHaveTextContent('Deploys to 1 website(s) first, then waits 10m before the rest.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Deploy now' }));
+    expect(await within(dialog).findByTestId('canary-started')).toHaveTextContent('Canary deployment started: 1 website(s) follow');
+    expect(bodies).toEqual([{ location_ids: [LOCATION_ID, 'loc-2'] }]);
+  });
+
+  it('sends canary_override after the step-up when the canary is skipped (R65)', async () => {
+    const bodies: unknown[] = [];
+    base({
+      session: sessionFor('operator'),
+      cert: issued({ service: serviceRef }),
+      bindings: [acmeBindingFixture(), acmeBindingFixture({ location_id: 'loc-2', target_name: 'web-2', cert_path: '/c2.crt' })],
+      extra: [
+        http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(servicePolicyFixture({ body: { schema: 1, canary: { enabled: true } } }))),
+        http.post(`${BASE}/deploy`, async ({ request }) => (bodies.push(await request.json()), HttpResponse.json({ deployments: [] }, { status: 202 }))),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Deploy now' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Deploy now' });
+    await userEvent.click(await within(dialog).findByRole('checkbox', { name: /Deploy to all at once/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Deploy now' }));
+    await waitFor(() => expect(bodies).toEqual([{ location_ids: [LOCATION_ID, 'loc-2'], canary_override: true }]));
   });
 
   it('asks an Administrator to confirm an incomplete chain and keeps an Operator out', async () => {

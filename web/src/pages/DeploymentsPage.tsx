@@ -1,4 +1,4 @@
-import { ActionIcon, Anchor, Code, Stack, Table, VisuallyHidden } from '@mantine/core';
+import { ActionIcon, Badge, Anchor, Code, Stack, Table, VisuallyHidden } from '@mantine/core';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
@@ -133,6 +133,13 @@ function Row({ d, when }: { d: Deployment; when: string }) {
           </p>
         )}
         {view === 'recovering' && <p className={classes.secondary}>{t(deploymentStateKey(d.state))}</p>}
+        {d.rollout && (
+          <p className={classes.secondary}>
+            <Badge variant="light" color="grape" tt="none" data-testid="rollout-badge">
+              {t('canary.waveBadge', { wave: d.rollout.wave })}
+            </Badge>
+          </p>
+        )}
         {view === 'held' && <p className={classes.secondary}>{t('deployments.held')}</p>}
       </Table.Td>
       <Table.Td>

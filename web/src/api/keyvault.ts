@@ -227,6 +227,8 @@ export interface DeployableLocation {
 }
 
 export interface BindingDeployResult {
+  // R65: the canary rollout the request became (deployments is then wave 1 only).
+  rollout?: { id: string; wave1: string[]; wave2: string[] } | null;
   deployments: { id: string; job_id: string; location_id: string; status_url: string; deployment_url: string; warnings: string[] }[];
 }
 
@@ -306,7 +308,7 @@ export const releaseKVVersion = (vaultId: string, certificateId: string, version
   });
 
 // Bindings (Connected websites).
-export const listDeployableLocations = (q: { key_type?: string; unbound?: boolean; q?: string; cursor?: string | null; limit?: number }) =>
+export const listDeployableLocations = (q: { key_type?: string; unbound?: boolean; q?: string; cursor?: string | null; limit?: number; service_id?: string }) =>
   apiFetch<Page<DeployableLocation>>(`${v1}/certificate-locations${qs({ ...q })}`);
 
 export const createBinding = (kvCertificateId: string, locationIds: string[]) =>
@@ -322,10 +324,15 @@ export const setAutoDeploy = (id: string, version: number, enabled: boolean) =>
 
 export const deleteBinding = (id: string) => apiFetch<void>(`${v1}/bindings/${enc(id)}`, { method: 'DELETE' });
 
-export const deployBinding = (id: string, versionId: string, locationIds: string[], confirmIncompleteChain: boolean) =>
+export const deployBinding = (id: string, versionId: string, locationIds: string[], confirmIncompleteChain: boolean, canaryOverride = false) =>
   apiFetch<BindingDeployResult>(`${v1}/bindings/${enc(id)}/actions/deploy`, {
     method: 'POST',
-    body: { version_id: versionId, location_ids: locationIds, ...(confirmIncompleteChain ? { confirm_incomplete_chain: true } : {}) },
+    body: {
+      version_id: versionId,
+      location_ids: locationIds,
+      ...(confirmIncompleteChain ? { confirm_incomplete_chain: true } : {}),
+      ...(canaryOverride ? { canary_override: true } : {}),
+    },
   });
 
 // Imports.

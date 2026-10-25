@@ -316,6 +316,7 @@ export type ACMEReplacesOutcome = '' | 'sent' | 'adopted' | 'no_ari' | 'other_ac
 export interface ACMEDeploy {
   location_ids?: string[];
   confirm_incomplete_chain?: boolean;
+  canary_override?: boolean; // R65: deploy to all at once (needs a fresh step-up)
 }
 
 // The enums of the schemas above, checked against api/openapi.yaml by acme.test.ts; each has a label in both languages.

@@ -8,6 +8,9 @@ import {
   deploymentDetailFixture,
   errorResponse,
   locationFixture,
+  SERVICE_ID,
+  serviceRef,
+  servicePolicyFixture,
   sessionFor,
   sessionHandlers,
   stepFixture,
@@ -17,6 +20,7 @@ import {
 import { renderWithAuth } from '../test/render';
 import { server } from '../test/server';
 import { DeployDialog } from './DeployDialog';
+import type { CanaryPolicy } from '../api/services';
 import deploy from './deploy.module.css';
 
 const NEW_ID = '0192c000-0000-7000-8000-0000000000c9';
@@ -387,6 +391,73 @@ describe('DeployDialog from a certificate', () => {
     certServer([]);
     await showDialog({ certificate: NEW_CERT });
     expect(await screen.findByText(/not used on any website that Alice can deploy to/)).toBeInTheDocument();
+  });
+});
+
+describe('DeployDialog canary (R65)', () => {
+  const l1 = locationFixture({ id: L1 });
+  const l2 = locationFixture({ id: L2, cert_path: '/etc/nginx/ssl/api.crt', servers: [{ names: ['api.example.test'], listens: [{ addr: '*', port: 443, default_server: false }], file: '/etc/nginx/conf.d/api.conf', line: 2 }] });
+  const OWNED = { ...NEW_CERT, service: serviceRef };
+
+  function canaryWorld(canary: CanaryPolicy, answer: object = accepted([D1, L1])) {
+    const bodies: unknown[] = [];
+    server.use(
+      http.get(`/api/v1/certificates/${NEW_ID}`, () => HttpResponse.json(certificateDetailFixture({ id: NEW_ID, service: serviceRef, locations: [l1, l2] }))),
+      http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(servicePolicyFixture({ body: { schema: 1, canary } }))),
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(answer, { status: 202 });
+      }),
+      http.get(`/api/v1/deployments/${D1}`, () => HttpResponse.json(deploymentDetailFixture({ id: D1, location_id: L1, status: 'running', state: 'holding', job_status: 'running', finished_at: null }))),
+    );
+    return bodies;
+  }
+
+  async function pickBoth() {
+    await showDialog({ certificate: OWNED });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /www\.example\.test/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /api\.example\.test/ }));
+  }
+
+  it('says how many go first and how long Alice waits, and tells the canary started', async () => {
+    asRole('operator');
+    const bodies = canaryWorld(
+      { enabled: true, hold: '15m' },
+      { ...accepted([D1, L1]), rollout: { id: 'r1', state: 'hold', wave1: [L1], wave2: [L2], settings: { count: 1, percent: 0, hold: '15m', interval: '30s', failures: 2, check: null, override_allowed: true } } },
+    );
+    await pickBoth();
+    expect(await screen.findByTestId('canary-note')).toHaveTextContent('Deploys to 1 website(s) first, then waits 15m before the rest.');
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    expect(bodies).toEqual([{ location_ids: [L1, L2], confirm_incomplete_chain: false }]);
+    expect(await screen.findByTestId('canary-started')).toHaveTextContent('Canary deployment started: 1 website(s) follow once the first wave passed its observation.');
+    expect(await screen.findByText('The new certificate is in place and verified; it is under observation before the other websites follow.')).toBeInTheDocument();
+  });
+
+  it('sends the override when "Deploy to all at once" is chosen', async () => {
+    asRole('operator');
+    const bodies = canaryWorld({ enabled: true }, accepted([D1, L1], [D2, L2]));
+    server.use(http.get(`/api/v1/deployments/${D2}`, () => HttpResponse.json(deploymentDetailFixture({ id: D2, location_id: L2 }))));
+    await pickBoth();
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Deploy to all at once/ }));
+    expect(screen.queryByTestId('canary-note')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    await waitFor(() => expect(bodies).toEqual([{ location_ids: [L1, L2], confirm_incomplete_chain: false, canary_override: true }]));
+  });
+
+  it('offers no override when the policy forbids it, and says nothing for one website or no canary', async () => {
+    asRole('operator');
+    canaryWorld({ enabled: true, override: 'forbidden' });
+    const view = await showDialog({ certificate: OWNED });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /www\.example\.test/ }));
+    expect(screen.queryByTestId('canary-choice')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('checkbox', { name: /api\.example\.test/ }));
+    expect(await screen.findByTestId('canary-note')).toBeInTheDocument();
+    expect(screen.queryByTestId('canary-override')).not.toBeInTheDocument();
+    view.unmount();
+    canaryWorld({ enabled: false });
+    await pickBoth();
+    await screen.findByRole('button', { name: 'Deploy' });
+    expect(screen.queryByTestId('canary-choice')).not.toBeInTheDocument();
   });
 });
 

@@ -21,6 +21,7 @@ import { PageLoader } from '../auth/guards';
 import { DeploymentSteps } from '../components/DeploymentSteps';
 import { DeploymentOutcome, DeploymentStatusBadge } from '../components/DeploymentView';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { RolloutPanel } from '../components/RolloutPanel';
 import { LabelledCode } from '../components/LabelledCode';
 import { FactList, Notice, PageHeader, Panel, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
@@ -55,6 +56,8 @@ function refetchEvery(d: DeploymentDetail | undefined, updates: number): number 
       return 15_000;
     case 'held':
       return 30_000;
+    case 'observing':
+      return 10_000;
     default:
       return false;
   }
@@ -200,6 +203,7 @@ export function DeploymentDetailPage() {
       />
       <ErrorAlert error={dep.error} />
       <DeploymentOutcome d={d} />
+      {d.rollout && <RolloutPanel id={d.rollout.id} />}
       {view === 'working' && <Notice tone="info" role="status" title={t('deploy.working')} />}
       {chain && <Notice tone="warning" testId="win-chain-differs" title={t('deployments.warnings.win_chain_differs', chain)} />}
 

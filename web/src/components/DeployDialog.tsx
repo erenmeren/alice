@@ -27,7 +27,9 @@ import { LocationWarning } from './LocationWarning';
 import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
 import deploy from './deploy.module.css';
-import { DialogActions } from './ui';
+import { DialogActions, Notice } from './ui';
+import { CanaryChoice, serviceIdOf } from './CanaryChoice';
+import { useOptionalStepUp } from './StepUpProvider';
 import { WRAP } from './wrap';
 
 export interface DeployDialogProps {
@@ -116,6 +118,9 @@ function DeployForm({
   const [chosenId, setChosenId] = useState('');
   const [picked, setPicked] = useState<string[]>(bindings && location ? [location.id] : []);
   const [confirmChain, setConfirmChain] = useState(false);
+  const [override, setOverride] = useState(false);
+  const { run } = useOptionalStepUp();
+  const [rollout, setRollout] = useState<DeployResult['rollout']>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [refused, setRefused] = useState<string | null>(null);
@@ -186,12 +191,17 @@ function DeployForm({
     setError(null);
     setRefused(null);
     try {
-      const res = await deployCertificate(
-        chosen.id,
-        targets.map((l) => l.id),
-        incompleteChain && admin && confirmChain,
-      );
+      const send = () =>
+        deployCertificate(
+          chosen.id,
+          targets.map((l) => l.id),
+          incompleteChain && admin && confirmChain,
+          override,
+        );
+      // R65: deploying to all at once needs a fresh step-up (asked for when the server wants it).
+      const res = override ? await run(send) : await send();
       refresh();
+      setRollout(res.rollout ?? null);
       follow(res);
     } catch (e) {
       setError(e);
@@ -227,6 +237,7 @@ function DeployForm({
             <Text size="sm">{t('deploy.working')}</Text>
           </Group>
         )}
+        {rollout && <Notice tone="info" role="status" testId="canary-started" title={t('canary.started', { count: rollout.wave2.length })} />}
         {runs.map((r) => {
           const loc = knownLocations.find((l) => l.id === r.locationId);
           const dep = r.deployment;
@@ -433,6 +444,8 @@ function DeployForm({
           </Alert>
         )}
         {incompleteChain && admin && <Checkbox label={t('deploy.confirmChain')} checked={confirmChain} onChange={(e) => setConfirmChain(e.currentTarget.checked)} />}
+
+        <CanaryChoice serviceId={serviceIdOf(chosen?.service)} destinations={targets.length} override={override} onOverride={setOverride} disabled={busy} />
 
         <ErrorAlert error={error} />
       </Stack>

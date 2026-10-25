@@ -18,6 +18,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { useNow } from './Expiry';
 import { InternalLink } from './InternalLink';
 import { useStepUp } from './StepUpProvider';
+import { CanaryChoice, serviceIdOf } from './CanaryChoice';
 import deploy from './deploy.module.css';
 import { DialogActions } from './ui';
 import { shortVersion, versionBlock } from './vaultText';
@@ -56,6 +57,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
   const [chosenId, setChosenId] = useState(firstId);
   const [picked, setPicked] = useState<string[]>(binding.locations.map((l) => l.location_id));
   const [confirmChain, setConfirmChain] = useState(false);
+  const [override, setOverride] = useState(false);
   const [chainAsked, setChainAsked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -109,7 +111,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
     setError(null);
     setRefused(null);
     try {
-      const res = await run(() => deployBinding(binding.id, version.id, picked, chainOffer && confirmChain));
+      const res = await run(() => deployBinding(binding.id, version.id, picked, chainOffer && confirmChain, override));
       refresh();
       follow(res);
     } catch (e) {
@@ -249,7 +251,8 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
               </Alert>
             )}
             {chainOffer && <Checkbox label={t('deploy.confirmChain')} checked={confirmChain} onChange={(e) => setConfirmChain(e.currentTarget.checked)} />}
-            <ErrorAlert error={error} />
+            <CanaryChoice serviceId={serviceIdOf(client.getQueryData<Target>(targetKey(binding.vault_id))?.service)} destinations={picked.length} override={override} onOverride={setOverride} disabled={busy} />
+        <ErrorAlert error={error} />
             <DialogActions>
               <Button variant="default" disabled={busy} onClick={close}>
                 {t('deploy.cancel')}

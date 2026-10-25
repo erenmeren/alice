@@ -19,8 +19,9 @@ export const FINAL_STATUSES: ReadonlySet<string> = new Set(['succeeded', 'unchan
 //   finishing  the job succeeded but the record is not final yet (the result is being recorded)
 //   stopped    the job ended (failed, cancelled or given up) while the record is still not final
 //   unknown    the status is a value this version does not know ('' or newer)
+//   observing  a wave-1 deployment of a canary rollout: in place and under observation (R65, state holding)
 //   working    queued or running
-export type DeploymentView = 'final' | 'held' | 'recovering' | 'finishing' | 'stopped' | 'unknown' | 'working';
+export type DeploymentView = 'final' | 'held' | 'recovering' | 'finishing' | 'stopped' | 'unknown' | 'observing' | 'working';
 
 const KNOWN_ACTIVE: ReadonlySet<string> = new Set(['pending', 'running', 'needs_attention']);
 const ENDED_JOBS: ReadonlySet<string> = new Set(['failed', 'cancelled', 'dead']);
@@ -75,7 +76,8 @@ export const SERVER_OPERATION_PENDING = 'deployment.server_operation_pending';
 
 // deploymentStatusText is the text key of a deployment's status: a failed deployment that an
 // Administrator cancelled before anything was sent reads "Cancelled", never as a failure.
-export function deploymentStatusText(d: Pick<Deployment, 'status' | 'error'>): string {
+export function deploymentStatusText(d: Pick<Deployment, 'status' | 'error'> & { state?: string }): string {
+  if (d.state === 'holding') return 'enum.deploymentState.holding'; // R65: "Under observation", not "Running"
   return isCancelled(d) ? 'deployments.cancelled' : deploymentStatusKey(d.status);
 }
 
@@ -84,6 +86,7 @@ export const wasSent = (d: Pick<Deployment, 'state'>): boolean => d.state !== ''
 
 export function deploymentView(d: Pick<Deployment, 'status' | 'state' | 'job_status'>): DeploymentView {
   if (FINAL_STATUSES.has(d.status)) return 'final';
+  if (d.state === 'holding') return 'observing';
   if (d.state === 'recovering' || d.status === 'needs_attention') return 'recovering';
   if (d.job_status === 'blocked_license' && NOT_SENT.has(d.state)) return 'held';
   if (d.job_status === 'succeeded' && KNOWN_ACTIVE.has(d.status)) return 'finishing';

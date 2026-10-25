@@ -3,6 +3,7 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { CanaryChoice, serviceIdOf } from '../CanaryChoice';
 import { Link } from 'react-router';
 import { bindingStateKey, deleteACMEBinding, deployACMECertificate, listACMEBindings, putACMEBinding, releaseACMEHold, updateACMECertificate, type ACMEBinding, type ACMECertificate } from '../../api/acme';
 import { isApiError } from '../../api/client';
@@ -18,7 +19,7 @@ import { DriftControls, DriftSummaryLine, HealthBadge, ObservationFacts } from '
 import { InternalLink } from '../InternalLink';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { HiddenCount } from '../services/shared';
-import { useStepUp } from '../StepUpProvider';
+import { useOptionalStepUp, useStepUp } from '../StepUpProvider';
 import { DialogActions, EmptyState, Notice, Panel, StatusBadge, type Tone } from '../ui';
 import { WRAP } from '../wrap';
 import { keyFamily, MAX_DEPLOY, Problem } from './issued';
@@ -506,6 +507,8 @@ function DeployNowDialog({ c, bindings, admin, onClose, onDone }: { c: ACMECerti
   const client = useQueryClient();
   const [picked, setPicked] = useState<string[]>(() => (bindings.length <= MAX_DEPLOY ? bindings.map((b) => b.location_id) : []));
   const [confirmChain, setConfirmChain] = useState(false);
+  const [override, setOverride] = useState(false);
+  const { run } = useOptionalStepUp();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [refused, setRefused] = useState<string | null>(null);
@@ -520,7 +523,13 @@ function DeployNowDialog({ c, bindings, admin, onClose, onDone }: { c: ACMECerti
     setError(null);
     setRefused(null);
     try {
-      const res = await deployACMECertificate(c.id, { location_ids: picked, ...(incomplete && admin ? { confirm_incomplete_chain: true } : {}) });
+      const send = () =>
+        deployACMECertificate(c.id, {
+          location_ids: picked,
+          ...(incomplete && admin ? { confirm_incomplete_chain: true } : {}),
+          ...(override ? { canary_override: true } : {}),
+        });
+      const res = override ? await run(send) : await send();
       setResult(res);
       void client.invalidateQueries({ queryKey: DEPLOYMENTS_KEY });
       onDone();
@@ -537,6 +546,7 @@ function DeployNowDialog({ c, bindings, admin, onClose, onDone }: { c: ACMECerti
       {result ? (
         <Stack gap="sm">
           <Notice tone="success" role="status" title={t('acme.issued.deployQueued', { count: result.deployments.length })} />
+          {result.rollout && <Notice tone="info" role="status" testId="canary-started" title={t('canary.started', { count: result.rollout.wave2.length })} />}
           <Stack gap={4}>
             {result.deployments.map((d) => {
               const b = name(d.location_id);
@@ -596,6 +606,7 @@ function DeployNowDialog({ c, bindings, admin, onClose, onDone }: { c: ACMECerti
             </Alert>
           )}
           {incomplete && admin && <Checkbox label={t('deploy.confirmChain')} checked={confirmChain} onChange={(e) => setConfirmChain(e.currentTarget.checked)} />}
+          <CanaryChoice serviceId={serviceIdOf(c.service)} destinations={picked.length} override={override} onOverride={setOverride} disabled={busy} />
           <ErrorAlert error={error} />
           <DialogActions>
             <Button variant="default" disabled={busy} onClick={onClose}>

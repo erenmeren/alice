@@ -43,6 +43,15 @@ export function useStepUp(): StepUpApi {
   return ctx;
 }
 
+// NO_STEP_UP runs the call as it is (outside a StepUpProvider: the server's refusal is then shown as an error).
+const NO_STEP_UP: StepUpApi = { run: (fn) => fn(), confirm: async () => {} };
+
+// useOptionalStepUp is useStepUp for a component that only sometimes needs a step-up (R65: a deploy dialog's
+// "Deploy to all at once") and may be rendered outside the provider.
+export function useOptionalStepUp(): StepUpApi {
+  return useContext(StepUpContext) ?? NO_STEP_UP;
+}
+
 interface Pending {
   promise: Promise<void>;
   resolve: () => void;

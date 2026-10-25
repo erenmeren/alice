@@ -1,63 +1,7 @@
 import { apiFetch, setCsrfToken } from './client';
 import { addServiceFilter } from './services';
 import type { SSHKeyDetail } from './sshkeys';
-import type {
-  AdminEnrollmentRequest,
-  ApiToken,
-  AuditPage,
-  AuditQuery,
-  AuditReport,
-  CreatedToken,
-  LicenseDetail,
-  LicenseStatus,
-  LicenseUploadResult,
-  LoginResponse,
-  MfaEnrollment,
-  MfaInput,
-  SessionInfo,
-  SessionWithCodes,
-  SetupSessionResponse,
-  SetupStatus,
-  Backup,
-  BackupList,
-  BackupSchedule,
-  Forwarding,
-  ForwardingInput,
-  HTTPSInfo,
-  HTTPSUpload,
-  TokenCreateRequest,
-  User,
-  UserCreateRequest,
-  UserUpdateRequest,
-  VersionInfo,
-  HostKey,
-  Job,
-  JobAccepted,
-  JobPage,
-  JobQuery,
-  KeyLocation,
-  PlatformKeyInfo,
-  SSHKeyPage,
-  SSHKeyQuery,
-  Target,
-  Certificate,
-  CertificateDetail,
-  CertificateLocation,
-  CertificateLocationList,
-  CertificateQuery,
-  CSR,
-  CSRCreateRequest,
-  DeployResult,
-  Deployment,
-  DeploymentDetail,
-  DeploymentQuery,
-  LocationPatch,
-  UploadRequest,
-  UploadResult,
-  TargetCreated,
-  TargetCreateRequest,
-  TargetType,
-} from './types';
+import type { AdminEnrollmentRequest, ApiToken, AuditPage, AuditQuery, AuditReport, Backup, BackupList, BackupSchedule, Certificate, CertificateDetail, CertificateLocation, CertificateLocationList, CertificateQuery, CreatedToken, CSR, CSRCreateRequest, Deployment, DeploymentDetail, DeploymentQuery, DeployResult, Forwarding, ForwardingInput, HostKey, HTTPSInfo, HTTPSUpload, Job, JobAccepted, JobPage, JobQuery, KeyLocation, LicenseDetail, LicenseStatus, LicenseUploadResult, LocationPatch, LoginResponse, MfaEnrollment, MfaInput, PlatformKeyInfo, Rollout, SessionInfo, SessionWithCodes, SetupSessionResponse, SetupStatus, SSHKeyPage, SSHKeyQuery, Target, TargetCreated, TargetCreateRequest, TargetType, TokenCreateRequest, UploadRequest, UploadResult, User, UserCreateRequest, UserUpdateRequest, VersionInfo } from './types';
 
 const v1 = '/api/v1';
 
@@ -341,11 +285,16 @@ export const getCertificate = (id: string) => apiFetch<CertificateDetail>(`${v1}
 export const uploadCertificate = (req: UploadRequest) =>
   apiFetch<UploadResult>(`${v1}/certificates/upload`, { method: 'POST', body: req });
 
-export const deployCertificate = (id: string, locationIds: string[], confirmIncompleteChain: boolean) =>
+export const deployCertificate = (id: string, locationIds: string[], confirmIncompleteChain: boolean, canaryOverride = false) =>
   apiFetch<DeployResult>(`${v1}/certificates/${enc(id)}/deploy`, {
     method: 'POST',
-    body: { location_ids: locationIds, confirm_incomplete_chain: confirmIncompleteChain },
+    body: { location_ids: locationIds, confirm_incomplete_chain: confirmIncompleteChain, ...(canaryOverride ? { canary_override: true } : {}) },
   });
+
+// Canary rollouts (R65).
+export const getRollout = (id: string) => apiFetch<Rollout>(`${v1}/deployment-rollouts/${enc(id)}`);
+export const continueRollout = (id: string) => apiFetch<Rollout>(`${v1}/deployment-rollouts/${enc(id)}/actions/continue`, { method: 'POST' });
+export const abortRollout = (id: string) => apiFetch<Rollout>(`${v1}/deployment-rollouts/${enc(id)}/actions/abort`, { method: 'POST' });
 
 export const listCSRs = () => apiFetch<{ items: CSR[] }>(`${v1}/certificates/csr`);
 

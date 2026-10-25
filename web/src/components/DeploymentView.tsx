@@ -11,7 +11,7 @@ import {
   untrustedSuccess,
 } from '../api/deployments';
 import { trustErrorKey } from '../api/enums';
-import type { Deployment, ErrorRef } from '../api/types';
+import type { Deployment, DeploymentDetail, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
 import { toneOf, type Tone } from '../theme';
@@ -24,7 +24,7 @@ import { WRAP } from './wrap';
 // version does not know, or '', reads "Unknown" and is neutral. The design's status pill (StatusBadge);
 // the theme never upper-cases it (Turkish dotted/dotless i).
 // `tone` overrides the status's own tone where a page knows more (the history marks an unverified success a warning).
-export function DeploymentStatusBadge({ d, testId, tone }: { d: Pick<Deployment, 'status' | 'error'>; testId?: string; tone?: Tone }) {
+export function DeploymentStatusBadge({ d, testId, tone }: { d: Pick<Deployment, 'status' | 'error'> & { state?: string }; testId?: string; tone?: Tone }) {
   const { t } = useTranslation();
   const cancelled = isCancelled(d);
   return (
@@ -158,6 +158,14 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
                 : 'deploy.rollbackFailedRestored'
               : 'deploy.rollbackFailed',
         );
+    }
+  } else if (view === 'observing') {
+    // R65: the new certificate is in place and verified; the canary observes it before the other websites follow.
+    color = 'blue';
+    headline = t('canary.observing');
+    const c = (d as DeploymentDetail).canary;
+    if (c && c.rounds > 0) {
+      extra = t('canary.roundSummary', { rounds: c.rounds, passes: c.passes, result: t(`canary.result.${c.last_result || 'none'}`) });
     }
   } else if (view === 'held') {
     color = 'yellow';
