@@ -317,8 +317,8 @@ func deployHelperCalls(t *testing.T) map[string][]string {
 	return out
 }
 
-// A2 / Review Focus 2: insertDeployment is called only by a person's RequestDeployment, the Key Vault "Deploy now"
-// (RequestKVDeployment), the Key Vault planner (planBinding) and prepareACMEDeployment; nothing passes it around as a
+// A2 / Review Focus 2: insertDeployment is called only by a person's RequestDeployment(WithRollout), the Key Vault "Deploy now"
+// (RequestKVDeploymentWithRollout), wave 2 of a person's canary rollout (insertWave2Location, R65), the Key Vault planner (planBinding) and prepareACMEDeployment; nothing passes it around as a
 // value; every one of them reads the certificate, locks the servers and locations and checks the location BEFORE it
 // inserts; and the ACME planner reaches it only through prepareACMEDeployment.
 func TestInsertDeploymentHasOnlyCheckedCallers(t *testing.T) {
@@ -333,7 +333,8 @@ func TestInsertDeploymentHasOnlyCheckedCallers(t *testing.T) {
 		}
 	}
 	slices.Sort(inserters)
-	assert.Equal(t, []string{"RequestDeployment", "RequestKVDeployment", "insertDriftRepair", "planBinding", "prepareACMEDeployment"}, inserters)
+	assert.Equal(t, []string{"RequestDeploymentWithRollout", "RequestKVDeploymentWithRollout", "insertDriftRepair", "insertWave2Location", "planBinding",
+		"prepareACMEDeployment"}, inserters, "R65: the request paths answer the canary's rollout; wave 2 of a person's rollout is inserted by the advance")
 	for _, fn := range inserters {
 		cs := calls[fn]
 		first := slices.Index(cs, "insertDeployment")
@@ -374,7 +375,7 @@ func TestACMEFilesReachDeploymentsOnlyThroughTheCheckedPaths(t *testing.T) {
 				if call, ok := n.(*ast.CallExpr); ok {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 						switch sel.Sel.Name {
-						case "prepareACMEDeployment", "insertDeployment", "RequestDeployment":
+						case "prepareACMEDeployment", "insertDeployment", "RequestDeploymentWithRollout":
 							callers[sel.Sel.Name] = append(callers[sel.Sel.Name], fn.Name.Name)
 						}
 					}
@@ -385,7 +386,7 @@ func TestACMEFilesReachDeploymentsOnlyThroughTheCheckedPaths(t *testing.T) {
 	}
 	assert.Equal(t, []string{"planACMEDeploy", "planACMEDeploy"}, callers["prepareACMEDeployment"], "the hold check and the deployments")
 	assert.Equal(t, []string{"prepareACMEDeployment"}, callers["insertDeployment"])
-	assert.Equal(t, []string{"DeployACMENow"}, callers["RequestDeployment"])
+	assert.Equal(t, []string{"DeployACMENowWithRollout"}, callers["RequestDeploymentWithRollout"])
 }
 
 // The pure decision never reads the clock or a database: everything comes from the snapshot (a second call with the same

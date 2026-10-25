@@ -198,7 +198,7 @@ WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, no
 			}
 		}
 		if p.hold != "" {
-			_, deployable, err := s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.candidate, 0, now)
+			_, deployable, err := s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.candidate, 0, now, nil)
 			if err != nil || deployable == 0 {
 				return err // nothing could be deployed now: nothing is held and nothing is said
 			}
@@ -211,8 +211,25 @@ WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, no
 			}
 		}
 		if len(p.deploy) > 0 && p.budget > 0 {
-			if created, _, err = s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.deploy, p.budget, now); err != nil {
+			var rollout *uuid.UUID
+			switch {
+			case p.createRollout != nil:
+				r, err := s.createAutomaticRollout(ctx, tx, sn.canary, p.createRollout, sn.current.id, sn.service,
+					rolloutSource{origin: RolloutOriginACME, acmeCertificateID: &id}, now)
+				if err != nil {
+					return err
+				}
+				rollout = &r.ID
+			case sn.canary != nil && sn.canary.rollout != nil && (sn.canary.rollout.State == RolloutWave1 || sn.canary.rollout.State == RolloutHold):
+				rollout = &sn.canary.rollout.ID
+			}
+			if created, _, err = s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.deploy, p.budget, now, rollout); err != nil {
 				return err
+			}
+			if p.canarySkipped != "" {
+				if err := s.auditCanarySkipped(ctx, tx, sn.canary, sn.current.id, p.deploy); err != nil {
+					return err
+				}
 			}
 		}
 		if p.stop != nil {
@@ -313,6 +330,9 @@ FROM deployments d WHERE d.location_id = ANY($1) AND (d.state <> 'done' OR d.cer
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the deployments: %w", err)
 	}
+	if sn.canary, err = readCanaryPlanState(ctx, tx, sn.service, RolloutOriginACME, "acme_certificate_id", id, c.id, "certificate_id", locs); err != nil {
+		return sn, nil, err
+	}
 	return sn, names, nil
 }
 
@@ -327,7 +347,7 @@ FROM deployments d WHERE d.location_id = ANY($1) AND (d.state <> 'done' OR d.cer
 // the checks (budget 0: the checks only, for a hold). A location that vanished or whose server was deleted ends the
 // attempt without an error (the next run sees it gone).
 func (s *Service) prepareACMEDeployment(ctx context.Context, tx pgx.Tx, certificate, service uuid.UUID, locations []uuid.UUID, budget int,
-	now time.Time) (created, deployable int, err error) {
+	now time.Time, rollout *uuid.UUID) (created, deployable int, err error) {
 	c, err := readDeployCertificate(ctx, tx, certificate)
 	if err != nil {
 		return 0, 0, err
@@ -350,6 +370,9 @@ func (s *Service) prepareACMEDeployment(ctx context.Context, tx pgx.Tx, certific
 	}
 	a := Actor{Audit: jobsActor}
 	src := deploySource{Trigger: TriggerACMERenewal}
+	if rollout != nil {
+		src.RolloutID, src.Wave = rollout, 1 // R65: wave 1 of the certificate's canary rollout
+	}
 	for _, id := range locations {
 		l := locs[id]
 		if _, err := s.checkDeployLocation(ctx, tx, c, l, targets[l.target]); err != nil {

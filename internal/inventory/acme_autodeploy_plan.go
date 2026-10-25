@@ -73,6 +73,8 @@ type acmeDeploySnapshot struct {
 	// forbidden: the service's policy forbids automatic deployment (R55): every binding with automatic deployment on is
 	// marked ReasonAutoDeployForbidden and nothing is deployed, held or stopped while it lasts.
 	forbidden bool
+	// canary is the canary of the ACME certificate's current certificate (R65, design §12; nil: none read).
+	canary *canaryPlanState
 }
 
 // acmeAttention is a change of a binding's attention mark: code "" clears it.
@@ -92,6 +94,9 @@ type acmeDeployPlan struct {
 	stop      *planStop   // version is the certificate id, name unused
 	stopCode  string      // the reason of the last counted failure
 	attention []acmeAttention
+	// R65: the rollout to create (deploy is then its wave 1), and why the canary was skipped ("" or "expiry").
+	createRollout *rolloutWaves
+	canarySkipped string
 }
 
 // planACMEAutoDeploy decides what the planner does for one ACME certificate. Rules, in order:
@@ -122,6 +127,9 @@ type acmeDeployPlan struct {
 //     location it would go to was bound before the reopening: without a person it would roll out the moment the licence
 //     returns. A binding made after the reopening is an Administrator's act (automatic deployment on needs one) with the
 //     certificate in view, so it is not held for it;
+//   - the canary (R65, canaryFilter): the locations of another rollout in wave 1 or hold are left alone; with the
+//     source service's canary on, two or more locations make a rollout whose wave 1 goes first, its rollout in wave 1 or
+//     hold lets only its unattempted wave-1 locations go, and once it completed the rest go as today;
 //   - otherwise at most min(AutoDeployWave - unfinished automatic deployments, remaining) are created.
 func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	var p acmeDeployPlan
@@ -190,6 +198,9 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	}
 
 	for _, b := range sn.bindings {
+		if sn.canary != nil && sn.canary.reserved[b.location] {
+			continue // R65: another rollout holds the location: no attention mark changes either
+		}
 		want := ""
 		served := b.served != nil && *b.served == cur.id
 		if d, ok := lastAuto[b.location]; ok && !served && !deployed[b.location] && failedStatus(d.status) && !neutralReason(d.errorCode) {
@@ -242,6 +253,8 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 		}
 	}
 	candidates := append(slices.Clone(fresh), retries...)
+	// R65 (design §12): the canary of the source service's policy decides which of them go now.
+	candidates, create, skip := canaryFilter(sn.canary, candidates, func(l uuid.UUID) bool { return !lastAny[l].IsZero() }, sn.now)
 	if len(candidates) == 0 {
 		return p
 	}
@@ -256,7 +269,7 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	}
 	p.budget = max(0, min(AutoDeployWave-inFlight, sn.remaining))
 	if p.budget > 0 {
-		p.deploy = candidates
+		p.deploy, p.createRollout, p.canarySkipped = candidates, create, skip
 	}
 	return p
 }

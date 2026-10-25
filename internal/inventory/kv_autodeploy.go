@@ -277,6 +277,17 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			return err
 		}
 		sn.reopened = run.reopened // the poll's own helper, read once per run
+		for i := range sn.versions {
+			if v := sn.versions[i]; v.current && v.leaf != nil {
+				locs := make([]uuid.UUID, 0, len(sn.locations))
+				for _, l := range sn.locations {
+					locs = append(locs, l.id)
+				}
+				if sn.canary, err = readCanaryPlanState(ctx, tx, vaultService, RolloutOriginKeyVault, "binding_id", id, v.id, "kv_version_id", locs); err != nil {
+					return err
+				}
+			}
+		}
 		p := planAutoDeploy(sn)
 		// R55: while the vault's service's policy forbids automatic deployment, the websites it would deploy to are marked
 		// and nothing else is planned (the binding stays on); once it allows it again the marks clear and the plan resumes.
@@ -345,6 +356,24 @@ WHERE binding_id = $1 AND binding_attention_code = $2`, id, ReasonAutoDeployForb
 			}
 			a := Actor{Audit: jobsActor}
 			src := deploySource{Trigger: triggerKVRenewal, BindingID: &id, KVVersionID: &cur.id, Version: cur.version}
+			if p.hold == nil && p.budget > 0 && len(p.deploy) > 0 {
+				switch {
+				case p.createRollout != nil:
+					r, err := s.createAutomaticRollout(ctx, tx, sn.canary, p.createRollout, *cur.leaf, vaultService,
+						rolloutSource{origin: RolloutOriginKeyVault, bindingID: &id, kvVersionID: &cur.id}, now)
+					if err != nil {
+						return err
+					}
+					src.RolloutID, src.Wave = &r.ID, 1
+				case sn.canary != nil && sn.canary.rollout != nil && (sn.canary.rollout.State == RolloutWave1 || sn.canary.rollout.State == RolloutHold):
+					src.RolloutID, src.Wave = &sn.canary.rollout.ID, 1
+				}
+				if p.canarySkipped != "" {
+					if err := s.auditCanarySkipped(ctx, tx, sn.canary, *cur.leaf, p.deploy); err != nil {
+						return err
+					}
+				}
+			}
 			for _, locID := range p.deploy {
 				if p.hold != nil || created >= p.budget {
 					break

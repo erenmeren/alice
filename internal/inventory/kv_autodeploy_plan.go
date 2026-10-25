@@ -82,6 +82,8 @@ type planSnapshot struct {
 	deployments                           []planDeployment
 	remaining                             int        // deployments the run may still create (all bindings)
 	reopened                              *time.Time // when the licence gate last reopened (nil: never)
+	// canary is the canary of the binding's current version (R65, design §12; nil: none read).
+	canary *canaryPlanState
 }
 
 // planNotice is an email the plan asks for, with the mark that makes it once.
@@ -120,6 +122,9 @@ type autoPlan struct {
 	notices []planNotice
 	stop    *planStop
 	hold    *planHold
+	// R65: the rollout to create (deploy is then its wave 1), and why the canary was skipped ("" or "expiry").
+	createRollout *rolloutWaves
+	canarySkipped string
 }
 
 // Closed reasons of a deployment (deployments.error_code) that say the state a deployment was
@@ -394,21 +399,23 @@ func planAutoDeploy(sn planSnapshot) autoPlan {
 	if older && cur.skippedAt == nil {
 		notify(cur, TemplateKVSkippedOlder, true)
 	}
-	if sn.reopened != nil && !cur.detectedAt.After(*sn.reopened) && cur.notifiedAt == nil && len(fresh)+len(retries) > 0 && !anyDeploymentOf(sn, cur) {
+	// R65 (design §12): the canary of the vault's service's policy decides which of them go now.
+	candidates, create, canarySkip := canaryFilter(sn.canary, append(fresh, retries...), func(l uuid.UUID) bool { return !lastAny[l].IsZero() }, now)
+	if sn.reopened != nil && !cur.detectedAt.After(*sn.reopened) && cur.notifiedAt == nil && len(candidates) > 0 && !anyDeploymentOf(sn, cur) {
 		// Detected before the licence gate last reopened (a renewal that arrived just before a lock and was not
 		// planned yet), no wave of it ever began (no deployment of it at all, any trigger or status) and not
 		// released by an Administrator (ReleaseVersion sets notified_at): without a person it would roll out the
 		// moment the licence returns. Held for the licence instead, if the apply step finds a website it could
 		// really deploy to; the existing "held" mail goes once. A wave that began before the lock continues under
 		// the normal rules.
-		p.hold = &planHold{version: cur.id, candidates: append(slices.Clone(fresh), retries...)}
+		p.hold = &planHold{version: cur.id, candidates: slices.Clone(candidates)}
 		p.notices = append(p.notices, planNotice{version: cur.id, template: TemplateKVNewVersionHeldLicense, onHold: true})
 		return p
 	}
 	p.budget = max(0, min(AutoDeployWave-inFlight, sn.remaining))
-	if p.budget > 0 {
-		// Fresh websites first, then the retries, each in website order.
-		p.deploy = append(fresh, retries...)
+	if p.budget > 0 && len(candidates) > 0 {
+		// Fresh websites first, then the retries, each in website order (the canary's wave 1 in its order).
+		p.deploy, p.createRollout, p.canarySkipped = candidates, create, canarySkip
 	}
 	return p
 }
