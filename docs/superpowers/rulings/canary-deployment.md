@@ -221,6 +221,28 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   certificate that failed its canary. Cost if wrong: none found; the incident then waits on the revert as on any busy
   place.
 
+- **Minor (a). One lock order at the release.** When a release deploys wave 2 (a person's rollout, at the hold's end or
+  by Continue now), `applyRolloutPlan` first locks every server of the rollout (`FOR NO KEY UPDATE`, id order), then the
+  release locks wave-1 websites and `insertWave2` wave-2 servers and websites. Why: a person's deploy locks servers, then
+  websites; without the first step a wave-1 and a wave-2 website on one server and a person deploying to the held website
+  at that moment could deadlock (PostgreSQL aborts one: the advance retries, the person gets a 500). Cost if wrong: the
+  release waits for a deploy on the rollout's servers that is taking its locks; no test reproduces the race (the release
+  and Continue paths run in the integration suites).
+- **Minor (b). A preemption releases the other wave-1 holds without a check pass** (design §20.3), also one whose
+  consecutive failures already reached the threshold when the advance has not yet acted on it. Why: the incident must be
+  able to proceed at those places, and the certificate the incident replaces is the compromised one, not the canary's;
+  the advance runs every 10 s, so the window is short. Cost if wrong: a website that was failing its checks keeps the new
+  certificate after an incident; its failures stay in the audit log and on the rollout.
+- **Minor (c). `AdvanceRollouts` takes the oldest 100 rollouts first.** More than 100 live rollouts (for example long
+  wave-2 phases) delay newer ones by a run each. Accepted: the batch bounds one run's transaction count; noted for
+  installations with very many concurrent rollouts.
+- **Minor (d). The unique indexes `deployment_rollouts_one_acme` and `_one_kv` exclude only failed and aborted
+  rollouts: intended (design §12, ruling 29).** A stopped or preempted automatic rollout ended for the licence or an
+  incident, not for the certificate's health; the planner then continues that certificate (or version) without a new
+  rollout, as after completion, so a second rollout of the same key is never needed. A new ACME certificate or Key Vault
+  version is a new key and gets its own rollout. Cost if wrong: a re-armed stopped certificate cannot get a canary of its
+  own until the next renewal.
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.

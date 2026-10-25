@@ -479,6 +479,14 @@ func (s *Service) applyRolloutPlan(ctx context.Context, tx pgx.Tx, r Rollout, sn
 			return false, gate
 		}
 	}
+	if plan.insertWave2 {
+		// Final review minor (a): a person's deploy locks servers, then websites; the release below locks wave-1 websites
+		// and insertWave2 then wave-2 servers. Locking every server of the rollout first keeps one order for both.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM targets WHERE id IN (SELECT target_id FROM certificate_locations WHERE id = ANY($1))
+ORDER BY id FOR NO KEY UPDATE`, append(slices.Clone(r.Wave1), r.Wave2...)); err != nil {
+			return false, fmt.Errorf("inventory: lock the rollout's servers: %w", err)
+		}
+	}
 	for _, id := range sortedKeys(plan.release) {
 		err := s.ReleaseHold(ctx, tx, id, plan.release[id])
 		if errors.Is(err, ErrCertificateRevoked) || errors.Is(err, ErrCertificateCompromised) {
