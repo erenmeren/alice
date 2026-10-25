@@ -26,6 +26,14 @@ import { keyFamily, MAX_DEPLOY, Problem } from './issued';
 const STATE_TONE: Record<string, Tone> = { current: 'success', pending: 'info', attention: 'warning', drifted: 'danger' };
 const STATE_ICON = { current: 'CircleCheck', pending: 'Clock3', attention: 'CircleAlert', drifted: 'CircleX' } as const;
 
+// placeColumnKey names the place column by the kinds it lists (R66): Binding when every row is a Windows binding,
+// Certificate file when none is, both when they are mixed. Any other kind counts as a file.
+function placeColumnKey(items: Pick<ACMEBinding, 'location_kind'>[]): string {
+  const bindings = items.filter((b) => b.location_kind === 'win_sslbinding').length;
+  if (bindings === 0) return 'acme.issued.bindings.columns.file';
+  return bindings === items.length ? 'acme.issued.bindings.columns.binding' : 'acme.issued.bindings.columns.place';
+}
+
 // AcmeBindingsPanel is "Websites using this certificate": the websites that follow an issued certificate, what each
 // serves, automatic deployment (the certificate's and each website's), the hold and stop marks of automatic deployment,
 // Add websites and Deploy now. Operators connect, remove, deploy and switch automatic deployment off; switching it on is
@@ -111,7 +119,7 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>{t('acme.issued.bindings.columns.server')}</Table.Th>
-                  <Table.Th>{t('acme.issued.bindings.columns.file')}</Table.Th>
+                  <Table.Th>{t(placeColumnKey(items))}</Table.Th>
                   <Table.Th>{t('acme.issued.bindings.columns.state')}</Table.Th>
                   <Table.Th>{t('drift.columns.observed')}</Table.Th>
                   <Table.Th>{t('acme.issued.bindings.columns.auto')}</Table.Th>

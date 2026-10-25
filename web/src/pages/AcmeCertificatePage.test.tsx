@@ -905,6 +905,36 @@ describe('what each website should have, what Alice last deployed and what is ob
     expectNoRawKeys();
   });
 
+  // FX-04 (R66 ruling 8): the place column is named by the kinds it lists.
+  it('names the place column by the kinds it lists', async () => {
+    const header = async (bindings: ACMEBinding[]) => {
+      base({ session: sessionFor('operator'), cert: issued(), bindings });
+      const view = await open();
+      const table = await screen.findByRole('table', { name: 'Websites using this certificate' });
+      const names = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+      view.unmount();
+      return names[1];
+    };
+    const file = (id: string) => acmeBindingFixture({ location_id: id });
+    const binding = (id: string) => acmeBindingFixture({ location_id: id, location_kind: 'win_sslbinding', cert_path: `http.sys/ipport/0.0.0.0:44${id.length}` });
+    expect(await header([file('f1'), file('f22')])).toBe('Certificate file');
+    expect(await header([binding('b1'), binding('b22')])).toBe('Binding');
+    expect(await header([file('f1'), binding('b1')])).toBe('Certificate file or binding');
+  });
+
+  it('says in the add dialog that Windows (IIS) websites are listed too', async () => {
+    base({
+      session: sessionFor('operator'),
+      cert: issued(),
+      bindings: [acmeBindingFixture()],
+      extra: [http.get('/api/v1/certificate-locations', () => HttpResponse.json({ items: [], next_cursor: null }))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add websites' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add websites to this certificate' });
+    expect(within(dialog).getByText(/Only websites on Nginx and Windows \(IIS\) servers whose key type fits are listed\./)).toBeInTheDocument();
+  });
+
   it('repairs a drifted website with one action, and lets an Operator choose observe or approve but not automatic repair', async () => {
     const calls: unknown[] = [];
     base({

@@ -120,7 +120,7 @@ table, with the commands filled in, under **Roles Alice needs** when you add a v
 | Feature | Role | Notes |
 |---|---|---|
 | Monitor certificates, keys and secrets | `Key Vault Reader` | Expected to be enough; not yet confirmed on a real vault. |
-| Deploy certificates to Nginx | + `Key Vault Secrets User` | Lets Alice read a certificate's private key. Scope it to the secrets of the certificates you deploy. |
+| Deploy certificates to Nginx and Windows (IIS) | + `Key Vault Secrets User` | Lets Alice read a certificate's private key. Scope it to the secrets of the certificates you deploy. |
 | Import certificates into the vault | + `Key Vault Certificates Officer` | Only needed if administrators import certificates from Alice. |
 
 The commands, exactly as Alice shows them (`<client-id>` is the application's client ID, or the managed identity's

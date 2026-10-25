@@ -2345,7 +2345,7 @@
     "title": "Key Vaults",
     "add": "Add Key Vault",
     "empty": "No Key Vault yet. Add one to see its certificates and keys.",
-    "intro": "Alice watches the certificates, keys and secrets of your Azure Key Vaults and can deploy their certificates to your Nginx websites.",
+    "intro": "Alice watches the certificates, keys and secrets of your Azure Key Vaults and can deploy their certificates to your Nginx websites and Windows (IIS) bindings.",
     "columns": {
       "name": "Name",
       "status": "Status",
@@ -2396,7 +2396,7 @@
       "title": "Roles Alice needs",
       "intro": "Give the application these roles on the vault. Each row adds to the one above. Alice only reads what the roles allow and never changes roles itself.",
       "monitor": "Monitor certificates, keys and secrets",
-      "deploy": "Deploy certificates to Nginx",
+      "deploy": "Deploy certificates to Nginx and Windows (IIS)",
       "import": "Import certificates into the vault",
       "readerUnconfirmed": "Expected to be enough; not yet confirmed on a real vault.",
       "policies": "Vault uses access policies",
@@ -2561,7 +2561,7 @@
     "page": {
       "description": "See certificate versions and the websites connected to them.",
       "boundaryTitle": "A precise boundary for Azure access",
-      "boundaryText": "Certificates can be monitored and deployed to Nginx. Keys are inventory-only; secrets show metadata only.",
+      "boundaryText": "Certificates can be monitored and deployed to Nginx and Windows (IIS). Keys are inventory-only; secrets show metadata only.",
       "keysOnlyTitle": "Key inventory only",
       "keysOnlyText": "Azure Key Vault key rotation is outside Alice v1 scope.",
       "metadataTitle": "Metadata only",
@@ -3807,6 +3807,8 @@
         "columns": {
           "server": "Server",
           "file": "Certificate file",
+          "binding": "Binding",
+          "place": "Certificate file or binding",
           "state": "State",
           "auto": "Automatic deployment",
           "actions": "Actions"
@@ -3835,7 +3837,7 @@
         "stoppedText": "Automatic deployment of this certificate stopped after repeated failures. Look at the websites that need attention, fix the cause, then use Deploy now.",
         "add": "Add websites",
         "addTitle": "Add websites to this certificate",
-        "addHelp": "Choose the websites that should use this certificate. Only Nginx websites whose key type fits are listed. Automatic deployment starts off for each of them.",
+        "addHelp": "Choose the websites that should use this certificate. Only websites on Nginx and Windows (IIS) servers whose key type fits are listed. Automatic deployment starts off for each of them.",
         "noLocations": "No website fits this certificate's key type, or every one already uses it.",
         "followsVault": "Follows a Key Vault certificate. Disconnect it there first.",
         "partlyAdded_one": "{{count}} website was connected before Alice stopped at the marked one; the rest were not tried.",
