@@ -357,6 +357,13 @@ INSERT INTO incident_notices (incident_id, notice, created_at)
 VALUES ('e1000000-0000-4000-8000-000000000001', 'windows.compromised_in_store:' || repeat('a', 40), now());
 INSERT INTO revocation_checks (fingerprint_sha256, status, method, error_code, failures, checked_at, next_check_at)
 VALUES (repeat('e', 64), 'unavailable', '', 'certificate.revocation_unreachable', 2, now(), now() + interval '2 hours');
+INSERT INTO deployment_rollouts (id, certificate_id, policy_version, settings, origin, state, wave1_location_ids, wave2_location_ids,
+        hold_started_at, hold_until, created_at)
+SELECT 'e3000000-0000-4000-8000-000000000001', certificate_id, 1, '{"hold":"10m"}', 'manual', 'hold', ARRAY[id],
+       ARRAY['e3000000-0000-4000-8000-000000000002'::uuid], now(), now() + interval '10 minutes', now() FROM certificate_locations LIMIT 1;
+INSERT INTO canary_checks (deployment_id, rollout_id, rounds, passes, next_check_at, last_at, last_result, last_tls, last_http_status, last_latency_ms)
+SELECT id, 'e3000000-0000-4000-8000-000000000001', 1, 1, now() + interval '30 seconds', now(), 'pass', 'pass', 200, 12
+FROM deployments WHERE state <> 'done' LIMIT 1;
 INSERT INTO services (id, name, environment_id, created_at, updated_at)
 VALUES ('e2000000-0000-4000-8000-000000000001', 'Payments', (SELECT id FROM environments WHERE key = 'production'), now(), now());
 INSERT INTO service_trusts (id, source_service_id, target_service_id, created_at)

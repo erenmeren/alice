@@ -31,20 +31,36 @@ import (
 	"alice/internal/providers/httpcheck"
 )
 
-// Ports of this package's local servers (127.0.0.1:45420..45431; 45422 and 45432..45439 belong to canaryjobs).
-const (
-	portMain      = 45420
-	portRedirect  = 45421
-	portOther     = 45423
-	portHeaders   = 45424
-	portSilent    = 45425
-	portSlow      = 45426
-	portHuge      = 45427
-	portBigHeader = 45428
-	portPlain     = 45429
-	portProxy     = 45430
-	portRefused   = 45431
+// Ports of this package's local servers: each is the port the system chose when its server started (listen), so no
+// fixed port meets another process's connection on CI (a fixed port in the ephemeral range collided once, R65).
+var (
+	portMain      int
+	portRedirect  int
+	portOther     int
+	portHeaders   int
+	portSilent    int
+	portSlow      int
+	portHuge      int
+	portBigHeader int
+	portPlain     int
+	portProxy     int
+	portRefused   int
 )
+
+// listen opens a listener on 127.0.0.1 at a port the system chooses and records the port in *port.
+func listen(t *testing.T, port *int) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	*port = ln.Addr().(*net.TCPAddr).Port
+	return ln
+}
+
+// closedPort records a port nothing listens on (one the system just gave out and took back).
+func closedPort(t *testing.T, port *int) {
+	t.Helper()
+	require.NoError(t, listen(t, port).Close())
+}
 
 type leaf struct {
 	cert tls.Certificate
@@ -78,12 +94,11 @@ func (s *seen) add(r *http.Request) {
 }
 func (s *seen) count() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.requests) }
 
-// serveTLS starts an HTTPS server on 127.0.0.1:port with the leaf and the handler; it records SNI and requests.
-func serveTLS(t *testing.T, port int, l leaf, h http.HandlerFunc) *seen {
+// serveTLS starts an HTTPS server on 127.0.0.1 (its port in *port) with the leaf and the handler; it records SNI and requests.
+func serveTLS(t *testing.T, port *int, l leaf, h http.HandlerFunc) *seen {
 	t.Helper()
 	s := &seen{}
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
-	require.NoError(t, err)
+	ln := listen(t, port)
 	cfg := &tls.Config{Certificates: []tls.Certificate{l.cert}, MinVersion: tls.VersionTLS12,
 		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) { s.addSNI(hello.ServerName); return nil, nil }}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +124,7 @@ func status(code int) http.HandlerFunc {
 // CAN-12: a pass, a status not expected, a redirect never followed.
 func TestCheckPasses(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	serveTLS(t, portMain, l, status(http.StatusOK))
+	serveTLS(t, &portMain, l, status(http.StatusOK))
 	res := checker().Check(context.Background(), req(portMain, l))
 	assert.True(t, res.OK, "%+v", res)
 	assert.Empty(t, res.Reason)
@@ -133,7 +148,7 @@ func TestCheckPasses(t *testing.T) {
 
 func TestCheckStatusNotExpected(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	serveTLS(t, portMain, l, status(http.StatusServiceUnavailable))
+	serveTLS(t, &portMain, l, status(http.StatusServiceUnavailable))
 	res := checker().Check(context.Background(), req(portMain, l))
 	assert.False(t, res.OK)
 	assert.Equal(t, httpcheck.ReasonHTTPStatus, res.Reason)
@@ -143,8 +158,8 @@ func TestCheckStatusNotExpected(t *testing.T) {
 
 func TestCheckDoesNotFollowRedirects(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	second := serveTLS(t, portRedirect, l, status(http.StatusOK))
-	serveTLS(t, portMain, l, func(w http.ResponseWriter, r *http.Request) {
+	second := serveTLS(t, &portRedirect, l, status(http.StatusOK))
+	serveTLS(t, &portMain, l, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://127.0.0.1:"+strconv.Itoa(portRedirect)+"/elsewhere", http.StatusFound)
 	})
 	res := checker().Check(context.Background(), req(portMain, l))
@@ -161,7 +176,7 @@ func TestCheckDoesNotFollowRedirects(t *testing.T) {
 // CAN-13: the served leaf is compared before any request byte is sent.
 func TestCheckComparesTheServedLeaf(t *testing.T) {
 	served, expected := newLeaf(t, "app.example.test"), newLeaf(t, "app.example.test")
-	s := serveTLS(t, portOther, served, status(http.StatusOK))
+	s := serveTLS(t, &portOther, served, status(http.StatusOK))
 	res := checker().Check(context.Background(), req(portOther, expected))
 	assert.False(t, res.OK)
 	assert.Equal(t, httpcheck.ReasonServedOther, res.Reason)
@@ -173,7 +188,7 @@ func TestCheckComparesTheServedLeaf(t *testing.T) {
 // CAN-13: what is sent: SNI and Host are the server name, GET, the exact target, no credentials.
 func TestCheckSendsTheServerNameAndHost(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	s := serveTLS(t, portHeaders, l, status(http.StatusNoContent))
+	s := serveTLS(t, &portHeaders, l, status(http.StatusNoContent))
 	r := req(portHeaders, l)
 	r.Path = "/health/deep?probe=1&x=%2F"
 	r.ExpectStatus = []int{204}
@@ -204,7 +219,7 @@ func TestCheckSendsTheServerNameAndHost(t *testing.T) {
 // CAN-14 (Review Focus 2): the server name is never resolved; only the address is dialed.
 func TestCheckNeverDialsTheHostName(t *testing.T) {
 	l := newLeaf(t, "metadata.invalid")
-	s := serveTLS(t, portMain, l, status(http.StatusOK))
+	s := serveTLS(t, &portMain, l, status(http.StatusOK))
 	var lookups atomic.Int32
 	res := httpcheck.HTTPChecker{Clock: clock.Real{}, Resolver: netaddrtest.Resolver(func(string) []netip.Addr {
 		lookups.Add(1)
@@ -238,9 +253,8 @@ func TestCheckRefusesLinkLocal(t *testing.T) {
 // CAN-14: environment proxies are never used (the destination is a managed server, decision 13).
 func TestCheckIgnoresEnvironmentProxies(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	serveTLS(t, portMain, l, status(http.StatusOK))
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(portProxy))
-	require.NoError(t, err)
+	serveTLS(t, &portMain, l, status(http.StatusOK))
+	ln := listen(t, &portProxy)
 	t.Cleanup(func() { _ = ln.Close() })
 	var proxied atomic.Int32
 	go func() {
@@ -268,8 +282,7 @@ func TestCheckTimeouts(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
 
 	t.Run("accepts and never answers", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(portSilent))
-		require.NoError(t, err)
+		ln := listen(t, &portSilent)
 		t.Cleanup(func() { _ = ln.Close() })
 		var conns []net.Conn
 		var mu sync.Mutex
@@ -300,7 +313,7 @@ func TestCheckTimeouts(t *testing.T) {
 	})
 
 	t.Run("slow-loris body", func(t *testing.T) {
-		serveTLS(t, portSlow, l, func(w http.ResponseWriter, r *http.Request) {
+		serveTLS(t, &portSlow, l, func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			f := w.(http.Flusher)
 			for range 30 {
@@ -327,7 +340,7 @@ func TestCheckTimeouts(t *testing.T) {
 	t.Run("huge body is cut after 64 KiB", func(t *testing.T) {
 		var wrote atomic.Int64
 		var finished atomic.Bool
-		serveTLS(t, portHuge, l, func(w http.ResponseWriter, _ *http.Request) {
+		serveTLS(t, &portHuge, l, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			chunk := make([]byte, 32<<10)
 			for range 320 { // 10 MiB
@@ -345,7 +358,7 @@ func TestCheckTimeouts(t *testing.T) {
 	})
 
 	t.Run("headers over 16 KiB", func(t *testing.T) {
-		serveTLS(t, portBigHeader, l, func(w http.ResponseWriter, _ *http.Request) {
+		serveTLS(t, &portBigHeader, l, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("X-Big", strings.Repeat("a", 20<<10))
 			w.WriteHeader(http.StatusOK)
 		})
@@ -355,8 +368,7 @@ func TestCheckTimeouts(t *testing.T) {
 	})
 
 	t.Run("plaintext listener", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(portPlain))
-		require.NoError(t, err)
+		ln := listen(t, &portPlain)
 		t.Cleanup(func() { _ = ln.Close() })
 		go func() {
 			for {
@@ -375,6 +387,7 @@ func TestCheckTimeouts(t *testing.T) {
 		assert.Equal(t, httpcheck.ReasonUnreachable, res.Reason, "%+v", res)
 	})
 
+	closedPort(t, &portRefused)
 	t.Run("refused port", func(t *testing.T) {
 		res := checker().Check(context.Background(), req(portRefused, l))
 		assert.Equal(t, httpcheck.ReasonUnreachable, res.Reason, "%+v", res)
@@ -396,8 +409,7 @@ func TestCheckTimeouts(t *testing.T) {
 // The malformed response of a TLS server that is not HTTP is a protocol failure.
 func TestCheckMalformedResponse(t *testing.T) {
 	l := newLeaf(t, "app.example.test")
-	ln, err := tls.Listen("tcp", "127.0.0.1:"+strconv.Itoa(portMain), &tls.Config{Certificates: []tls.Certificate{l.cert}})
-	require.NoError(t, err)
+	ln := tls.NewListener(listen(t, &portMain), &tls.Config{Certificates: []tls.Certificate{l.cert}, MinVersion: tls.VersionTLS12})
 	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {

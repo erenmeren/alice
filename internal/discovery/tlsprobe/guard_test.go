@@ -43,6 +43,8 @@ var allowedSkipVerify = map[string]int{
 	"internal/vconsole/store/tls.go": 1,
 	// R59 G2: an API target's server identity, compared with the pinned SubjectPublicKeyInfo in VerifyConnection.
 	"internal/providers/tlspin/tlspin.go": 1,
+	// R65: a canary check compares the presented leaf with the deployed certificate in VerifyConnection (design §9.3).
+	"internal/providers/httpcheck/httpcheck.go": 1,
 }
 
 // rootSkips are the directories, by exact root-relative path, that hold other projects' Go files
