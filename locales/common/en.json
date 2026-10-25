@@ -1389,7 +1389,7 @@
       },
       "canary_wave_failed": {
         "title": "The canary deployment failed, so this website was put back.",
-        "cause": "This website received the new certificate first, as a canary, but the canary deployment failed for another reason (another first website failed, the checks could not run, the certificate was revoked, or the websites went away). Alice restored the previous certificate here.",
+        "cause": "This website received the new certificate first, as a canary, but the canary deployment failed for another reason (another first website failed, the checks could not run, the certificate was revoked, the websites went away, or not every first website got a deployment within an hour). Alice restored the previous certificate here.",
         "action": "Open the rollout on the deployment's page to see why, fix the cause, then deploy again."
       },
       "rollout_state": {

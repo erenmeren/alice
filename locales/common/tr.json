@@ -1389,7 +1389,7 @@
       },
       "canary_wave_failed": {
         "title": "Kanarya dağıtımı başarısız oldu, bu web sitesi geri alındı.",
-        "cause": "Bu web sitesi yeni sertifikayı kanarya olarak ilk aldı, ancak kanarya dağıtımı başka bir nedenle başarısız oldu (ilk web sitelerinden biri başarısız oldu, denetimler çalışamadı, sertifika iptal edildi ya da web siteleri kaldırıldı). Alice burada önceki sertifikayı geri yükledi.",
+        "cause": "Bu web sitesi yeni sertifikayı kanarya olarak ilk aldı, ancak kanarya dağıtımı başka bir nedenle başarısız oldu (ilk web sitelerinden biri başarısız oldu, denetimler çalışamadı, sertifika iptal edildi, web siteleri kaldırıldı ya da ilk web sitelerinin hepsine bir saat içinde dağıtım yapılamadı). Alice burada önceki sertifikayı geri yükledi.",
         "action": "Nedenini görmek için dağıtımın sayfasında yayılımı açın, nedeni giderin, sonra yeniden dağıtın."
       },
       "rollout_state": {

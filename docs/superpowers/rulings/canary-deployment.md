@@ -243,6 +243,11 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   version is a new key and gets its own rollout. Cost if wrong: a re-armed stopped certificate cannot get a canary of its
   own until the next renewal.
 
+- **Re-review notes.** A wave-1 website without a deployment whose server is deleted still counts as missing (`gone()`
+  reads only deployment rows), so after the hour the rollout fails as `wave1_incomplete` instead of dropping the website.
+  Intended: the stricter, fail-closed behaviour; the owner may relax it later. The re-review of `917c568a..465205c3`
+  confirmed the planner budget, the one-hour limit, the cap of 19, `preemptPlan` for every state and the lock order.
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.
