@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -412,7 +412,7 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 
 | ID | Case | Expected |
 |---|---|---|
-| HB-01 | An incident place on a disabled server | The place waits and fails busy, never `internal.unexpected`; the incident engine's and the key deploy job's reasons equal the API catalogue's (`target.disabled` included) |
+| HB-01 | An incident place on a disabled server | The place fails at once with `target.disabled` (R66); the incident engine's and the key deploy job's reasons equal the API catalogue's |
 | HB-02 | A website-side person changes a Key Vault binding | They may release their own websites; adding, or releasing another service's website, is 403 |
 | HB-03 | A certificate file whose leaf is labelled `TRUSTED CERTIFICATE` or `X509 CERTIFICATE` | The helper reports the leaf, never the intermediate; trust settings never reach Alice |
 | HB-04 | A backup whose revoked leaf is labelled `TRUSTED CERTIFICATE` | The rollback guard refuses the restore |
@@ -429,6 +429,19 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | HB-15 | The authority revoked an inventory certificate | Marked revoked (final), deployments refused, ACME renewal due, one audit row, one mail |
 | HB-16 | The switch | On for a new installation, off after an update; off, locked or unconfigured make no request |
 | HB-17 | The certificate page and Settings | The check's status and the switch shown in EN and TR |
+
+### 24.9 Fixes batch 1 (R66)
+
+(Plan `docs/superpowers/plans/2026-10-25-fixes-batch-1.md`; rulings `docs/superpowers/rulings/fixes-2026-10-25.md`.)
+
+| ID | Case | Expected |
+|---|---|---|
+| FX-01 | A deployment requested by a person to a disabled server (certificate, Key Vault binding, ACME Deploy now, drift Repair) | 409 `ALC-TGT-0006` naming the website, audit reason `target_disabled`, nothing queued; the automatic planners skip it silently |
+| FX-02 | A key compromise incident's place on a server disabled after the start | Fails at once with `target.disabled`; other places go on; Retry after enabling deploys it |
+| FX-03 | The details of a certificate found by network discovery | Its last revocation check (or "Not checked yet") in EN and TR; list and export unchanged |
+| FX-04 | An ACME certificate bound to Windows bindings and certificate files | The panel's column fits its rows; the add help and the Key Vault texts name Windows (IIS) |
+| FX-05 | The deploy dialog follows five deployments on a loaded machine | Every run read at least every 30 s, at most 125 reads and 150 requests a minute, no 429 |
+| FX-06 | A helper checksum file with a missing, duplicate, extra or malformed line | The release stage refuses it, naming the file and the make target |
 
 ## 25. Security Test Plan
 

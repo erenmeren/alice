@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-305 IDs: 295 test, 7 partial, 1 owner, 2 deferred, 0 gap.
+311 IDs: 301 test, 7 partial, 1 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -225,6 +225,12 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | HB-15 | The authority revoked an inventory certificate | test | `internal/inventory:TestRevocationRunMarksAnAuthorityRevocation`<br>`internal/inventory:TestRevocationRunRenewsARevokedACMECertificate`<br>`internal/inventory:TestRevocationRunHoldIsNotFinal`<br>`internal/inventory:TestRevocationRunChecksDiscoveredLeaves`<br>`migrations:TestMigration00034` |
 | HB-16 | The switch | test | `internal/inventory:TestRevocationRunSkipsWhenOffLockedOrUnconfigured`<br>`internal/inventory:TestRevocationSettingsDefaults`<br>`internal/api:TestRevocationSettingsRoutes`<br>`migrations:TestMigration00034` |
 | HB-17 | The certificate page and Settings | test | `internal/api:TestCertificateDTORevocationCheck`<br>`internal/api:TestRevocationCheckCodeTable`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:shows the switch on and saves it off with the version read`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:renders in Turkish`<br>`web/src/pages/CertificateDetailPage.test.tsx:shows the revocation check`<br>`web/src/pages/CertificateDetailPage.test.tsx:says the authority revoked it` |
+| FX-01 | A deployment requested by a person to a disabled server (certificate, Key Vault binding, ACME Deploy now, drift Repair) | test | `internal/inventory:TestRequestDeploymentRefusals`<br>`internal/inventory:TestRequestKVDeployment`<br>`internal/inventory:TestACMEAutoDeploySkipsWhatIsNotReady`<br>`internal/api:TestCertificateErrorsMapToCodes` |
+| FX-02 | A key compromise incident's place on a server disabled after the start | test | `internal/inventory:TestIncidentPlaceOnADisabledServerFailsAtOnce`<br>`internal/api:TestIncidentRefusalCodesMatchTheCatalogue` |
+| FX-03 | The details of a certificate found by network discovery | test | `internal/discovery/discoverysvc:TestCertificateInCarriesTheRevocationCheck`<br>`internal/api:TestDiscoveryCertificateDetailRevocationCheck`<br>`web/src/components/discovery/ResultsTab.test.tsx:shows the revocation check of the found certificate`<br>`web/src/pages/CertificateDetailPage.test.tsx:lists the revocation check right after the chain` |
+| FX-04 | An ACME certificate bound to Windows bindings and certificate files | test | `web/src/pages/AcmeCertificatePage.test.tsx:names the place column by the kinds it lists`<br>`web/src/pages/AcmeCertificatePage.test.tsx:says in the add dialog that Windows (IIS) websites are listed too`<br>`web/src/components/RoleGuide.test.tsx:Deploy certificates to Nginx and Windows (IIS)`<br>`web/src/components/AccessCheckPanel.test.tsx:Deploy certificates to Nginx and Windows` |
+| FX-05 | The deploy dialog follows five deployments on a loaded machine | test | `web/e2e/phase4.spec.ts:read at least every 30 s`<br>`web/src/api/deployments.test.ts:stays far below` |
+| FX-06 | A helper checksum file with a missing, duplicate, extra or malformed line | test | `tools/releasebuild:TestStageRefusesAMissingInput`<br>`internal/providers/windows/winproto:TestReleasedHelperVersion` |
 | S-01 | Run the full integration suite and the E2E suite with log capture (zap/slog handler wrapping a buffer, plus container st... | test | `internal/api:TestPlatformKeyNeverLeaks`<br>`internal/api:TestSecretLeakSuiteWithGeneratedKeys`<br>`internal/api:TestSecretsNeverLeak` |
 | S-02 | Response scanner middleware in test builds: every HTTP response body, header, and cookie is scanned for canaries and PEM... | test | `internal/api:TestSecretsNeverLeak` |
 | S-03 | Error paths: force failures (invalid key upload, wrong password for PFX, SSH failure, KV 403 echoing a body containing a... | test | `internal/api:TestSecretsNeverLeak` |

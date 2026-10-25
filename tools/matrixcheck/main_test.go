@@ -103,6 +103,16 @@ func TestSpecIDsFindHardeningRows(t *testing.T) {
 	assert.Equal(t, "A place on a disabled server", titles["HB-01"])
 }
 
+// The FX prefix of section 24.9 (fixes batch 1, R66) is a matrix ID.
+func TestSpecIDsFindFixesRows(t *testing.T) {
+	spec := "## 24. Failures\n\n### 24.9 Fixes batch 1 (R66)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
+		"| FX-01 | A deployment to a disabled server | refused |\n| FX-06 | A helper checksum file | refused |\n| FXX-01 | not a matrix prefix | ignored |\n"
+	ids, titles, err := SpecIDs(strings.NewReader(spec))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FX-01", "FX-06"}, ids)
+	assert.Equal(t, "A deployment to a disabled server", titles["FX-01"])
+}
+
 func TestRefusesMissingUnknownAndBrokenEntries(t *testing.T) {
 	for name, tc := range map[string]struct{ mapJSON, want string }{
 		"missing":          {`[{"id":"L-01","status":"owner","owner":"x"}]`, "L-02: no entry"},

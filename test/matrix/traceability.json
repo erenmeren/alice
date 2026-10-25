@@ -2696,6 +2696,60 @@
   ]
  },
  {
+  "id": "FX-01",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRequestDeploymentRefusals",
+   "internal/inventory:TestRequestKVDeployment",
+   "internal/inventory:TestACMEAutoDeploySkipsWhatIsNotReady",
+   "internal/api:TestCertificateErrorsMapToCodes"
+  ]
+ },
+ {
+  "id": "FX-02",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestIncidentPlaceOnADisabledServerFailsAtOnce",
+   "internal/api:TestIncidentRefusalCodesMatchTheCatalogue"
+  ]
+ },
+ {
+  "id": "FX-03",
+  "status": "test",
+  "tests": [
+   "internal/discovery/discoverysvc:TestCertificateInCarriesTheRevocationCheck",
+   "internal/api:TestDiscoveryCertificateDetailRevocationCheck",
+   "web/src/components/discovery/ResultsTab.test.tsx:shows the revocation check of the found certificate",
+   "web/src/pages/CertificateDetailPage.test.tsx:lists the revocation check right after the chain"
+  ]
+ },
+ {
+  "id": "FX-04",
+  "status": "test",
+  "tests": [
+   "web/src/pages/AcmeCertificatePage.test.tsx:names the place column by the kinds it lists",
+   "web/src/pages/AcmeCertificatePage.test.tsx:says in the add dialog that Windows (IIS) websites are listed too",
+   "web/src/components/RoleGuide.test.tsx:Deploy certificates to Nginx and Windows (IIS)",
+   "web/src/components/AccessCheckPanel.test.tsx:Deploy certificates to Nginx and Windows"
+  ]
+ },
+ {
+  "id": "FX-05",
+  "status": "test",
+  "tests": [
+   "web/e2e/phase4.spec.ts:read at least every 30 s",
+   "web/src/api/deployments.test.ts:stays far below"
+  ]
+ },
+ {
+  "id": "FX-06",
+  "status": "test",
+  "tests": [
+   "tools/releasebuild:TestStageRefusesAMissingInput",
+   "internal/providers/windows/winproto:TestReleasedHelperVersion"
+  ]
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [
