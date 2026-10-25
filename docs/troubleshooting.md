@@ -1092,7 +1092,7 @@ while the server waits for it, a new one only after the identity changed.
 
 **Meaning.** The server is disabled, so Alice runs no task on it (shown on the task, HTTP 409 when returned directly).
 
-**Likely cause.** The server was disabled while the task waited in the queue.
+**Likely cause.** The server was disabled before a deployment was requested, or while a task waited in the queue.
 
 **What to do.** Open the server to see why it is disabled, then click **Test connection**.
 
@@ -2544,7 +2544,7 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 
 **Meaning.** Alice cannot deploy to this server now. (HTTP 409, reason `deployment.target_not_ready`.)
 
-**Likely cause.** The server is not connected: its host key fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.
+**Likely cause.** The server is not connected: its host key fingerprint is not confirmed or has changed, or Alice cannot sign in.
 
 **What to do.** Open the server's page, solve the problem shown there, then deploy again.
 

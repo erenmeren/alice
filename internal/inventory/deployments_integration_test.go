@@ -305,6 +305,20 @@ func TestRequestDeploymentRefusals(t *testing.T) {
 	assert.ErrorIs(t, req(f.admin, f.cert.ID, false, f.loc3onTarget2), inventory.ErrTargetNotReady)
 	f.setTargetStatus(f.target2, "pending_host_key")
 	assert.ErrorIs(t, req(f.admin, f.cert.ID, false, f.loc3onTarget2), inventory.ErrTargetNotReady)
+	// FX-01 (R66 ruling 2): a disabled server is refused as disabled, not as not ready, naming the
+	// website, and all or nothing.
+	f.setTargetStatus(f.target2, inventory.StatusDisabled)
+	err = req(f.admin, f.cert.ID, false, f.loc3onTarget2)
+	assert.ErrorIs(t, err, inventory.ErrTargetDisabled)
+	assert.NotErrorIs(t, err, inventory.ErrTargetNotReady)
+	var disabled *inventory.LocationRefusalError
+	require.ErrorAs(t, err, &disabled)
+	assert.Equal(t, f.loc3onTarget2, disabled.LocationID)
+	jobsBefore := len(f.h.jobs.requests())
+	deploymentsBefore := f.h.count("SELECT count(*) FROM deployments")
+	assert.ErrorIs(t, req(f.admin, f.cert.ID, false, f.loc5, f.loc3onTarget2), inventory.ErrTargetDisabled)
+	assert.Len(t, f.h.jobs.requests(), jobsBefore)
+	assert.Equal(t, deploymentsBefore, f.h.count("SELECT count(*) FROM deployments"))
 	f.setTargetStatus(f.target2, "ok")
 	f.setConfigValid(f.target2, false)
 	assert.ErrorIs(t, req(f.admin, f.cert.ID, false, f.loc3onTarget2), inventory.ErrNginxConfigInvalid)
@@ -335,7 +349,7 @@ func TestRequestDeploymentRefusals(t *testing.T) {
 		assert.NotContains(t, d, "key_type", "detail keys pass the denylist")
 	}
 	assert.Subset(t, reasons, []string{"no_private_key", "expired", "key_type_mismatch", "chain_unconfirmed", "location_unsupported",
-		"target_not_ready", "config_invalid", "recovery_pending", "in_progress"})
+		"target_not_ready", "target_disabled", "config_invalid", "recovery_pending", "in_progress"})
 	denied := f.h.auditDetails("deployment.denied")
 	assert.Equal(t, map[string]string{"certificate_id": f.cert.ID.String(), "location_id": f.loc1.String(), "reason": "in_progress"}, denied[0])
 	assert.Equal(t, 1, f.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.denied' AND result = 'denied' AND details->>'reason' = 'in_progress'"))

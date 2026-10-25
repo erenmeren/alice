@@ -2202,8 +2202,8 @@ paths:
         404 (the certificate or a location does not exist), 409 ALC-CRT-0009 (no private key), 422 ALC-CRT-0003
         (expired), 409 ALC-CRT-0014 (not valid yet), 422 ALC-CRT-0007 (key type), 409 ALC-CRT-0011 (an incomplete
         chain needs an Administrator's confirm_incomplete_chain; an Operator's confirmation does not count), 409
-        ALC-NGX-0007 (location unsupported or missing), 409 ALC-DEP-0011 (server not ready), 409 ALC-NGX-0002
-        (Nginx configuration invalid), 409 ALC-DEP-0021 (the location must be discovered again), 409 ALC-CRT-0010
+        ALC-NGX-0007 (location unsupported or missing), 409 ALC-TGT-0006 (the server is disabled), 409 ALC-DEP-0011
+        (server not ready), 409 ALC-NGX-0002 (Nginx configuration invalid), 409 ALC-DEP-0021 (the location must be discovered again), 409 ALC-CRT-0010
         (key type of the place, params expected and actual), 409 ALC-DEP-0002 (a deployment on the server is being
         recovered; retryable), 409 ALC-DEP-0001 (a deployment to this location is in progress; retryable: a
         repeated request while one runs answers this, never a second deployment). A san_mismatch warning does not
@@ -6766,6 +6766,7 @@ components:
         last_seen: { type: string, format: date-time }
         endpoints: { type: array, items: { $ref: "#/components/schemas/DiscoveredEndpoint" }, description: The detail only }
         more_endpoints: { type: boolean, description: The detail only }
+        revocation_check: { $ref: "#/components/schemas/RevocationCheck", description: 'R66: the detail only; null before the first check (the list and the CSV leave it out)' }
     DiscoveredCertificatePage:
       type: object
       required: [items, next_cursor]

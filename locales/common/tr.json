@@ -1349,7 +1349,7 @@
       },
       "target_not_ready": {
         "title": "Alice şu anda bu sunucuya dağıtım yapamaz.",
-        "cause": "Sunucu bağlı değil: ana bilgisayar anahtarının parmak izi onaylanmadı veya değişti, Alice oturum açamıyor ya da sunucu devre dışı.",
+        "cause": "Sunucu bağlı değil: ana bilgisayar anahtarının parmak izi onaylanmadı veya değişti ya da Alice oturum açamıyor.",
         "action": "Sunucunun sayfasını açın, orada gösterilen sorunu çözün, sonra yeniden dağıtın."
       },
       "verify_chain": {

@@ -38,6 +38,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,6 +79,8 @@ var (
 	commitRe    = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	imageRefRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,127}:[A-Za-z0-9._-]{1,128}$`)
 	imageIDRe   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	// helperSumLineRE is one line of a helper checksum file as sha256sum writes it: the hash, two spaces, the name.
+	helperSumLineRE = regexp.MustCompile(`^([0-9a-f]{64})  (\S+)$`)
 )
 
 // images is what the stage needs from Docker; tests replace it.
@@ -731,8 +734,8 @@ func helperEntries(dir string) ([]entry, error) {
 	return out, nil
 }
 
-// helperSetEntries returns the checksum file sums and the binaries it lists under helper/: every binary
-// must exist, be a regular file and match its line.
+// helperSetEntries returns the checksum file sums and the binaries it lists under helper/: the file lists
+// exactly files, each once, in sha256sum form, and every binary must exist, be a regular file and match its line.
 func helperSetEntries(dir, sums string, files []string, target string) ([]entry, error) {
 	sumsPath := filepath.Join(dir, sums)
 	if err := regularFile(sumsPath); err != nil {
@@ -742,11 +745,22 @@ func helperSetEntries(dir, sums string, files []string, target string) ([]entry,
 	if err != nil {
 		return nil, err
 	}
+	// The file lists exactly its binaries, each once, in sha256sum form, as the Makefile writes it (R66 ruling 9).
+	exact := fmt.Errorf("%s must list exactly %s, each once; run make %s", sumsPath, strings.Join(files, ", "), target)
 	want := map[string]string{}
-	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if sum, name, ok := strings.Cut(l, "  "); ok {
-			want[name] = sum
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != len(files) {
+		return nil, exact
+	}
+	for _, l := range lines {
+		m := helperSumLineRE.FindStringSubmatch(l)
+		if m == nil || !slices.Contains(files, m[2]) {
+			return nil, exact
 		}
+		if _, dup := want[m[2]]; dup {
+			return nil, exact
+		}
+		want[m[2]] = m[1]
 	}
 	out := []entry{{dst: "helper/" + sums, src: sumsPath, mode: 0o644}}
 	for _, name := range files {

@@ -416,6 +416,18 @@ describe('CertificateDetailPage import into Key Vault', () => {
     expect(within(facts).getByText(/^Could not check: The certificate authority's revocation service could not be reached\. \(next try .*\)$/)).toBeInTheDocument();
   });
 
+  // R66 (a declined R64 minor): the check follows the chain instead of leading the facts.
+  it('lists the revocation check right after the chain', async () => {
+    certServer(certificateDetailFixture({ id: ID, revocation_check: null }));
+    await renderRoute(`/certificates/${ID}`);
+    const facts = await screen.findByLabelText('Certificate details');
+    const labels = Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent);
+    const chain = labels.indexOf('Chain');
+    expect(chain).toBeGreaterThan(0);
+    expect(labels[chain + 1]).toBe('Revocation check');
+    expect(labels[0]).not.toBe('Revocation check');
+  });
+
   it('says a certificate was never checked', async () => {
     certServer(certificateDetailFixture({ id: ID, revocation_check: null }));
     await renderRoute(`/certificates/${ID}`);

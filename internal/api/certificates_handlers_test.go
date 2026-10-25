@@ -258,6 +258,7 @@ func TestCertificateErrorsMapToCodes(t *testing.T) {
 		{inventory.ErrDeploymentInProgress, "ALC-DEP-0001", 409, nil},
 		{inventory.ErrRecoveryPending, "ALC-DEP-0002", 409, nil},
 		{inventory.ErrTargetNotReady, "ALC-DEP-0011", 409, nil},
+		{inventory.ErrTargetDisabled, "ALC-TGT-0006", 409, nil}, // FX-01 (R66 ruling 2)
 		{inventory.ErrLocationNeedsDiscovery, "ALC-DEP-0021", 409, nil},
 		{inventory.ErrLocationUnsupported, "ALC-NGX-0007", 409, nil},
 		{inventory.ErrNginxConfigInvalid, "ALC-NGX-0002", 409, nil},
@@ -270,6 +271,8 @@ func TestCertificateErrorsMapToCodes(t *testing.T) {
 		{&inventory.LocationRefusalError{LocationID: locationID, Err: &inventory.KeyTypeMismatchError{Expected: "rsa", Actual: "ecdsa"}},
 			"ALC-CRT-0010", 409, map[string]string{"expected": "rsa", "actual": "ecdsa", "location_id": locationID.String()}},
 		{&inventory.LocationRefusalError{LocationID: locationID, Err: inventory.ErrNotFound}, "ALC-SYS-0001", 404,
+			map[string]string{"location_id": locationID.String()}},
+		{&inventory.LocationRefusalError{LocationID: locationID, Err: inventory.ErrTargetDisabled}, "ALC-TGT-0006", 409,
 			map[string]string{"location_id": locationID.String()}},
 	} {
 		d, inv := inventoryDeps(t)

@@ -607,3 +607,45 @@ func TestDiscoveryCertificateCursorHoldsYear9999(t *testing.T) {
 	require.Len(t, afters, 2, "the export counted both pages")
 	assert.Equal(t, discovery.CertificateCursor{NotAfter: last, Fingerprint: dscFP}, *afters[1])
 }
+
+// FX-03 (R66 ruling 7): the found certificate's detail carries its last revocation check (null before the first
+// check, a failure with its code); the list does not.
+func TestDiscoveryCertificateDetailRevocationCheck(t *testing.T) {
+	h, f, _ := discoveryDeps(t)
+	checked := testNow.Add(-time.Hour)
+	row := sampleCertRow()
+	row.Revocation = &discovery.RevocationCheck{Status: "unavailable", ErrorCode: "certificate.revocation_unreachable", CheckedAt: checked,
+		NextCheckAt: checked.Add(time.Hour)}
+	f.CertificateFn = func(context.Context, string) (discovery.CertificateRow, []discovery.EndpointRow, bool, error) {
+		return row, nil, false, nil
+	}
+	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates/"+dscFP, "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	d := jsonObj(t, rec)
+	rc, ok := d["revocation_check"].(map[string]any)
+	require.True(t, ok, "%v", d["revocation_check"])
+	assert.Equal(t, "unavailable", rc["status"])
+	assert.Equal(t, checked.UTC().Format(time.RFC3339), rc["checked_at"])
+	assert.Nil(t, rc["revoked_at"])
+	e := rc["error"].(map[string]any)
+	assert.Equal(t, ErrCertRevocationUnreachable.Code, e["code"])
+	assert.Equal(t, "certificate.revocation_unreachable", e["reason"])
+
+	row.Revocation = nil
+	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates/"+dscFP, "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	d = jsonObj(t, rec)
+	v, present := d["revocation_check"]
+	assert.True(t, present, "the detail always names the check")
+	assert.Nil(t, v, "null before the first check")
+
+	f.ListCertificatesFn = func(context.Context, discovery.CertificateFilter) ([]discovery.CertificateRow, bool, error) {
+		c := sampleCertRow()
+		c.Revocation = &discovery.RevocationCheck{Status: "good", CheckedAt: checked, NextCheckAt: checked}
+		return []discovery.CertificateRow{c}, false, nil
+	}
+	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	item := jsonObj(t, rec)["items"].([]any)[0].(map[string]any)
+	assert.NotContains(t, item, "revocation_check", "the list carries no revocation check")
+}

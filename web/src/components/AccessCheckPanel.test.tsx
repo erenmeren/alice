@@ -34,7 +34,7 @@ describe('AccessCheckPanel', () => {
     );
     const monitor = screen.getByRole('row', { name: /Monitor certificates/ });
     expect(monitor).toHaveTextContent('Allowed');
-    const deploy = screen.getByRole('row', { name: /Deploy certificates to Nginx/ });
+    const deploy = screen.getByRole('row', { name: /Deploy certificates to Nginx and Windows \(IIS\)/ });
     expect(deploy).toHaveTextContent('Not allowed: needs Key Vault Secrets User');
     expect(within(deploy).getByText('Key Vault Secrets User').tagName).toBe('CODE');
     expect(screen.getByRole('row', { name: /Import certificates into the vault/ })).toHaveTextContent('Checked when you import');
@@ -47,7 +47,7 @@ describe('AccessCheckPanel', () => {
     );
     expect(screen.getByRole('row', { name: /Monitor certificates/ })).toHaveTextContent('Check failed');
     expect(screen.getByRole('row', { name: /Monitor certificates/ })).toHaveTextContent('Cannot reach Azure');
-    expect(screen.getByRole('row', { name: /Deploy certificates to Nginx/ })).toHaveTextContent('Not checked');
+    expect(screen.getByRole('row', { name: /Deploy certificates to Nginx and Windows \(IIS\)/ })).toHaveTextContent('Not checked');
   });
 
   it('says so when no check ran yet', async () => {

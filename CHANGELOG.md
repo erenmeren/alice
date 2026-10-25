@@ -35,6 +35,20 @@
 Rulings: `docs/superpowers/rulings/canary-deployment.md`. Migration `00035_canary_deployment.sql`; codes
 `ALC-DEP-0031`..`ALC-DEP-0035`, `ALC-SVC-0020`; KI-44.
 
+## Unreleased — Fixes batch 1 (R66)
+
+**Added**
+- The revocation check of a certificate found by network discovery, in its details.
+
+**Changed**
+- A deployment to a disabled server is refused with `ALC-TGT-0006` (it was `ALC-DEP-0011`); a key compromise incident's
+  place on a disabled server fails at once with that reason instead of after 30 engine runs as busy.
+
+**Fixed**
+- The websites panel of an ACME certificate names a Windows binding as a binding, and the help for adding websites and
+  the Key Vault texts say that Windows (IIS) is deployable too.
+- The release package checks that each helper checksum file lists exactly its binaries, each once and well formed.
+
 ## Unreleased — Hardening batch 1 (R64)
 
 **Added**

@@ -31,7 +31,7 @@ describe('RoleGuide', () => {
     expect(imp).toHaveTextContent('+ Key Vault Certificates Officer');
     expect(within(monitor).getByText('Expected to be enough; not yet confirmed on a real vault.')).toBeInTheDocument();
     expect(within(monitor).getByText('Monitor certificates, keys and secrets')).toBeInTheDocument();
-    expect(within(deploy).getByText('Deploy certificates to Nginx')).toBeInTheDocument();
+    expect(within(deploy).getByText('Deploy certificates to Nginx and Windows (IIS)')).toBeInTheDocument();
     expect(within(imp).getByText('Import certificates into the vault')).toBeInTheDocument();
   });
 
@@ -66,7 +66,7 @@ describe('RoleGuide', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     await show({ vaultName: 'contoso-prod' });
-    const buttons = screen.getAllByRole('button', { name: /^Copy command: Deploy certificates to Nginx$/ });
+    const buttons = screen.getAllByRole('button', { name: /^Copy command: Deploy certificates to Nginx and Windows \(IIS\)$/ });
     expect(buttons).toHaveLength(1);
     await user.click(buttons[0]);
     expect(writeText).toHaveBeenCalledWith(fillCommand(CMD_SECRETS_USER, { vaultName: 'contoso-prod' }));

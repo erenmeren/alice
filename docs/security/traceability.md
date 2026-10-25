@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-337 IDs: 327 test, 7 partial, 1 owner, 2 deferred, 0 gap.
+343 IDs: 333 test, 7 partial, 1 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -208,7 +208,7 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | WIN-43 | Helper 1.0.0 under Alice 1.0; a 0.3.0 and a 0.2.0 helper | test | `internal/providers/windows/winproto:TestReleasedHelperVersion`<br>`internal/providers/windows:TestCleanupNeedsHelper030` |
 | WIN-44 | An ACME certificate deployed to a Windows binding and to a certificate file | test | `internal/api:TestACMEBindingDTOHasLocationKind`<br>`internal/inventory:TestListACMEBindingsCarriesTheLocationKind`<br>`web/src/pages/AcmeCertificatePage.test.tsx:speaks of a Windows binding as a binding, and keeps the file wording for a certificate file (R63)` |
 | WIN-45 | The owner's manual matrix before release: Windows Server 2019, Server Core, a domain baseline, Defender on (with a clean... | owner | owner step: docs/release-checklist.md section 8 (rows 8.1-8.8) |
-| HB-01 | An incident place on a disabled server | test | `internal/api:TestIncidentRefusalCodesMatchTheCatalogue`<br>`internal/api:TestSSHKeyDeployRefusalsMatchTheCatalogue`<br>`internal/inventory:TestIncidentRefusalCodes`<br>`internal/inventory:TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy` |
+| HB-01 | An incident place on a disabled server | test | `internal/api:TestIncidentRefusalCodesMatchTheCatalogue`<br>`internal/api:TestSSHKeyDeployRefusalsMatchTheCatalogue`<br>`internal/inventory:TestIncidentRefusalCodes`<br>`internal/inventory:TestIncidentPlaceOnADisabledServerFailsAtOnce` |
 | HB-02 | A website-side person changes a Key Vault binding | test | `internal/api:TestPatchBindingFromTheWebsiteSide` |
 | HB-03 | A certificate file whose leaf is labelled TRUSTED CERTIFICATE or X509 CERTIFICATE | test | `cmd/alice-helper:TestCertBlocksReadsTheOpenSSLLeafLabels`<br>`cmd/alice-helper:TestCertBlocksNeverReturnAKey`<br>`cmd/alice-helper:TestEmulatorFidelityDump`<br>`internal/providers/linuxssh/helperproto:TestHelperVersion111` |
 | HB-04 | A backup whose revoked leaf is labelled TRUSTED CERTIFICATE | test | `cmd/alice-helper:TestRollbackGuardReadsATrustedLeaf` |
@@ -225,6 +225,12 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | HB-15 | The authority revoked an inventory certificate | test | `internal/inventory:TestRevocationRunMarksAnAuthorityRevocation`<br>`internal/inventory:TestRevocationRunRenewsARevokedACMECertificate`<br>`internal/inventory:TestRevocationRunHoldIsNotFinal`<br>`internal/inventory:TestRevocationRunChecksDiscoveredLeaves`<br>`migrations:TestMigration00034` |
 | HB-16 | The switch | test | `internal/inventory:TestRevocationRunSkipsWhenOffLockedOrUnconfigured`<br>`internal/inventory:TestRevocationSettingsDefaults`<br>`internal/api:TestRevocationSettingsRoutes`<br>`migrations:TestMigration00034` |
 | HB-17 | The certificate page and Settings | test | `internal/api:TestCertificateDTORevocationCheck`<br>`internal/api:TestRevocationCheckCodeTable`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:shows the switch on and saves it off with the version read`<br>`web/src/components/settings/RevocationCheckSettings.test.tsx:renders in Turkish`<br>`web/src/pages/CertificateDetailPage.test.tsx:shows the revocation check`<br>`web/src/pages/CertificateDetailPage.test.tsx:says the authority revoked it` |
+| FX-01 | A deployment requested by a person to a disabled server (certificate, Key Vault binding, ACME Deploy now, drift Repair) | test | `internal/inventory:TestRequestDeploymentRefusals`<br>`internal/inventory:TestRequestKVDeployment`<br>`internal/inventory:TestACMEAutoDeploySkipsWhatIsNotReady`<br>`internal/api:TestCertificateErrorsMapToCodes` |
+| FX-02 | A key compromise incident's place on a server disabled after the start | test | `internal/inventory:TestIncidentPlaceOnADisabledServerFailsAtOnce`<br>`internal/api:TestIncidentRefusalCodesMatchTheCatalogue` |
+| FX-03 | The details of a certificate found by network discovery | test | `internal/discovery/discoverysvc:TestCertificateInCarriesTheRevocationCheck`<br>`internal/api:TestDiscoveryCertificateDetailRevocationCheck`<br>`web/src/components/discovery/ResultsTab.test.tsx:shows the revocation check of the found certificate`<br>`web/src/pages/CertificateDetailPage.test.tsx:lists the revocation check right after the chain` |
+| FX-04 | An ACME certificate bound to Windows bindings and certificate files | test | `web/src/pages/AcmeCertificatePage.test.tsx:names the place column by the kinds it lists`<br>`web/src/pages/AcmeCertificatePage.test.tsx:says in the add dialog that Windows (IIS) websites are listed too`<br>`web/src/components/RoleGuide.test.tsx:Deploy certificates to Nginx and Windows (IIS)`<br>`web/src/components/AccessCheckPanel.test.tsx:Deploy certificates to Nginx and Windows` |
+| FX-05 | The deploy dialog follows five deployments on a loaded machine | test | `web/e2e/phase4.spec.ts:read at least every 30 s`<br>`web/src/api/deployments.test.ts:stays far below` |
+| FX-06 | A helper checksum file with a missing, duplicate, extra or malformed line | test | `tools/releasebuild:TestStageRefusesAMissingInput`<br>`internal/providers/windows/winproto:TestReleasedHelperVersion` |
 | CAN-01 | The canary key of a service policy: defaults, normalization | test | `internal/authz:TestParseCanaryDefaultsAndNormalization` |
 | CAN-02 | Out-of-range or crossed canary fields | test | `internal/authz:TestParseCanaryRefuses` |
 | CAN-03 | The waves of a rollout | test | `internal/authz:TestCanaryWaves`<br>`internal/authz:TestCanaryWavesCapWaveOne`<br>`web/src/components/CanaryChoice.test.ts:counts as the server does, capped at 19` |

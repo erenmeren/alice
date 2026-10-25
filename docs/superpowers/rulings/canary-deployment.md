@@ -174,7 +174,7 @@ No number of the design or the plan changed.
   `phase4.spec.ts` does); the new files are proven on the target by the chain length Nginx sends (1 before, 2 after),
   the leaf by its fingerprint. Rounds are driven by `advanceClock(16)` and `runScheduled('canary.advance')` inside
   `drainUntil`. Cost if wrong: none.
-- **Task 13. `tools/matrixcheck` reads the `CAN` prefix** of §24.9, as R64 added `HB`
+- **Task 13. `tools/matrixcheck` reads the `CAN` prefix** of §24.10 (renumbered from §24.9 at the merge of R66, which took §24.9 and `FX`), as R64 added `HB`
   (`TestSpecIDsFindCanaryRows`). Cost if wrong: none.
 - **Task 13. SEC-110 is the next free requirement number** (SEC-109 was the last); the canary's STRIDE rows are a new
   `04-security.md` §14.4 block, and its accepted port item is KI-44. Cost if wrong: a renumber.

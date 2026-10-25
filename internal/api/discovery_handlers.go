@@ -509,7 +509,7 @@ func (s *server) getDiscoveredCertificate(w http.ResponseWriter, r *http.Request
 		list = append(list, discoveryEndpointJSON(e))
 	}
 	d.Endpoints, d.MoreEndpoints = &list, &more
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, http.StatusOK, discoveryCertificateDetailDTO{discoveryCertificateDTO: d, RevocationCheck: discoveryRevocationJSON(c.Revocation)})
 }
 
 // errExportCursor: a cursor the export made itself did not parse back (Alice's own mistake: the file is cut).

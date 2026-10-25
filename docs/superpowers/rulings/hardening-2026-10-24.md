@@ -190,12 +190,12 @@ Rulings made during execution:
    Operator can do).
 9. KI-43 wording and severity (Low).
 10. Ruling 23 and F1: a disabled server's incident place waits and fails "busy"; whether it should fail at once with
-    `target.disabled`.
+    `target.disabled`. Fixed in R66 (`docs/superpowers/rulings/fixes-2026-10-25.md`).
 11. Ruling 41: at 640 x 800 px an Administrator's navigation now scrolls to reach its last group.
 
 ## Deferred
 
-- E1: the discovery page does not show a discovery certificate's revocation status (only the mail does).
+- E1: the discovery page does not show a discovery certificate's revocation status (only the mail does). Done in R66.
 - E2: fetching a missing issuer from the AIA caIssuers address.
 - E3: OCSP nonce, delta CRLs, partitioned-CRL scope checks (`IssuingDistributionPoint` reasons).
 - E4: a revocation e2e journey with a compose fake responder.
@@ -208,7 +208,7 @@ Rulings made during execution:
 - **F1.** A key compromise incident's place on a disabled server is retried as "busy" for 30 runs (about 15 minutes)
   and then fails `incident.location_busy`, because `RequestDeployment` refuses a disabled server as not ready. The
   page's reason does not say the server is disabled. Fix candidate: refuse a disabled server with `ErrTargetDisabled` in
-  `checkDeployLocation` (a change to every deploy path's answer, `ALC-TGT-0006` instead of the not-ready code).
+  `checkDeployLocation` (a change to every deploy path's answer, `ALC-TGT-0006` instead of the not-ready code). Fixed in R66 (`docs/superpowers/rulings/fixes-2026-10-25.md`).
 - **F2.** `make test` was not run per task until Task 9 (the plan's per-task gate named it); CI run `40123556039`
   caught two misses (`web/src/App.test.tsx` navigation lists and the e2e `resetSQL` tables), fixed in `e2936fb6`.
   Process note, not a product defect.
@@ -228,7 +228,8 @@ Minor findings, declined:
 
 - One run may cache up to 16 CRLs of up to 10 MiB each (the plan's limits); a byte budget for the cache would bound the
   memory of a run more tightly against certificates that name many huge CRLs.
-- The certificate page lists **Revocation check** as its first fact; after the chain would read more naturally.
+- The certificate page lists **Revocation check** as its first fact; after the chain would read more naturally. Done in
+  R66.
 
 ## Gate evidence
 
@@ -297,7 +298,7 @@ coordinator) and five Minor ones; all but M3 were fixed on this branch:
   (`lower(params->>'thumbprint')`; `00033` is unreleased and only on this branch). Tests:
   `internal/inventory:TestCompromisedInStoreNoticeKeyIsLowerCase`, `migrations:TestMigration00033BackfillsTheStoreNotices`
   (an upper-case copy of the same notice back-fills one row). `1cd900d5`.
-- **M3, not fixed (stays F1, owner item 10):** the disabled-server incident place.
+- **M3, not fixed (stays F1, owner item 10):** the disabled-server incident place. Fixed in R66 (`docs/superpowers/rulings/fixes-2026-10-25.md`).
 
 Evidence: `make lint` and `make test` pass; the integration suites of `internal/inventory`, `migrations`,
 `internal/backup/...` and `cmd/alice` pass; coverage `internal/inventory` 89.0 % (floor 89), `internal/api` 97.1 % (95),

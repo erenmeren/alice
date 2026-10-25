@@ -6,6 +6,7 @@ import { discoveryWorld, requests } from '../../test/discovery';
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import type { RevocationCheck } from '../../api/types';
 import { resultQuery } from './ResultsTab';
 
 const blank = { status: '', expiry: '', self_signed: '', scope_id: '', found: '', q: '', view: '' };
@@ -157,6 +158,37 @@ describe('Network discovery results', () => {
     expectNoRawKeys();
     await userEvent.click(within(drawer).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  // FX-03 (R66 ruling 7): the drawer shows the found certificate's last revocation check, or that it was never checked.
+  it('shows the revocation check of the found certificate', async () => {
+    const good: RevocationCheck = { status: 'good', method: 'ocsp', reason: '', revoked_at: null, checked_at: '2026-10-03T08:00:00Z', next_check_at: '2026-10-04T08:00:00Z', error: null };
+    discoveryWorld({ certificates: [discoveredCertificateFixture({ endpoints: [], revocation_check: good })] });
+    const first = await renderRoute('/discovery');
+    await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
+    let drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
+    let facts = await within(drawer).findByLabelText('Certificate details');
+    const labels = Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent);
+    expect(labels[labels.indexOf('Expires') + 1]).toBe('Revocation check');
+    expect(within(facts).getByText(/^Not revoked \(checked .*, OCSP\)$/)).toBeInTheDocument();
+    expectNoRawKeys();
+    first.unmount();
+
+    discoveryWorld({ certificates: [discoveredCertificateFixture({ endpoints: [], revocation_check: null })] });
+    const second = await renderRoute('/discovery');
+    await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
+    drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
+    facts = await within(drawer).findByLabelText('Certificate details');
+    expect(within(facts).getByText('Not checked yet')).toBeInTheDocument();
+    second.unmount();
+
+    discoveryWorld({ session: sessionFor('admin', 'tr'), certificates: [discoveredCertificateFixture({ endpoints: [], revocation_check: null })] });
+    await renderRoute('/discovery', { languages: ['tr'] });
+    await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
+    drawer = await screen.findByRole('dialog', { name: /^Ağda bulunan: / });
+    facts = await within(drawer).findByLabelText('Sertifika ayrıntıları');
+    expect(within(facts).getByText('İptal denetimi')).toBeInTheDocument();
+    expect(within(facts).getByText('Henüz denetlenmedi')).toBeInTheDocument();
   });
 
   it('says "Unknown" for a status this version does not know, never a raw key', async () => {

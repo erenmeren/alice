@@ -103,14 +103,24 @@ func TestSpecIDsFindHardeningRows(t *testing.T) {
 	assert.Equal(t, "A place on a disabled server", titles["HB-01"])
 }
 
-// The CAN prefix of section 24.9 (canary deployment, R65) is a matrix ID.
+// The CAN prefix of section 24.10 (canary deployment, R65) is a matrix ID.
 func TestSpecIDsFindCanaryRows(t *testing.T) {
-	spec := "## 24. Failures\n\n### 24.9 Canary deployment (R65)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
+	spec := "## 24. Failures\n\n### 24.10 Canary deployment (R65)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
 		"| CAN-01 | The canary key | defaults |\n| CAN-32 | Canary journeys | pass |\n| CANX-01 | not a matrix prefix | ignored |\n"
 	ids, titles, err := SpecIDs(strings.NewReader(spec))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"CAN-01", "CAN-32"}, ids)
 	assert.Equal(t, "The canary key", titles["CAN-01"])
+}
+
+// The FX prefix of section 24.9 (fixes batch 1, R66) is a matrix ID.
+func TestSpecIDsFindFixesRows(t *testing.T) {
+	spec := "## 24. Failures\n\n### 24.9 Fixes batch 1 (R66)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
+		"| FX-01 | A deployment to a disabled server | refused |\n| FX-06 | A helper checksum file | refused |\n| FXX-01 | not a matrix prefix | ignored |\n"
+	ids, titles, err := SpecIDs(strings.NewReader(spec))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FX-01", "FX-06"}, ids)
+	assert.Equal(t, "A deployment to a disabled server", titles["FX-01"])
 }
 
 func TestRefusesMissingUnknownAndBrokenEntries(t *testing.T) {

@@ -2,11 +2,15 @@ package discoverysvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"alice/internal/authz"
 	"alice/internal/discovery"
+	"alice/internal/platform/db"
 )
 
 // ListCertificates lists discovered leaf certificates (discovery.ListCertificates, soonest expiry first); f.Limit is the
@@ -55,7 +59,31 @@ func (s *Service) CertificateIn(ctx context.Context, fingerprint string, reach a
 	if more = len(eps) > MaxDetailEndpoints; more {
 		eps = eps[:MaxDetailEndpoints]
 	}
+	if list[0].Revocation, err = revocationCheckOf(ctx, s.pool, fingerprint); err != nil {
+		return discovery.CertificateRow{}, nil, false, err
+	}
 	return list[0], eps, more, nil
+}
+
+// revocationCheckOf reads a leaf's last revocation check by fingerprint (the revocation job checks discovery leaves
+// without an inventory row too, R64 ruling 14); nil when never checked. The same read as inventory's, kept here so
+// discovery gains no inventory import (R66 ruling 7).
+func revocationCheckOf(ctx context.Context, q db.Querier, fingerprint string) (*discovery.RevocationCheck, error) {
+	var rc discovery.RevocationCheck
+	err := q.QueryRow(ctx, `SELECT status, method, reason, error_code, revoked_at, checked_at, next_check_at FROM revocation_checks
+WHERE fingerprint_sha256 = $1`, fingerprint).Scan(&rc.Status, &rc.Method, &rc.Reason, &rc.ErrorCode, &rc.RevokedAt, &rc.CheckedAt, &rc.NextCheckAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("discovery: read the certificate's revocation check: %w", err)
+	}
+	if rc.RevokedAt != nil {
+		at := rc.RevokedAt.UTC()
+		rc.RevokedAt = &at
+	}
+	rc.CheckedAt, rc.NextCheckAt = rc.CheckedAt.UTC(), rc.NextCheckAt.UTC()
+	return &rc, nil
 }
 
 // ListEndpoints lists discovered endpoints (discovery.ListEndpoints: inside a scope in the order of its unique key);

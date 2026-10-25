@@ -413,7 +413,8 @@ func setLocationIn(ctx context.Context, q db.Querier, now time.Time, incident, l
 // requestIncidentDeployment requests the replacement's deployment to one pending location (RequestDeployment: the
 // person's path, with the incident engine as the actor; no incomplete chain is ever confirmed). A deployment of the
 // replacement already running there (the ACME automatic deployment) is followed instead; a busy location waits a few
-// runs; any other refusal fails the location with its code.
+// runs; any other refusal fails the location with its code: a disabled server fails the place at once with
+// target.disabled, since it needs a person rather than time (R66).
 func (s *Service) requestIncidentDeployment(ctx context.Context, i Incident, l incidentLocationRow) (bool, error) {
 	if l.activeDep != nil && l.activeDepCrt != nil && *l.activeDepCrt == *i.ReplacementCertificateID {
 		return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationDeploying, l.activeDep, "", l.attempts)

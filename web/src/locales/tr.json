@@ -2365,7 +2365,7 @@
     "title": "Key Vault kasaları",
     "add": "Key Vault ekle",
     "empty": "Henüz Key Vault yok. Sertifikalarını ve anahtarlarını görmek için bir tane ekleyin.",
-    "intro": "Alice, Azure Key Vault kasalarınızdaki sertifikaları, anahtarları ve gizli anahtarları izler; kasadaki sertifikaları Nginx web sitelerinize dağıtabilir.",
+    "intro": "Alice, Azure Key Vault kasalarınızdaki sertifikaları, anahtarları ve gizli anahtarları izler; kasadaki sertifikaları Nginx web sitelerinize ve Windows (IIS) bağlamalarınıza dağıtabilir.",
     "columns": {
       "name": "Ad",
       "status": "Durum",
@@ -2416,7 +2416,7 @@
       "title": "Alice'in ihtiyaç duyduğu roller",
       "intro": "Uygulamaya kasada şu rolleri verin. Her satır bir üstündekine eklenir. Alice yalnızca rollerin izin verdiğini okur ve rolleri kendisi hiçbir zaman değiştirmez.",
       "monitor": "Sertifikaları, anahtarları ve gizli anahtarları izleme",
-      "deploy": "Sertifikaları Nginx'e dağıtma",
+      "deploy": "Sertifikaları Nginx'e ve Windows'a (IIS) dağıtma",
       "import": "Sertifikaları kasaya içe aktarma",
       "readerUnconfirmed": "Yeterli olması bekleniyor; henüz gerçek bir kasada doğrulanmadı.",
       "policies": "Kasa erişim ilkeleri kullanıyor",
@@ -2581,7 +2581,7 @@
     "page": {
       "description": "Sertifika sürümlerini ve bunlara bağlı web sitelerini görün.",
       "boundaryTitle": "Azure erişimi için net kapsam",
-      "boundaryText": "Sertifikalar izlenebilir ve Nginx’e dağıtılabilir. Anahtarlar yalnızca envanter içindir; gizli verilerin sadece üst bilgileri gösterilir.",
+      "boundaryText": "Sertifikalar izlenebilir ve Nginx’e ve Windows’a (IIS) dağıtılabilir. Anahtarlar yalnızca envanter içindir; gizli verilerin sadece üst bilgileri gösterilir.",
       "keysOnlyTitle": "Yalnızca anahtar envanteri",
       "keysOnlyText": "Azure Key Vault anahtar rotasyonu Alice v1 kapsamı dışındadır.",
       "metadataTitle": "Yalnızca üst bilgi",
@@ -3827,6 +3827,8 @@
         "columns": {
           "server": "Sunucu",
           "file": "Sertifika dosyası",
+          "binding": "Bağlama",
+          "place": "Sertifika dosyası veya bağlama",
           "state": "Durum",
           "auto": "Otomatik dağıtım",
           "actions": "İşlemler"
@@ -3855,7 +3857,7 @@
         "stoppedText": "Bu sertifikanın otomatik dağıtımı tekrarlanan hatalardan sonra durdu. İlgilenilmesi gereken web sitelerine bakın, nedeni giderin, ardından Şimdi dağıt'ı kullanın.",
         "add": "Web sitesi ekle",
         "addTitle": "Bu sertifikaya web sitesi ekle",
-        "addHelp": "Bu sertifikayı kullanacak web sitelerini seçin. Yalnızca anahtar türü uyan Nginx web siteleri listelenir. Her biri için otomatik dağıtım kapalı başlar.",
+        "addHelp": "Bu sertifikayı kullanacak web sitelerini seçin. Yalnızca Nginx ve Windows (IIS) sunucularındaki, anahtar türü uyan web siteleri listelenir. Her biri için otomatik dağıtım kapalı başlar.",
         "noLocations": "Bu sertifikanın anahtar türüne uyan web sitesi yok veya hepsi zaten bu sertifikayı kullanıyor.",
         "followsVault": "Bir Key Vault sertifikasını izliyor. Önce orada bağlantısını kaldırın.",
         "partlyAdded_one": "Alice işaretli web sitesinde durmadan önce {{count}} web sitesi bağlandı; kalanlar denenmedi.",

@@ -600,6 +600,12 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // minute, internal/api/server.go). The budget (task 22) is one loop of at most 2 reads a second
       // for any batch: at most 120 deployment reads in any minute (asserted: 125, timer slack), and
       // 150 API requests of every kind together. The wait lasts a full minute of polling.
+      // The rate itself is pinned by the deterministic Vitest budget test (web/src/api/deployments.test.ts,
+      // fake timers: 55 to 125 reads a minute). Here the loop sleeps one tick after each round of reads,
+      // so a loaded machine stretches every tick: a lower bound on reads a minute measured the
+      // machine, not Alice (22 a minute under a loaded make ci). What this journey proves is that
+      // every run is followed all minute: each is read at least 3 times, never 30 s apart, from
+      // the first read to the end of the minute (R66 ruling 6).
       const pollStart = () => deploymentReads()[0]?.at ?? Date.now();
       await expect
         .poll(() => (deploymentReads().at(-1)?.at ?? 0) - pollStart(), { message: 'the dialog polls for a full minute', timeout: 100_000, intervals: [1_000] })
@@ -610,9 +616,17 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       });
       expect(most(deploymentReads()), 'deployment reads in any minute (budget 120; before the fix 300)').toBeLessThanOrEqual(125);
       expect(most(responses), 'API requests of every kind in any minute').toBeLessThanOrEqual(150);
-      expect(most(deploymentReads()), 'the dialog kept polling all minute').toBeGreaterThanOrEqual(60);
+      const windowStart = pollStart();
+      const windowEnd = windowStart + 61_000;
       for (const id of new Set(deploymentReads().map((r) => r.path))) {
-        expect(deploymentReads().filter((r) => r.path === id).length, `${id} read during the minute`).toBeGreaterThanOrEqual(10);
+        const ts = deploymentReads()
+          .filter((r) => r.path === id && r.at >= windowStart && r.at <= windowEnd)
+          .map((r) => r.at)
+          .sort((a, b) => a - b);
+        expect(ts.length, `${id}: read at least 3 times during the minute`).toBeGreaterThanOrEqual(3);
+        const marks = [windowStart, ...ts, windowEnd];
+        const gap = Math.max(...marks.slice(1).map((at, i) => at - marks[i]));
+        expect(gap, `${id}: read at least every 30 s`).toBeLessThanOrEqual(30_000);
       }
       expect(new Set(deploymentReads().map((r) => r.path)).size, 'every run is followed').toBe(SITES.length);
       expect(responses.filter((r) => r.status === 429), 'no request was answered 429').toEqual([]);

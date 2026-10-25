@@ -131,6 +131,22 @@ func discoveryCertificateJSON(c discovery.CertificateRow, now time.Time) discove
 		EndpointCount: c.Endpoints, SeenOnCount: c.SeenOn, FirstSeen: c.FirstSeen.UTC(), LastSeen: c.LastSeen.UTC()}
 }
 
+// discoveryCertificateDetailDTO is a discovered leaf's detail: its last revocation check (null before the first check;
+// the list and the CSV leave it out, R66 ruling 7).
+type discoveryCertificateDetailDTO struct {
+	discoveryCertificateDTO
+	RevocationCheck *revocationCheckDTO `json:"revocation_check"`
+}
+
+// discoveryRevocationJSON is revocationCheckJSON for a discovered leaf's check.
+func discoveryRevocationJSON(rc *discovery.RevocationCheck) *revocationCheckDTO {
+	if rc == nil {
+		return nil
+	}
+	return &revocationCheckDTO{Status: rc.Status, Method: rc.Method, Reason: rc.Reason, RevokedAt: utcPtr(rc.RevokedAt), CheckedAt: rc.CheckedAt.UTC(),
+		NextCheckAt: rc.NextCheckAt.UTC(), Error: errorRef(rc.ErrorCode, nil)}
+}
+
 type discoveryTargetDTO struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
