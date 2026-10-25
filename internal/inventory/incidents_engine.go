@@ -267,6 +267,7 @@ type incidentLocationRow struct {
 	depCert      *uuid.UUID
 	activeDep    *uuid.UUID // the unfinished deployment of the location, if any
 	activeDepCrt *uuid.UUID
+	activeState  string // its state ("" when none)
 }
 
 // incidentDeploying requests and follows the deployments of the replacement.
@@ -275,7 +276,7 @@ func (s *Service) incidentDeploying(ctx context.Context, i Incident) (bool, erro
 		return false, nil
 	}
 	rows, err := s.pool.Query(ctx, `SELECT l.location_id, l.status, l.deployment_id, l.attempts, coalesce(d.state, ''), coalesce(d.status, ''),
-    coalesce(d.verified, ''), coalesce(d.error_code, ''), d.certificate_id, a.id, a.certificate_id
+    coalesce(d.verified, ''), coalesce(d.error_code, ''), d.certificate_id, a.id, a.certificate_id, coalesce(a.state, '')
 FROM certificate_incident_locations l
 LEFT JOIN deployments d ON d.id = l.deployment_id
 LEFT JOIN deployments a ON a.location_id = l.location_id AND a.state <> 'done'
@@ -286,7 +287,7 @@ WHERE l.incident_id = $1 ORDER BY l.location_id`, i.ID)
 	locs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (incidentLocationRow, error) {
 		var l incidentLocationRow
 		return l, r.Scan(&l.location, &l.status, &l.deployment, &l.attempts, &l.depState, &l.depStatus, &l.depVerified, &l.depCode, &l.depCert,
-			&l.activeDep, &l.activeDepCrt)
+			&l.activeDep, &l.activeDepCrt, &l.activeState)
 	})
 	if err != nil {
 		return false, fmt.Errorf("inventory: read the incident's locations: %w", err)
@@ -416,6 +417,12 @@ func setLocationIn(ctx context.Context, q db.Querier, now time.Time, incident, l
 func (s *Service) requestIncidentDeployment(ctx context.Context, i Incident, l incidentLocationRow) (bool, error) {
 	if l.activeDep != nil && l.activeDepCrt != nil && *l.activeDepCrt == *i.ReplacementCertificateID {
 		return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationDeploying, l.activeDep, "", l.attempts)
+	}
+	if l.activeDep != nil && l.activeState == DeployStateHolding {
+		// R65 (design §20.3): a canary hold at the place is preempted (its rollout's holds released, no wave 2) unless the
+		// held certificate is revoked or compromised, which the canary reverts; either way the place is requested on a
+		// later step, once it is free.
+		return s.PreemptRolloutOf(ctx, *l.activeDep)
 	}
 	// An incident replaces a key that is already there: no trust is needed (R49, design §5.6).
 	got, err := s.RequestDeployment(ctx, Actor{Audit: incidentActor}, DeployRequestInput{CertificateID: *i.ReplacementCertificateID,
