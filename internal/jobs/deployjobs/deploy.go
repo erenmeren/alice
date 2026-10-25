@@ -170,6 +170,10 @@ func (h *handlers) follow(ctx context.Context, j jobs.Job, d inventory.Deploymen
 		return nil, jobs.Retry(reasonUnexpected, nil, errors.New("deployjobs: the deployment's state keeps changing"))
 	case d.State == inventory.DeployStateDone:
 		return resultOf(d, deployJob)
+	case d.State == inventory.DeployStateHolding:
+		// R65: sent and verified, waiting for the canary's verdict: never send again, never recover (the canary
+		// releases or reverts it).
+		return holdingResult(d), nil
 	case d.State == inventory.DeployStateDeploying || d.State == inventory.DeployStateRecovering:
 		// A send may have happened (a run after a crash or a lost lease): never send again (§8.4, §8.8).
 		return h.recoverDeployment(ctx, d, steps, deployJob)

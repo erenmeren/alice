@@ -19,13 +19,13 @@ import (
 const liveRecoveryJob = `r.status IN ('queued', 'running', 'blocked_license')`
 
 // sweepWhere selects the deployments the sweep handles ($1 now, $2 the recovery dedupe prefix):
-// unfinished, their job not running, no live recovery job, and either on a deleted server, or
+// unfinished and not holding (a hold belongs to the canary, R65 design §8.4), their job not running, no live recovery job, and either on a deleted server, or
 // possibly sent with recover_after passed, or never sent with a job that ended (or was pruned). A
 // held (blocked_license) or still queued job of a deployment that never sent anything is left.
 const sweepWhere = `FROM deployments d
 JOIN targets t ON t.id = d.target_id
 LEFT JOIN jobs j ON j.id = d.job_id
-WHERE d.state <> 'done'
+WHERE d.state NOT IN ('done', 'holding')
   AND (j.status IS NULL OR j.status <> 'running')
   AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.dedupe_key = $2 || d.id::text AND ` + liveRecoveryJob + `)
   AND (t.deleted_at IS NOT NULL

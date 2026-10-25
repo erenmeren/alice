@@ -26,6 +26,9 @@ import (
 //	queued | precheck        nothing (nothing was sent;     success {outcome: state}
 //	                         the deploy job or the sweep
 //	                         ends it)
+//	holding (R65)            nothing (the canary owns it;   success {outcome: holding}
+//	                         a revert moves it to
+//	                         recovering first)
 //	deploying | recovering   recoverDeployment              see recoverDeployment
 func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRecorder) (map[string]any, error) {
 	ctx = withClaim(ctx, j)
@@ -45,6 +48,8 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 		return resultOf(d, recoveryJob)
 	case d.State == inventory.DeployStateQueued || d.State == inventory.DeployStatePrecheck:
 		return map[string]any{"deployment_id": d.ID.String(), "outcome": d.State}, nil
+	case d.State == inventory.DeployStateHolding:
+		return holdingResult(d), nil
 	}
 	return h.recoverDeployment(ctx, d, steps, recoveryJob)
 }
@@ -114,6 +119,17 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	restore_forbidden (the helper's guard refused a restore, R48)  rollback (the helper answers it as          as the rollback
 //	                                                               recorded: rollback_failed
 //	                                                               deployment.rollback_forbidden)
+//
+// A revert (R65 design §10: revert_reason set, a canary rollout's hold handed to the recovery) changes two rows and
+// the error code of every rollback:
+//
+//	committed: VerifyDeployment OK                                 rollback, cause = revert_reason (the new
+//	                                                               certificate works; the canary still wants it
+//	                                                               gone)
+//	committed: VerifyDeployment !OK                                rollback, cause = revert_reason (the
+//	                                                               verification failure recorded as above)
+//	unchanged (a hold never comes from it)                         rollback_failed deployment.outcome_unknown
+//	any rollback                                                   error_code = revert_reason
 //
 // rollback = RollbackDeployment(RollbackRequest: the recorded previous fingerprint and chain length,
 // and the rollback guard read right before it, R48: an unreadable guard is unresolved
@@ -222,11 +238,24 @@ func (h *handlers) recoverDeployment(ctx context.Context, d inventory.Deployment
 // verified checks a committed or unchanged journal with the recorded values (see recoverDeployment).
 func (h *handlers) verified(ctx context.Context, sess providers.Session, d inventory.Deployment, mat inventory.Material, st providers.DeploymentState,
 	rec *recorder, m mode) (map[string]any, error) {
+	if d.RevertReason != "" && st.Phase == providers.PhaseUnchanged {
+		// A hold is a committed operation; an unchanged journal contradicts it (defensive, design §10).
+		return h.recordFor(ctx, d, outcomeUnknownRecord(), m, nil)
+	}
 	rec.Step(providers.StepNameVerify, providers.StepStarted, nil)
 	vr, err := sess.VerifyDeployment(ctx, mat.VerifyRequest())
 	if err != nil {
 		rec.Step(providers.StepNameVerify, providers.StepFailed, nil)
 		return unresolved(m, err)
+	}
+	if vr.OK && d.RevertReason != "" {
+		// The new certificate is served, but the canary failed: roll it back all the same.
+		status := providers.StepOK
+		if vr.Mode == "skipped" {
+			status = providers.StepSkipped
+		}
+		rec.Step(providers.StepNameVerify, status, vr.StepParams())
+		return h.rollback(ctx, sess, d, mat, st, rec, m, rollbackCause{reason: d.RevertReason, trust: vr.Trust}, 1)
 	}
 	if vr.OK {
 		status := providers.StepOK
@@ -279,6 +308,9 @@ func (h *handlers) rollback(ctx context.Context, sess providers.Session, d inven
 	from := inventory.DeploymentFinish{CauseStep: c.step, HelperError: st.Error, Trust: c.trust}
 	if c.step == providers.StepNameVerify {
 		from.VerifyFailedReason, from.VerifyFailedPort = c.reason, c.port
+	}
+	if d.RevertReason != "" {
+		c.reason = d.RevertReason // R65: a revert's rollback says why the canary reverted it
 	}
 	var r inventory.OutcomeRecord
 	var err error

@@ -213,9 +213,9 @@ func (m Material) oldKeyType() string {
 	return m.KeyType
 }
 
-// sent reports whether a send may have happened in this state.
+// sent reports whether a send may have happened in this state (a hold was sent and verified: R65 ruling 32).
 func sent(state string) bool {
-	return state == DeployStateDeploying || state == DeployStateRecovering || state == DeployStateDone
+	return state == DeployStateDeploying || state == DeployStateHolding || state == DeployStateRecovering || state == DeployStateDone
 }
 
 // chainLength counts the CERTIFICATE blocks of a PEM text (as the provider does).
@@ -519,21 +519,30 @@ type lockedDeployment struct {
 	operation                         *uuid.UUID
 	attempts                          int
 	errorCode                         string
+	rollout                           *uuid.UUID // R65: the canary rollout, nil outside one
+	wave                              int        // 1 or 2 in a rollout, else 0
+	revertReason                      string     // R65: why a hold is being reverted ("" when not)
 }
 
-// wasSent reports whether a send may have happened: deploying or recovering with an operation id
+// wasSent reports whether a send may have happened: deploying, holding or recovering with an operation id
 // recorded by StartDeployment. A row without one never sent anything, whatever its state says.
 func (d lockedDeployment) wasSent() bool {
-	return (d.state == DeployStateDeploying || d.state == DeployStateRecovering) && d.operation != nil
+	return (d.state == DeployStateDeploying || d.state == DeployStateHolding || d.state == DeployStateRecovering) && d.operation != nil
+}
+
+// holdsOnSuccess reports whether a verified success of d enters holding instead of done (R65 design §8.1): a wave-1
+// deployment of a rollout, whatever the rollout's state (the canary decides).
+func (d lockedDeployment) holdsOnSuccess() bool {
+	return d.rollout != nil && d.wave == 1 && d.state != DeployStateHolding
 }
 
 const lockedDeploymentColumns = `d.id, d.location_id, d.target_id, d.certificate_id, d.state, d.status, d.cert_path, d.new_fingerprint,
-d.previous_fingerprint, d.operation_id, d.recovery_attempts, d.error_code`
+d.previous_fingerprint, d.operation_id, d.recovery_attempts, d.error_code, d.rollout_id, coalesce(d.wave, 0), d.revert_reason`
 
 func scanLocked(row pgx.Row, extra ...any) (lockedDeployment, error) {
 	var d lockedDeployment
 	err := row.Scan(append([]any{&d.id, &d.location, &d.target, &d.certificate, &d.state, &d.status, &d.certPath, &d.newFingerprint,
-		&d.previous, &d.operation, &d.attempts, &d.errorCode}, extra...)...)
+		&d.previous, &d.operation, &d.attempts, &d.errorCode, &d.rollout, &d.wave, &d.revertReason}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lockedDeployment{}, ErrNotFound
 	}
@@ -883,6 +892,11 @@ type DeploymentFinish struct {
 	// recovery. "" leaves the location's hash unknown: the next deployment is refused
 	// (ErrLocationNeedsDiscovery) until a discovery reads the file again.
 	CertFileSHA256 string
+
+	// release (R65, ReleaseHold only): this success ends a hold; holdCause names why (release, incident,
+	// target_deleted) in the deployment.succeeded audit row.
+	release   bool
+	holdCause string
 }
 
 // recordedTrust is f.Trust as the record keeps it (R51): a status, reason and store outside the closed lists are
@@ -1017,7 +1031,18 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 		return ErrDeploymentState
 	}
 	success := f.Status == DeployStatusSucceeded || f.Status == DeployStatusUnchanged
-	if success && verified == "skipped" {
+	switch {
+	case d.state == DeployStateHolding && (!f.release || f.Status != DeployStatusSucceeded):
+		// R65: a hold ends only by the canary's release (ReleaseHold) or revert (RequestRevert, then the recovery).
+		if f.Status == DeployStatusSucceeded {
+			return errAlreadyFinished // a deploy or recovery run that records its success again: the hold stands
+		}
+		return ErrDeploymentState
+	case success && d.revertReason != "":
+		// A revert's recovery only rolls back (design §10): a success of the reverted operation is never recorded.
+		return ErrDeploymentState
+	}
+	if success && verified == "skipped" && !f.release {
 		var skip bool
 		if err := tx.QueryRow(ctx, "SELECT skip_verify FROM certificate_locations WHERE id = $1", d.location).Scan(&skip); err != nil {
 			return fmt.Errorf("inventory: read the location's verification settings: %w", err)
@@ -1040,6 +1065,9 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 	}
 	trust, trustPort := recordedTrust(f.Trust)
 	now := s.clock.Now().UTC()
+	if f.Status == DeployStatusSucceeded && d.holdsOnSuccess() {
+		return s.enterHold(ctx, tx, d, f, verified, params, trust, trustPort, now)
+	}
 	// A finish without a failed step keeps the recorded one, or names the verification whose
 	// failure the deployment was recovered from (a rollback's outcome carries no step).
 	var failedStep string
@@ -1088,7 +1116,7 @@ WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA, thumb); er
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}
 	}
-	return s.finishRecords(ctx, tx, d, f.Status, code, failedStep, verified, oneOf(f.Phase, phases), f.Params["operation_id"])
+	return s.finishRecords(ctx, tx, d, f.Status, code, failedStep, verified, oneOf(f.Phase, phases), f.Params["operation_id"], f.holdCause)
 }
 
 // rollbackFailedTemplate chooses the email of a rollback_failed deployment by what happened
@@ -1110,7 +1138,7 @@ func rollbackFailedTemplate(code, phase string) string {
 
 // finishRecords writes a finished deployment's audit rows and emails.
 func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployment, status, code, failedStep, verified, phase,
-	operationParam string) error {
+	operationParam, holdCause string) error {
 	type ev struct {
 		action  string
 		result  audit.Result
@@ -1122,6 +1150,9 @@ func (s *Service) finishRecords(ctx context.Context, tx pgx.Tx, d lockedDeployme
 	case DeployStatusSucceeded:
 		events = []ev{{"deployment.succeeded", audit.Success, map[string]string{"new_fingerprint": d.newFingerprint,
 			"previous_fingerprint": d.previous, "verified": verified}}}
+		if holdCause != "" {
+			events[0].details["hold_cause"] = holdCause
+		}
 	case DeployStatusUnchanged:
 		events = []ev{{"deployment.unchanged", audit.Success, map[string]string{"new_fingerprint": d.newFingerprint, "verified": verified}}}
 	case DeployStatusFailed:
@@ -1261,7 +1292,7 @@ ORDER BY created_at DESC, id DESC LIMIT 1), $2), (SELECT location_kind FROM depl
 const windowsHelperMissing = "windows.helper_missing"
 
 func (s *Service) markRecoveringLocked(ctx context.Context, tx pgx.Tx, d lockedDeployment, retryAt time.Time, needsAttention bool) error {
-	if !d.wasSent() {
+	if !d.wasSent() || d.state == DeployStateHolding {
 		return ErrDeploymentState
 	}
 	status := DeployStatusRunning
@@ -1328,7 +1359,7 @@ func (s *Service) RequestRecovery(ctx context.Context, id uuid.UUID) (uuid.UUID,
 }
 
 func (s *Service) requestRecoveryLocked(ctx context.Context, tx pgx.Tx, d lockedDeployment) (uuid.UUID, error) {
-	if !d.wasSent() {
+	if !d.wasSent() || d.state == DeployStateHolding {
 		return uuid.Nil, ErrDeploymentState
 	}
 	dedupe := recoverDedupePrefix + d.id.String()
@@ -1392,7 +1423,7 @@ func (s *Service) RecordOutcome(ctx context.Context, id uuid.UUID, rec OutcomeRe
 		if d.state == DeployStateDone {
 			return errAlreadyFinished
 		}
-		if !d.wasSent() {
+		if !d.wasSent() || d.state == DeployStateHolding {
 			return ErrDeploymentState
 		}
 		code := sanitizeCode(f.ErrorCode, interruptedCode)

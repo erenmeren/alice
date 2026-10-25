@@ -160,6 +160,10 @@ var explicitGrants = map[string][]string{
 	// Held backups (00031, R59): written once before a change, deleted by the retention (never while the deployment is
 	// unfinished: Z1032), never updated.
 	"public.deployment_backups": {"DELETE", "INSERT", "SELECT"},
+	// Canary deployment (00035, R65): a rollout and its observations are history, never deleted (an observation goes
+	// with its deployment's cascade).
+	"public.deployment_rollouts": {"INSERT", "SELECT"},
+	"public.canary_checks":       {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -195,11 +199,17 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"deployed_fingerprint", "details", "file_observed_at", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
 		"unsupported_reason", "verify_address", "verify_port", "verify_sni", "version", "warnings"}},
-	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
+	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at", "held_cert_file_sha256",
 		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
-		"recover_after", "recovery_attempts", "result", "rollback_info", "rollback_leaf_sha256", "rollback_spki_sha256", "started_at", "state",
-		"status", "trust_enforced", "trust_error", "trust_port", "trust_status", "trust_store", "verified", "verify_failed_port",
-		"verify_failed_reason"}},
+		"recover_after", "recovery_attempts", "result", "revert_reason", "rollback_info", "rollback_leaf_sha256",
+		"rollback_spki_sha256", "started_at", "state", "status", "trust_enforced", "trust_error", "trust_port", "trust_status",
+		"trust_store", "verified", "verify_failed_port", "verify_failed_reason"}},
+	// Canary deployment (00035, R65): a rollout's identity, origin, source, waves, settings snapshot and creation are fixed
+	// at INSERT; an observation's deployment and rollout likewise.
+	"public.deployment_rollouts": {"UPDATE": {"finished_at", "gate_waiting_since", "hold_started_at", "hold_until", "reason", "reason_params",
+		"skipped", "state", "version"}},
+	"public.canary_checks": {"UPDATE": {"consecutive_failures", "first_failure", "last_at", "last_http_status", "last_latency_ms", "last_pass_at",
+		"last_reason", "last_result", "last_tls", "next_check_at", "passes", "rounds"}},
 	// Phase 5: a location joins or leaves a binding; everything that names a vault object, a
 	// version, a thumbprint, a binding's certificate or an import's request is fixed at INSERT.
 	"public.kv_certificates": {"UPDATE": {"auto_renew", "content_type", "current_thumbprint", "current_version", "details_pending",
@@ -319,6 +329,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	dnsProviders := hasColumn(t, d, "acme_hooks", "settings")
 	groundwork := hasColumn(t, d, "certificate_locations", "locator")
 	cleanupSwitch := hasColumn(t, d, "targets", "certificate_cleanup")
+	canary := hasColumn(t, d, "deployments", "revert_reason")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -378,6 +389,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00023 the rollback target columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "rollback_leaf_sha256" || c == "rollback_spki_sha256"
+			})}
+		}
+		if name == "public.deployments" && !canary {
+			// Below 00035 the held file hash and the revert reason do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "held_cert_file_sha256" || c == "revert_reason"
 			})}
 		}
 		if name == "public.deployments" && !trust {

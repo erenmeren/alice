@@ -369,6 +369,9 @@ const (
 //	                                {"outcome": "uncertain"} (it recorded what it learned; the
 //	                                sweep queues the next one)
 func resultOf(d inventory.Deployment, m mode) (map[string]any, error) {
+	if d.State == inventory.DeployStateHolding {
+		return holdingResult(d), nil // R65: the success entered the canary's hold
+	}
 	out := map[string]any{"deployment_id": d.ID.String()}
 	if d.State != inventory.DeployStateDone {
 		out["outcome"] = string(providers.DeployUncertain)
@@ -390,6 +393,11 @@ func resultOf(d inventory.Deployment, m mode) (map[string]any, error) {
 		return out, jobs.Attention(d.ErrorCode, jobParams(d.ErrorParams), nil)
 	}
 	return out, jobs.Fail(d.ErrorCode, jobParams(d.ErrorParams), nil)
+}
+
+// holdingResult is the answer of a job whose deployment holds (R65): a success, the canary decides the rest.
+func holdingResult(d inventory.Deployment) map[string]any {
+	return map[string]any{"deployment_id": d.ID.String(), "outcome": inventory.DeployStateHolding}
 }
 
 // report re-reads the deployment after a record was written and answers resultOf it, so the job's

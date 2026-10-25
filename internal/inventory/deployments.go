@@ -69,6 +69,9 @@ package inventory
 //     Administrators are emailed once (needs_attention); after MaxRecoveryAttempts (about a day)
 //     the sweep ends it rollback_failed (deployment.recovery_exhausted, the outcome-unknown email).
 //   - a deleted server's unfinished deployments end (deployment.target_deleted) once no job runs.
+//   - holding (R65, canary_hold.go): a wave-1 deployment of a canary rollout whose send was committed and verified
+//     waits for the rollout's verdict; the canary releases it (done succeeded, the location updated then) or reverts it
+//     (recovering with revert_reason: the recovery rolls it back). The sweep never touches it.
 
 import (
 	"context"
@@ -99,6 +102,7 @@ const (
 	DeployStateQueued     = "queued"
 	DeployStatePrecheck   = "precheck"
 	DeployStateDeploying  = "deploying"
+	DeployStateHolding    = "holding"
 	DeployStateRecovering = "recovering"
 	DeployStateDone       = "done"
 )
@@ -255,6 +259,12 @@ type Deployment struct {
 	// (providers.Level*: none unless it succeeded or was unchanged; then installed, served or trusted).
 	Trust providers.Trust
 	Level int
+
+	// R65: the canary rollout the deployment belongs to (nil outside one), its wave (1 or 2; 0 outside one), and the
+	// reason of a revert of a wave-1 hold ("" when none).
+	RolloutID    *uuid.UUID
+	Wave         int
+	RevertReason string
 }
 
 // DeploymentFilter selects deployments, newest first.
@@ -681,7 +691,8 @@ d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomple
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
 d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source,
-d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced, d.location_kind
+d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced, d.location_kind,
+d.rollout_id, coalesce(d.wave, 0), d.revert_reason
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
@@ -703,7 +714,8 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
 		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource,
-		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced, &d.LocationKind)
+		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced, &d.LocationKind,
+		&d.RolloutID, &d.Wave, &d.RevertReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
