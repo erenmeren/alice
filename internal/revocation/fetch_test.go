@@ -93,7 +93,9 @@ func TestFreshnessAndReasons(t *testing.T) {
 	assert.True(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(4 * time.Minute)}, now), "a clock a little behind the responder's")
 	assert.False(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(6 * time.Minute)}, now), "from the future")
 	assert.False(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(-time.Hour), NextUpdate: now.Add(-6 * time.Minute)}, now), "expired")
-	assert.True(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(-time.Hour)}, now), "no next update: current")
+	assert.True(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(-time.Hour)}, now), "no next update, recent: current")
+	assert.True(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(-7*24*time.Hour + time.Minute)}, now))
+	assert.False(t, ocspFresh(&ocsp.Response{ThisUpdate: now.Add(-8 * 24 * time.Hour)}, now), "no next update and older than 7 days (final review M4)")
 	for code, name := range map[int]string{0: "unspecified", 1: "keyCompromise", 2: "cACompromise", 3: "affiliationChanged", 4: "superseded",
 		5: "cessationOfOperation", 6: "certificateHold", 7: "unspecified", 8: "unspecified", 9: "privilegeWithdrawn", 10: "aACompromise", 99: "unspecified", -1: "unspecified"} {
 		assert.Equal(t, name, reasonName(code), "%d", code)

@@ -3,6 +3,7 @@ package revocation
 import (
 	"context"
 	"crypto/x509"
+	"math/big"
 	"net"
 	"testing"
 	"time"
@@ -72,6 +73,23 @@ func TestCheckOCSPAnswers(t *testing.T) {
 			Result{Status: StatusGood, Method: "crl"}},
 		{"stale", func(w *world, _ *x509.Certificate) { w.fake.SetFault("/ocsp", fakerevocation.FaultStale) },
 			Result{Status: StatusGood, Method: "crl"}},
+		// Final review C1: a delegated responder speaks for the CA only with id-kp-OCSPSigning and while it is valid.
+		{"a delegated responder", func(w *world, l *x509.Certificate) {
+			w.fake.SetFault("/ocsp", fakerevocation.FaultDelegated)
+			w.fake.Revoke(l.SerialNumber, 1, at)
+		}, Result{Status: StatusRevoked, Method: "ocsp", RevokedAt: at, Reason: "keyCompromise"}},
+		{"a delegated responder without OCSP signing", func(w *world, l *x509.Certificate) {
+			w.fake.SetFault("/ocsp", fakerevocation.FaultDelegatedNoEKU)
+			w.fake.SetFault("/crl", fakerevocation.FaultDown)
+			w.fake.Revoke(l.SerialNumber, 1, at)
+		}, Result{Status: StatusUnavailable, Code: CodeInvalidAnswer}},
+		{"an expired delegated responder", func(w *world, l *x509.Certificate) {
+			w.fake.SetFault("/ocsp", fakerevocation.FaultDelegatedExpired)
+			w.fake.SetFault("/crl", fakerevocation.FaultDown)
+			w.fake.Revoke(l.SerialNumber, 1, at)
+		}, Result{Status: StatusUnavailable, Code: CodeInvalidAnswer}},
+		// Final review M1: removeFromCRL (8) lifts a hold; it is never a revocation.
+		{"removeFromCRL", func(w *world, l *x509.Certificate) { w.fake.Revoke(l.SerialNumber, 8, at) }, Result{Status: StatusGood, Method: "ocsp"}},
 		{"both down", func(w *world, _ *x509.Certificate) {
 			w.fake.SetFault("/ocsp", fakerevocation.FaultDown)
 			w.fake.SetFault("/crl", fakerevocation.FaultDown)
@@ -120,6 +138,12 @@ func TestCheckCRL(t *testing.T) {
 			w.fake.Revoke(l.SerialNumber, 1, at)
 		}, Result{Status: StatusRevoked, Method: "crl", RevokedAt: at, Reason: "keyCompromise"}},
 		{"PEM", func(w *world, _ *x509.Certificate) { w.fake.SetCRLPEM(true) }, Result{Status: StatusGood, Method: "crl"}},
+		// Final review M1: an entry with removeFromCRL is no revocation; a delta CRL is not read.
+		{"listed with removeFromCRL", func(w *world, l *x509.Certificate) { w.fake.Revoke(l.SerialNumber, 8, at) }, Result{Status: StatusGood, Method: "crl"}},
+		{"a delta CRL", func(w *world, l *x509.Certificate) {
+			w.fake.SetFault("/crl", fakerevocation.FaultDeltaCRL)
+			w.fake.Revoke(l.SerialNumber, 1, at)
+		}, Result{Status: StatusUnavailable, Code: CodeInvalidAnswer}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
@@ -187,4 +211,36 @@ func TestRunBudgetAndCache(t *testing.T) {
 		r.Check(ctx, w.leaf(nil, []string{u}), w.ca.Intermediate)
 	}
 	assert.Equal(t, maxCachedCRLs+4, w.fake.Requests("/crl"), "past 16 CRLs a run caches no more")
+}
+
+// Final review C2: one run, two issuers naming the same CRL address. The CRL verified for the first issuer is never
+// searched for a leaf of the second: the second fetches and verifies the answer against its own issuer.
+func TestCRLCacheIsPerIssuer(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	r := w.check.NewRun(50)
+	leaf := w.leaf(nil, []string{crlURL})
+	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, leaf, w.ca.Intermediate))
+	other := pki.NewCA("Victim", pki.ECDSA256, w.clk.Now())
+	victim := other.Issue(pki.Opts{CommonName: "victim.example.test", CRLDistributionPoints: []string{crlURL}}, w.clk.Now()).Cert
+	w.fake.Revoke(victim.SerialNumber, 1, w.clk.Now().Add(-time.Hour)) // the attacker's CRL (signed by the first CA) lists the victim
+	assert.Equal(t, Result{Status: StatusUnavailable, Code: CodeInvalidAnswer}, r.Check(ctx, victim, other.Intermediate),
+		"the cached list of another issuer is a miss; fetched again, it fails the victim issuer's signature check")
+	assert.Equal(t, 2, w.fake.Requests("/crl"))
+	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, w.leaf(nil, []string{crlURL}), w.ca.Intermediate))
+	assert.Equal(t, 2, w.fake.Requests("/crl"), "the first issuer's list is still cached")
+}
+
+// Final review M2: a CRL over 1 MiB is read and used, never cached.
+func TestLargeCRLsAreNotCached(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	for n := range 40000 {
+		w.fake.Revoke(big.NewInt(int64(1_000_000+n)), 4, w.clk.Now().Add(-time.Hour))
+	}
+	r := w.check.NewRun(50)
+	leaf := w.leaf(nil, []string{crlURL})
+	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, leaf, w.ca.Intermediate))
+	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, leaf, w.ca.Intermediate))
+	assert.Equal(t, 2, w.fake.Requests("/crl"), "not cached")
 }

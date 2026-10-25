@@ -60,8 +60,12 @@ const (
 	maxOCSPAnswer   = 64 << 10
 	maxCRLAnswer    = 10 << 20
 	maxCachedCRLs   = 16
-	freshness       = 5 * time.Minute // the clock skew an answer's times are allowed
-	userAgent       = "Alice-revocation-check"
+	// maxCachedCRLBytes: a larger CRL is read and used but not kept for the run (final review M2).
+	maxCachedCRLBytes = 1 << 20
+	// reasonRemoveFromCRL (8) lifts a hold; it is never a revocation (final review M1).
+	reasonRemoveFromCRL = 8
+	freshness           = 5 * time.Minute // the clock skew an answer's times are allowed
+	userAgent           = "Alice-revocation-check"
 )
 
 // Checker holds the guarded HTTP client; each scheduled run takes a Run of it.

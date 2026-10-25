@@ -110,6 +110,30 @@ func TestFakeServesSignedAnswers(t *testing.T) {
 		check(x509.ParseRevocationList(body))
 	}
 
+	// The delegated responders: the library accepts each (it checks only that the issuer signed the responder), which is
+	// why the checker checks the purpose and the validity itself (final review C1).
+	for f, check := range map[fakerevocation.Fault]func(*x509.Certificate){
+		fakerevocation.FaultDelegated:        func(c *x509.Certificate) { assert.Contains(t, c.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning) },
+		fakerevocation.FaultDelegatedNoEKU:   func(c *x509.Certificate) { assert.NotContains(t, c.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning) },
+		fakerevocation.FaultDelegatedExpired: func(c *x509.Certificate) { assert.True(t, c.NotAfter.Before(clk.Now())) },
+	} {
+		s.SetFault("/ocsp", f)
+		_, body = get(t, http.MethodPost, base+"/ocsp", req)
+		resp, err = ocsp.ParseResponseForCert(body, leaf.Cert, ca.Intermediate)
+		require.NoError(t, err)
+		require.NotNil(t, resp.Certificate)
+		check(resp.Certificate)
+	}
+	s.SetFault("/crl", fakerevocation.FaultDeltaCRL)
+	_, body = get(t, http.MethodGet, base+"/crl", nil)
+	delta, err := x509.ParseRevocationList(body)
+	require.NoError(t, err)
+	found := false
+	for _, e := range delta.Extensions {
+		found = found || e.Id.String() == "2.5.29.27"
+	}
+	assert.True(t, found, "the delta CRL indicator")
+
 	s.SetFault("/crl", fakerevocation.FaultDown)
 	code, _ = get(t, http.MethodGet, base+"/crl", nil)
 	assert.Equal(t, http.StatusInternalServerError, code)

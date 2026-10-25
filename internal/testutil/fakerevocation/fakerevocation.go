@@ -5,9 +5,11 @@ package fakerevocation
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -38,6 +40,15 @@ const (
 	FaultRedirect          // 302 to /target on the same server
 	FaultUnknown           // OCSP: the responder does not know the certificate
 	FaultOtherIssuer       // CRL: signed by the issuer's key under another issuer name
+	// OCSP: signed by a delegated responder the issuer certified for TLS servers only (no id-kp-OCSPSigning): a leaf of
+	// the same CA must never speak for the CA (final review C1, R64).
+	FaultDelegatedNoEKU
+	// OCSP: signed by a delegated responder the issuer certified for OCSP signing (a correct answer, not a fault).
+	FaultDelegated
+	// OCSP: signed by a delegated OCSP responder whose certificate has expired.
+	FaultDelegatedExpired
+	// CRL: a delta CRL (the delta CRL indicator extension, 2.5.29.27), which Alice does not read (final review M1).
+	FaultDeltaCRL
 )
 
 // HugeSize is the size of a FaultHuge answer: over both caps of the checker (64 KiB and 10 MiB).
@@ -172,6 +183,9 @@ func (s *Server) serveOCSP(w http.ResponseWriter, r *http.Request, fault Fault) 
 		tmpl.ThisUpdate, tmpl.NextUpdate = now.Add(-2*time.Hour), now.Add(-time.Hour)
 	case FaultWrongSigner:
 		signer, key = s.other.Intermediate, s.other.IntermediateKey
+	case FaultDelegatedNoEKU, FaultDelegated, FaultDelegatedExpired:
+		signer, key = s.responder(fault, now)
+		tmpl.Certificate = signer
 	}
 	der, err := ocsp.CreateResponse(s.ca.Intermediate, signer, tmpl, key)
 	if err != nil {
@@ -201,6 +215,8 @@ func (s *Server) serveCRL(w http.ResponseWriter, fault Fault) {
 		issuer = &x509.Certificate{Subject: s.ca.Intermediate.Subject, RawSubject: s.ca.Intermediate.RawSubject, KeyUsage: x509.KeyUsageCRLSign,
 			SubjectKeyId: s.ca.Intermediate.SubjectKeyId}
 		key = s.other.IntermediateKey
+	case FaultDeltaCRL:
+		list.ExtraExtensions = append(list.ExtraExtensions, pkix.Extension{Id: asn1.ObjectIdentifier{2, 5, 29, 27}, Value: []byte{0x02, 0x01, 0x01}})
 	case FaultOtherIssuer:
 		// The issuer's key, another name: the signature verifies, the issuer does not match the certificate's.
 		issuer = &x509.Certificate{Subject: pkix.Name{CommonName: "Another Issuer"}, KeyUsage: x509.KeyUsageCRLSign,
@@ -216,6 +232,31 @@ func (s *Server) serveCRL(w http.ResponseWriter, fault Fault) {
 	}
 	w.Header().Set("Content-Type", "application/pkix-crl")
 	_, _ = io.Copy(w, bytes.NewReader(der))
+}
+
+// responder is a delegated OCSP responder certificate the CA's intermediate issued, with or without id-kp-OCSPSigning,
+// valid now or expired an hour ago.
+func (s *Server) responder(fault Fault, now time.Time) (*x509.Certificate, crypto.Signer) {
+	key := pki.NewKey(pki.ECDSA256)
+	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}
+	nb, na := now.Add(-time.Hour), now.Add(time.Hour)
+	switch fault {
+	case FaultDelegatedNoEKU:
+		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	case FaultDelegatedExpired:
+		nb, na = now.Add(-48*time.Hour), now.Add(-time.Hour)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(now.UnixNano()), Subject: pkix.Name{CommonName: "Fake OCSP responder"},
+		NotBefore: nb, NotAfter: na, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: eku}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, s.ca.Intermediate, key.Public(), s.ca.IntermediateKey)
+	if err != nil {
+		panic("fakerevocation: " + err.Error())
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		panic("fakerevocation: " + err.Error())
+	}
+	return c, key
 }
 
 type zeros struct{}
