@@ -29,10 +29,13 @@ const (
 
 // Bounds and defaults of the canary key (design §5.1).
 const (
-	MinCanaryCount         = 1
-	MaxCanaryCount         = 10
-	MinCanaryPercent       = 1
-	MaxCanaryPercent       = 50
+	MinCanaryCount   = 1
+	MaxCanaryCount   = 10
+	MinCanaryPercent = 1
+	MaxCanaryPercent = 50
+	// MaxCanaryWave1 is the most websites a wave 1 holds, whatever the percentage (the rollout table's CHECK; final
+	// review C2): a 50 % canary of 40 websites deploys 19 first.
+	MaxCanaryWave1         = 19
 	MaxCanaryFirst         = 20
 	MinCanaryHold          = time.Minute
 	MaxCanaryHold          = 24 * time.Hour
@@ -392,7 +395,7 @@ func (p Policy) CanarySettings() (CanarySettings, bool) {
 
 // CanaryWaves splits the destinations of one request into wave 1 and wave 2 (design §7): the destinations named by
 // s.First in its order, then the others by UUID byte order; wave 1 is the first k (count, or the ceiling of the
-// percentage, at least 1), and wave 2 is never empty. Fewer than two destinations answer nil, nil. The input is not
+// percentage, at least 1, at most MaxCanaryWave1), and wave 2 is never empty. Fewer than two destinations answer nil, nil. The input is not
 // changed; distinct destinations are assumed (a request names each location once).
 func CanaryWaves(dests []uuid.UUID, s CanarySettings) (wave1, wave2 []uuid.UUID) {
 	n := len(dests)
@@ -417,6 +420,6 @@ func CanaryWaves(dests []uuid.UUID, s CanarySettings) (wave1, wave2 []uuid.UUID)
 	if s.Percent > 0 {
 		k = (n*s.Percent + 99) / 100
 	}
-	k = max(1, min(k, n-1))
+	k = max(1, min(k, n-1, MaxCanaryWave1))
 	return order[:k:k], slices.Clone(order[k:])
 }

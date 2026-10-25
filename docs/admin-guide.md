@@ -1798,7 +1798,7 @@ or the Key Vault; the websites' services keep their trusts as before.
 
 | Setting | What it does | Empty means |
 |---|---|---|
-| **Size of the first wave** | A number of websites (at most 10) or a percentage (at most 50, rounded up). The first wave is never all the websites. | 1 website |
+| **Size of the first wave** | A number of websites (at most 10) or a percentage (at most 50, rounded up). The first wave is never all the websites and never more than 19 (a 50 % canary of 40 websites deploys 19 first). | 1 website |
 | **Deploy here first** | Websites of the service that go into the first wave whenever they are destinations. | none |
 | **Hold** | How long the first wave is observed, 1m to 24h. | 10m |
 | **Interval** | Time between two checks of a website, 15s to 10m (shorter than the hold). | 30s |

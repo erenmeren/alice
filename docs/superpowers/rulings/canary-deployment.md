@@ -206,6 +206,13 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   if wrong: an automatic first wave whose planner is slowed for more than an hour (a very large global batch) is put back
   and retried at the next renewal; the holds of a planner's wave count against no limit (at most 19).
 
+- **C2. Wave 1 is capped at 19 websites (`authz.MaxCanaryWave1`) in `CanaryWaves`**, and the deploy dialogs' note counts
+  the same way (`TestCanaryWavesCapWaveOne`, `CanaryChoice.test.ts`: 38 websites at 50 % give 19, 39 give 19, 200 at
+  10 % give 19). Why: a Key Vault deploy takes up to 200 websites and the planners have no cap, so a percentage could ask
+  for 20 or more and break the rollout table's CHECK (1..19), answering 500 to a person and failing every planner run;
+  the cap keeps the CHECK of migration 00035 as shipped in this branch instead of relaxing it. Cost if wrong: a service
+  that wants a larger first wave gets 19 (the admin guide says so).
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.

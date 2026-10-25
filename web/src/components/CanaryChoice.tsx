@@ -8,11 +8,14 @@ import { isOutside, type OwnerService } from '../api/types';
 // serviceIdOf is a row's owning service id ('' when the caller does not see it).
 export const serviceIdOf = (s: OwnerService | null | undefined): string | undefined => (s && !isOutside(s) ? s.id : undefined);
 
+// MAX_CANARY_WAVE1 is the most websites a first wave holds (authz.MaxCanaryWave1, final review C2).
+const MAX_CANARY_WAVE1 = 19;
+
 // canaryFirstWave is how many websites a canary deploys first (design §7): the policy's count (default 1) or the
-// ceiling of its percentage, at least 1 and never all of them.
+// ceiling of its percentage, at least 1, never all of them and at most 19.
 export function canaryFirstWave(c: CanaryPolicy, destinations: number): number {
   const k = c.subset?.percent !== undefined ? Math.ceil((destinations * c.subset.percent) / 100) : (c.subset?.count ?? 1);
-  return Math.max(1, Math.min(k, destinations - 1));
+  return Math.max(1, Math.min(k, destinations - 1, MAX_CANARY_WAVE1));
 }
 
 // useCanary reads the source service's canary key (undefined while it is unknown, off, or the service is not known).

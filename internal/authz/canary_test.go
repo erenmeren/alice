@@ -285,3 +285,26 @@ func TestCanarySettingsJSON(t *testing.T) {
 	assert.Error(t, json.Unmarshal([]byte(`{"timeout":"x"}`), &back))
 	assert.Error(t, json.Unmarshal([]byte(`[]`), &back))
 }
+
+// Final review C2 (R65): wave 1 never holds more than MaxCanaryWave1 websites (the rollout table's CHECK), whatever the
+// percentage of a large request.
+func TestCanaryWavesCapWaveOne(t *testing.T) {
+	ids := func(n int) []uuid.UUID {
+		out := make([]uuid.UUID, n)
+		for i := range out {
+			out[i] = uuid.New()
+		}
+		return out
+	}
+	half := authz.CanarySettings{Percent: 50}
+	w1, w2 := authz.CanaryWaves(ids(38), half)
+	assert.Len(t, w1, 19, "the ceiling of 50 % of 38 is 19: at the limit")
+	assert.Len(t, w2, 19)
+	w1, w2 = authz.CanaryWaves(ids(39), half)
+	assert.Len(t, w1, authz.MaxCanaryWave1, "20 would be over the limit")
+	assert.Len(t, w2, 20)
+	w1, w2 = authz.CanaryWaves(ids(200), authz.CanarySettings{Percent: 10})
+	assert.Len(t, w1, authz.MaxCanaryWave1)
+	assert.Len(t, w2, 181)
+	assert.Equal(t, 19, authz.MaxCanaryWave1)
+}
