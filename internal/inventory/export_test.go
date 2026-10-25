@@ -16,6 +16,14 @@ import (
 	"alice/internal/secrets"
 )
 
+// CanarySNI exposes sniFor (the canary's copy of tlsverify.SNIFor) to the test that keeps the two in step.
+func CanarySNI(names, sans []string) string { return sniFor(names, sans) }
+
+// IncidentDeployInput is the request a key-compromise incident makes (R65 tests: exempt from the canary).
+func IncidentDeployInput(cert uuid.UUID, locs ...uuid.UUID) DeployRequestInput {
+	return DeployRequestInput{CertificateID: cert, LocationIDs: locs, incident: true}
+}
+
 // AuditLicenseDenial exposes auditLicenseDenial to the integration tests.
 func (s *Service) AuditLicenseDenial(ctx context.Context, a Actor, name string, cause error) {
 	s.auditLicenseDenial(ctx, a, name, cause)

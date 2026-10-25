@@ -24,6 +24,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/acmejobs"
+	"alice/internal/jobs/canaryjobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/driftjobs"
 	"alice/internal/jobs/kvjobs"
@@ -38,6 +39,7 @@ import (
 	"alice/internal/platform/netaddr"
 	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
+	"alice/internal/providers/httpcheck"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/reports"
@@ -325,7 +327,19 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	netdiscojobs.Register(runner, netdiscoDeps(svc, clk, log))
 	driftjobs.Register(runner, driftDeps(svc, clk, log))
 	winjobs.Register(runner, winDeps(svc, clk, log))
+	canaryjobs.Register(runner, canaryDeps(svc, clk, log))
 	return runner
+}
+
+// canaryDeps are the dependencies of the canary deployment's round job (R65): the HTTPS application check dials through
+// the SEC-065 rule (httpcheck) and names Alice's version.
+func canaryDeps(svc *services, clk clock.Clock, log *slog.Logger) canaryjobs.Deps {
+	d := canaryjobs.Deps{Registry: svc.registry, Checker: httpcheck.HTTPChecker{Clock: clk}, Clock: clk, Log: log,
+		UserAgent: "Alice-canary/" + version.Version}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	return d
 }
 
 // winDeps are the dependencies of the Windows certificate cleanup (R62 W3): the windows.cleanup job and its schedule.
@@ -528,6 +542,9 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		// queues windows.cleanup jobs, which change a server and are held in lock). The e2e build never ticks it: a journey
 		// runs it with POST /test/scheduler/run.
 		winjobs.ScheduleTask(svc.inventory, windowsCleanupScheduleEvery, log),
+		// Canary deployment (R65): decides every rollout (ClassAlways: observation and revert run in every licence state;
+		// wave 2 asks the gate). The e2e build never ticks it: the journeys run it with POST /test/scheduler/run.
+		canaryjobs.AdvanceTask(svc.inventory, canaryAdvanceEvery, log),
 		// The revocation check (R64, D5): asks the authorities about the due certificates (ReadOnly: paused in lock; the
 		// inventory also asks the gate and reads the switch). The e2e build never ticks it.
 		jobs.Task{Type: jobs.RevocationCheck, Every: revocationCheckEvery, Run: func(ctx context.Context) error {

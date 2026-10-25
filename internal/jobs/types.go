@@ -257,7 +257,7 @@ const (
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name,
-		inventory.JobACMERenew, NetdiscoScan.Name, inventory.JobDriftObserve, inventory.JobWindowsCleanup:
+		inventory.JobACMERenew, NetdiscoScan.Name, inventory.JobDriftObserve, inventory.JobWindowsCleanup, inventory.JobCanaryCheck:
 		return 1
 	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5
@@ -281,7 +281,8 @@ func MaxAttemptsFor(t Type) int {
 // repeat daily while a server is down (R62 W3 Ruling 13: a cleanup mails nobody but an incident's report).
 func AlertsWhenExhausted(t Type) bool {
 	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name &&
-		t.Name != ACMECleanup.Name && t.Name != inventory.JobDriftObserve && t.Name != inventory.JobWindowsCleanup
+		t.Name != ACMECleanup.Name && t.Name != inventory.JobDriftObserve && t.Name != inventory.JobWindowsCleanup &&
+		t.Name != inventory.JobCanaryCheck
 }
 
 // maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many
@@ -337,6 +338,18 @@ var (
 var (
 	WindowsCleanup         = Register(inventory.JobWindowsCleanup, license.ClassChange)
 	WindowsCleanupSchedule = Register("windows.cleanup_schedule", license.ClassReadOnly)
+)
+
+// Canary deployment (R65, docs/superpowers/specs/2026-10-24-canary-deployment-design.md §9.4, §18). canary.advance is
+// the periodic task that decides every rollout (inventory.AdvanceRollouts: holds, releases, reverts, wave 2, rounds);
+// canary.check observes one holding deployment once (one attempt, never a dead-job e-mail: the next round is queued by
+// the advance). Both ClassAlways (decision 17): observation and revert protect production in every licence state, like
+// recovery and incident.advance; wave 2 asks the gate itself. The names are literals (the web's label guard reads literal
+// Register calls) and equal inventory.JobCanaryAdvance and inventory.JobCanaryCheck. The handler and the task are in
+// internal/jobs/canaryjobs.
+var (
+	CanaryAdvance = Register("canary.advance", license.ClassAlways)
+	CanaryCheck   = Register("canary.check", license.ClassAlways)
 )
 
 // Phase 7 periodic task (R42 rows 3 and 5; §8.2 alerts.evaluate, §8.6 "not gated"): the expiry scan sends notices in

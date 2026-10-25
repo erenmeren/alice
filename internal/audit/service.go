@@ -35,6 +35,7 @@ var serviceOf = map[string]string{
 	"rotation":               `SELECT k.service_id FROM rotations r JOIN rotation_policies p ON p.id = r.policy_id JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE r.id = $1`,
 	"certificate_incident":   `SELECT c.service_id FROM certificate_incidents i JOIN certificates c ON c.id = i.certificate_id WHERE i.id = $1`,
 	"job":                    `SELECT service_id FROM jobs WHERE id = $1`,
+	"deployment_rollout":     `SELECT service_id FROM deployment_rollouts WHERE id = $1`, // the source service (R65)
 }
 
 // withServiceID adds details.service_id to an event about a resource that has an owning service, unless the event

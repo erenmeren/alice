@@ -136,6 +136,9 @@ func (s *CanarySettings) UnmarshalJSON(b []byte) error {
 	}
 	out := CanarySettings{Count: j.Count, Percent: j.Percent, First: j.First, Failures: j.Failures, Check: j.Check,
 		OverrideAllowed: j.OverrideAllowed}
+	if len(out.First) == 0 {
+		out.First = nil // as CanarySettings answers it
+	}
 	for _, f := range []struct {
 		in  string
 		out *time.Duration

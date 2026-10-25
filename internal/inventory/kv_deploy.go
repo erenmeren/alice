@@ -37,6 +37,8 @@ type KVDeployInput struct {
 	// (ErrHeldNeedsStepUp): a hold can appear between the caller's read and this call. Not-held versions
 	// ignore it.
 	StrictSession bool
+	// CanaryOverride is a person's "deploy to all at once" (R65; see DeployRequestInput).
+	CanaryOverride bool
 }
 
 // deployVersion is a stored version as a deployment needs it.
@@ -99,6 +101,13 @@ func versionRefusal(v deployVersion, c kvCertInfo, leaf deployCertificate, a Act
 // held or released alike); otherwise the chain is known only once the secret is read (KVDeployMaterial refuses
 // an incomplete one without the confirmation, ruling S7). Deploying a held version does not release it.
 func (s *Service) RequestKVDeployment(ctx context.Context, a Actor, in KVDeployInput) ([]RequestedDeployment, error) {
+	out, _, err := s.RequestKVDeploymentWithRollout(ctx, a, in)
+	return out, err
+}
+
+// RequestKVDeploymentWithRollout is RequestKVDeployment with the canary's answer (R65): the vault's service is the
+// source whose policy decides; a rollout inserts wave 1 only and names the binding and version.
+func (s *Service) RequestKVDeploymentWithRollout(ctx context.Context, a Actor, in KVDeployInput) ([]RequestedDeployment, *Rollout, error) {
 	var errs validate.Errors
 	if in.BindingID == uuid.Nil {
 		errs.Add("binding_id", validate.Pattern, nil)
@@ -110,20 +119,21 @@ func (s *Service) RequestKVDeployment(ctx context.Context, a Actor, in KVDeployI
 		errs = append(errs, validateLocationIDs(in.LocationIDs, MaxBindingLocations)...)
 	}
 	if len(errs) > 0 {
-		return nil, errs
+		return nil, nil, errs
 	}
 	kv := func() map[string]string {
 		return map[string]string{"binding_id": in.BindingID.String(), "version_id": in.VersionID.String()}
 	}
 	if err := s.license.Allow(license.ClassChange); err != nil {
-		return nil, s.auditLicenseRefusal(ctx, a, err, "deployment.denied", "binding", in.BindingID, kv())
+		return nil, nil, s.auditLicenseRefusal(ctx, a, err, "deployment.denied", "binding", in.BindingID, kv())
 	}
 	var (
-		out    []RequestedDeployment
-		denial *bindingDenial
+		out     []RequestedDeployment
+		rollout *Rollout
+		denial  *bindingDenial
 	)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		out, denial = nil, nil
+		out, rollout, denial = nil, nil, nil
 		vault, b, err := lockBinding(ctx, tx, in.BindingID)
 		if err != nil {
 			return err
@@ -213,7 +223,18 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		knownComplete := leaf.chainComplete && source == "azure_kv" && !v.chainIncomplete
 		src := deploySource{Trigger: "manual", BindingID: &in.BindingID, KVVersionID: &in.VersionID, Version: v.version,
 			Confirmed: in.ConfirmIncompleteChain && a.Role == rbac.Admin && !knownComplete}
-		for _, id := range ids {
+		plan, reason, err := s.planCanary(ctx, tx, a, leaf, ids, in.CanaryOverride, false,
+			rolloutSource{origin: RolloutOriginManual, bindingID: &in.BindingID, kvVersionID: &in.VersionID}, now)
+		if err != nil {
+			if reason != "" {
+				return denyWith(&denial, reason, uuid.Nil, err)
+			}
+			return err
+		}
+		if rollout = plan.rollout; rollout != nil {
+			src.RolloutID, src.Wave = &rollout.ID, 1
+		}
+		for _, id := range plan.insert {
 			r, err := s.insertDeployment(ctx, tx, a, leaf, locs[id], src, now)
 			if errors.Is(err, ErrDeploymentInProgress) {
 				return denyWith(&denial, "in_progress", id, err)
@@ -226,9 +247,9 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		return nil
 	})
 	if err != nil {
-		return nil, s.finishDenial(ctx, a, err, denial, "deployment.denied", "binding", in.BindingID, kv())
+		return nil, nil, s.finishDenial(ctx, a, err, denial, "deployment.denied", "binding", in.BindingID, kv())
 	}
-	return out, nil
+	return out, rollout, nil
 }
 
 // ReleaseInput names a held version. ConfirmIncompleteChain is the Administrator's acknowledgement that a

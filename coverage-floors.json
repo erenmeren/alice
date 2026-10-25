@@ -28,6 +28,7 @@
   "alice/internal/providers/nginx": 98,
   "alice/internal/providers/tlsverify": 95,
   "alice/internal/providers/httpcheck": 95,
+  "alice/internal/jobs/canaryjobs": 95,
   "alice/internal/providers/nginx/nginxconf": 92,
   "alice/internal/providers/apacheconf": 92,
   "alice/internal/providers/windows": 95,

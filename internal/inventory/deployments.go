@@ -174,6 +174,11 @@ type DeployRequestInput struct {
 	CertificateID          uuid.UUID
 	LocationIDs            []uuid.UUID // 1..20
 	ConfirmIncompleteChain bool        // counts only for an Administrator (F-17)
+	// CanaryOverride is a person's "deploy to all at once" (R65, design §13.1): the API asks for a fresh step-up; the
+	// source service's policy must allow it (ErrCanaryOverrideForbidden). Ignored when no canary would apply.
+	CanaryOverride bool
+	// acmeSource names the ACME certificate of a Deploy now (the rollout's source link, R65).
+	acmeSource *uuid.UUID
 	// source is the service whose key the deployment places (R49, design §5.6): nil for the certificate's own, the ACME
 	// certificate's for its Deploy now. incident: a key-compromise incident's replacement, which needs no trust (the
 	// key it replaces is there already).
@@ -265,6 +270,8 @@ type Deployment struct {
 	RolloutID    *uuid.UUID
 	Wave         int
 	RevertReason string
+	RolloutState string      // the rollout's state ("" outside one)
+	Canary       *CanaryView // Deployment(...) only: the latest observation of a wave-1 hold (nil when it never held)
 }
 
 // DeploymentFilter selects deployments, newest first.
@@ -272,6 +279,7 @@ type DeploymentFilter struct {
 	TargetID      uuid.UUID
 	CertificateID uuid.UUID
 	LocationID    uuid.UUID
+	RolloutID     uuid.UUID // R65: the deployments of one canary rollout
 	Cursor        string
 	Limit         int // 1..200, default 50
 	// Reach keeps the deployments the caller sees (R49 Phase 2: its server's service or its certificate's); the zero
@@ -390,21 +398,31 @@ var targetReady = []string{StatusOK, StatusUnreachable, StatusChecking}
 // pre-check (Task 16), not decided here. A server name the certificate does not cover is a
 // warning (san_mismatch), not a refusal.
 func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployRequestInput) ([]RequestedDeployment, error) {
+	out, _, err := s.RequestDeploymentWithRollout(ctx, a, in)
+	return out, err
+}
+
+// RequestDeploymentWithRollout is RequestDeployment with the canary's answer (R65, design §6): when the source
+// service's policy enables the canary, two or more locations are named, the request is no override and the expiry
+// guard passes, the request becomes a rollout: only wave 1 is inserted (the answer's deployments), and the rollout is
+// answered; otherwise the rollout is nil and every location is deployed. Every location is checked either way.
+func (s *Service) RequestDeploymentWithRollout(ctx context.Context, a Actor, in DeployRequestInput) ([]RequestedDeployment, *Rollout, error) {
 	if errs := validateDeployInput(in); len(errs) > 0 {
-		return nil, errs
+		return nil, nil, errs
 	}
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		if reason := license.DenialReason(err); reason != "" { // locked, lock_due or unverified (AUD-02)
 			s.auditDeployDenial(ctx, a, in.CertificateID, deployDenial{reason: reason})
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	var (
-		out    []RequestedDeployment
-		denial *deployDenial
+		out     []RequestedDeployment
+		rollout *Rollout
+		denial  *deployDenial
 	)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		out, denial = nil, nil
+		out, rollout, denial = nil, nil, nil
 		deny := func(loc uuid.UUID, reason string, err error) error {
 			denial = &deployDenial{location: loc, reason: reason}
 			return err
@@ -444,9 +462,22 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 				return deny(id, reason, err)
 			}
 		}
-		for _, id := range in.LocationIDs {
+		src := rolloutSource{origin: RolloutOriginManual, acmeCertificateID: in.acmeSource}
+		plan, reason, err := s.planCanary(ctx, tx, a, c, in.LocationIDs, in.CanaryOverride, in.incident, src, now)
+		if err != nil {
+			if reason != "" {
+				return deny(uuid.Nil, reason, err)
+			}
+			return err
+		}
+		rollout = plan.rollout
+		for _, id := range plan.insert {
 			l := locs[id]
-			r, err := s.insertDeployment(ctx, tx, a, c, l, deploySource{Trigger: "manual", Confirmed: in.ConfirmIncompleteChain && !c.chainComplete}, now)
+			ds := deploySource{Trigger: "manual", Confirmed: in.ConfirmIncompleteChain && !c.chainComplete}
+			if rollout != nil {
+				ds.RolloutID, ds.Wave = &rollout.ID, 1
+			}
+			r, err := s.insertDeployment(ctx, tx, a, c, l, ds, now)
 			if errors.Is(err, ErrDeploymentInProgress) {
 				return deny(id, "in_progress", err)
 			}
@@ -464,9 +495,9 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, rollout, nil
 }
 
 func readDeployCertificate(ctx context.Context, q db.Querier, id uuid.UUID) (deployCertificate, error) {
@@ -613,16 +644,23 @@ type deploySource struct {
 	KVVersionID *uuid.UUID
 	Confirmed   bool
 	Version     string
+	// RolloutID and Wave place the deployment in a canary rollout (R65; written at insert only).
+	RolloutID *uuid.UUID
+	Wave      int
 }
 
 func (s *Service) insertDeployment(ctx context.Context, tx pgx.Tx, a Actor, c deployCertificate, l deployLocation, src deploySource,
 	now time.Time) (RequestedDeployment, error) {
 	id := uuid.Must(uuid.NewV7())
+	var wave *int
+	if src.RolloutID != nil {
+		wave = &src.Wave
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, requested_by, state, status,
-    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, binding_id, kv_version_id, created_at, location_kind)
-VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12, $16)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
+    new_fingerprint, cert_path, key_path, confirm_incomplete_chain, binding_id, kv_version_id, created_at, location_kind, rollout_id, wave)
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12, $16, $17, $18)`, id, c.id, l.id, l.target, nullableUser(a.UserID),
 		DeployStateQueued, DeployStatusPending, c.fingerprint, l.certPath, l.keyPath, src.Confirmed, now, src.Trigger, src.BindingID, src.KVVersionID,
-		l.kind.OrFile())
+		l.kind.OrFile(), src.RolloutID, wave)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "deployments_one_active" {
 		return RequestedDeployment{}, ErrDeploymentInProgress
@@ -656,6 +694,9 @@ VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12, $16)`,
 	if src.BindingID != nil {
 		details["binding_id"] = src.BindingID.String()
 		details["version"] = src.Version
+	}
+	if src.RolloutID != nil {
+		details["rollout_id"], details["wave"] = src.RolloutID.String(), strconv.Itoa(src.Wave)
 	}
 	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "deployment.requested", ObjectType: "deployment",
 		ObjectID: id.String(), Result: audit.Success, Details: details})
@@ -692,8 +733,9 @@ d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.resu
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
 d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source,
 d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced, d.location_kind,
-d.rollout_id, coalesce(d.wave, 0), d.revert_reason
+d.rollout_id, coalesce(d.wave, 0), d.revert_reason, coalesce(ro.state, '')
 FROM deployments d
+LEFT JOIN deployment_rollouts ro ON ro.id = d.rollout_id
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
 LEFT JOIN users u ON u.id = d.requested_by
@@ -715,7 +757,7 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
 		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource,
 		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced, &d.LocationKind,
-		&d.RolloutID, &d.Wave, &d.RevertReason)
+		&d.RolloutID, &d.Wave, &d.RevertReason, &d.RolloutState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -779,7 +821,15 @@ func (s *Service) Deployment(ctx context.Context, id uuid.UUID) (Deployment, err
 		st.At = st.At.UTC()
 		d.Steps = append(d.Steps, st)
 	}
-	return d, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Deployment{}, err
+	}
+	if d.RolloutID != nil && d.Wave == 1 {
+		if d.Canary, err = canaryViewOfDeployment(ctx, s.pool, id); err != nil {
+			return Deployment{}, err
+		}
+	}
+	return d, nil
 }
 
 func nullID(id uuid.UUID) *uuid.UUID {
@@ -819,8 +869,9 @@ WHERE ($1::uuid IS NULL OR d.target_id = $1)
   AND ($3::uuid IS NULL OR d.location_id = $3)
   AND ($4::timestamptz IS NULL OR (d.created_at, d.id) < ($4::timestamptz, $5::uuid))
   AND `+authz.DeploymentVisible("d", "$7")+`
+  AND ($8::uuid IS NULL OR d.rollout_id = $8)
 ORDER BY d.created_at DESC, d.id DESC
-LIMIT $6`, nullID(f.TargetID), nullID(f.CertificateID), nullID(f.LocationID), afterAt, afterID, limit+1, f.Reach.SQL())
+LIMIT $6`, nullID(f.TargetID), nullID(f.CertificateID), nullID(f.LocationID), afterAt, afterID, limit+1, f.Reach.SQL(), nullID(f.RolloutID))
 	if err != nil {
 		return DeploymentPage{}, fmt.Errorf("inventory: list deployments: %w", err)
 	}

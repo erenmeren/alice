@@ -34,6 +34,8 @@ type LocationFilter struct {
 	Limit          int
 	// Reach keeps the websites on servers the caller sees (R49 Phase 2); the zero value is every service.
 	Reach authz.Reach
+	// ServiceIDs keeps the websites on servers of these services (R65: the canary editor's first picker); empty: all.
+	ServiceIDs []uuid.UUID
 }
 
 // DeployableLocation is one website that can be connected.
@@ -138,9 +140,10 @@ WHERE l.supported AND l.missing_since IS NULL
                   WHERE lower(n COLLATE "C") LIKE $4 ESCAPE '\'))
   AND ($5::text IS NULL OR (lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id) > ($5::text COLLATE "C", $6::text COLLATE "C", $7::uuid))
   AND `+authz.OwnedVisible("t", "$10")+`
+  AND (cardinality($12::uuid[]) = 0 OR t.service_id = ANY($12))
 ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id
 LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes(), f.Reach.SQL(),
-		providers.MaxCanonicalLength)
+		providers.MaxCanonicalLength, serviceIDsOrEmpty(f.ServiceIDs))
 	if err != nil {
 		return DeployableLocationPage{}, fmt.Errorf("inventory: list deployable locations: %w", err)
 	}
@@ -188,4 +191,12 @@ func serverNames(servers []providers.CertServer) []string {
 		}
 	}
 	return out
+}
+
+// serviceIDsOrEmpty is a non-nil list for a uuid[] parameter.
+func serviceIDsOrEmpty(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }

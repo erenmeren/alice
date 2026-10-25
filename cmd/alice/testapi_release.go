@@ -58,6 +58,9 @@ const (
 	driftRepairEvery   = time.Minute
 )
 
+// canaryAdvanceEvery is the interval of the canary deployment's decisions (R65, design §18).
+const canaryAdvanceEvery = 10 * time.Second
+
 // windowsCleanupScheduleEvery is the interval of the Windows certificate cleanup schedule (R62 W3 Ruling 13): each
 // Windows server is cleaned up once a day; the hourly schedule only finds the due ones.
 const windowsCleanupScheduleEvery = time.Hour

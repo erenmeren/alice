@@ -89,6 +89,7 @@ type ACMEBinding struct {
 type ACMEDeployInput struct {
 	LocationIDs            []uuid.UUID
 	ConfirmIncompleteChain bool
+	CanaryOverride         bool // R65: a person's "deploy to all at once" (see DeployRequestInput)
 }
 
 const acmeBindingSelect = `SELECT b.acme_certificate_id, b.location_id, l.target_id, t.name::text, l.cert_path, l.kind, b.auto_deploy, b.attention_at,
@@ -370,28 +371,35 @@ func (s *Service) RemoveACMEBinding(ctx context.Context, a Actor, id, location u
 // deployment.requested / deployment.denied audit rows, ErrChainUnconfirmed unless an Administrator confirms an
 // incomplete chain). ErrNotFound, ErrACMENotIssued; with no location named, ErrACMENoBindings (none bound) or ErrACMETooManyBindings (more than MaxDeployLocations bound: name them).
 func (s *Service) DeployACMENow(ctx context.Context, a Actor, id uuid.UUID, in ACMEDeployInput) ([]RequestedDeployment, error) {
+	out, _, err := s.DeployACMENowWithRollout(ctx, a, id, in)
+	return out, err
+}
+
+// DeployACMENowWithRollout is DeployACMENow with the canary's answer (R65): the ACME certificate's service is the source
+// whose policy decides; a rollout names the ACME certificate.
+func (s *Service) DeployACMENowWithRollout(ctx context.Context, a Actor, id uuid.UUID, in ACMEDeployInput) ([]RequestedDeployment, *Rollout, error) {
 	c, err := getACMECert(ctx, s.pool, id, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if c.CurrentCertificateID == nil {
-		return nil, ErrACMENotIssued
+		return nil, nil, ErrACMENotIssued
 	}
 	rows, err := s.pool.Query(ctx, "SELECT location_id FROM acme_bindings WHERE acme_certificate_id = $1 ORDER BY location_id", id)
 	if err != nil {
-		return nil, fmt.Errorf("inventory: read the ACME bindings: %w", err)
+		return nil, nil, fmt.Errorf("inventory: read the ACME bindings: %w", err)
 	}
 	bound, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 	if err != nil {
-		return nil, fmt.Errorf("inventory: read the ACME bindings: %w", err)
+		return nil, nil, fmt.Errorf("inventory: read the ACME bindings: %w", err)
 	}
 	locations := in.LocationIDs
 	if len(locations) == 0 {
 		switch {
 		case len(bound) == 0:
-			return nil, ErrACMENoBindings
+			return nil, nil, ErrACMENoBindings
 		case len(bound) > MaxDeployLocations:
-			return nil, ErrACMETooManyBindings
+			return nil, nil, ErrACMETooManyBindings
 		}
 		locations = bound
 	}
@@ -401,12 +409,12 @@ func (s *Service) DeployACMENow(ctx context.Context, a Actor, id uuid.UUID, in A
 	}
 	for _, l := range locations {
 		if !isBound[l] {
-			return nil, &LocationRefusalError{LocationID: l, Err: ErrACMELocationNotBound}
+			return nil, nil, &LocationRefusalError{LocationID: l, Err: ErrACMELocationNotBound}
 		}
 	}
 	// The key is the ACME certificate's: its service is the source (R49, design §5.6).
-	return s.RequestDeployment(ctx, a, DeployRequestInput{CertificateID: *c.CurrentCertificateID, LocationIDs: locations,
-		ConfirmIncompleteChain: in.ConfirmIncompleteChain, source: &c.ServiceID})
+	return s.RequestDeploymentWithRollout(ctx, a, DeployRequestInput{CertificateID: *c.CurrentCertificateID, LocationIDs: locations,
+		ConfirmIncompleteChain: in.ConfirmIncompleteChain, source: &c.ServiceID, CanaryOverride: in.CanaryOverride, acmeSource: &c.ID})
 }
 
 // ReleaseACMEDeployHold releases the current certificate of a live ACME certificate from the licence hold (an

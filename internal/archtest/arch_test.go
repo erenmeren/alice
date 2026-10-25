@@ -78,6 +78,11 @@ var rules = map[string][]string{
 	// the clock; it never reaches the inventory or a database.
 	"alice/internal/revocation": {"alice/internal/platform/netaddr", "alice/internal/platform/clock"},
 	"alice/internal/jobs/...":   {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz"},
+	// The canary's round job (R65) is a jobs package that also runs the HTTPS application check (httpcheck: netaddr and
+	// the clock only).
+	"alice/internal/jobs/canaryjobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
+		"alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz",
+		"alice/internal/providers/httpcheck", "alice/internal/jobs"},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
 	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
