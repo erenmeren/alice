@@ -5133,6 +5133,18 @@
     },
     "notDeployed": "Not deployed yet",
     "skipped": "Not deployed: {{reason}}",
+    "skipReason": {
+      "location_not_found": "the website or its server is gone",
+      "in_progress": "another deployment of this website is still running",
+      "location_unsupported": "Alice cannot deploy to this website",
+      "target_disabled": "its server is disabled",
+      "target_not_ready": "its server is not connected",
+      "config_invalid": "the server's configuration does not pass its test",
+      "rescan_needed": "the website's files changed; run Discover on its server",
+      "key_type_mismatch": "the website needs another key type",
+      "service_untrusted": "its service does not accept keys from the certificate's service",
+      "recovery_pending": "an earlier change on its server is still being finished"
+    },
     "hidden": "{{count}} websites outside your services are not shown.",
     "continue": "Continue now",
     "continueHelp": "Skips the rest of the observation and deploys to the remaining websites.",

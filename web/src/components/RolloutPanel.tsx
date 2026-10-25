@@ -17,6 +17,9 @@ import { WRAP } from './wrap';
 // reasonKey is the text key of a rollout's reason (its dots become underscores: i18next reads dots as nesting).
 export const rolloutReasonKey = (reason: string) => `canary.reason.${reason.replace(/\./g, '_')}`;
 
+// skipReasonKey is the text key of a wave-2 website's skip reason (insertWave2Location's codes; dots become underscores).
+export const skipReasonKey = (reason: string) => `canary.skipReason.${reason.replace(/\./g, '_')}`;
+
 const ACTIVE: ReadonlySet<string> = new Set(['wave1', 'hold', 'wave2']);
 
 // remaining is the hold left at the moment, from the server's clock (now) read with the rollout and the time since
@@ -116,7 +119,7 @@ export function RolloutPanel({ id }: { id: string }) {
           return (
             <Text size="sm" key={s.location_id} data-testid="rollout-skipped" style={WRAP}>
               {l ? `${l.target_name} ${l.site}: ` : ''}
-              {t('canary.skipped', { reason: s.reason })}
+              {t('canary.skipped', { reason: t(skipReasonKey(s.reason), { defaultValue: s.reason }) })}
             </Text>
           );
         })}

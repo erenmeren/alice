@@ -6,7 +6,9 @@ import { errorResponse, globalSession, sessionHandlers } from '../test/fixtures'
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
-import { RolloutPanel, rolloutReasonKey } from './RolloutPanel';
+import en from '../locales/en.json';
+import tr from '../locales/tr.json';
+import { RolloutPanel, rolloutReasonKey, skipReasonKey } from './RolloutPanel';
 
 const ROLLOUT_ID = '0192c000-0000-7000-8000-0000000000a1';
 
@@ -114,11 +116,28 @@ describe('RolloutPanel (R65)', () => {
   it('shows only the actions the server allows, the skipped websites and the hidden count', async () => {
     world(rolloutFixture({ state: 'wave2', allowed_actions: [], skipped: [{ location_id: 'l2', reason: 'target_not_ready' }], hidden_count: 2 }));
     await renderWithStepUp(<RolloutPanel id={ROLLOUT_ID} />);
-    expect(await screen.findByTestId('rollout-skipped')).toHaveTextContent('web-02 /etc/nginx/ssl/www.crt: Not deployed: target_not_ready');
+    expect(await screen.findByTestId('rollout-skipped')).toHaveTextContent('web-02 /etc/nginx/ssl/www.crt: Not deployed: its server is not connected');
     expect(screen.getByText('2 websites outside your services are not shown.')).toBeInTheDocument();
     expect(screen.queryByTestId('rollout-continue')).not.toBeInTheDocument();
     expect(screen.queryByTestId('rollout-abort')).not.toBeInTheDocument();
     expect(screen.queryByTestId('rollout-countdown')).not.toBeInTheDocument();
+  });
+
+  it('names every skip reason of wave 2 in words, in both languages, and shows an unknown one as it is', async () => {
+    const reasons = ['location_not_found', 'in_progress', 'location_unsupported', 'target_disabled', 'target_not_ready', 'config_invalid',
+      'rescan_needed', 'key_type_mismatch', 'service.untrusted', 'recovery_pending'];
+    for (const lang of ['en', 'tr'] as const) {
+      const tree = (lang === 'en' ? en : tr) as unknown as { canary: { skipReason: Record<string, string> } };
+      for (const r of reasons) expect(tree.canary.skipReason[r.replace(/\./g, '_')], `${lang} ${r}`).toBeTruthy();
+    }
+    world(rolloutFixture({ state: 'wave2', allowed_actions: [], skipped: [{ location_id: 'l2', reason: 'target_disabled' }] }));
+    const view = await renderWithStepUp(<RolloutPanel id={ROLLOUT_ID} />);
+    expect(await screen.findByTestId('rollout-skipped')).toHaveTextContent('Not deployed: its server is disabled');
+    view.unmount();
+    world(rolloutFixture({ state: 'wave2', allowed_actions: [], skipped: [{ location_id: 'l2', reason: 'some_new_reason' }] }));
+    await renderWithStepUp(<RolloutPanel id={ROLLOUT_ID} />);
+    expect(await screen.findByTestId('rollout-skipped')).toHaveTextContent('Not deployed: some_new_reason');
+    expect(skipReasonKey('service.untrusted')).toBe('canary.skipReason.service_untrusted');
   });
 
   it('shows the refusal of a state that moved on', async () => {

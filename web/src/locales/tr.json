@@ -5133,6 +5133,18 @@
     },
     "notDeployed": "Henüz dağıtılmadı",
     "skipped": "Dağıtılmadı: {{reason}}",
+    "skipReason": {
+      "location_not_found": "web sitesi ya da sunucusu artık yok",
+      "in_progress": "bu web sitesinin başka bir dağıtımı hâlâ sürüyor",
+      "location_unsupported": "Alice bu web sitesine dağıtım yapamıyor",
+      "target_disabled": "sunucusu devre dışı",
+      "target_not_ready": "sunucusu bağlı değil",
+      "config_invalid": "sunucunun yapılandırması testini geçmiyor",
+      "rescan_needed": "web sitesinin dosyaları değişti; sunucusunda Keşfet'i çalıştırın",
+      "key_type_mismatch": "web sitesi başka bir anahtar türü istiyor",
+      "service_untrusted": "hizmeti, sertifikanın hizmetinden anahtar kabul etmiyor",
+      "recovery_pending": "sunucusundaki önceki bir değişiklik hâlâ tamamlanıyor"
+    },
     "hidden": "Hizmetleriniz dışındaki {{count}} web sitesi gösterilmiyor.",
     "continue": "Şimdi devam et",
     "continueHelp": "Gözlemin kalanını atlar ve kalan web sitelerine dağıtır.",
