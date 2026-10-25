@@ -438,7 +438,7 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 |---|---|---|
 | CAN-01 | The `canary` key of a service policy: defaults, normalization | Absent fields take the defaults (1 website, hold 10 min, rounds every 30 s, 2 failures, override allowed); explicit defaults are not stored; durations read as `90s`, `10m`, `1h` |
 | CAN-02 | Out-of-range or crossed canary fields | Hold outside 1 min-24 h, interval outside 15 s-10 min or not below the hold, timeout outside 1-10 s or not below the interval, count above 10, percent above 50, both count and percent, a path that is not origin-form, an unknown field: each refused on its own field |
-| CAN-03 | The waves of a rollout | Count or the ceiling of the percentage, at least 1 and never all; `first` websites lead in their order; the split is stable for the same input; 2 and 20 destinations |
+| CAN-03 | The waves of a rollout | Count or the ceiling of the percentage, at least 1, never all and at most 19; `first` websites lead in their order; the split is stable for the same input; 2 and 20 destinations |
 | CAN-04 | A `first` website that is not one of the service's | Refused on `body.canary.first.N` |
 | CAN-05 | Migration 00035 | The rollout and check tables with their checks and grants; `holding` only in wave 1; the down migration refuses with Z1033 while a rollout or a hold exists |
 | CAN-06 | A wave-1 deployment verified | It holds (`running`, `holding`) and its location is not yet updated; an `unchanged` wave-1 outcome finishes at once; wave 2 and plain deployments never hold |

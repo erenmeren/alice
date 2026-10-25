@@ -2726,7 +2726,9 @@
   "id": "CAN-03",
   "status": "test",
   "tests": [
-   "internal/authz:TestCanaryWaves"
+   "internal/authz:TestCanaryWaves",
+   "internal/authz:TestCanaryWavesCapWaveOne",
+   "web/src/components/CanaryChoice.test.ts:counts as the server does, capped at 19"
   ]
  },
  {
@@ -2859,7 +2861,8 @@
   "id": "CAN-20",
   "status": "test",
   "tests": [
-   "internal/inventory:TestDecideRollout"
+   "internal/inventory:TestDecideRollout",
+   "internal/inventory:TestDecideRolloutFailsAWaveOneThatNeverCompletes"
   ]
  },
  {
@@ -2913,7 +2916,8 @@
    "internal/inventory:TestCanaryFilter",
    "internal/inventory:TestPlanCanaryACME",
    "internal/inventory:TestPlanCanaryKV",
-   "internal/inventory:TestPlannerSkipsTheCanaryWhenACertificateEndsSoon"
+   "internal/inventory:TestPlannerSkipsTheCanaryWhenACertificateEndsSoon",
+   "internal/inventory:TestPlannersDeployAWaveOneLargerThanTheirWave"
   ]
  },
  {
@@ -2922,7 +2926,8 @@
   "tests": [
    "internal/inventory:TestACMERenewalRollsOutWithACanary",
    "internal/inventory:TestKVRenewalRollsOutWithACanary",
-   "internal/inventory:TestContinuedAutomaticRolloutCompletesAtRelease"
+   "internal/inventory:TestContinuedAutomaticRolloutCompletesAtRelease",
+   "internal/inventory:TestAWaveOneWebsiteThatStopsBeingACandidateFailsTheRollout"
   ]
  },
  {
@@ -2933,7 +2938,9 @@
    "internal/inventory:TestIncidentNeverReleasesACompromisedHold",
    "internal/inventory:TestDeployedCertificateRevokedDuringTheHold",
    "internal/inventory:TestDriftAndWindowsCleanupSeeAHoldAsUnfinished",
-   "internal/inventory:TestPreemptionOfNoHoldAndAFailedRelease"
+   "internal/inventory:TestPreemptionOfNoHoldAndAFailedRelease",
+   "internal/inventory:TestPreemptPlan",
+   "internal/inventory:TestPreemptionRevertsAHoldOfAFailedRollout"
   ]
  },
  {
