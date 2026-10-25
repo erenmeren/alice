@@ -219,11 +219,13 @@ func TestCRLCacheIsPerIssuer(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	r := w.check.NewRun(50)
-	leaf := w.leaf(nil, []string{crlURL})
-	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, leaf, w.ca.Intermediate))
 	other := pki.NewCA("Victim", pki.ECDSA256, w.clk.Now())
 	victim := other.Issue(pki.Opts{CommonName: "victim.example.test", CRLDistributionPoints: []string{crlURL}}, w.clk.Now()).Cert
-	w.fake.Revoke(victim.SerialNumber, 1, w.clk.Now().Add(-time.Hour)) // the attacker's CRL (signed by the first CA) lists the victim
+	// The attacker's CRL (signed by the first CA) lists the victim's serial before anything is fetched, so a cache hit
+	// across issuers would answer "revoked" for the victim.
+	w.fake.Revoke(victim.SerialNumber, 1, w.clk.Now().Add(-time.Hour))
+	leaf := w.leaf(nil, []string{crlURL})
+	assert.Equal(t, Result{Status: StatusGood, Method: "crl"}, r.Check(ctx, leaf, w.ca.Intermediate))
 	assert.Equal(t, Result{Status: StatusUnavailable, Code: CodeInvalidAnswer}, r.Check(ctx, victim, other.Intermediate),
 		"the cached list of another issuer is a miss; fetched again, it fails the victim issuer's signature check")
 	assert.Equal(t, 2, w.fake.Requests("/crl"))

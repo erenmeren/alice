@@ -11,7 +11,9 @@ package inventory
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -148,8 +150,10 @@ type revocationCandidate struct {
 	chain       string // the leaf's PEM, then its chain (an inventory certificate's pem_chain; a discovered leaf's PEM)
 	issuerPEM   string // a discovered leaf's presented chain, issuer first ("" for an inventory certificate: it is in chain)
 	inventory   bool
-	// heldIssuer: a discovered leaf's issuer is an inventory certificate Alice did not find by discovery (ruling 42).
-	heldIssuer bool
+	// heldIssuer is the fingerprint of the head of a discovered leaf's presented chain when it is an inventory certificate
+	// Alice did not find by discovery ("" otherwise). It vouches only when it is the issuer that signed the leaf (ruling
+	// 42, final review I1 bypass).
+	heldIssuer string
 }
 
 // revocationRunState is what one run counts across its results.
@@ -197,7 +201,7 @@ func (s *Service) RunRevocationChecks(ctx context.Context) (RevocationRunReport,
 		switch {
 		case leaf == nil:
 			res = revocation.Result{Status: revocation.StatusNotCheckable, Code: revocation.CodeNoIssuer}
-		case !c.inventory && !c.heldIssuer && !s.chainTrusted(c, leaf, s.clock.Now()):
+		case !c.inventory && !heldSigner(c, issuer) && !s.chainTrusted(c, leaf, s.clock.Now()):
 			// Ruling 42: a discovered leaf of an issuer nobody vouches for is never fetched for.
 			res = revocation.Result{Status: revocation.StatusNotCheckable, Code: revocation.CodeUntrustedIssuer}
 		default:
@@ -232,7 +236,7 @@ WHERE NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = r.fi
 // revocationCandidates selects the due certificates (one statement, at most revocationBatch, the longest due first).
 func (s *Service) revocationCandidates(ctx context.Context, now time.Time) ([]revocationCandidate, error) {
 	rows, err := s.pool.Query(ctx, `WITH cand AS (
-    SELECT c.fingerprint_sha256 AS fp, c.pem_chain AS chain, '' AS issuer_pem, true AS inv, false AS held
+    SELECT c.fingerprint_sha256 AS fp, c.pem_chain AS chain, '' AS issuer_pem, true AS inv, '' AS held
     FROM certificates c WHERE c.revoked_at IS NULL AND c.not_after > $1 AND NOT c.self_signed
   UNION ALL
     SELECT d.fingerprint_sha256, d.pem, i.chain, false, i.held
@@ -240,7 +244,8 @@ func (s *Service) revocationCandidates(ctx context.Context, now time.Time) ([]re
     JOIN LATERAL (SELECT
             (SELECT string_agg(ic.pem, E'\n' ORDER BY array_position(e.chain_fingerprints, ic.fingerprint_sha256)) FROM discovery_certificates ic
              WHERE ic.fingerprint_sha256 = ANY (e.chain_fingerprints)) AS chain,
-            EXISTS (SELECT 1 FROM certificates hc WHERE hc.fingerprint_sha256 = e.chain_fingerprints[1] AND hc.source <> 'discovered') AS held
+            CASE WHEN EXISTS (SELECT 1 FROM certificates hc WHERE hc.fingerprint_sha256 = e.chain_fingerprints[1] AND hc.source <> 'discovered')
+                 THEN e.chain_fingerprints[1] ELSE '' END AS held
           FROM discovery_endpoints e
           WHERE e.fingerprint_sha256 = d.fingerprint_sha256
             AND EXISTS (SELECT 1 FROM discovery_certificates ic WHERE ic.fingerprint_sha256 = e.chain_fingerprints[1])
@@ -278,6 +283,15 @@ func revocationPair(c revocationCandidate) (leaf, issuer *x509.Certificate) {
 		}
 	}
 	return leaf, nil
+}
+
+// heldSigner reports whether the issuer that signed a discovered leaf is the held certificate at the head of its chain.
+func heldSigner(c revocationCandidate, issuer *x509.Certificate) bool {
+	if c.heldIssuer == "" || issuer == nil {
+		return false
+	}
+	sum := sha256.Sum256(issuer.Raw)
+	return hex.EncodeToString(sum[:]) == c.heldIssuer
 }
 
 // chainTrusted reports whether a discovered leaf's presented chain reaches a trusted root (Config.Roots: the system's
@@ -351,7 +365,13 @@ func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, r
 		case revocation.StatusOnHold:
 			at := res.RevokedAt
 			row.revokedAt, row.next = &at, now.Add(revocationHoldAfter)
-			if (prevStatus != string(revocation.StatusOnHold) || prevNotified == nil) && (c.inventory || st.discoveredMailAllowed()) {
+			due := prevStatus != string(revocation.StatusOnHold) || prevNotified == nil
+			if due && !c.inventory && !st.discoveredMailAllowed() {
+				due = false
+				s.log.Warn("revocation e-mail suppressed: the run's limit of e-mails about discovered certificates is reached",
+					"fingerprint", c.fingerprint, "status", string(res.Status))
+			}
+			if due {
 				if err := s.revocationNews(ctx, tx, c, res, TemplateCertificateOnHoldByAuthority, "certificate.revocation_on_hold"); err != nil {
 					return err
 				}
@@ -364,6 +384,11 @@ func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, r
 				row.reason = "unspecified"
 			}
 			mail := prevNotified == nil && (c.inventory || st.discoveredMailAllowed())
+			if !mail && prevNotified == nil {
+				// Lost for good: a revoked row is never checked again (ruling 42). The log keeps the fingerprint.
+				s.log.Warn("revocation e-mail suppressed: the run's limit of e-mails about discovered certificates is reached",
+					"fingerprint", c.fingerprint, "status", string(res.Status))
+			}
 			if err := s.revokedByAuthority(ctx, tx, c, res, row.reason, mail); err != nil {
 				return err
 			}

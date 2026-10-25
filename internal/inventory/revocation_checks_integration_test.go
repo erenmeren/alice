@@ -472,6 +472,7 @@ func TestRevocationRunCapsDiscoveredMails(t *testing.T) {
 	assert.Equal(t, 25, rep.Revoked)
 	assert.Equal(t, 5, rep.MailsSuppressed)
 	assert.Equal(t, 20, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered))
+	assert.Equal(t, 5, strings.Count(h.logs.String(), "revocation e-mail suppressed"), "each suppressed e-mail is logged with its fingerprint")
 	for _, p := range h.incidentMailParams(inventory.TemplateCertificateRevokedByAuthorityDiscovered) {
 		assert.True(t, strings.HasPrefix(p["certificate_name"], "evil?[31m?"), p["certificate_name"])
 	}
@@ -499,4 +500,40 @@ func TestRevocationRunRecordsOnceUnderConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, 1, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered), "one Administrator, one e-mail")
+}
+
+// Final review I1 (bypass): a held certificate at the head of the presented chain vouches only when it is the issuer
+// that signed the leaf. An endpoint presenting [an uploaded certificate that signed nothing, the attacker's CA] is not
+// checked, and nothing is fetched from the addresses the attacker's leaf names.
+func TestRevocationRunHeldIssuerMustSignTheLeaf(t *testing.T) {
+	rf := &revFake{}
+	h := newHarness(t, withRevocation(t, rf)) // the fake (attacker) authority's root is not trusted
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	scope, err := seed.DiscoveryScope(h.ctx, h.db.App, "LAN", false)
+	require.NoError(t, err)
+	org := pki.NewCA("Org", pki.ECDSA256, h.clock.Now()).Issue(pki.Opts{CommonName: "org.example.test", SANs: []string{"org.example.test"}}, h.clock.Now())
+	h.uploadLeaf(admin, org) // held, source uploaded; it signed nothing
+	l := rf.leaf(h, "lan.example.test", []string{revOCSP}, []string{revCRL})
+	for _, row := range []struct {
+		fp, pem string
+		leaf    bool
+	}{{pki.Fingerprint(l.Cert), string(l.CertPEM), true}, {pki.Fingerprint(org.Cert), string(org.CertPEM), false},
+		{pki.Fingerprint(rf.ca.Intermediate), string(rf.ca.IntermediatePEM), false}} {
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO discovery_certificates (fingerprint_sha256, is_leaf, subject_cn, not_before, not_after, key_algorithm,
+    pem, first_seen, last_seen) VALUES ($1, $2, 'x', $3, $4, 'ecdsa', $5, $3, $3)`, row.fp, row.leaf, h.clock.Now().Add(-time.Hour),
+			h.clock.Now().Add(30*24*time.Hour), row.pem)
+		require.NoError(t, err)
+	}
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO discovery_endpoints (id, scope_id, address, port, fingerprint_sha256, chain_fingerprints, state, first_seen,
+    last_seen, last_scanned_at) VALUES ($1, $2, '10.0.0.9', 443, $3, ARRAY[$4, $5], 'present', now(), now(), now())`, uuid.New(), scope,
+		pki.Fingerprint(l.Cert), pki.Fingerprint(org.Cert), pki.Fingerprint(rf.ca.Intermediate))
+	require.NoError(t, err)
+	rf.fake.Revoke(l.Cert.SerialNumber, 1, h.clock.Now().Add(-time.Hour))
+	h.runRevocation()
+	r, ok := h.revocationRow(l)
+	require.True(t, ok)
+	assert.Equal(t, "not_checkable", r.Status)
+	assert.Equal(t, revocation.CodeUntrustedIssuer, r.Code)
+	assert.Zero(t, rf.fake.Requests("/ocsp")+rf.fake.Requests("/crl"))
+	assert.Zero(t, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered))
 }

@@ -164,10 +164,13 @@ Rulings made during execution:
 42. **A discovered leaf is checked only when someone vouches for its issuer** (coordinator ruling after the
     independent review, I1). A leaf network discovery found is checked only when the chain its endpoint presented
     verifies to the trusted roots (`Config.Roots`: the system pool unless set; `x509.VerifyOptions` with the endpoint's
-    chain as intermediates) or its issuer is an inventory certificate whose source is not `discovered`. Otherwise it is
+    chain as intermediates) or the issuer that signed it is an inventory certificate whose source is not `discovered`
+    (the held certificate at the head of the chain vouches only when it is that issuer). Otherwise it is
     `not_checkable` with `certificate.revocation_untrusted_issuer` (`ALC-CRT-0026`) and no request is made. At most 20
     e-mails about discovered leaves (revoked or on hold) per run; the rest are recorded with their status, counted in
-    `RevocationRunReport.MailsSuppressed` and not mailed. The name in every revocation e-mail is reduced to printable
+    `RevocationRunReport.MailsSuppressed` and not mailed; each suppressed e-mail is logged (warning) with the
+    certificate's fingerprint. A suppressed revocation e-mail is lost for good, because a revoked row is never checked
+    again; a suppressed hold e-mail goes out at a later check while the hold lasts. The name in every revocation e-mail is reduced to printable
     characters (others become "?") besides the 200-rune cap. Cost if wrong: a discovered certificate of a private
     authority Alice does not hold is never checked; a large mass revocation in discovery mails 20 certificates per run.
 
@@ -299,3 +302,16 @@ coordinator) and five Minor ones; all but M3 were fixed on this branch:
 Evidence: `make lint` and `make test` pass; the integration suites of `internal/inventory`, `migrations`,
 `internal/backup/...` and `cmd/alice` pass; coverage `internal/inventory` 89.0 % (floor 89), `internal/api` 97.1 % (95),
 `internal/revocation` 98.0 % (95); no floor lowered.
+
+Re-review of `5fa9c6d1..8c938ce1` confirmed C1, C2, I2, M1, M2, M4 and M5 fixed and found one remaining bypass of I1:
+
+- **I1 bypass, Important: a held certificate that signed nothing vouched for the attacker's issuer.** The candidate
+  query marked a discovered leaf "held" when the head of its presented chain was a non-discovery inventory certificate,
+  but the issuer used was any chain certificate that signed the leaf; a chain [the organisation's uploaded certificate,
+  the attacker's CA] skipped the trust check and Alice fetched from the attacker's addresses. Fix: the held certificate
+  vouches only when its SHA-256 equals the issuer `revocationPair` picked; otherwise the root verification decides and,
+  failing it, `certificate.revocation_untrusted_issuer`. Test: `internal/inventory:TestRevocationRunHeldIssuerMustSignTheLeaf`
+  (failed before the fix with the leaf marked revoked; passes with no request to the fake).
+- **Minor:** a suppressed discovery e-mail is logged with its fingerprint (ruling 42; asserted in
+  `TestRevocationRunCapsDiscoveredMails`), and `TestCRLCacheIsPerIssuer` lists the victim's serial before the first fetch,
+  so it shows the false revocation the old cache allowed.
