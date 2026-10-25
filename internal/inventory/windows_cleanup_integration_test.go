@@ -5,6 +5,7 @@ package inventory_test
 import (
 	"crypto/x509"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -430,4 +431,24 @@ func TestCompromisedInStoreNoticeSurvivesOutboxPruning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, plan, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
 	assert.Zero(t, h.emails(inventory.TemplateWindowsCompromisedInStore), "never sent twice")
+}
+
+// Final review M5: the notice key holds the thumbprint in lower case, so a helper that reports it in upper case and one
+// that reports it in lower case record the same notice.
+func TestCompromisedInStoreNoticeKeyIsLowerCase(t *testing.T) {
+	ca := pki.NewCA("Cleanup case", pki.ECDSA256, start)
+	held := ca.Issue(pki.Opts{CommonName: "held.example.test", SANs: []string{"held.example.test"}}, start)
+	f := newCleanupFixture(t, held, held)
+	h := f.h
+	kept := f.issue("kept")
+	f.compromise(kept)
+	incident := f.incident(kept)
+	upper := watched(kept, providers.WatchKept, "bound")
+	upper.SHA1 = strings.ToUpper(upper.SHA1) //nolint:forbidigo // a hex thumbprint as Windows prints it
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, providers.CleanupPlan{Watched: []providers.CleanupWatched{upper}},
+		inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	require.NoError(t, h.svc.RecordCleanup(h.ctx, f.win, &incident, providers.CleanupPlan{Watched: []providers.CleanupWatched{watched(kept,
+		providers.WatchKept, "bound")}}, inventory.CleanupDecision{}, providers.CleanupApplyResult{}))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM incident_notices WHERE notice = $1", inventory.TemplateWindowsCompromisedInStore+":"+thumbprint(kept)))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM incident_notices"))
 }

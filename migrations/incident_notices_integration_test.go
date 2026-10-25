@@ -4,6 +4,7 @@ package migrations_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -38,7 +39,7 @@ VALUES ($1, 'email', 'ada@example.com', 'windows.compromised_in_store', jsonb_bu
 'sent', now(), now())`, uuid.New(), incidentID, thumbprint))
 	}
 	outbox(incident.String(), thumb)
-	outbox(incident.String(), thumb) // the same notice to a second recipient
+	outbox(incident.String(), strings.ToUpper(thumb)) //nolint:forbidigo // the same notice, its thumbprint in upper case (final review M5)
 	outbox(uuid.New().String(), thumb)
 	outbox(incident.String(), "not-a-thumbprint")
 

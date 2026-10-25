@@ -306,7 +306,7 @@ func (s *Service) compromisedInStore(ctx context.Context, tx pgx.Tx, target, inc
 	// Recorded once per incident and certificate (incident_notices, R64 Ruling 12): of two jobs at the same moment only the
 	// one that inserts the row queues the notice, and a notice whose outbox rows were pruned is never sent again.
 	tag, err := tx.Exec(ctx, `INSERT INTO incident_notices (incident_id, notice, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-		incident, TemplateWindowsCompromisedInStore+":"+thumbprint, s.clock.Now().UTC())
+		incident, TemplateWindowsCompromisedInStore+":"+lowerHex(thumbprint), s.clock.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("inventory: record the incident's notice: %w", err)
 	}
@@ -399,4 +399,14 @@ JOIN targets t ON t.id = l.target_id WHERE l.id = $1`, location, string(provider
 	_, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobWindowsCleanup, TargetID: target, Payload: map[string]string{"incident_id": incident.String()},
 		Kind: "system", DedupeKey: fmt.Sprintf("%s:%s:incident:%s:%s", JobWindowsCleanup, target, incident, location)})
 	return err
+}
+
+// lowerHex is a hex string in lower case (a thumbprint as Windows prints it is upper case; final review M5).
+func lowerHex(s string) string {
+	return strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'F' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
 }

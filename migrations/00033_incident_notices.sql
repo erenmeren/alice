@@ -13,7 +13,7 @@ GRANT SELECT, INSERT ON incident_notices TO alice_app;
 
 -- The store notices already queued (those the outbox still holds) are recorded, so an update does not send them again.
 INSERT INTO incident_notices (incident_id, notice, created_at)
-SELECT (o.params->>'incident_id')::uuid, 'windows.compromised_in_store:' || (o.params->>'thumbprint'), min(o.created_at)
+SELECT (o.params->>'incident_id')::uuid, 'windows.compromised_in_store:' || lower(o.params->>'thumbprint'), min(o.created_at)
 FROM notifications_outbox o
 WHERE o.template_key = 'windows.compromised_in_store'
   AND o.params->>'incident_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
