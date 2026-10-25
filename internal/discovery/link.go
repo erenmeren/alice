@@ -80,7 +80,7 @@ type CertificateRow struct {
 	SeenOn       int
 	Status       string
 	ManagedID    uuid.NullUUID
-	Revocation   *RevocationCheck // the detail only; nil when never checked (and always nil in a list)
+	Revocation   *RevocationCheck `db:"-"` // the detail only (not a column: ListCertificates scans by position); nil when never checked
 }
 
 // RevocationCheck is a leaf's last revocation check (revocation_checks, by fingerprint; R64 ruling 14, R66 ruling 7):
