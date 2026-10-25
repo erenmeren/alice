@@ -161,12 +161,23 @@ Rulings made during execution:
     proves that the menu button opens the navigation and that a closed one never covers the page. Cost if wrong: if the
     owner wants every entry visible at 800 px without scrolling, the navigation needs a more compact layout.
 
+42. **A discovered leaf is checked only when someone vouches for its issuer** (coordinator ruling after the
+    independent review, I1). A leaf network discovery found is checked only when the chain its endpoint presented
+    verifies to the trusted roots (`Config.Roots`: the system pool unless set; `x509.VerifyOptions` with the endpoint's
+    chain as intermediates) or its issuer is an inventory certificate whose source is not `discovered`. Otherwise it is
+    `not_checkable` with `certificate.revocation_untrusted_issuer` (`ALC-CRT-0026`) and no request is made. At most 20
+    e-mails about discovered leaves (revoked or on hold) per run; the rest are recorded with their status, counted in
+    `RevocationRunReport.MailsSuppressed` and not mailed. The name in every revocation e-mail is reduced to printable
+    characters (others become "?") besides the 200-rune cap. Cost if wrong: a discovered certificate of a private
+    authority Alice does not hold is never checked; a large mass revocation in discovery mails 20 certificates per run.
+
 ## Owner to confirm
 
 1. Ruling 19 (and C2): the check **on** for new installations and **off** after an update, or on for both.
 2. Ruling 20: `revocation.check` paused in lock (`ClassReadOnly`), or running in every state.
 3. Ruling 17: ports 80 and 443 only, no proxy support, private addresses allowed. Does any customer authority need
-   another port or a proxy?
+   another port or a proxy? Sharpened by ruling 42: a certificate found by discovery is checked only when its chain
+   reaches a trusted root or its issuer is held in Alice, and at most 20 discovery revocation e-mails go out per run.
 4. Ruling 15: Alice marks a certificate revoked for good on the authority's signed word, and never starts an incident by
    herself (including for `keyCompromise`).
 5. Ruling 5: no "incident started" mail to service owners.
@@ -243,3 +254,48 @@ answered nothing (C4):
 - `make test-ssh` (in run 3) passed with helper 1.11.0: `TestRealOpenSSH`, `TestRealNginx`, `TestRealApache`,
   `TestRealHAProxy`.
 - `make matrix-check MATRIXCHECK_FLAGS=-strict`: 305 IDs, 295 by tests, 0 pending, 0 gaps.
+
+## Final review fixes (R64)
+
+An independent review of `main..hardening-1` at `5fa9c6d1` found two Critical and two Important defects (verified by the
+coordinator) and five Minor ones; all but M3 were fixed on this branch:
+
+- **C1, Critical: a delegated OCSP responder was accepted without id-kp-OCSPSigning or validity.**
+  `golang.org/x/crypto/ocsp.ParseResponseForCert` checks only that the issuer signed the responder certificate, so any
+  leaf of the CA could sign "revoked, keyCompromise" for every certificate of it, which Alice marks final. Fix
+  (`172bd12e`): a responder certificate other than the issuer needs `x509.ExtKeyUsageOCSPSigning` and must be valid now,
+  otherwise `certificate.revocation_invalid_answer`. Tests: `internal/revocation:TestCheckOCSPAnswers` rows "a delegated
+  responder" (accepted), "a delegated responder without OCSP signing" and "an expired delegated responder" (both
+  refused; they failed before the fix), with the fake's `FaultDelegated`, `FaultDelegatedNoEKU` and
+  `FaultDelegatedExpired`.
+- **C2, Critical: the CRL cache was keyed by address only.** A cache hit skipped the signature and issuer checks, so a
+  CRL verified for one issuer (an attacker's) was searched for a leaf of another (the victim's). Fix (`172bd12e`): the
+  key is the SHA-256 of the issuer's public key and name plus the address; another issuer's hit is a miss and is fetched
+  and verified again. Test: `internal/revocation:TestCRLCacheIsPerIssuer` (failed before the fix).
+- **I1, Important: discovered leaves were checked with whatever issuer the endpoint presented.** Anyone running TLS in
+  a scanned range could make Alice send OCSP and CRL requests to internal addresses and send unbounded e-mails with a
+  name of their choosing. Fix (`86825ad2`, ruling 42): the trust rule, `ALC-CRT-0026` with its EN and TR texts and
+  troubleshooting section, the 20-mail cap and printable names. Tests:
+  `internal/inventory:TestRevocationRunSkipsDiscoveredLeavesOfUntrustedIssuers`,
+  `internal/inventory:TestRevocationRunCapsDiscoveredMails`, `internal/api:TestRevocationCheckCodeTable` (the new row);
+  `TestRevocationRunChecksDiscoveredLeaves` now trusts the fake authority's root.
+- **I2, Important: two overlapping runs could both send the first mail.** `SELECT ... FOR UPDATE` locks nothing while no
+  check row exists. Fix (`86825ad2`): each recording takes `pg_advisory_xact_lock(hashtext('revocation:' ||
+  fingerprint))` first. Test: `internal/inventory:TestRevocationRunRecordsOnceUnderConcurrency` (8 concurrent runs, one
+  mail; without the lock it queued 8 in each of 3 runs).
+- **M1:** reason 8 (removeFromCRL) is no revocation, in a CRL entry or an OCSP answer (`TestCheckOCSPAnswers` row
+  "removeFromCRL", `TestCheckCRL` row "listed with removeFromCRL"); a CRL with the delta CRL indicator (2.5.29.27) is
+  refused (`TestCheckCRL` row "a delta CRL", fake `FaultDeltaCRL`). `172bd12e`.
+- **M2:** a CRL over 1 MiB is read and used but not cached (`internal/revocation:TestLargeCRLsAreNotCached`).
+  `172bd12e`.
+- **M4:** an OCSP answer without a next update counts for at most 7 days after it was issued
+  (`internal/revocation:TestFreshnessAndReasons`). `172bd12e`.
+- **M5:** the `incident_notices` key holds the thumbprint in lower case, on insert and in the `00033` back-fill
+  (`lower(params->>'thumbprint')`; `00033` is unreleased and only on this branch). Tests:
+  `internal/inventory:TestCompromisedInStoreNoticeKeyIsLowerCase`, `migrations:TestMigration00033BackfillsTheStoreNotices`
+  (an upper-case copy of the same notice back-fills one row). `1cd900d5`.
+- **M3, not fixed (stays F1, owner item 10):** the disabled-server incident place.
+
+Evidence: `make lint` and `make test` pass; the integration suites of `internal/inventory`, `migrations`,
+`internal/backup/...` and `cmd/alice` pass; coverage `internal/inventory` 89.0 % (floor 89), `internal/api` 97.1 % (95),
+`internal/revocation` 98.0 % (95); no floor lowered.
