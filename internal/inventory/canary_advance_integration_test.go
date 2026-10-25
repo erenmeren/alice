@@ -275,10 +275,10 @@ func TestWaveTwoRechecksEachLocation(t *testing.T) {
 	require.Len(t, two, 1)
 	assert.Equal(t, f.loc5, two[0].LocationID)
 	read := w.read()
-	assert.Equal(t, []inventory.RolloutSkip{{LocationID: f.loc2, Reason: "target_not_ready"}}, read.Skipped)
+	assert.Equal(t, []inventory.RolloutSkip{{LocationID: f.loc2, Reason: "target_disabled"}}, read.Skipped)
 	denied := f.h.auditDetails("deployment.denied")
 	require.Len(t, denied, 1)
-	assert.Equal(t, "target_not_ready", denied[0]["reason"])
+	assert.Equal(t, "target_disabled", denied[0]["reason"])
 	assert.Equal(t, f.loc2.String(), denied[0]["location_id"])
 	assert.Equal(t, 1, f.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.denied' AND actor_type = 'system'"))
 }

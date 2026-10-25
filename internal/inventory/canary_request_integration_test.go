@@ -46,10 +46,10 @@ func TestRequestCreatesARollout(t *testing.T) {
 	version := f.h.setPolicy(f.h.defaultService(), canaryOn)
 	locs := []uuid.UUID{f.loc1, f.loc2, f.loc3onTarget2}
 
-	// Every location is still checked: a server that is not ready refuses the whole request, wave 2 included.
+	// Every location is still checked: a disabled server refuses the whole request, wave 2 included (R66: ErrTargetDisabled).
 	f.setTargetStatus(f.target2, inventory.StatusDisabled)
 	_, _, err := f.h.svc.RequestDeploymentWithRollout(f.h.ctx, f.admin, inventory.DeployRequestInput{CertificateID: f.cert.ID, LocationIDs: locs})
-	assert.ErrorIs(t, err, inventory.ErrTargetNotReady)
+	assert.ErrorIs(t, err, inventory.ErrTargetDisabled)
 	assert.Zero(t, f.deploymentCount())
 	assert.Zero(t, f.h.count("SELECT count(*) FROM deployment_rollouts"))
 	f.setTargetStatus(f.target2, inventory.StatusOK)
