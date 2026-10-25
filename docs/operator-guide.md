@@ -643,6 +643,34 @@ waiting to start when the license locked is held as "On hold for the license" un
 discards it after the next license is installed. A discarded deployment ends **cancelled** (`ALC-DEP-0022`): nothing
 was sent, the website keeps its certificate, and no failure email is sent.
 
+### Canary deployments
+
+When a service's policy asks for a canary (see the admin guide, "Canary deployment"), the deploy dialogs say so before
+you deploy to two or more websites: "Deploys to N website(s) first, then waits 10m before the rest." After **Deploy**
+only the first wave's deployments start; the dialog says "Canary deployment started".
+
+On a first-wave deployment's page the outcome reads "The new certificate is in place and verified; it is under
+observation before the other websites follow", and the **Canary deployment** panel shows:
+
+- the state (**Deploying the first wave**, **Observing the first wave**, **Deploying the rest**, **Completed**,
+  **Failed**, **Aborted**, **Stopped**, **Ended by an incident**) and, when it ended, why;
+- how long the observation still lasts (from Alice's clock);
+- both waves: each website with its deployment, and for the first wave the latest check (TLS, HTTP status, time and the
+  failures in a row);
+- the websites of the second wave Alice did not deploy to, with the reason, and how many websites outside your services
+  it left out.
+
+**Continue now** ends the observation and deploys to the rest at once. It asks you to confirm your identity again and
+needs the right to deploy to every remaining website; it is refused while the license is locked. **Abort** stops the
+canary and puts the first wave back to the previous certificate; it needs no new confirmation and works in every license
+state. The other websites are not touched by either.
+
+**Deploy to all at once** in a deploy dialog skips the canary for that deployment, when the policy allows it. It asks you
+to confirm your identity again and is in the audit log. API tokens can neither skip the canary nor continue one.
+
+The deployment history marks canary deployments with **Canary · wave 1** or **Canary · wave 2**, and a first-wave
+deployment under observation with **Under observation**.
+
 ## Key Vaults
 
 **Key Vaults** lists the Azure Key Vaults Alice watches, with their address, status, sign-in method and last

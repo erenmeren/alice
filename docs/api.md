@@ -159,6 +159,25 @@ Starting and cancelling scans share a limit of 10 a minute per person or token. 
 the exclusions cannot be changed with a token. In lock mode starting a scan is refused (`ALC-LIC-0001`); the rest
 works. `GET /api/v1/discovery/certificates/export` downloads the same list as CSV. Lists page by cursor like the others.
 
+**Follow a canary deployment** (R65; a read-only token is enough). When the certificate's service asks for a canary, a
+deployment to two or more websites (`POST /api/v1/certificates/<id>/deploy`, a Key Vault binding's
+`POST /api/v1/bindings/<id>/actions/deploy`, an ACME certificate's `POST …/deploy`) answers only the first wave in
+`deployments` and the rollout in `rollout` (`id`, `state`, `wave1`, `wave2`, `settings`):
+
+```
+curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/deployment-rollouts/<rollout id>"
+curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/deployments?rollout_id=<rollout id>"
+```
+
+The rollout carries its state and reason, `hold_until` with the server's `now`, both waves with each website's
+deployment and the first wave's latest check, the skipped websites, `allowed_actions` and `hidden_count` (websites
+outside your services). A first-wave deployment under observation has `state` `holding` and `status` `running`; each
+deployment carries `rollout` (`id`, `wave`, `state`) and its detail `canary` (the latest check).
+`POST /api/v1/deployment-rollouts/<id>/actions/abort` puts the first wave back (a **Read and operate** token, also while
+the license is locked). Continuing early (`…/actions/continue`) and skipping the canary (`"canary_override": true` on the
+deploy routes) need a fresh confirmation in a browser session: a token is refused (403 `ALC-AUTH-0002`). A rollout that
+moved on answers 409 `ALC-DEP-0034`; an override the policy forbids 422 `ALC-SVC-0020`.
+
 **Export the audit log** (administrators and auditors, a read-only token is enough):
 
 ```

@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; canary deployment, R65: CAN-01..CAN-32, §24.9). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -429,6 +429,45 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | HB-15 | The authority revoked an inventory certificate | Marked revoked (final), deployments refused, ACME renewal due, one audit row, one mail |
 | HB-16 | The switch | On for a new installation, off after an update; off, locked or unconfigured make no request |
 | HB-17 | The certificate page and Settings | The check's status and the switch shown in EN and TR |
+
+### 24.9 Canary deployment (R65)
+
+(Design `docs/superpowers/specs/2026-10-24-canary-deployment-design.md`; plan `docs/superpowers/plans/2026-10-24-canary-deployment.md`; rulings `docs/superpowers/rulings/canary-deployment.md`.)
+
+| ID | Case | Expected |
+|---|---|---|
+| CAN-01 | The `canary` key of a service policy: defaults, normalization | Absent fields take the defaults (1 website, hold 10 min, rounds every 30 s, 2 failures, override allowed); explicit defaults are not stored; durations read as `90s`, `10m`, `1h` |
+| CAN-02 | Out-of-range or crossed canary fields | Hold outside 1 min-24 h, interval outside 15 s-10 min or not below the hold, timeout outside 1-10 s or not below the interval, count above 10, percent above 50, both count and percent, a path that is not origin-form, an unknown field: each refused on its own field |
+| CAN-03 | The waves of a rollout | Count or the ceiling of the percentage, at least 1 and never all; `first` websites lead in their order; the split is stable for the same input; 2 and 20 destinations |
+| CAN-04 | A `first` website that is not one of the service's | Refused on `body.canary.first.N` |
+| CAN-05 | Migration 00035 | The rollout and check tables with their checks and grants; `holding` only in wave 1; the down migration refuses with Z1033 while a rollout or a hold exists |
+| CAN-06 | A wave-1 deployment verified | It holds (`running`, `holding`) and its location is not yet updated; an `unchanged` wave-1 outcome finishes at once; wave 2 and plain deployments never hold |
+| CAN-07 | A hold released or reverted | The release finishes the deployment as a success and updates the location; a revert queues a recovery with the revert reason |
+| CAN-08 | The recovery sweep meets a hold | A holding deployment is never swept |
+| CAN-09 | The revert of a committed wave-1 deployment | Restored through the journal; `rolled_back` with the canary reason; an unchanged revert is outcome unknown |
+| CAN-10 | A revert the rollback guard refuses | The restore is not done; the deployment says why (R48) |
+| CAN-11 | A deploy or recovery job meets a hold; a restart after the restore was sent | Nothing is done to a hold without a revert; a revert resumes after a restart |
+| CAN-12 | The application check passes, sees an unexpected status, meets a redirect | A pass with the status and latency; another status fails `canary.http_status`; a redirect is never followed |
+| CAN-13 | What the check sends and compares | The served leaf is compared before any request byte; SNI and `Host` are the server name; GET of the exact path, no credentials, `Connection: close` |
+| CAN-14 | Where the check may connect | Only the location's address is dialed, never the host name; link-local refused by address and by name (SEC-065); no environment proxy |
+| CAN-15 | Silent server, slow body, huge body, huge headers, plaintext, refused port, cancelled | Timeout within the budget; the body cut after 64 KiB; headers over 16 KiB are a protocol failure; unreachable for a plaintext or refused port |
+| CAN-16 | Whether a request becomes a rollout | Off, fewer than 2 destinations, an incident replacement, an override, a wave-2 certificate that expires within hold + 24 h: no rollout, each skip audited |
+| CAN-17 | A manual request with the canary on | One rollout; only wave 1 is queued; the snapshot of the policy is stored |
+| CAN-18 | A wave-2 certificate expires soon | The canary is skipped and audited |
+| CAN-19 | Deploy to all at once; Key Vault and ACME Deploy now | The override is refused when the policy forbids it and audited when used; Deploy now of Key Vault and ACME make rollouts |
+| CAN-20 | The rollout decision | Every row of design §9 and §11: rounds due, a failure threshold, an unknown never passing, the grace, the hold's end, a clock jump |
+| CAN-21 | A rollout passes | Rounds pass; at the hold's end wave 1 is released and wave 2 queued; a round of a deployment that no longer holds is ignored; one job per due round |
+| CAN-22 | A rollout fails | Wave 1 is reverted, wave 2 never queued |
+| CAN-23 | A hold that arrives after the verdict | It is reverted |
+| CAN-24 | A manual rollout at the end of its hold in a confirmed lock | Wave 1 released, the rollout stopped, one e-mail |
+| CAN-25 | Wave 2 is queued | Each location is checked again as a new request would; a refused one is skipped and named |
+| CAN-26 | The automatic planners | ACME and Key Vault plans create rollouts by the source service's policy; incident replacements and fewer than 2 websites do not |
+| CAN-27 | An ACME or Key Vault renewal with the canary on | Rolls out wave by wave; a failed rollout stops automatic deployment of that version |
+| CAN-28 | An incident, a revocation, drift and the Windows cleanup meet a hold | An incident preempts the hold (released, rollout `preempted`); a compromised held certificate is never released; a revoked one is reverted; drift and the cleanup treat a hold as unfinished |
+| CAN-29 | The rollout routes | Read, continue (a fresh step-up, the destinations' rights, refused in lock) and abort (no step-up, works in lock); a token never continues; state refusals ALC-DEP-0034 |
+| CAN-30 | `canary_override` on the three deploy routes | A fresh browser step-up; a token is refused; ALC-SVC-0020 when the policy forbids it |
+| CAN-31 | The web: policy section, deploy dialogs, rollout panel, list badge | As design §19, in EN and TR |
+| CAN-32 | Canary journeys on the e2e stack | Pass to wave 2; a failing check reverts wave 1 and wave 2 keeps its files (read on the target); abort; deploy to all at once with a step-up, audited; the pass journey in Turkish |
 
 ## 25. Security Test Plan
 

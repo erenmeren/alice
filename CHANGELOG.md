@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — Canary deployment (R65)
+
+**Added**
+- **Canary deployment**: a service's policy (**Policy** tab, **Canary deployment**) can deploy its certificates to a few
+  websites first (a number or a percentage, and websites that always go first), observe them for a hold of 1 minute to
+  24 hours with checks every 15 seconds to 10 minutes, and only then deploy to the rest. Each check is the TLS check of a
+  deployment plus, optionally, an HTTPS request to a path of the website (for example `/healthz`) with the expected
+  statuses, sent only to the website's own address. Failed checks in a row (2 by default), a failed first-wave
+  deployment, or no passing check until shortly after the hold put every first-wave website back to its previous
+  certificate; the others are never touched. Applies to deployments from a certificate's page, Key Vault and ACME
+  **Deploy now**, and the automatic deployments of ACME renewals and Key Vault versions.
+- The deployment's page shows the **Canary deployment** panel: the state and why it ended, the time left, both waves
+  with each website's deployment and the latest check, **Continue now** (with a fresh confirmation) and **Abort**. The
+  history marks **Canary · wave 1** and **Canary · wave 2**, and a first-wave deployment **Under observation**.
+- **Deploy to all at once** in the deploy dialogs skips the canary for one deployment with a fresh confirmation, unless
+  the service's policy forbids it. API tokens can neither skip nor continue a canary.
+- API: `GET /api/v1/deployment-rollouts/{id}`, `POST …/actions/continue`, `POST …/actions/abort`; `canary_override` on
+  the three deploy routes; `rollout` in deploy answers and deployments, `canary` in a deployment's detail;
+  `rollout_id` filter of the deployment list. New codes `ALC-DEP-0031` to `ALC-DEP-0035` and `ALC-SVC-0020` (see
+  [troubleshooting.md](docs/troubleshooting.md)).
+- E-mail "Canary deployment of <certificate> stopped before its second wave" when a canary a person asked for reaches
+  its hold's end while the licence does not allow changes.
+
+**Changed**
+- A deployment can be in the new state **Under observation** (`holding`, status `running`) while its canary observes it.
+- The service policy key `canary` is no longer refused as "not available yet".
+
+**Security**
+- The canary's check dials only a managed website's own address through the same address rule as every connection to a
+  managed server, compares the served certificate before it sends anything, and follows no redirect and no proxy
+  (STRIDE CN-1..CN-5, SEC-110, KI-44).
+
+Rulings: `docs/superpowers/rulings/canary-deployment.md`. Migration `00035_canary_deployment.sql`; codes
+`ALC-DEP-0031`..`ALC-DEP-0035`, `ALC-SVC-0020`; KI-44.
+
 ## Unreleased — Hardening batch 1 (R64)
 
 **Added**

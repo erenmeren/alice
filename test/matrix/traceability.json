@@ -2707,5 +2707,286 @@
    "internal/acme/solver/dnsapi/azuredns:TestNoSecretKeyTokenOrAnswerTextLeaks",
    "internal/acme/solver/dnsapi/azuredns:TestEntraAnswerTextNeverReachesAnError"
   ]
+ },
+ {
+  "id": "CAN-01",
+  "status": "test",
+  "tests": [
+   "internal/authz:TestParseCanaryDefaultsAndNormalization"
+  ]
+ },
+ {
+  "id": "CAN-02",
+  "status": "test",
+  "tests": [
+   "internal/authz:TestParseCanaryRefuses"
+  ]
+ },
+ {
+  "id": "CAN-03",
+  "status": "test",
+  "tests": [
+   "internal/authz:TestCanaryWaves"
+  ]
+ },
+ {
+  "id": "CAN-04",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestSetPolicyCanaryFirstMustBeTheServicesLocations"
+  ]
+ },
+ {
+  "id": "CAN-05",
+  "status": "test",
+  "tests": [
+   "migrations:TestMigration00035Canary"
+  ]
+ },
+ {
+  "id": "CAN-06",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestWaveOneSuccessEntersHolding",
+   "internal/inventory:TestUnchangedWaveOneFinishesAtOnce",
+   "internal/inventory:TestWaveTwoAndPlainDeploymentsNeverHold",
+   "internal/inventory:TestHoldKeepsTheVerificationsFindings"
+  ]
+ },
+ {
+  "id": "CAN-07",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestReleaseHoldFinishesAsASuccess",
+   "internal/inventory:TestRequestRevertQueuesARecovery"
+  ]
+ },
+ {
+  "id": "CAN-08",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestSweepLeavesHoldingAlone"
+  ]
+ },
+ {
+  "id": "CAN-09",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestRevertDecisions",
+   "internal/jobs/deployjobs:TestRevertRollsBackACommittedOperation"
+  ]
+ },
+ {
+  "id": "CAN-10",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestRevertRespectsTheRollbackGuard"
+  ]
+ },
+ {
+  "id": "CAN-11",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestDeployJobFindingHoldingDoesNothing",
+   "internal/jobs/deployjobs:TestRecoveryJobFindingHoldingWithoutRevertDoesNothing",
+   "internal/jobs/deployjobs:TestRevertSurvivesARestartAfterTheRestoreWasSent"
+  ]
+ },
+ {
+  "id": "CAN-12",
+  "status": "test",
+  "tests": [
+   "internal/providers/httpcheck:TestCheckPasses",
+   "internal/providers/httpcheck:TestCheckStatusNotExpected",
+   "internal/providers/httpcheck:TestCheckDoesNotFollowRedirects"
+  ]
+ },
+ {
+  "id": "CAN-13",
+  "status": "test",
+  "tests": [
+   "internal/providers/httpcheck:TestCheckComparesTheServedLeaf",
+   "internal/providers/httpcheck:TestCheckSendsTheServerNameAndHost"
+  ]
+ },
+ {
+  "id": "CAN-14",
+  "status": "test",
+  "tests": [
+   "internal/providers/httpcheck:TestCheckNeverDialsTheHostName",
+   "internal/providers/httpcheck:TestCheckRefusesLinkLocal",
+   "internal/providers/httpcheck:TestCheckIgnoresEnvironmentProxies"
+  ]
+ },
+ {
+  "id": "CAN-15",
+  "status": "test",
+  "tests": [
+   "internal/providers/httpcheck:TestCheckTimeouts",
+   "internal/providers/httpcheck:TestCheckMalformedResponse"
+  ]
+ },
+ {
+  "id": "CAN-16",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCanaryDecision"
+  ]
+ },
+ {
+  "id": "CAN-17",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRequestCreatesARollout"
+  ]
+ },
+ {
+  "id": "CAN-18",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCanarySkippedWhenAWaveTwoCertificateExpiresSoon"
+  ]
+ },
+ {
+  "id": "CAN-19",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestOverride",
+   "internal/inventory:TestKVDeployNowAndACMEDeployNowCreateRollouts"
+  ]
+ },
+ {
+  "id": "CAN-20",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestDecideRollout"
+  ]
+ },
+ {
+  "id": "CAN-21",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRolloutPassesAndStartsWaveTwo",
+   "internal/jobs/canaryjobs:TestRoundPassFailUnknown",
+   "internal/jobs/canaryjobs:TestRoundIgnoresANonHoldingDeployment",
+   "internal/jobs/canaryjobs:TestAdvanceTaskQueuesOneJobPerDueRound",
+   "internal/inventory:TestRoundDefaultsAndAWaveOneDetail"
+  ]
+ },
+ {
+  "id": "CAN-22",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRolloutFailsAndRevertsWaveOneOnly",
+   "internal/inventory:TestCanaryStepsFailWhole",
+   "internal/inventory:TestCanaryReleaseAndRevertFailWhole",
+   "internal/inventory:TestCanaryPersonAndPlannerStepsFailWhole"
+  ]
+ },
+ {
+  "id": "CAN-23",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRolloutRevertsAHoldThatArrivesAfterTheVerdict"
+  ]
+ },
+ {
+  "id": "CAN-24",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestManualRolloutStopsAfterWaveOneInLock",
+   "internal/inventory:TestCanaryTemplatesAreTheStopMail"
+  ]
+ },
+ {
+  "id": "CAN-25",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestWaveTwoRechecksEachLocation",
+   "internal/inventory:TestWaveTwoSkipsAGoneAndABusyWebsite"
+  ]
+ },
+ {
+  "id": "CAN-26",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCanaryFilter",
+   "internal/inventory:TestPlanCanaryACME",
+   "internal/inventory:TestPlanCanaryKV",
+   "internal/inventory:TestPlannerSkipsTheCanaryWhenACertificateEndsSoon"
+  ]
+ },
+ {
+  "id": "CAN-27",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestACMERenewalRollsOutWithACanary",
+   "internal/inventory:TestKVRenewalRollsOutWithACanary",
+   "internal/inventory:TestContinuedAutomaticRolloutCompletesAtRelease"
+  ]
+ },
+ {
+  "id": "CAN-28",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestIncidentPreemptsAHold",
+   "internal/inventory:TestIncidentNeverReleasesACompromisedHold",
+   "internal/inventory:TestDeployedCertificateRevokedDuringTheHold",
+   "internal/inventory:TestDriftAndWindowsCleanupSeeAHoldAsUnfinished",
+   "internal/inventory:TestPreemptionOfNoHoldAndAFailedRelease"
+  ]
+ },
+ {
+  "id": "CAN-29",
+  "status": "test",
+  "tests": [
+   "internal/api:TestCanaryThroughTheAPI",
+   "internal/api:TestRolloutRoutes",
+   "internal/inventory:TestRolloutDetailContinueAndAbort",
+   "internal/inventory:TestAbortRevertsTheHoldingWaveOne",
+   "internal/inventory:TestAbortInWaveOneEndsTheQueuedDeployment"
+  ]
+ },
+ {
+  "id": "CAN-30",
+  "status": "test",
+  "tests": [
+   "internal/api:TestDeployOverrideNeedsStepUp"
+  ]
+ },
+ {
+  "id": "CAN-31",
+  "status": "test",
+  "tests": [
+   "web/src/components/services/PolicyPanel.test.tsx:renders a stored canary policy",
+   "web/src/components/services/PolicyPanel.test.tsx:switches it on and sends only what is set",
+   "web/src/components/services/PolicyPanel.test.tsx:sends a percentage instead of a count",
+   "web/src/components/services/PolicyPanel.test.tsx:marks the field the server refuses and a duration Alice cannot read",
+   "web/src/components/services/PolicyPanel.test.tsx:is read-only without the right to change the policy, in Turkish too",
+   "web/src/components/RolloutPanel.test.tsx:shows the state, the countdown from the server clock, both waves and the last round",
+   "web/src/components/RolloutPanel.test.tsx:asks before aborting and shows the reason afterwards",
+   "web/src/components/RolloutPanel.test.tsx:shows only the actions the server allows, the skipped websites and the hidden count",
+   "web/src/components/RolloutPanel.test.tsx:shows the refusal of a state that moved on",
+   "web/src/components/RolloutPanel.test.tsx:reads in Turkish and names every reason",
+   "web/src/components/DeployDialog.test.tsx:says how many go first and how long Alice waits, and tells the canary started",
+   "web/src/components/DeployDialog.test.tsx:sends the override when \"Deploy to all at once\" is chosen",
+   "web/src/components/DeployDialog.test.tsx:offers no override when the policy forbids it, and says nothing for one website or no canary",
+   "web/src/components/KVDeployDialog.test.tsx:says a canary goes first for the vault service and sends the override when chosen (R65)",
+   "web/src/pages/AcmeCertificatePage.test.tsx:says a canary goes first and sends the override when \"Deploy to all at once\" is chosen (R65)",
+   "web/src/components/DeploymentView.test.tsx:holding (R65): in place and under observation, never \"live\" and never a failure",
+   "web/src/pages/DeploymentsPage.test.tsx:marks a canary deployment with its wave and a held one as under observation (R65)",
+   "web/src/pages/DeploymentDetailPage.test.tsx:shows the observation, the round summary and the rollout panel"
+  ]
+ },
+ {
+  "id": "CAN-32",
+  "status": "test",
+  "tests": [
+   "web/e2e/canary.spec.ts:the first website passes its observation, then the others follow",
+   "web/e2e/canary.spec.ts:a failing application check puts the first website back and the others never get the certificate",
+   "web/e2e/canary.spec.ts:Abort during the observation puts the first website back",
+   "web/e2e/canary.spec.ts:\"Deploy to all at once\" asks for a step-up, deploys everywhere and is audited",
+   "web/e2e/canary.spec.ts:ilk web sitesi gözlemden geçer, sonra diğerleri izler"
+  ]
  }
 ]

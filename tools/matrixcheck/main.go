@@ -86,7 +86,7 @@ func main() {
 }
 
 var (
-	idRowRe    = regexp.MustCompile(`^\|\s*((?:SR|WIN|HB|[LFSRAOX])-\d+)\s*\|`)
+	idRowRe    = regexp.MustCompile(`^\|\s*((?:SR|WIN|HB|CAN|[LFSRAOX])-\d+)\s*\|`)
 	sectionRe  = regexp.MustCompile(`^##\s+(\d+)\.`)
 	testFnRe   = regexp.MustCompile(`(?m)^func ((?:Test|Fuzz|Benchmark|Example)\w*)\(`)
 	testNameRe = regexp.MustCompile(`^(?:Test|Fuzz)\w+$`)

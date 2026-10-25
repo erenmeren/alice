@@ -609,7 +609,8 @@ defeat the guard. Global Administrators are not exempt from a policy; they chang
 Reserved top-level keys, refused now with 422 `ALC-SVC-0015` ("not available yet"), so adding them later is not a
 breaking change: `verification` (post-deploy TLS check policy), `drift` (detect and act on a server whose file no
 longer matches), `canary` (deploy to a subset first), `windows` (deployment windows), `thresholds` (per-service expiry
-alert days). The UI shows them nowhere in v1. Also later: a scoped audit view (rows already carry
+alert days). The UI shows them nowhere in v1. (R65: `canary` is delivered and no longer reserved; see
+[the canary deployment design](2026-10-24-canary-deployment-design.md).) Also later: a scoped audit view (rows already carry
 `details.service_id`), a per-service "outside policy" flag on discovered certificates, per-service ACME providers.
 
 ## 8. API changes

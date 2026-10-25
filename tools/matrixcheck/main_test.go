@@ -103,6 +103,16 @@ func TestSpecIDsFindHardeningRows(t *testing.T) {
 	assert.Equal(t, "A place on a disabled server", titles["HB-01"])
 }
 
+// The CAN prefix of section 24.9 (canary deployment, R65) is a matrix ID.
+func TestSpecIDsFindCanaryRows(t *testing.T) {
+	spec := "## 24. Failures\n\n### 24.9 Canary deployment (R65)\n\n| ID | Case | Expected |\n|---|---|---|\n" +
+		"| CAN-01 | The canary key | defaults |\n| CAN-32 | Canary journeys | pass |\n| CANX-01 | not a matrix prefix | ignored |\n"
+	ids, titles, err := SpecIDs(strings.NewReader(spec))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"CAN-01", "CAN-32"}, ids)
+	assert.Equal(t, "The canary key", titles["CAN-01"])
+}
+
 func TestRefusesMissingUnknownAndBrokenEntries(t *testing.T) {
 	for name, tc := range map[string]struct{ mapJSON, want string }{
 		"missing":          {`[{"id":"L-01","status":"owner","owner":"x"}]`, "L-02: no entry"},

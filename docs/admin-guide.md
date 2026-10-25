@@ -1786,6 +1786,58 @@ A successful deployment, and one an administrator cancelled by discarding its wa
 email. Every deployment, refusal and outcome is in the audit log
 (`deployment.*`, `certificate.*`, `csr.*`, `location.*`).
 
+### Canary deployment
+
+A service can deploy its certificates to a few websites first, observe them for a while, and only then deploy to the
+rest: a **canary deployment**. Switch it on in the service's **Policy** tab, section **Canary deployment** (an
+Administrator of the service, with a fresh confirmation code; every change is a new policy version in the audit log).
+It applies to every deployment of the service's certificates to two or more websites: from a certificate's page, a Key
+Vault certificate's **Deploy now**, an ACME certificate's **Deploy now**, and the automatic deployments of ACME
+renewals and Key Vault versions. The service that decides is the one that owns the certificate, the ACME certificate
+or the Key Vault; the websites' services keep their trusts as before.
+
+| Setting | What it does | Empty means |
+|---|---|---|
+| **Size of the first wave** | A number of websites (at most 10) or a percentage (at most 50, rounded up). The first wave is never all the websites. | 1 website |
+| **Deploy here first** | Websites of the service that go into the first wave whenever they are destinations. | none |
+| **Hold** | How long the first wave is observed, 1m to 24h. | 10m |
+| **Interval** | Time between two checks of a website, 15s to 10m (shorter than the hold). | 30s |
+| **Failures** | Failed checks in a row that put the first wave back. | 2 |
+| **Application check** | An HTTPS request to each first-wave website: a **Path** (for example `/healthz`), an optional **Host name** (only the name sent in TLS and in `Host`, never an address), an optional **Port**, the **Expected statuses** and a **Timeout** (1s to 10s). | no request: only the TLS check |
+| **Forbid deploying to all at once** | Nobody may skip the canary for this service. | allowed with a fresh confirmation code |
+
+**What happens.** The first wave is deployed and verified as usual; each of its deployments then waits **Under
+observation** (its website already serves the new certificate). Every interval Alice checks each first-wave website:
+the same TLS check as after a deployment, then the application check, which Alice sends only to the website's own
+address (the one it deploys and verifies through), compares the certificate the website serves with the one deployed
+before it sends anything, and never follows a redirect or uses a proxy. When the hold ends and the last checks passed,
+the first wave's deployments finish as succeeded and Alice deploys to the other websites, each checked again as a new
+deployment would be (a website refused then is named on the rollout). When a website fails **Failures** checks in a
+row, or a first-wave deployment fails, Alice puts every first-wave website back to its previous certificate (the same
+restore as a rollback, with the same check that never puts a revoked or compromised certificate back) and deploys
+nothing to the others. A check that cannot run never counts as passed: if no check passes until a little after the hold
+(twice the interval, at least 5 minutes), the first wave is put back too.
+
+**When there is no canary.** A deployment to one website, a key-compromise replacement, a deployment where a person
+chose **Deploy to all at once**, and a deployment where a destination's current certificate ends within the hold plus
+24 hours deploy everywhere at once. Each skip is in the audit log (**Canary skipped**, **Canary skipped: deployed to all
+at once**).
+
+**Automatic deployments.** An ACME renewal or a new Key Vault version deploys by the same rules. When its canary fails,
+automatic deployment of that version stops, as after a failed deployment (the existing e-mail says so); the next
+renewal or version starts again.
+
+**While the license is locked.** Observation and putting back continue in every license state. A canary a person asked
+for, whose hold ends while the license does not allow changes, keeps the first wave, deploys nothing more and sends
+**"Canary deployment of <certificate> stopped before its second wave"** to the alert recipients; deploy to the other
+websites again after the license is renewed. A key-compromise incident ends a canary at its websites (**Ended by an
+incident**): the first wave keeps the certificate and the incident goes on.
+
+The audit log has every step of a canary (**Canary deployment started**, **Canary observation started**, **Canary check
+failed**, **Canary wave 1 released**, **Canary wave 2 started**, **Canary deployment continued early**, **Canary
+deployment completed**, **failed**, **aborted**, **stopped by the licence**, **ended by an incident**), never one row per
+check; the deployment's page shows the latest check.
+
 ## Key Vaults
 
 Day-to-day use of a vault (statuses, inventory, connections, automatic deployment, held versions, imports) is in

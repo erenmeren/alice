@@ -199,6 +199,7 @@ for every service; limiting a person to some services comes with a later version
 | Out | TCP 80 (HTTP) | Each name proved by the ACME web proof (HTTP-01), to check the proof file before the authority does; only for certificates that use that proof |
 | Out | TCP, the ports of a scan scope (443 and the like) | Network discovery: a TLS handshake to each address and port of a scope an administrator wrote, inside the networks an administrator allowed; nothing before an administrator adds a scope; never through a proxy |
 | Out | TCP 636 by default (or the port in the address) | The LDAP directory or Active Directory domain controllers over `ldaps://`, when directory sign-in is set up; TLS verified, no plain `ldap://`, no StartTLS, no referrals |
+| Out | TCP, the port of each first-wave website (443 by default, or the port of the service's canary check) | The canary deployment's checks (R65), when a service's policy asks for a canary: a TLS handshake and, with an application check, one HTTPS `GET` of the policy's path, sent only to the website's own address on a managed server and only after the website served the certificate just deployed; never through a proxy, never following a redirect |
 | Out | the mail server's port (25, 465 or 587) | E-mail, when configured |
 | Out | TCP 6514 by default (or the port chosen) | Audit forwarding, when configured |
 
@@ -274,10 +275,14 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
 - **Network discovery trusts nothing it finds.** To see expired, self-signed and wrongly chained certificates, the scan
   probe does not verify the certificate a server presents: the server is exactly the thing being examined. This is
   one function (`tlsprobe.CapturePresentedChain`); a source test fails if the setting appears anywhere else in Alice
-  besides the three older places that compare a served certificate with a pinned one. The probe sends nothing after
+  besides the other places that compare a served certificate with a pinned one or with the one just deployed (the canary's check). The probe sends nothing after
   the handshake, returns only certificates and never a "valid" or "trusted" verdict, and no screen calls a found
   certificate trusted. Scanning was tested only against simulated servers and on loopback, not on real networks; read
   [the review](security/reviews/network-discovery.md).
+- **Canary checks reach other ports of managed servers.** An administrator of a service can set the port of the
+  canary's application check, so Alice opens a TLS connection to that port of a server it already manages; a service
+  there that is not the website receives a TLS greeting and nothing else, because the request is sent only after the
+  website served the certificate just deployed (`SECURITY-REPORT.md` KI-44).
 - **The recovery passphrase and the master key cannot be changed in version 1.** An exposed passphrase opens every
   backup copy made before and after; protect the copies.
 - **Audit log limits.** The chain proves that entries were not changed or removed in between; someone with control
