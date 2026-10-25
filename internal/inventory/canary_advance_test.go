@@ -259,3 +259,31 @@ func TestDecideRolloutFailsAWaveOneThatNeverCompletes(t *testing.T) {
 		w.dep1(2, DeployStateDeploying, DeployStatusRunning, "")}})
 	assert.Equal(t, RolloutWave1, got.next)
 }
+
+// Final review I (R65): an incident never releases a hold of a rollout that already failed or was aborted (it arrived
+// after the verdict while still sending); the hold is reverted as the advance would. A live rollout's holds are released
+// and the rollout is preempted; a finished passing one's are released.
+func TestPreemptPlan(t *testing.T) {
+	w := newAdvanceWorld()
+	pass := func(i int) rolloutDeployment { return w.holding(i, "pass", 10*time.Second, 0) }
+
+	failed := w.rollout(RolloutFailed, RolloutOriginManual)
+	failed.Reason = RolloutReasonCheckFailed
+	p := preemptPlan(rolloutSnapshot{r: failed, now: w.now, deployments: []rolloutDeployment{pass(0)}})
+	assert.Empty(t, p.release, "a failed rollout's hold is never released by an incident")
+	assert.Equal(t, map[uuid.UUID]string{w.dep[0]: ReasonCanaryCheckFailed}, p.revert)
+	assert.Equal(t, RolloutFailed, p.next)
+
+	p = preemptPlan(rolloutSnapshot{r: w.rollout(RolloutAborted, RolloutOriginManual), now: w.now, deployments: []rolloutDeployment{pass(0)}})
+	assert.Empty(t, p.release)
+	assert.Equal(t, map[uuid.UUID]string{w.dep[0]: ReasonCanaryAborted}, p.revert)
+
+	p = preemptPlan(rolloutSnapshot{r: w.rollout(RolloutHold, RolloutOriginManual), now: w.now, deployments: []rolloutDeployment{pass(0), pass(1)}})
+	assert.Equal(t, map[uuid.UUID]string{w.dep[0]: HoldCauseIncident, w.dep[1]: HoldCauseIncident}, p.release)
+	assert.Equal(t, RolloutPreempted, p.next)
+	assert.Equal(t, RolloutReasonPreempted, p.reason)
+
+	p = preemptPlan(rolloutSnapshot{r: w.rollout(RolloutCompleted, RolloutOriginACME), now: w.now, deployments: []rolloutDeployment{pass(0)}})
+	assert.Equal(t, map[uuid.UUID]string{w.dep[0]: HoldCauseIncident}, p.release)
+	assert.Equal(t, RolloutCompleted, p.next)
+}

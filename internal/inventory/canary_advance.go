@@ -788,18 +788,31 @@ func (s *Service) PreemptRolloutOf(ctx context.Context, deployment uuid.UUID) (b
 		if sn.certificateForbidden {
 			return nil // the canary reverts it (canary.certificate_revoked)
 		}
-		plan := rolloutPlan{next: r.State, reasonParams: map[string]string{}, release: map[uuid.UUID]string{}, revert: map[uuid.UUID]string{},
-			endQueued: map[uuid.UUID]string{}}
-		for _, d := range sn.deployments {
-			if d.wave == 1 && d.state == DeployStateHolding {
-				plan.release[d.id] = HoldCauseIncident
-			}
-		}
-		if !finalRolloutState(r.State) {
-			plan.next, plan.reason = RolloutPreempted, RolloutReasonPreempted
-		}
-		moved, err = s.applyRolloutPlan(ctx, tx, r, sn, plan, incidentActor, false)
+		moved, err = s.applyRolloutPlan(ctx, tx, r, sn, preemptPlan(sn), incidentActor, false)
 		return err
 	})
 	return moved, err
+}
+
+// preemptPlan is what an incident does to the rollout of a hold it reaches (design §20.3): a live rollout's holds are
+// released (cause incident) and the rollout ends preempted; a finished passing one's holds are released. A hold of a
+// rollout that already failed or was aborted (it arrived after the verdict while still sending) is reverted as the advance
+// would, never released (final review I): it would otherwise be recorded a success with a certificate that failed its
+// canary.
+func preemptPlan(sn rolloutSnapshot) rolloutPlan {
+	r := sn.r
+	if r.State == RolloutFailed || r.State == RolloutAborted {
+		return decideRollout(sn)
+	}
+	plan := rolloutPlan{next: r.State, reasonParams: map[string]string{}, release: map[uuid.UUID]string{}, revert: map[uuid.UUID]string{},
+		endQueued: map[uuid.UUID]string{}}
+	for _, d := range sn.deployments {
+		if d.wave == 1 && d.state == DeployStateHolding {
+			plan.release[d.id] = HoldCauseIncident
+		}
+	}
+	if !finalRolloutState(r.State) {
+		plan.next, plan.reason = RolloutPreempted, RolloutReasonPreempted
+	}
+	return plan
 }

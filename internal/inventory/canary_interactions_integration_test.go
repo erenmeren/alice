@@ -115,3 +115,23 @@ func TestDriftAndWindowsCleanupSeeAHoldAsUnfinished(t *testing.T) {
 	}
 	assert.NotEqual(t, inventory.DeployStateDone, inventory.DeployStateHolding)
 }
+
+// Final review I (R65): the rollout failed while a wave-1 website was still sending; that website then holds and an
+// incident reaches it before the next advance: it is reverted, never recorded a success.
+func TestPreemptionRevertsAHoldOfAFailedRollout(t *testing.T) {
+	f := newDeployFixture(t)
+	id := f.request(f.admin, f.cert.ID, f.loc1)
+	rollout := f.asWave(id, 1)
+	_, err := f.h.db.Owner.Exec(f.h.ctx, `UPDATE deployment_rollouts SET state = 'failed', reason = 'canary.check_failed', finished_at = $2
+WHERE id = $1`, rollout, f.h.clock.Now())
+	require.NoError(t, err)
+	f.start(id)
+	require.NoError(t, f.succeed(id, stringOf('e', 64)))
+	require.Equal(t, inventory.DeployStateHolding, f.get(id).State)
+	_, err = f.h.svc.PreemptRolloutOf(f.h.ctx, id)
+	require.NoError(t, err)
+	d := f.get(id)
+	assert.Equal(t, inventory.DeployStateRecovering, d.State)
+	assert.Equal(t, inventory.ReasonCanaryCheckFailed, d.RevertReason)
+	assert.NotEqual(t, inventory.DeployStatusSucceeded, d.Status)
+}

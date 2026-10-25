@@ -213,6 +213,14 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   the cap keeps the CHECK of migration 00035 as shipped in this branch instead of relaxing it. Cost if wrong: a service
   that wants a larger first wave gets 19 (the admin guide says so).
 
+- **I. An incident never releases a hold of a failed or aborted rollout.** `PreemptRolloutOf` decides through
+  `preemptPlan`, which hands a failed or aborted rollout to `decideRollout` (the hold is reverted with the rollout's
+  reason, as the next advance would) and releases holds only of a live rollout (then preempted) or a finished passing one
+  (`TestPreemptPlan`, `TestPreemptionRevertsAHoldOfAFailedRollout`). Why: a website that was still sending when its
+  rollout failed holds afterwards; an incident reaching it before the next advance recorded it `succeeded` with a
+  certificate that failed its canary. Cost if wrong: none found; the incident then waits on the revert as on any busy
+  place.
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.
