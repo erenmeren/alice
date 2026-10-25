@@ -8,6 +8,8 @@
   "acme.enum.keyType.rsa_4096",
   "acme.enum.preset.letsencrypt",
   "acme.enum.preset.zerossl",
+  "canary.columns.http",
+  "canary.columns.tls",
   "certificates.csr.keyRsa3072",
   "certificates.csr.keyRsa4096",
   "certificates.detail.keyValue",

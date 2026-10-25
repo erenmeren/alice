@@ -1,8 +1,9 @@
-import { ActionIcon, Button, Checkbox, Group, Loader, NativeSelect, NumberInput, Stack, Table, Text, Textarea, TextInput } from '@mantine/core';
+import { ActionIcon, Alert, Button, Checkbox, Group, Loader, MultiSelect, NativeSelect, NumberInput, SegmentedControl, Stack, Switch, Table, Text, Textarea, TextInput } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listACMEProviders } from '../../api/acme';
+import { listDeployableLocations } from '../../api/keyvault';
 import { ACME_PROVIDERS_KEY, servicePolicyKey, servicePolicyVersionsKey, SERVICES_KEY } from '../../api/queryKeys';
 import {
   changedPolicyKeys,
@@ -14,6 +15,8 @@ import {
   POLICY_KEY_TYPES,
   POLICY_SOURCES,
   putServicePolicy,
+  CANARY_DURATION,
+  type CanaryPolicy,
   type PolicyChallenge,
   type PolicyDocument,
   type PolicySource,
@@ -40,6 +43,73 @@ interface PolicyForm {
   revokeMode: '' | 'after_verified' | 'now';
   administrators: boolean;
   addresses: { email: string; locale: string }[];
+  canary?: CanaryForm; // absent: no canary key (R65)
+}
+
+// The canary's form (R65): '' is "not set" (Alice's default, not stored).
+interface CanaryForm {
+  enabled: boolean;
+  mode: 'count' | 'percent';
+  count: number | string;
+  percent: number | string;
+  first: string[];
+  hold: string;
+  interval: string;
+  failures: number | string;
+  check: boolean;
+  path: string;
+  host: string;
+  port: number | string;
+  statuses: string;
+  timeout: string;
+  forbidOverride: boolean;
+}
+
+function canaryFormOf(c: CanaryPolicy | undefined): CanaryForm {
+  return {
+    enabled: c?.enabled ?? false,
+    mode: c?.subset?.percent !== undefined ? 'percent' : 'count',
+    count: c?.subset?.count ?? '',
+    percent: c?.subset?.percent ?? '',
+    first: [...(c?.first ?? [])],
+    hold: c?.hold ?? '',
+    interval: c?.interval ?? '',
+    failures: c?.failures ?? '',
+    check: c?.check !== undefined,
+    path: c?.check?.path ?? '',
+    host: c?.check?.host ?? '',
+    port: c?.check?.port ?? '',
+    statuses: (c?.check?.expect_status ?? []).join(', '),
+    timeout: c?.check?.timeout ?? '',
+    forbidOverride: c?.override === 'forbidden',
+  };
+}
+
+// canaryOf builds the canary key: only what is set (the server's defaults are not sent); nothing at all when it is off
+// and nothing else is set.
+export function canaryOf(c: CanaryForm): CanaryPolicy | undefined {
+  const out: CanaryPolicy = { enabled: c.enabled };
+  if (c.mode === 'count' && typeof c.count === 'number') out.subset = { count: c.count };
+  if (c.mode === 'percent' && typeof c.percent === 'number') out.subset = { percent: c.percent };
+  if (c.first.length > 0) out.first = [...c.first];
+  if (c.hold.trim() !== '') out.hold = c.hold.trim();
+  if (c.interval.trim() !== '') out.interval = c.interval.trim();
+  if (typeof c.failures === 'number') out.failures = c.failures;
+  if (c.check) {
+    const check: NonNullable<CanaryPolicy['check']> = { path: c.path.trim() };
+    if (c.host.trim() !== '') check.host = c.host.trim();
+    if (typeof c.port === 'number' && c.port > 0) check.port = c.port;
+    const statuses = c.statuses
+      .split(/[\s,]+/)
+      .filter((x) => x !== '')
+      .map((x) => Number(x));
+    if (statuses.length > 0) check.expect_status = statuses;
+    if (c.timeout.trim() !== '') check.timeout = c.timeout.trim();
+    out.check = check;
+  }
+  if (c.forbidOverride) out.override = 'forbidden';
+  if (!c.enabled && Object.keys(out).length === 1) return undefined;
+  return out;
 }
 
 function formOf(p: PolicyDocument): PolicyForm {
@@ -54,6 +124,7 @@ function formOf(p: PolicyDocument): PolicyForm {
     revokeMode: p.incident?.revoke_mode ?? '',
     administrators: p.notifications?.administrators ?? true,
     addresses: (p.notifications?.addresses ?? []).map((a) => ({ ...a })),
+    canary: canaryFormOf(p.canary),
   };
 }
 
@@ -85,6 +156,8 @@ export function documentOf(f: PolicyForm): PolicyDocument {
     if (!f.administrators) doc.notifications.administrators = false;
     if (addresses.length > 0) doc.notifications.addresses = addresses;
   }
+  const canary = f.canary ? canaryOf(f.canary) : undefined;
+  if (canary) doc.canary = canary;
   return doc;
 }
 
@@ -306,6 +379,7 @@ function PolicyEditor({
             )}
           </Stack>
         </Panel>
+        <CanarySection service={service} c={f.canary ?? canaryFormOf(undefined)} set={(patch) => set({ canary: { ...(f.canary ?? canaryFormOf(undefined)), ...patch } })} readOnly={readOnly} fields={fields} />
         <ErrorAlert error={save.error} />
         {canEdit && (
           <Group>
@@ -352,6 +426,213 @@ function PolicyHistory({ service }: { service: Service }) {
           </Table.Tbody>
         </Table>
       )}
+    </Panel>
+  );
+}
+
+// CanarySection is the policy's canary key (R65, design §19): wave 1's size, the websites that go first, the hold, the
+// rounds, the optional application check and whether a person may deploy to all at once. A warning says when some of the
+// service's websites skip verification and no application check is set (those are observed by time only).
+function CanarySection({
+  service,
+  c,
+  set,
+  readOnly,
+  fields,
+}: {
+  service: Service;
+  c: CanaryForm;
+  set: (patch: Partial<CanaryForm>) => void;
+  readOnly: boolean;
+  fields: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const websites = useQuery({
+    queryKey: ['certificate-locations', 'service', service.id],
+    queryFn: () => listDeployableLocations({ service_id: service.id, limit: 200 }),
+  });
+  const known = new Set((websites.data?.items ?? []).map((l) => l.id));
+  const choices = [
+    ...(websites.data?.items ?? []).map((l) => ({ value: l.id, label: `${l.target_name} ${l.cert_path}` })),
+    ...c.first.filter((id) => !known.has(id)).map((id) => ({ value: id, label: t('services.policyForm.canary.firstGone') })),
+  ];
+  const durationError = (v: string, field: string) =>
+    fields[field] ?? (v.trim() !== '' && !CANARY_DURATION.test(v.trim()) ? t('services.policyForm.canary.durationHelp') : undefined);
+  return (
+    <Panel title={t('services.policyForm.canary.title')} description={t('services.policyForm.canary.description')}>
+      <Stack gap="sm" data-testid="policy-canary">
+        <Switch
+          label={t('services.policyForm.canary.enabled')}
+          checked={c.enabled}
+          onChange={(e) => set({ enabled: e.currentTarget.checked })}
+          disabled={readOnly}
+          data-testid="canary-enabled"
+        />
+        <Group align="flex-end">
+          <SegmentedControl
+            value={c.mode}
+            onChange={(v) => set({ mode: v === 'percent' ? 'percent' : 'count' })}
+            disabled={readOnly}
+            aria-label={t('services.policyForm.canary.size')}
+            data={[
+              { value: 'count', label: t('services.policyForm.canary.byCount') },
+              { value: 'percent', label: t('services.policyForm.canary.byPercent') },
+            ]}
+          />
+          {c.mode === 'count' ? (
+            <NumberInput
+              label={t('services.policyForm.canary.count')}
+              placeholder="1"
+              value={c.count}
+              onChange={(v) => set({ count: v })}
+              min={1}
+              max={10}
+              allowDecimal={false}
+              readOnly={readOnly}
+              w={200}
+              error={fields['body.canary.subset.count'] ?? fields['body.canary.subset']}
+              data-testid="canary-count"
+            />
+          ) : (
+            <NumberInput
+              label={t('services.policyForm.canary.percent')}
+              value={c.percent}
+              onChange={(v) => set({ percent: v })}
+              min={1}
+              max={50}
+              allowDecimal={false}
+              readOnly={readOnly}
+              w={200}
+              error={fields['body.canary.subset.percent'] ?? fields['body.canary.subset']}
+              data-testid="canary-percent"
+            />
+          )}
+        </Group>
+        <MultiSelect
+          label={t('services.policyForm.canary.first')}
+          description={t('services.policyForm.canary.firstHelp')}
+          data={choices}
+          value={c.first}
+          onChange={(v) => set({ first: v })}
+          disabled={readOnly}
+          searchable
+          maxValues={20}
+          error={fieldsUnder(fields, 'body.canary.first')}
+        />
+        <Group align="flex-start">
+          <TextInput
+            label={t('services.policyForm.canary.hold')}
+            description={t('services.policyForm.canary.holdHelp')}
+            placeholder="10m"
+            value={c.hold}
+            onChange={(e) => set({ hold: e.currentTarget.value })}
+            readOnly={readOnly}
+            w={200}
+            error={durationError(c.hold, 'body.canary.hold')}
+            data-testid="canary-hold"
+          />
+          <TextInput
+            label={t('services.policyForm.canary.interval')}
+            description={t('services.policyForm.canary.intervalHelp')}
+            placeholder="30s"
+            value={c.interval}
+            onChange={(e) => set({ interval: e.currentTarget.value })}
+            readOnly={readOnly}
+            w={200}
+            error={durationError(c.interval, 'body.canary.interval')}
+            data-testid="canary-interval"
+          />
+          <NumberInput
+            label={t('services.policyForm.canary.failures')}
+            description={t('services.policyForm.canary.failuresHelp')}
+            placeholder="2"
+            value={c.failures}
+            onChange={(v) => set({ failures: v })}
+            min={1}
+            max={10}
+            allowDecimal={false}
+            readOnly={readOnly}
+            w={200}
+            error={fields['body.canary.failures']}
+          />
+        </Group>
+        <Checkbox
+          label={t('services.policyForm.canary.check')}
+          description={t('services.policyForm.canary.checkHelp')}
+          checked={c.check}
+          onChange={(e) => set({ check: e.currentTarget.checked })}
+          disabled={readOnly}
+          data-testid="canary-check"
+        />
+        {c.check && (
+          <Group align="flex-start">
+            <TextInput
+              label={t('services.policyForm.canary.path')}
+              placeholder="/healthz"
+              value={c.path}
+              onChange={(e) => set({ path: e.currentTarget.value })}
+              readOnly={readOnly}
+              w={220}
+              translate="no"
+              error={fields['body.canary.check.path']}
+              data-testid="canary-path"
+            />
+            <TextInput
+              label={t('services.policyForm.canary.host')}
+              description={t('services.policyForm.canary.hostHelp')}
+              value={c.host}
+              onChange={(e) => set({ host: e.currentTarget.value })}
+              readOnly={readOnly}
+              w={220}
+              translate="no"
+              error={fields['body.canary.check.host']}
+            />
+            <NumberInput
+              label={t('services.policyForm.canary.port')}
+              description={t('services.policyForm.canary.portHelp')}
+              value={c.port}
+              onChange={(v) => set({ port: v })}
+              min={1}
+              max={65535}
+              allowDecimal={false}
+              readOnly={readOnly}
+              w={160}
+              error={fields['body.canary.check.port']}
+            />
+            <TextInput
+              label={t('services.policyForm.canary.statuses')}
+              placeholder="200"
+              value={c.statuses}
+              onChange={(e) => set({ statuses: e.currentTarget.value })}
+              readOnly={readOnly}
+              w={160}
+              error={fieldsUnder(fields, 'body.canary.check.expect_status')}
+            />
+            <TextInput
+              label={t('services.policyForm.canary.timeout')}
+              placeholder="5s"
+              value={c.timeout}
+              onChange={(e) => set({ timeout: e.currentTarget.value })}
+              readOnly={readOnly}
+              w={160}
+              error={durationError(c.timeout, 'body.canary.check.timeout')}
+              data-testid="canary-timeout"
+            />
+          </Group>
+        )}
+        {c.enabled && !c.check && (
+          <Alert color="yellow" data-testid="canary-time-only">
+            {t('services.policyForm.canary.timeOnly')}
+          </Alert>
+        )}
+        <Checkbox
+          label={t('services.policyForm.canary.forbidOverride')}
+          description={t('services.policyForm.canary.forbidOverrideHelp')}
+          checked={c.forbidOverride}
+          onChange={(e) => set({ forbidOverride: e.currentTarget.checked })}
+          disabled={readOnly}
+        />
+      </Stack>
     </Panel>
   );
 }

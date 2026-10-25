@@ -786,7 +786,22 @@
       "user_groups_truncated": "Oturum açışın yalnızca ilk 1000 grubu saklandı",
       "certificate_revoked_by_authority": "Sertifika yetkilisi tarafından iptal edildi (iptal denetimi)",
       "certificate_revocation_on_hold": "Sertifika yetkilisi tarafından askıya alındı (iptal denetimi)",
-      "settings_revocation_check_changed": "İptal denetimi açıldı veya kapatıldı"
+      "settings_revocation_check_changed": "İptal denetimi açıldı veya kapatıldı",
+      "deployment_holding": "Dağıtım gözlemde (kanarya)",
+      "deployment_revert_requested": "Kanarya dağıtımının geri alınması istendi",
+      "deployment_rollout_started": "Kanarya dağıtımı başladı",
+      "deployment_canary_overridden": "Kanarya atlandı: hepsine aynı anda dağıtıldı",
+      "deployment_canary_skipped": "Kanarya atlandı",
+      "deployment_rollout_hold_started": "Kanarya gözlemi başladı",
+      "deployment_rollout_check_failed": "Kanarya denetimi başarısız oldu",
+      "deployment_rollout_continued": "Kanarya dağıtımına erken devam edildi",
+      "deployment_rollout_released": "Kanarya 1. dalgası onaylandı",
+      "deployment_rollout_wave2_started": "Kanarya 2. dalgası başladı",
+      "deployment_rollout_aborted": "Kanarya dağıtımı durduruldu",
+      "deployment_rollout_failed": "Kanarya dağıtımı başarısız oldu",
+      "deployment_rollout_stopped": "Kanarya dağıtımı lisans nedeniyle durdu",
+      "deployment_rollout_preempted": "Kanarya dağıtımı bir olayla sona erdi",
+      "deployment_rollout_completed": "Kanarya dağıtımı tamamlandı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1491,6 +1506,10 @@
       },
       "revocation": {
         "check": "Sertifika yetkililerinde iptal denetimleri"
+      },
+      "canary": {
+        "advance": "Kanarya dağıtımı kararları",
+        "check": "Kanarya dağıtımı denetimleri"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -1552,6 +1571,7 @@
       "queued": "Başlamayı bekliyor",
       "precheck": "Mevcut sertifika denetleniyor",
       "deploying": "Dağıtılıyor",
+      "holding": "Gözlemde",
       "recovering": "Sonuç doğrulanıyor",
       "done": "Tamamlandı"
     }
@@ -4743,7 +4763,8 @@
         "acme": "ACME sertifikaları",
         "deployment": "Otomatik dağıtım",
         "incident": "Olaylar",
-        "notifications": "E-postalar"
+        "notifications": "E-postalar",
+        "canary": "Kanarya dağıtımı"
       },
       "history": {
         "title": "Sürümler",
@@ -4754,6 +4775,38 @@
         "first": "İlk sürüm (kural yok)",
         "nothing": "Hiçbir şey",
         "system": "Alice (sistem)"
+      },
+      "canary": {
+        "title": "Kanarya dağıtımı",
+        "description": "Önce birkaç web sitesine dağıtın, onları gözlemleyin, ancak ondan sonra kalanlara dağıtın. Bu hizmetin anahtarlarının iki veya daha fazla web sitesine yapılan her dağıtımına uygulanır.",
+        "enabled": "Önce bir alt kümeye dağıt",
+        "size": "İlk dalganın boyutu",
+        "byCount": "Web sitesi sayısı",
+        "byPercent": "Yüzde",
+        "count": "İlk dalgadaki web siteleri",
+        "percent": "İlk dalgadaki yüzde",
+        "first": "Önce buraya dağıt",
+        "firstHelp": "Bu web siteleri hedef olduklarında ilk dalgaya girer.",
+        "firstGone": "Kaldırılmış bir web sitesi",
+        "hold": "Bekleme süresi",
+        "holdHelp": "İlk dalganın ne kadar gözlemleneceği, 1m ile 24h arası. Boş: 10m.",
+        "interval": "Aralık",
+        "intervalHelp": "Bir web sitesinin iki denetimi arasındaki süre, 15s ile 10m arası. Boş: 30s.",
+        "failures": "Başarısızlıklar",
+        "failuresHelp": "İlk dalgayı geri alan art arda başarısız denetim sayısı. Boş: 2.",
+        "durationHelp": "Bir sayı ve bir birim: s, m veya h (örneğin 90s, 10m, 1h).",
+        "check": "Uygulama denetimi",
+        "checkHelp": "İlk dalgadaki her web sitesine yeni sertifika üzerinden, web sitesinin kendi adresine gönderilen bir HTTPS isteği.",
+        "path": "Yol",
+        "host": "Ana bilgisayar adı",
+        "hostHelp": "Boş: web sitesinin kendi adı. Asla adres olarak kullanılmaz.",
+        "port": "Bağlantı noktası",
+        "portHelp": "Boş: web sitesinin bağlantı noktası.",
+        "statuses": "Beklenen durum kodları",
+        "timeout": "Zaman aşımı",
+        "timeOnly": "Uygulama denetimi olmadan, doğrulamayı atlayan web siteleri yalnızca süreyle gözlemlenir.",
+        "forbidOverride": "Hepsine aynı anda dağıtmayı yasakla",
+        "forbidOverrideHelp": "Bu seçilmezse, yeni kimlik doğrulaması yapmış bir kişi tek bir dağıtım için kanaryayı atlayabilir."
       }
     },
     "forbiddenMark": "Bekletiliyor: hizmeti otomatik dağıtımı yasaklıyor",
@@ -5021,5 +5074,71 @@
     "tokenHelp": "Anahtar, hesabın rollerinin izin verdiğini yapabilir, fazlasını değil. Oluşturmak yeni bir doğrulama kodu ister.",
     "disabledTitle": "Devre dışı",
     "disabledTokens": "Devre dışı bir otomasyon hesabının anahtarı olamaz. Anahtar oluşturmak için hesabı etkinleştirin."
+  },
+  "canary": {
+    "title": "Kanarya dağıtımı",
+    "observing": "Yeni sertifika yerinde ve doğrulandı; diğer web siteleri izlemeden önce gözlemde.",
+    "roundSummary": "Şimdiye kadar {{rounds}} denetim, {{passes}} başarılı. Son denetim: {{result}}.",
+    "result": {
+      "pass": "başarılı",
+      "fail": "başarısız",
+      "unknown": "çalışamadı",
+      "none": "henüz yok"
+    },
+    "tls": {
+      "pass": "başarılı",
+      "fail": "başarısız",
+      "skipped": "atlandı",
+      "unknown": "çalışamadı",
+      "none": "henüz denetlenmedi"
+    },
+    "waveBadge": "Kanarya · dalga {{wave}}",
+    "state": {
+      "wave1": "İlk dalga dağıtılıyor",
+      "hold": "İlk dalga gözlemleniyor",
+      "wave2": "Kalanlar dağıtılıyor",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız",
+      "aborted": "Durduruldu",
+      "stopped": "Durdu",
+      "preempted": "Bir olayla sona erdi"
+    },
+    "reason": {
+      "canary_check_failed": "İlk dalgadaki bir web sitesinin denetimi çok kez başarısız oldu; ilk dalga geri alındı.",
+      "canary_check_unavailable": "Denetimler bekleme süresi bitene kadar çalışamadı; ilk dalga geri alındı.",
+      "canary_wave1_failed": "İlk dalgadaki bir dağıtım başarısız oldu; ilk dalga geri alındı.",
+      "canary_certificate_revoked": "Sertifika iptal edildi ya da anahtarı ele geçirilmiş olarak işaretlendi; ilk dalga geri alındı.",
+      "canary_aborted": "Bir kişi kanarya dağıtımını durdurdu; ilk dalga geri alındı.",
+      "canary_wave_gone": "İlk dalgadaki bütün web siteleri kaldırıldı.",
+      "canary_preempted_by_incident": "Bir anahtar ele geçirme olayı kanarya dağıtımını sona erdirdi; ilk dalga sertifikayı korur.",
+      "license_locked": "Lisans şu anda değişikliğe izin vermiyor: ilk dalga sertifikayı korur, kalanlara dağıtılmadı.",
+      "lock_due": "Lisans bir saat boyunca doğrulanamadı: ilk dalga sertifikayı korur, kalanlara dağıtılmadı.",
+      "unverified": "Lisans bir saat boyunca doğrulanamadı: ilk dalga sertifikayı korur, kalanlara dağıtılmadı."
+    },
+    "holdLeft": "Gözlem {{minutes}} dk {{seconds}} sn sonra biter.",
+    "holdOver": "Gözlem süresi doldu; sonraki denetim karar verir.",
+    "wave": "Dalga {{wave}}",
+    "columns": {
+      "website": "Web sitesi",
+      "server": "Sunucu",
+      "deployment": "Dağıtım",
+      "lastCheck": "Son denetim",
+      "tls": "TLS",
+      "http": "HTTP",
+      "latency": "Süre",
+      "failures": "Art arda başarısızlık"
+    },
+    "notDeployed": "Henüz dağıtılmadı",
+    "skipped": "Dağıtılmadı: {{reason}}",
+    "hidden": "Hizmetleriniz dışındaki {{count}} web sitesi gösterilmiyor.",
+    "continue": "Şimdi devam et",
+    "continueHelp": "Gözlemin kalanını atlar ve kalan web sitelerine dağıtır.",
+    "abort": "Durdur ve geri al",
+    "abortConfirm": "Kanarya dağıtımı durdurulsun ve ilk dalga önceki sertifikaya geri alınsın mı? Diğer web sitelerine dokunulmaz.",
+    "abortYes": "Durdur ve geri al",
+    "note": "Önce {{count}} web sitesine dağıtır, sonra kalanlardan önce {{hold}} bekler.",
+    "override": "Hepsine aynı anda dağıt",
+    "overrideHelp": "Bu dağıtım için kanaryayı atlar; kimliğinizi yeniden doğrulamanızı ister.",
+    "started": "Kanarya dağıtımı başladı: ilk dalga gözlemi geçince {{count}} web sitesi izleyecek."
   }
 }

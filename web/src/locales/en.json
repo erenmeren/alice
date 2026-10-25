@@ -786,7 +786,22 @@
       "user_groups_truncated": "Only the first 1000 groups of a sign-in were kept",
       "certificate_revoked_by_authority": "Certificate revoked by its authority (revocation check)",
       "certificate_revocation_on_hold": "Certificate suspended by its authority (revocation check)",
-      "settings_revocation_check_changed": "Revocation check switched on or off"
+      "settings_revocation_check_changed": "Revocation check switched on or off",
+      "deployment_holding": "Deployment under observation (canary)",
+      "deployment_revert_requested": "Canary deployment revert requested",
+      "deployment_rollout_started": "Canary deployment started",
+      "deployment_canary_overridden": "Canary skipped: deployed to all at once",
+      "deployment_canary_skipped": "Canary skipped",
+      "deployment_rollout_hold_started": "Canary observation started",
+      "deployment_rollout_check_failed": "Canary check failed",
+      "deployment_rollout_continued": "Canary deployment continued early",
+      "deployment_rollout_released": "Canary wave 1 released",
+      "deployment_rollout_wave2_started": "Canary wave 2 started",
+      "deployment_rollout_aborted": "Canary deployment aborted",
+      "deployment_rollout_failed": "Canary deployment failed",
+      "deployment_rollout_stopped": "Canary deployment stopped by the licence",
+      "deployment_rollout_preempted": "Canary deployment ended by an incident",
+      "deployment_rollout_completed": "Canary deployment completed"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1491,6 +1506,10 @@
       },
       "revocation": {
         "check": "Revocation checks at the certificate authorities"
+      },
+      "canary": {
+        "advance": "Canary deployment decisions",
+        "check": "Canary deployment checks"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -1552,6 +1571,7 @@
       "queued": "Waiting to start",
       "precheck": "Checking the current certificate",
       "deploying": "Deploying",
+      "holding": "Under observation",
       "recovering": "Confirming the outcome",
       "done": "Finished"
     }
@@ -4743,7 +4763,8 @@
         "acme": "ACME certificates",
         "deployment": "Automatic deployment",
         "incident": "Incidents",
-        "notifications": "E-mails"
+        "notifications": "E-mails",
+        "canary": "Canary deployment"
       },
       "history": {
         "title": "Versions",
@@ -4754,6 +4775,38 @@
         "first": "The first version (no rules)",
         "nothing": "Nothing",
         "system": "Alice"
+      },
+      "canary": {
+        "title": "Canary deployment",
+        "description": "Deploy to a few websites first, observe them, and only then deploy to the rest. Applies to every deployment of this service’s keys to two or more websites.",
+        "enabled": "Deploy to a subset first",
+        "size": "Size of the first wave",
+        "byCount": "Number of websites",
+        "byPercent": "Percentage",
+        "count": "Websites in the first wave",
+        "percent": "Percent in the first wave",
+        "first": "Deploy here first",
+        "firstHelp": "These websites go into the first wave when they are destinations.",
+        "firstGone": "A removed website",
+        "hold": "Hold",
+        "holdHelp": "How long the first wave is observed, 1m to 24h. Empty: 10m.",
+        "interval": "Interval",
+        "intervalHelp": "Time between two checks of a website, 15s to 10m. Empty: 30s.",
+        "failures": "Failures",
+        "failuresHelp": "Failed checks in a row that put the first wave back. Empty: 2.",
+        "durationHelp": "A number and one unit: s, m or h (for example 90s, 10m, 1h).",
+        "check": "Application check",
+        "checkHelp": "An HTTPS request to each website of the first wave, through the new certificate, sent to the website’s own address.",
+        "path": "Path",
+        "host": "Host name",
+        "hostHelp": "Empty: the website’s own name. Never used as an address.",
+        "port": "Port",
+        "portHelp": "Empty: the website’s port.",
+        "statuses": "Expected statuses",
+        "timeout": "Timeout",
+        "timeOnly": "Without an application check, websites that skip verification are observed by time only.",
+        "forbidOverride": "Forbid deploying to all at once",
+        "forbidOverrideHelp": "Without this, a person with a fresh step-up may skip the canary for one deployment."
       }
     },
     "forbiddenMark": "Held: its service forbids automatic deployment",
@@ -5021,5 +5074,71 @@
     "tokenHelp": "The token can do what the account's roles allow, and no more. Making one asks for a fresh verification code.",
     "disabledTitle": "Disabled",
     "disabledTokens": "A disabled automation account holds no tokens. Enable it to make one."
+  },
+  "canary": {
+    "title": "Canary deployment",
+    "observing": "The new certificate is in place and verified; it is under observation before the other websites follow.",
+    "roundSummary": "{{rounds}} checks so far, {{passes}} passed. Last check: {{result}}.",
+    "result": {
+      "pass": "passed",
+      "fail": "failed",
+      "unknown": "could not run",
+      "none": "not yet"
+    },
+    "tls": {
+      "pass": "passed",
+      "fail": "failed",
+      "skipped": "skipped",
+      "unknown": "could not run",
+      "none": "not checked yet"
+    },
+    "waveBadge": "Canary · wave {{wave}}",
+    "state": {
+      "wave1": "Deploying the first wave",
+      "hold": "Observing the first wave",
+      "wave2": "Deploying the rest",
+      "completed": "Completed",
+      "failed": "Failed",
+      "aborted": "Aborted",
+      "stopped": "Stopped",
+      "preempted": "Ended by an incident"
+    },
+    "reason": {
+      "canary_check_failed": "A check of a first-wave website failed too often, so the first wave was put back.",
+      "canary_check_unavailable": "The checks could not run until the hold ended, so the first wave was put back.",
+      "canary_wave1_failed": "A first-wave deployment failed, so the first wave was put back.",
+      "canary_certificate_revoked": "The certificate was revoked or its key marked compromised, so the first wave was put back.",
+      "canary_aborted": "A person stopped the canary deployment; the first wave was put back.",
+      "canary_wave_gone": "Every first-wave website went away.",
+      "canary_preempted_by_incident": "A key-compromise incident ended the canary deployment; the first wave keeps the certificate.",
+      "license_locked": "The licence does not allow changes now: the first wave keeps the certificate, the rest was not deployed.",
+      "lock_due": "The licence could not be confirmed for an hour: the first wave keeps the certificate, the rest was not deployed.",
+      "unverified": "The licence could not be verified for an hour: the first wave keeps the certificate, the rest was not deployed."
+    },
+    "holdLeft": "Observation ends in {{minutes}} min {{seconds}} s.",
+    "holdOver": "The observation time is over; the next check decides.",
+    "wave": "Wave {{wave}}",
+    "columns": {
+      "website": "Website",
+      "server": "Server",
+      "deployment": "Deployment",
+      "lastCheck": "Last check",
+      "tls": "TLS",
+      "http": "HTTP",
+      "latency": "Time",
+      "failures": "Failures in a row"
+    },
+    "notDeployed": "Not deployed yet",
+    "skipped": "Not deployed: {{reason}}",
+    "hidden": "{{count}} websites outside your services are not shown.",
+    "continue": "Continue now",
+    "continueHelp": "Skips the rest of the observation and deploys to the remaining websites.",
+    "abort": "Abort",
+    "abortConfirm": "Stop the canary deployment and put the first wave back to the previous certificate? The other websites are not touched.",
+    "abortYes": "Abort and put back",
+    "note": "Deploys to {{count}} website(s) first, then waits {{hold}} before the rest.",
+    "override": "Deploy to all at once",
+    "overrideHelp": "Skips the canary for this deployment; asks you to confirm your identity again.",
+    "started": "Canary deployment started: {{count}} website(s) follow once the first wave passed its observation."
   }
 }

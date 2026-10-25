@@ -69,7 +69,23 @@ export interface PolicyDocument {
   incident?: { revoke_mode?: 'after_verified' | 'now' };
   // Who else receives the service's e-mails (read by the notification routing by service).
   notifications?: { administrators?: boolean; addresses?: { email: string; locale: string }[] };
+  // R65: deploy to a subset first, observe it, then deploy to the rest. Absent fields are Alice's defaults.
+  canary?: CanaryPolicy;
 }
+
+export interface CanaryPolicy {
+  enabled: boolean;
+  subset?: { count?: number; percent?: number };
+  first?: string[];
+  hold?: string;
+  interval?: string;
+  failures?: number;
+  check?: { path: string; host?: string; port?: number; expect_status?: number[]; timeout?: string };
+  override?: 'allowed' | 'forbidden';
+}
+
+// The canary's duration form (design §5.1): a number and one unit.
+export const CANARY_DURATION = /^[1-9][0-9]{0,4}(s|m|h)$/;
 
 export type PolicySource = 'acme' | 'uploaded' | 'csr';
 export type PolicyChallenge = 'dns01' | 'http01';
@@ -77,7 +93,7 @@ export const POLICY_SOURCES: readonly PolicySource[] = ['acme', 'uploaded', 'csr
 export const POLICY_CHALLENGES: readonly PolicyChallenge[] = ['dns01', 'http01'];
 export const POLICY_KEY_TYPES: readonly string[] = ['ecdsa_p256', 'ecdsa_p384', 'rsa_2048', 'rsa_3072', 'rsa_4096'];
 // The top-level keys of a policy in the order the history names them.
-export const POLICY_KEYS = ['domains', 'certificate_sources', 'acme', 'deployment', 'incident', 'notifications'] as const;
+export const POLICY_KEYS = ['domains', 'certificate_sources', 'acme', 'deployment', 'incident', 'notifications', 'canary'] as const;
 export const MAX_POLICY_DOMAINS = 200;
 export const MAX_POLICY_ADDRESSES = 20;
 
