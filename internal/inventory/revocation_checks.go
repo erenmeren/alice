@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,6 +47,9 @@ const (
 	revocationNotAfter  = 7 * 24 * time.Hour // not checkable
 	revocationMaxWait   = 24 * time.Hour     // the failures' backoff cap
 	revocationEndpoints = 5                  // the endpoints a discovered certificate's e-mail names
+	// revocationDiscoveredMails bounds the e-mails about discovered leaves in one run (final review I1): anyone who runs
+	// TLS in a scanned range chooses those certificates.
+	revocationDiscoveredMails = 20
 )
 
 // RevocationRun is one run of a revocation checker (*revocation.Run).
@@ -66,7 +70,7 @@ type checkerAdapter struct{ c *revocation.Checker }
 func (a checkerAdapter) NewRun(perHost int) RevocationRun { return a.c.NewRun(perHost) }
 
 // RevocationRunReport counts what one run did.
-type RevocationRunReport struct{ Checked, Revoked, OnHold, Deferred int }
+type RevocationRunReport struct{ Checked, Revoked, OnHold, Deferred, MailsSuppressed int }
 
 // RevocationCheck is the last check of a certificate (GetCertificate).
 type RevocationCheck struct {
@@ -142,8 +146,25 @@ func (s *Service) SaveRevocationSettings(ctx context.Context, a audit.Actor, ver
 type revocationCandidate struct {
 	fingerprint string
 	chain       string // the leaf's PEM, then its chain (an inventory certificate's pem_chain; a discovered leaf's PEM)
-	issuerPEM   string // a discovered leaf's issuer ("" for an inventory certificate: the issuer is in chain)
+	issuerPEM   string // a discovered leaf's presented chain, issuer first ("" for an inventory certificate: it is in chain)
 	inventory   bool
+	// heldIssuer: a discovered leaf's issuer is an inventory certificate Alice did not find by discovery (ruling 42).
+	heldIssuer bool
+}
+
+// revocationRunState is what one run counts across its results.
+type revocationRunState struct {
+	discoveredMails, suppressed int
+}
+
+// discoveredMailAllowed takes one of the run's discovered-leaf e-mails, or counts it suppressed.
+func (st *revocationRunState) discoveredMailAllowed() bool {
+	if st.discoveredMails >= revocationDiscoveredMails {
+		st.suppressed++
+		return false
+	}
+	st.discoveredMails++
+	return true
 }
 
 // RunRevocationChecks checks the due certificates once (the revocation.check task). Nothing is asked when the switch is
@@ -166,15 +187,20 @@ func (s *Service) RunRevocationChecks(ctx context.Context) (RevocationRunReport,
 		return rep, err
 	}
 	run := s.revocation.NewRun(revocationPerHost)
+	var st revocationRunState
 	for _, c := range cands {
 		if ctx.Err() != nil || s.clock.Now().Sub(started) > revocationRunBudget {
 			break
 		}
 		leaf, issuer := revocationPair(c)
 		var res revocation.Result
-		if leaf == nil {
+		switch {
+		case leaf == nil:
 			res = revocation.Result{Status: revocation.StatusNotCheckable, Code: revocation.CodeNoIssuer}
-		} else {
+		case !c.inventory && !c.heldIssuer && !s.chainTrusted(c, leaf, s.clock.Now()):
+			// Ruling 42: a discovered leaf of an issuer nobody vouches for is never fetched for.
+			res = revocation.Result{Status: revocation.StatusNotCheckable, Code: revocation.CodeUntrustedIssuer}
+		default:
 			res = run.Check(ctx, leaf, issuer)
 		}
 		if res.Status == revocation.StatusDeferred {
@@ -182,7 +208,9 @@ func (s *Service) RunRevocationChecks(ctx context.Context) (RevocationRunReport,
 			continue
 		}
 		rep.Checked++
-		if err := s.recordRevocation(ctx, c, res); err != nil {
+		err := s.recordRevocation(ctx, c, res, &st)
+		rep.MailsSuppressed = st.suppressed
+		if err != nil {
 			return rep, err
 		}
 		switch res.Status {
@@ -204,17 +232,23 @@ WHERE NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = r.fi
 // revocationCandidates selects the due certificates (one statement, at most revocationBatch, the longest due first).
 func (s *Service) revocationCandidates(ctx context.Context, now time.Time) ([]revocationCandidate, error) {
 	rows, err := s.pool.Query(ctx, `WITH cand AS (
-    SELECT c.fingerprint_sha256 AS fp, c.pem_chain AS chain, '' AS issuer_pem, true AS inv
+    SELECT c.fingerprint_sha256 AS fp, c.pem_chain AS chain, '' AS issuer_pem, true AS inv, false AS held
     FROM certificates c WHERE c.revoked_at IS NULL AND c.not_after > $1 AND NOT c.self_signed
   UNION ALL
-    SELECT d.fingerprint_sha256, d.pem, i.pem, false
+    SELECT d.fingerprint_sha256, d.pem, i.chain, false, i.held
     FROM discovery_certificates d
-    JOIN LATERAL (SELECT ic.pem FROM discovery_endpoints e JOIN discovery_certificates ic ON ic.fingerprint_sha256 = e.chain_fingerprints[1]
-                  WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY e.last_seen DESC NULLS LAST, e.id LIMIT 1) i ON true
+    JOIN LATERAL (SELECT
+            (SELECT string_agg(ic.pem, E'\n' ORDER BY array_position(e.chain_fingerprints, ic.fingerprint_sha256)) FROM discovery_certificates ic
+             WHERE ic.fingerprint_sha256 = ANY (e.chain_fingerprints)) AS chain,
+            EXISTS (SELECT 1 FROM certificates hc WHERE hc.fingerprint_sha256 = e.chain_fingerprints[1] AND hc.source <> 'discovered') AS held
+          FROM discovery_endpoints e
+          WHERE e.fingerprint_sha256 = d.fingerprint_sha256
+            AND EXISTS (SELECT 1 FROM discovery_certificates ic WHERE ic.fingerprint_sha256 = e.chain_fingerprints[1])
+          ORDER BY e.last_seen DESC NULLS LAST, e.id LIMIT 1) i ON true
     WHERE d.is_leaf AND NOT d.self_signed AND d.not_after > $1
       AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
 )
-SELECT cand.fp, cand.chain, cand.issuer_pem, cand.inv FROM cand
+SELECT cand.fp, cand.chain, cand.issuer_pem, cand.inv, cand.held FROM cand
 LEFT JOIN revocation_checks r ON r.fingerprint_sha256 = cand.fp
 WHERE r.fingerprint_sha256 IS NULL OR (r.next_check_at <= $1 AND r.status <> 'revoked')
 ORDER BY coalesce(r.next_check_at, '-infinity'::timestamptz), cand.fp
@@ -224,7 +258,7 @@ LIMIT $2`, now, revocationBatch)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (revocationCandidate, error) {
 		var c revocationCandidate
-		err := row.Scan(&c.fingerprint, &c.chain, &c.issuerPEM, &c.inventory)
+		err := row.Scan(&c.fingerprint, &c.chain, &c.issuerPEM, &c.inventory, &c.heldIssuer)
 		return c, err
 	})
 }
@@ -244,6 +278,17 @@ func revocationPair(c revocationCandidate) (leaf, issuer *x509.Certificate) {
 		}
 	}
 	return leaf, nil
+}
+
+// chainTrusted reports whether a discovered leaf's presented chain reaches a trusted root (Config.Roots: the system's
+// unless set), as a browser would accept it (ruling 42).
+func (s *Service) chainTrusted(c revocationCandidate, leaf *x509.Certificate, now time.Time) bool {
+	inter := x509.NewCertPool()
+	for _, ic := range pemCertificates(c.issuerPEM) {
+		inter.AddCert(ic)
+	}
+	_, err := leaf.Verify(x509.VerifyOptions{Roots: s.roots, Intermediates: inter, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	return err == nil
 }
 
 // pemCertificates parses every CERTIFICATE block of a PEM text (a block that does not parse is skipped).
@@ -273,8 +318,13 @@ func revocationBackoff(n int) time.Duration {
 }
 
 // recordRevocation records one result in its own transaction, and acts on a revocation or a suspension.
-func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, res revocation.Result) error {
+func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, res revocation.Result, st *revocationRunState) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// One recording of a certificate at a time (final review I2): with no check row yet, FOR UPDATE below locks
+		// nothing, and two overlapping runs would both find no e-mail sent.
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('revocation:' || $1))", c.fingerprint); err != nil {
+			return fmt.Errorf("inventory: lock the revocation check: %w", err)
+		}
 		now := s.clock.Now().UTC()
 		var prevStatus string
 		var prevFailures int
@@ -301,7 +351,7 @@ func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, r
 		case revocation.StatusOnHold:
 			at := res.RevokedAt
 			row.revokedAt, row.next = &at, now.Add(revocationHoldAfter)
-			if prevStatus != string(revocation.StatusOnHold) || prevNotified == nil {
+			if (prevStatus != string(revocation.StatusOnHold) || prevNotified == nil) && (c.inventory || st.discoveredMailAllowed()) {
 				if err := s.revocationNews(ctx, tx, c, res, TemplateCertificateOnHoldByAuthority, "certificate.revocation_on_hold"); err != nil {
 					return err
 				}
@@ -313,10 +363,11 @@ func (s *Service) recordRevocation(ctx context.Context, c revocationCandidate, r
 			if row.reason == "" {
 				row.reason = "unspecified"
 			}
-			if err := s.revokedByAuthority(ctx, tx, c, res, row.reason, prevNotified); err != nil {
+			mail := prevNotified == nil && (c.inventory || st.discoveredMailAllowed())
+			if err := s.revokedByAuthority(ctx, tx, c, res, row.reason, mail); err != nil {
 				return err
 			}
-			if prevNotified == nil {
+			if mail {
 				row.notified = &now
 			}
 		default:
@@ -344,9 +395,8 @@ type revocationRow struct {
 }
 
 // revokedByAuthority marks an inventory certificate revoked (final; audited certificate.revoked_by_authority) and mails
-// the revocation once (notified: already mailed); a discovered leaf is only mailed.
-func (s *Service) revokedByAuthority(ctx context.Context, tx pgx.Tx, c revocationCandidate, res revocation.Result, reason string,
-	notified *time.Time) error {
+// the revocation when mail (once: the caller knows whether it was mailed); a discovered leaf is only mailed.
+func (s *Service) revokedByAuthority(ctx context.Context, tx pgx.Tx, c revocationCandidate, res revocation.Result, reason string, mail bool) error {
 	if c.inventory {
 		tag, err := tx.Exec(ctx, `UPDATE certificates SET revoked_at = $1, revocation_reason = $2, revocation_seen = $3
 WHERE fingerprint_sha256 = $4 AND revoked_at IS NULL`, res.RevokedAt, revocationReasonOf(reason), res.Method, c.fingerprint)
@@ -361,7 +411,7 @@ WHERE fingerprint_sha256 = $4 AND revoked_at IS NULL`, res.RevokedAt, revocation
 			}
 		}
 	}
-	if notified != nil {
+	if !mail {
 		return nil
 	}
 	template := TemplateCertificateRevokedByAuthority
@@ -424,7 +474,7 @@ WHERE e.fingerprint_sha256 = $1`, c.fingerprint)
 		return err
 	}
 	method := map[string]string{"ocsp": "OCSP", "crl": "CRL"}[res.Method]
-	params := map[string]string{"certificate_name": truncRunes(strings.TrimSpace(name), 200), "fingerprint": c.fingerprint,
+	params := map[string]string{"certificate_name": printableName(truncRunes(strings.TrimSpace(name), 200)), "fingerprint": c.fingerprint,
 		"revoked_at": res.RevokedAt.UTC().Format("2006-01-02 15:04") + " UTC", "reason": reason, "method": method}
 	if !c.inventory {
 		eps, err := discoveredEndpoints(ctx, tx, c.fingerprint)
@@ -466,4 +516,15 @@ WHERE fingerprint_sha256 = $1`, fingerprint).Scan(&rc.Status, &rc.Method, &rc.Re
 	}
 	rc.RevokedAt, rc.CheckedAt, rc.NextCheckAt = utcPtr(rc.RevokedAt), rc.CheckedAt.UTC(), rc.NextCheckAt.UTC()
 	return &rc, nil
+}
+
+// printableName replaces every rune that is not printable (control characters, bidirectional overrides) with "?": a
+// certificate's name reaches an e-mail, and a discovered certificate's name is chosen by whoever runs the server.
+func printableName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return '?'
+	}, s)
 }

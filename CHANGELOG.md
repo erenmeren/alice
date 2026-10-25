@@ -12,7 +12,7 @@
   marks the certificate revoked for good (never deployed again, an issued certificate renewed at once) and is e-mailed
   once; a suspension is shown and e-mailed but not marked; unknown and unreachable answers are only shown. The
   certificate's page shows the last check; the switch is in **Settings**, **General**. New codes `ALC-CRT-0020` to
-  `ALC-CRT-0025` (see [troubleshooting.md](docs/troubleshooting.md)).
+  `ALC-CRT-0026` (see [troubleshooting.md](docs/troubleshooting.md)).
 
 **Changed**
 - `alice-helper` 1.11.0 (protocol 11, same sudoers file) reads a first certificate labelled `TRUSTED CERTIFICATE` or
@@ -31,7 +31,7 @@
 reach your certificate authorities over HTTP and HTTPS. Update the helpers to 1.11.0.
 
 Rulings: `docs/superpowers/rulings/hardening-2026-10-24.md`. Migrations `00033_incident_notices.sql`,
-`00034_revocation_checks.sql`; codes `ALC-CRT-0020`..`ALC-CRT-0025`; KI-43.
+`00034_revocation_checks.sql`; codes `ALC-CRT-0020`..`ALC-CRT-0026`; KI-43.
 
 ## Unreleased — Windows servers (CI and release, R63)
 

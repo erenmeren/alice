@@ -1262,6 +1262,11 @@
         "title": "The certificate authority's revocation answer is too large.",
         "cause": "The OCSP answer was larger than 64 KiB or the CRL larger than 10 MiB, more than Alice reads.",
         "action": "Alice tries again by herself. A CRL this large is unusual: ask the authority whether it offers OCSP."
+      },
+      "revocation_untrusted_issuer": {
+        "title": "The certificate's issuer is not trusted, so its revocation is not checked.",
+        "cause": "Network discovery found this certificate, and the chain its server presented reaches no trusted root, nor is its issuer a certificate Alice holds. Anyone who runs a TLS server in a scanned range chooses such a certificate and the addresses it names, so Alice does not connect to them.",
+        "action": "Nothing to do for a self-signed or private test certificate. For a company authority, upload its certificate to Alice, or have the server send the full chain to a root the Alice host trusts."
       }
     },
     "csr": {

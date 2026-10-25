@@ -8673,7 +8673,7 @@ components:
       type: [object, "null"]
       description: >-
         R64: the last revocation check of a certificate (null before the first). error is the reason of an unavailable or
-        not checkable check (ALC-CRT-0020 to ALC-CRT-0025).
+        not checkable check (ALC-CRT-0020 to ALC-CRT-0026).
       required: [status, method, reason, revoked_at, checked_at, next_check_at, error]
       properties:
         status: { type: string, enum: [good, revoked, on_hold, unknown, unavailable, not_checkable] }

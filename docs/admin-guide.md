@@ -2271,8 +2271,10 @@ itself (a mass revocation, a mis-issuance, a key reported compromised to the aut
 
 - **What is checked.** Every certificate Alice holds that is not expired, not revoked and not self-signed, whatever its
   source (found on a server, uploaded, from a signing request, from a Key Vault or issued by a certificate authority
-  over ACME), and every leaf certificate network discovery found that is not in Alice's inventory, when an endpoint
-  presented its issuer.
+  over ACME), and every leaf certificate network discovery found that is not in Alice's inventory, when the chain its
+  endpoint presented reaches a root the Alice host trusts or its issuer is a certificate Alice holds (uploaded, not
+  found by discovery). Any other discovered certificate is shown as not checkable (`ALC-CRT-0026`): whoever runs a
+  server in a scanned range chooses it and the addresses it names.
 - **How.** Alice asks the certificate's OCSP responder first and reads its CRL when OCSP gives no answer. Only an answer
   signed by the certificate's issuer and still current counts. Alice needs the issuer: a certificate whose server sends
   no intermediate cannot be checked.
@@ -2281,14 +2283,15 @@ itself (a mass revocation, a mis-issuance, a key reported compromised to the aut
   know after a day; a suspended one after 6 hours; one that cannot be checked after 7 days. When the authority cannot
   be reached, Alice tries again after 1, 2 and 4 hours and then at most once a day.
 - **What you see.** The certificate's page shows **Revocation check** with the last result: not revoked, revoked by its
-  authority, suspended, unknown to the authority, could not check (with the reason, `ALC-CRT-0020` to `ALC-CRT-0025` in
+  authority, suspended, unknown to the authority, could not check (with the reason, `ALC-CRT-0020` to `ALC-CRT-0026` in
   [troubleshooting.md](troubleshooting.md)) or not checked yet.
 - **What a revocation does.** A revocation the authority signed marks the certificate revoked for good, as a revocation
   Alice asked for: Alice never deploys it again, a rollback never puts it back, and an issued certificate (ACME) with
   automatic renewal on is renewed at once. Alice e-mails the certificate's service recipients once (audit
   `certificate.revoked_by_authority`). Alice never starts a key compromise incident by itself: when the reason is
   `keyCompromise`, start one from the certificate's page. A leaf found by network discovery is only e-mailed, to the
-  services of the scopes that found it.
+  services of the scopes that found it, at most 20 such e-mails per run (the others are recorded and shown on the
+  results, not e-mailed).
 - **Suspensions.** A certificate the authority suspended (`certificateHold`) is shown and e-mailed once per suspension
   (audit `certificate.revocation_on_hold`) but not marked: the authority can lift a suspension.
 - **Unknown and unreachable answers** are shown and never acted on: no mark, no e-mail.

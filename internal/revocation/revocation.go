@@ -43,6 +43,9 @@ const (
 	CodeNoIssuer       = "certificate.revocation_no_issuer"
 	CodeNoAddress      = "certificate.revocation_no_address"
 	CodeTooLarge       = "certificate.revocation_too_large"
+	// CodeUntrustedIssuer: a leaf network discovery found whose chain reaches no trusted root and whose issuer is no
+	// inventory certificate is not checked (the caller decides it; final review I1, R64 ruling 42).
+	CodeUntrustedIssuer = "certificate.revocation_untrusted_issuer"
 )
 
 // Result is the outcome of one check.

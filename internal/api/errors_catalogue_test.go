@@ -908,6 +908,7 @@ func TestRevocationCheckCodeTable(t *testing.T) {
 		{ErrCertRevocationNoIssuer, revocation.CodeNoIssuer, http.StatusUnprocessableEntity},
 		{ErrCertRevocationNoAddress, revocation.CodeNoAddress, http.StatusUnprocessableEntity},
 		{ErrCertRevocationTooLarge, revocation.CodeTooLarge, http.StatusBadGateway},
+		{ErrCertRevocationUntrustedIssuer, revocation.CodeUntrustedIssuer, http.StatusUnprocessableEntity}, // final review I1
 	} {
 		assert.Equal(t, fmt.Sprintf("ALC-CRT-%04d", 20+i), row.ec.Code)
 		assert.Equal(t, row.reason, row.ec.Reason)

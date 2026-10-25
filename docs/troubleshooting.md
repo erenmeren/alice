@@ -2446,6 +2446,14 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **What to do.** Alice tries again by herself. A CRL this large is unusual: ask the authority whether it offers OCSP.
 
+## ALC-CRT-0026: The certificate's issuer is not trusted, so its revocation is not checked
+
+**Meaning.** Network discovery found this certificate, and the chain its server presented reaches no trusted root, nor is its issuer a certificate Alice holds. Anyone who runs a TLS server in a scanned range chooses such a certificate and the addresses it names, so Alice does not connect to them. (HTTP 422, reason `certificate.revocation_untrusted_issuer`; shown on the result of a revocation check, never answered by a route.)
+
+**Likely cause.** The server presents a self-signed certificate, one from a private authority Alice does not hold, or a chain without its intermediate.
+
+**What to do.** Nothing to do for a self-signed or private test certificate. For a company authority, upload its certificate to Alice, or have the server send the full chain to a root the Alice host trusts.
+
 ## ALC-DEP-0001: Deployment already in progress
 
 **Meaning.** Another deployment to this website is in progress. (HTTP 409, reason `deployment.in_progress`.)

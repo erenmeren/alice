@@ -5,9 +5,12 @@ package inventory_test
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,7 +259,7 @@ func TestRevocationRunHoldIsNotFinal(t *testing.T) {
 // scope's service is mailed and no certificate row changes.
 func TestRevocationRunChecksDiscoveredLeaves(t *testing.T) {
 	rf := &revFake{}
-	h := newHarness(t, withRevocation(t, rf))
+	h := newHarness(t, withRevocation(t, rf), withTrustedRevocationRoot(rf))
 	h.user("ada", rbac.Admin, "ada@example.com")
 	payments := h.newService("Payments")
 	h.owner(payments, "pia", "pia@example.com")
@@ -390,4 +393,110 @@ func TestIncidentAndRevocationWorkWithoutANotifier(t *testing.T) {
 	w.advance()
 	assert.Equal(t, inventory.IncidentNeedsAttention, w.incident(i.ID).State)
 	assert.Zero(t, f.h.count("SELECT count(*) FROM notifications_outbox"))
+}
+
+// withTrustedRevocationRoot makes the fake authority's root a trusted root (Config.Roots), as a public CA's root is in
+// the system pool. Listed after withRevocation, which creates the authority.
+func withTrustedRevocationRoot(rf *revFake) harnessOption {
+	return func(c *inventory.Config) {
+		pool := x509.NewCertPool()
+		pool.AddCert(rf.ca.Root)
+		c.Roots = pool
+	}
+}
+
+// discoveredLeaf stores a leaf network discovery found on 10.0.0.<n>:443 with its issuer in the presented chain.
+func (h *harness) discoveredLeaf(scope uuid.UUID, l pki.Leaf, issuer *x509.Certificate, issuerPEM []byte, cn string, n int) {
+	h.t.Helper()
+	for _, row := range []struct {
+		fp, pem, cn string
+		leaf        bool
+	}{{pki.Fingerprint(l.Cert), string(l.CertPEM), cn, true}, {pki.Fingerprint(issuer), string(issuerPEM), "issuer", false}} {
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO discovery_certificates (fingerprint_sha256, is_leaf, subject_cn, not_before, not_after, key_algorithm,
+    pem, first_seen, last_seen) VALUES ($1, $2, $3, $4, $5, 'ecdsa', $6, $4, $4) ON CONFLICT DO NOTHING`, row.fp, row.leaf, row.cn,
+			h.clock.Now().Add(-time.Hour), h.clock.Now().Add(30*24*time.Hour), row.pem)
+		require.NoError(h.t, err)
+	}
+	_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO discovery_endpoints (id, scope_id, address, port, fingerprint_sha256, chain_fingerprints, state, first_seen,
+    last_seen, last_scanned_at) VALUES ($1, $2, $3::inet, 443, $4, ARRAY[$5], 'present', now(), now(), now())`, uuid.New(), scope,
+		fmt.Sprintf("10.0.%d.%d", n/250, n%250+1), pki.Fingerprint(l.Cert), pki.Fingerprint(issuer))
+	require.NoError(h.t, err)
+}
+
+// Final review I1, ruling 42: a discovered leaf whose presented chain does not reach a trusted root (and whose issuer
+// is no inventory certificate) is not checked: no request goes to the address it names, and nothing is mailed.
+func TestRevocationRunSkipsDiscoveredLeavesOfUntrustedIssuers(t *testing.T) {
+	rf := &revFake{}
+	h := newHarness(t, withRevocation(t, rf)) // the fake authority's root is not trusted
+	h.user("ada", rbac.Admin, "ada@example.com")
+	scope, err := seed.DiscoveryScope(h.ctx, h.db.App, "LAN", false)
+	require.NoError(t, err)
+	l := rf.leaf(h, "lan.example.test", []string{revOCSP}, []string{revCRL})
+	h.discoveredLeaf(scope, l, rf.ca.Intermediate, rf.ca.IntermediatePEM, "lan.example.test", 1)
+	rf.fake.Revoke(l.Cert.SerialNumber, 1, h.clock.Now().Add(-time.Hour))
+	h.runRevocation()
+	r, ok := h.revocationRow(l)
+	require.True(t, ok)
+	assert.Equal(t, "not_checkable", r.Status)
+	assert.Equal(t, revocation.CodeUntrustedIssuer, r.Code)
+	assert.Zero(t, rf.fake.Requests("/ocsp")+rf.fake.Requests("/crl"), "no request to an address an untrusted certificate names")
+	assert.Zero(t, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered))
+
+	// An issuer Alice holds in her inventory (not one discovery found) is trusted without a root.
+	sum := sha256.Sum256(rf.ca.Intermediate.Raw)
+	_, err = h.db.Owner.Exec(h.ctx, `INSERT INTO certificates (id, fingerprint_sha256, not_before, not_after, key_algorithm, public_key_sha256,
+pem_chain, source, first_seen_at, last_seen_at, created_at, subject_cn, self_signed) VALUES ($1, $2, $3, $4, 'ecdsa', $5, $6, 'uploaded', now(), now(), now(),
+'issuer', false)`, uuid.New(), hex.EncodeToString(sum[:]), rf.ca.Intermediate.NotBefore, h.clock.Now().Add(-time.Minute), strings.Repeat("cd", 32),
+		string(rf.ca.IntermediatePEM))
+	require.NoError(t, err)
+	h.clock.Advance(8 * 24 * time.Hour)
+	h.runRevocation()
+	r, _ = h.revocationRow(l)
+	assert.Equal(t, "revoked", r.Status, "the issuer is an uploaded inventory certificate")
+}
+
+// Final review I1: at most 20 discovered-revocation mails per run (the rest recorded and counted); the name in a mail
+// is printable.
+func TestRevocationRunCapsDiscoveredMails(t *testing.T) {
+	rf := &revFake{}
+	h := newHarness(t, withRevocation(t, rf), withTrustedRevocationRoot(rf))
+	h.user("ada", rbac.Admin, "ada@example.com")
+	scope, err := seed.DiscoveryScope(h.ctx, h.db.App, "LAN", false)
+	require.NoError(t, err)
+	for n := range 25 {
+		l := rf.leaf(h, "lan.example.test", []string{revOCSP}, nil)
+		h.discoveredLeaf(scope, l, rf.ca.Intermediate, rf.ca.IntermediatePEM, "evil\x1b[31m\u202e"+strings.Repeat("x", n), n)
+		rf.fake.Revoke(l.Cert.SerialNumber, 1, h.clock.Now().Add(-time.Hour))
+	}
+	rep := h.runRevocation()
+	assert.Equal(t, 25, rep.Revoked)
+	assert.Equal(t, 5, rep.MailsSuppressed)
+	assert.Equal(t, 20, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered))
+	for _, p := range h.incidentMailParams(inventory.TemplateCertificateRevokedByAuthorityDiscovered) {
+		assert.True(t, strings.HasPrefix(p["certificate_name"], "evil?[31m?"), p["certificate_name"])
+	}
+}
+
+// Final review I2: two runs recording the same first result at once queue one mail set.
+func TestRevocationRunRecordsOnceUnderConcurrency(t *testing.T) {
+	rf := &revFake{}
+	h := newHarness(t, withRevocation(t, rf), withTrustedRevocationRoot(rf))
+	h.user("ada", rbac.Admin, "ada@example.com")
+	scope, err := seed.DiscoveryScope(h.ctx, h.db.App, "LAN", false)
+	require.NoError(t, err)
+	l := rf.leaf(h, "lan.example.test", []string{revOCSP}, nil)
+	h.discoveredLeaf(scope, l, rf.ca.Intermediate, rf.ca.IntermediatePEM, "lan.example.test", 1)
+	rf.fake.Revoke(l.Cert.SerialNumber, 1, h.clock.Now().Add(-time.Hour))
+	require.NoError(t, h.lic.Tick(h.ctx))
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := h.svc.RunRevocationChecks(h.ctx)
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 1, h.emails(inventory.TemplateCertificateRevokedByAuthorityDiscovered), "one Administrator, one e-mail")
 }

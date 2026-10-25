@@ -1262,6 +1262,11 @@
         "title": "Sertifika yetkilisinin iptal yanıtı çok büyük.",
         "cause": "OCSP yanıtı 64 KiB'tan ya da CRL 10 MiB'tan büyüktü; bu Alice'in okuduğundan fazla.",
         "action": "Alice kendisi yeniden dener. Bu kadar büyük bir CRL olağan değildir: yetkiliye OCSP sunup sunmadığını sorun."
+      },
+      "revocation_untrusted_issuer": {
+        "title": "Sertifikayı verene güvenilmiyor, bu yüzden iptali denetlenmiyor.",
+        "cause": "Bu sertifikayı ağ keşfi buldu ve sunucusunun sunduğu zincir güvenilen bir köke ulaşmıyor; vereni de Alice'in elindeki bir sertifika değil. Taranan bir aralıkta TLS sunucusu çalıştıran herkes böyle bir sertifikayı ve adlandırdığı adresleri seçebilir; bu yüzden Alice onlara bağlanmaz.",
+        "action": "Kendinden imzalı ya da özel bir deneme sertifikası için yapılacak bir şey yok. Bir şirket yetkilisi için onun sertifikasını Alice'e yükleyin ya da sunucunun, Alice sunucusunun güvendiği bir köke kadar tüm zinciri göndermesini sağlayın."
       }
     },
     "csr": {

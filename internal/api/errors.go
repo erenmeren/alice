@@ -341,6 +341,8 @@ var (
 	ErrCertRevocationNoIssuer       = ErrorCode{Code: "ALC-CRT-0023", Reason: "certificate.revocation_no_issuer", Status: http.StatusUnprocessableEntity}
 	ErrCertRevocationNoAddress      = ErrorCode{Code: "ALC-CRT-0024", Reason: "certificate.revocation_no_address", Status: http.StatusUnprocessableEntity}
 	ErrCertRevocationTooLarge       = ErrorCode{Code: "ALC-CRT-0025", Reason: "certificate.revocation_too_large", Status: http.StatusBadGateway}
+	// A leaf network discovery found whose chain reaches no trusted root (final review I1, R64 ruling 42).
+	ErrCertRevocationUntrustedIssuer = ErrorCode{Code: "ALC-CRT-0026", Reason: "certificate.revocation_untrusted_issuer", Status: http.StatusUnprocessableEntity}
 
 	ErrDeployInProgress           = ErrorCode{Code: "ALC-DEP-0001", Reason: "deployment.in_progress", Status: http.StatusConflict, Retryable: true}
 	ErrDeployRecoveryPending      = ErrorCode{Code: "ALC-DEP-0002", Reason: "deployment.recovery_pending", Status: http.StatusConflict, Retryable: true}
@@ -659,7 +661,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
 		ErrCertRevoked, ErrCertCompromised,
 		ErrCertRevocationUnreachable, ErrCertRevocationInvalidAnswer, ErrCertRevocationAddressRefused, ErrCertRevocationNoIssuer,
-		ErrCertRevocationNoAddress, ErrCertRevocationTooLarge,
+		ErrCertRevocationNoAddress, ErrCertRevocationTooLarge, ErrCertRevocationUntrustedIssuer,
 		ErrDeployInProgress, ErrDeployRecoveryPending, ErrDeployVerifyFailed, ErrDeployVerifyOther, ErrDeployVerifyUnreachable,
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
