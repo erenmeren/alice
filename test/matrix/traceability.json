@@ -2879,7 +2879,8 @@
   "status": "test",
   "tests": [
    "internal/providers/httpcheck:TestCheckTimeouts",
-   "internal/providers/httpcheck:TestCheckMalformedResponse"
+   "internal/providers/httpcheck:TestCheckMalformedResponse",
+   "internal/providers/httpcheck:TestReadBody"
   ]
  },
  {
@@ -3036,7 +3037,8 @@
    "web/src/pages/AcmeCertificatePage.test.tsx:says a canary goes first and sends the override when \"Deploy to all at once\" is chosen (R65)",
    "web/src/components/DeploymentView.test.tsx:holding (R65): in place and under observation, never \"live\" and never a failure",
    "web/src/pages/DeploymentsPage.test.tsx:marks a canary deployment with its wave and a held one as under observation (R65)",
-   "web/src/pages/DeploymentDetailPage.test.tsx:shows the observation, the round summary and the rollout panel"
+   "web/src/pages/DeploymentDetailPage.test.tsx:shows the observation, the round summary and the rollout panel",
+   "web/src/components/RolloutPanel.test.tsx:names every skip reason of wave 2 in words, in both languages, and shows an unknown one as it is"
   ]
  },
  {

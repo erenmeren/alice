@@ -253,6 +253,13 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   the read and report a clean end of the body. `httpcheck` now answers `canary.timeout` whenever its context ended,
   whatever the copy returned. Cost if wrong: none (a check that outlived its timeout never passed).
 
+- **Second re-review minors.** (1) The timeout branch of the body read is a function, `readBody`, pinned by a
+  deterministic reader that ends cleanly only after the deadline (`TestReadBody`; httpcheck 97.9 %). (2) The rollout panel
+  names every skip reason `insertWave2Location` can give (`location_not_found`, `in_progress`, `location_unsupported`,
+  `target_disabled`, `target_not_ready`, `config_invalid`, `rescan_needed`, `key_type_mismatch`, `service.untrusted`,
+  `recovery_pending`) in EN and TR (`canary.skipReason.*`, dots as underscores) and shows an unknown code as it is. Cost if
+  wrong: a new skip reason shows its code until a text is added.
+
 ## Gate evidence (Task 14)
 
 After the merge of `main` at `07c55ec8` (R66), at `bd1e7618`: `make ci E2E_PROJECT=alice-e2e-canary ALICE_E2E_PORT=9979`
