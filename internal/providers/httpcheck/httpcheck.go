@@ -175,14 +175,7 @@ func (c HTTPChecker) check(ctx context.Context, r Request) Result {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	res.HTTPStatus = resp.StatusCode
-	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, MaxBodyBytes)); err != nil {
-		res.Reason = classify(ctx, err, true)
-		return res
-	}
-	if ctx.Err() != nil {
-		// The deadline ended the body: the transport may close the connection under the read and report a clean end of
-		// the body (seen on CI with a slow-loris server); a check that outlived its timeout is a timeout either way.
-		res.Reason = ReasonTimeout
+	if res.Reason = readBody(ctx, resp.Body); res.Reason != "" {
 		return res
 	}
 	expect := r.ExpectStatus
@@ -195,6 +188,19 @@ func (c HTTPChecker) check(ctx context.Context, r Request) Result {
 	}
 	res.OK = true
 	return res
+}
+
+// readBody reads at most MaxBodyBytes of the body and discards it; it answers the failure's reason ("" for none). A
+// deadline that ended the body is a timeout even when the read reports a clean end: the transport may close the
+// connection under the read (seen on CI with a slow-loris server); a check that outlived its timeout never passes.
+func readBody(ctx context.Context, body io.Reader) string {
+	if _, err := io.Copy(io.Discard, io.LimitReader(body, MaxBodyBytes)); err != nil {
+		return classify(ctx, err, true)
+	}
+	if ctx.Err() != nil {
+		return ReasonTimeout
+	}
+	return ""
 }
 
 // newRequest builds the GET: the target exactly as given, Host the server name (or the address), no credentials.
