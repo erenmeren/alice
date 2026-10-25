@@ -9329,7 +9329,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         state: { $ref: "#/components/schemas/RolloutState" }
-        reason: { type: string, description: 'canary.check_failed, canary.check_unavailable, canary.wave1_failed, canary.certificate_revoked, canary.aborted, canary.wave_gone, canary.preempted_by_incident, license.locked, lock_due, unverified, or ""' }
+        reason: { type: string, description: 'canary.check_failed, canary.check_unavailable, canary.wave1_failed, canary.certificate_revoked, canary.aborted, canary.wave_gone, canary.wave1_incomplete, canary.preempted_by_incident, license.locked, lock_due, unverified, or ""' }
         reason_params: { type: object, additionalProperties: { type: string } }
         origin: { type: string, enum: [manual, acme, key_vault] }
         certificate:

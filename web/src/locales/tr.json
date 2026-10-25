@@ -5110,6 +5110,7 @@
       "canary_certificate_revoked": "Sertifika iptal edildi ya da anahtarı ele geçirilmiş olarak işaretlendi; ilk dalga geri alındı.",
       "canary_aborted": "Bir kişi kanarya dağıtımını durdurdu; ilk dalga geri alındı.",
       "canary_wave_gone": "İlk dalgadaki bütün web siteleri kaldırıldı.",
+      "canary_wave1_incomplete": "İlk dalgadaki web sitelerinin hepsine bir saat içinde dağıtılamadı; ilk dalga geri alındı.",
       "canary_preempted_by_incident": "Bir anahtar ele geçirme olayı kanarya dağıtımını sona erdirdi; ilk dalga sertifikayı korur.",
       "license_locked": "Lisans şu anda değişikliğe izin vermiyor: ilk dalga sertifikayı korur, kalanlara dağıtılmadı.",
       "lock_due": "Lisans bir saat boyunca doğrulanamadı: ilk dalga sertifikayı korur, kalanlara dağıtılmadı.",

@@ -5110,6 +5110,7 @@
       "canary_certificate_revoked": "The certificate was revoked or its key marked compromised, so the first wave was put back.",
       "canary_aborted": "A person stopped the canary deployment; the first wave was put back.",
       "canary_wave_gone": "Every first-wave website went away.",
+      "canary_wave1_incomplete": "Not every first-wave website could be deployed within an hour, so the first wave was put back.",
       "canary_preempted_by_incident": "A key-compromise incident ended the canary deployment; the first wave keeps the certificate.",
       "license_locked": "The licence does not allow changes now: the first wave keeps the certificate, the rest was not deployed.",
       "lock_due": "The licence could not be confirmed for an hour: the first wave keeps the certificate, the rest was not deployed.",

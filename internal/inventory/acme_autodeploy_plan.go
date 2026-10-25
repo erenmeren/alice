@@ -52,6 +52,7 @@ type acmeDeployment struct {
 	certificate uuid.UUID
 	automatic   bool // trigger acme_renewal
 	done        bool
+	holding     bool // a wave-1 deployment under its canary's observation (R65): waiting, not working
 	status      string
 	errorCode   string
 	createdAt   time.Time
@@ -157,7 +158,7 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	for _, d := range sn.deployments {
 		if !d.done {
 			busy[d.location] = true
-			if d.automatic {
+			if d.automatic && !d.holding { // final review C1: a hold uses no budget, or a wave 1 over 5 never completes
 				inFlight++
 			}
 		}

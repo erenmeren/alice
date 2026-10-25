@@ -190,6 +190,22 @@ No number of the design or the plan changed.
 - **Task 12. A journey runs the advance once right after wave 1 holds**: the rollout starts its observation only on an
   advance (the e2e build never ticks the task). Cost if wrong: none.
 
+## Final review fixes (R65)
+
+Independent review of `917c568a` ("fix first"); each finding was fixed test first, one commit each.
+
+- **C1. An automatic wave 1 larger than the planner's wave of 5, or with a website that stops being a candidate, no
+  longer holds forever.** (a) Both planners count a holding deployment as busy for its website but not as in flight
+  against `AutoDeployWave`: a hold is waiting, not working (`TestPlannersDeployAWaveOneLargerThanTheirWave`). (b) A
+  rollout still in `wave1` whose wave-1 website has no deployment `CanaryWave1Limit` (1 hour) after its creation fails
+  with `canary.wave1_incomplete` (ALC-DEP-0033, cause `wave1_incomplete`) and reverts its holds
+  (`TestDecideRolloutFailsAWaveOneThatNeverCompletes`, `TestAWaveOneWebsiteThatStopsBeingACandidateFailsTheRollout`).
+  Why: an age limit is one rule for every way a website can drop out (automatic deployment switched off, binding removed,
+  a person deployed it, a lasting refusal), and it applies only while a website has no deployment, so a slow but
+  started deployment is not cut short; a manual rollout inserts every wave-1 deployment at once and never meets it. Cost
+  if wrong: an automatic first wave whose planner is slowed for more than an hour (a very large global batch) is put back
+  and retried at the next renewal; the holds of a planner's wave count against no limit (at most 19).
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.

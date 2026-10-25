@@ -26,6 +26,9 @@ import (
 
 // Bounds of the advance (design §14, §18).
 const (
+	// CanaryWave1Limit is how long a rollout may stay in wave 1 while a wave-1 website has no deployment yet (an
+	// automatic rollout's planner creates them over several runs) before it fails (final review C1).
+	CanaryWave1Limit = time.Hour
 	// CanaryGateWait is how long a person's rollout waits for a transient licence answer before it stops (decision 16).
 	CanaryGateWait = time.Hour
 	// rolloutBatch bounds the rollouts one advance handles.
@@ -48,6 +51,7 @@ const (
 	RolloutReasonRevoked          = "canary.certificate_revoked"
 	RolloutReasonAborted          = "canary.aborted"
 	RolloutReasonWaveGone         = "canary.wave_gone"
+	RolloutReasonWave1Incomplete  = "canary.wave1_incomplete"
 	RolloutReasonPreempted        = "canary.preempted_by_incident"
 	RolloutReasonLicenseLocked    = "license.locked"
 )
@@ -126,6 +130,8 @@ func waveFailedCause(rolloutReason string) string {
 		return "certificate_revoked"
 	case RolloutReasonWaveGone:
 		return "wave_gone"
+	case RolloutReasonWave1Incomplete:
+		return "wave1_incomplete"
 	}
 	return ""
 }
@@ -227,10 +233,11 @@ func decideRollout(sn rolloutSnapshot) rolloutPlan {
 	}
 	var live []rolloutDeployment
 	settled := true // every live wave-1 location has a deployment that holds or ended as a success
+	missing := false
 	for _, loc := range r.Wave1 {
 		d, ok := byLocation[loc]
 		if !ok {
-			settled = false
+			settled, missing = false, true
 			continue
 		}
 		if d.gone() {
@@ -261,6 +268,11 @@ func decideRollout(sn rolloutSnapshot) rolloutPlan {
 			}
 			return fail(RolloutReasonCheckFailed, params)
 		}
+	}
+	if r.State == RolloutWave1 && missing && !sn.now.Before(r.CreatedAt.Add(CanaryWave1Limit)) {
+		// Final review C1: a wave-1 website that never got a deployment (a planner stopped offering it, or its budget
+		// ran out) must not keep the others holding forever.
+		return fail(RolloutReasonWave1Incomplete, nil)
 	}
 	holdStarted, holdUntil := r.HoldStartedAt, r.HoldUntil
 	if r.State == RolloutWave1 && settled {

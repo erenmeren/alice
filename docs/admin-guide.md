@@ -1816,7 +1816,8 @@ deployment would be (a website refused then is named on the rollout). When a web
 row, or a first-wave deployment fails, Alice puts every first-wave website back to its previous certificate (the same
 restore as a rollback, with the same check that never puts a revoked or compromised certificate back) and deploys
 nothing to the others. A check that cannot run never counts as passed: if no check passes until a little after the hold
-(twice the interval, at least 5 minutes), the first wave is put back too.
+(twice the interval, at least 5 minutes), the first wave is put back too, and so it is when a first-wave website still has
+no deployment an hour after the canary began (an automatic deployment that stopped offering it).
 
 **When there is no canary.** A deployment to one website, a key-compromise replacement, a deployment where a person
 chose **Deploy to all at once**, and a deployment where a destination's current certificate ends within the hold plus

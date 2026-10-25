@@ -617,7 +617,8 @@ WHERE l.binding_id = $1 ORDER BY l.id`, binding)
 		return fmt.Errorf("inventory: read the websites: %w", err)
 	}
 
-	rows, err = tx.Query(ctx, `SELECT d.location_id, d.kv_version_id, d.trigger = 'kv_renewal', d.state = 'done', d.status, d.error_code, d.created_at, d.finished_at
+	rows, err = tx.Query(ctx, `SELECT d.location_id, d.kv_version_id, d.trigger = 'kv_renewal', d.state = 'done', d.state = 'holding', d.status, d.error_code,
+    d.created_at, d.finished_at
 FROM deployments d
 WHERE (d.binding_id = $1 AND (d.kv_version_id = ANY($2) OR d.state <> 'done')) OR (d.state <> 'done' AND d.location_id = ANY($3))
 ORDER BY d.created_at, d.id`, binding, versionIDs, locIDs)
@@ -627,7 +628,7 @@ ORDER BY d.created_at, d.id`, binding, versionIDs, locIDs)
 	defer rows.Close()
 	for rows.Next() {
 		var d planDeployment
-		if err := rows.Scan(&d.location, &d.version, &d.automatic, &d.done, &d.status, &d.errorCode, &d.createdAt, &d.finishedAt); err != nil {
+		if err := rows.Scan(&d.location, &d.version, &d.automatic, &d.done, &d.holding, &d.status, &d.errorCode, &d.createdAt, &d.finishedAt); err != nil {
 			return fmt.Errorf("inventory: read a deployment: %w", err)
 		}
 		d.createdAt, d.finishedAt = d.createdAt.UTC(), utcPtr(d.finishedAt)

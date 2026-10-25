@@ -134,3 +134,38 @@ func TestPlanCanaryKV(t *testing.T) {
 	p = planAutoDeploy(f.sn)
 	assert.Empty(t, p.deploy, "a wave-1 failure is not retried")
 }
+
+// Final review C1 (R65): a wave 1 larger than the planner's wave of 5. The first run deploys five; they hold; a hold is
+// waiting, not working, so the next run's budget is not used up by them and the rest of wave 1 is deployed.
+func TestPlannersDeployAWaveOneLargerThanTheirWave(t *testing.T) {
+	f := newACMEPlanFixture()
+	old := uuid.New()
+	for range 5 {
+		f.sn.bindings = append(f.sn.bindings, acmeDeployBinding{location: uuid.New(), autoDeploy: true, createdAt: planNow.Add(-10 * 24 * time.Hour),
+			served: &old})
+	}
+	slices.SortFunc(f.sn.bindings, func(x, y acmeDeployBinding) int { return compareUUID(x.location, y.location) })
+	var all []uuid.UUID
+	for _, b := range f.sn.bindings {
+		all = append(all, b.location)
+	}
+	f.sn.canary = canaryState(&Rollout{State: RolloutWave1, Wave1: all, Wave2: nil})
+	for _, l := range all[:5] {
+		f.sn.deployments = append(f.sn.deployments, acmeDeployment{location: l, certificate: f.cur, automatic: true, status: DeployStatusRunning,
+			holding: true, createdAt: planNow.Add(-time.Minute)})
+	}
+	p := planACMEAutoDeploy(f.sn)
+	assert.Equal(t, AutoDeployWave, p.budget, "the five holds use no budget")
+	assert.Equal(t, all[5:], p.deploy)
+
+	k := newPlanFixture()
+	order := sortedIDs(k.a, k.b, k.c)
+	k.sn.canary = canaryState(&Rollout{State: RolloutWave1, Wave1: order, Wave2: nil})
+	for range AutoDeployWave {
+		k.sn.deployments = append(k.sn.deployments, planDeployment{location: uuid.New(), automatic: true, status: DeployStatusRunning, holding: true,
+			createdAt: planNow.Add(-time.Minute)})
+	}
+	q := planAutoDeploy(k.sn)
+	assert.Equal(t, AutoDeployWave, q.budget, "holds use no budget in the Key Vault planner either")
+	assert.NotEmpty(t, q.deploy)
+}

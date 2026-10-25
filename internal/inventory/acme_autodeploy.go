@@ -316,14 +316,15 @@ WHERE b.acme_certificate_id = $1 ORDER BY b.location_id`, id, sn.service)
 	for _, b := range sn.bindings {
 		locs = append(locs, b.location)
 	}
-	rows, err = tx.Query(ctx, `SELECT d.location_id, d.certificate_id, d.trigger = $3, d.state = 'done', d.status, d.error_code, d.created_at, d.finished_at
+	rows, err = tx.Query(ctx, `SELECT d.location_id, d.certificate_id, d.trigger = $3, d.state = 'done', d.state = 'holding', d.status, d.error_code,
+    d.created_at, d.finished_at
 FROM deployments d WHERE d.location_id = ANY($1) AND (d.state <> 'done' OR d.certificate_id = $2) ORDER BY d.created_at, d.id`, locs, c.id, TriggerACMERenewal)
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the deployments: %w", err)
 	}
 	sn.deployments, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (acmeDeployment, error) {
 		var d acmeDeployment
-		err := r.Scan(&d.location, &d.certificate, &d.automatic, &d.done, &d.status, &d.errorCode, &d.createdAt, &d.finishedAt)
+		err := r.Scan(&d.location, &d.certificate, &d.automatic, &d.done, &d.holding, &d.status, &d.errorCode, &d.createdAt, &d.finishedAt)
 		d.createdAt, d.finishedAt = d.createdAt.UTC(), utcPtr(d.finishedAt)
 		return d, err
 	})

@@ -10,7 +10,7 @@ import (
 	"alice/internal/authz"
 )
 
-// advanceWorld is a rollout with three wave-1 and two wave-2 locations, created an hour ago, interval 30 s, hold 10 min,
+// advanceWorld is a rollout with three wave-1 and two wave-2 locations, created 30 minutes ago, interval 30 s, hold 10 min,
 // failures 2.
 type advanceWorld struct {
 	now          time.Time
@@ -41,7 +41,8 @@ func newAdvanceWorld() advanceWorld {
 
 func (w advanceWorld) rollout(state, origin string) Rollout {
 	r := Rollout{ID: uuid.New(), State: state, Origin: origin, Wave1: w.w1[:], Wave2: w.w2[:], ReasonParams: map[string]string{},
-		Settings: authz.CanarySettings{Count: 3, Hold: w.settingsHold, Interval: 30 * time.Second, Timeout: 5 * time.Second, Failures: 2}}
+		CreatedAt: w.now.Add(-30 * time.Minute),
+		Settings:  authz.CanarySettings{Count: 3, Hold: w.settingsHold, Interval: 30 * time.Second, Timeout: 5 * time.Second, Failures: 2}}
 	if state != RolloutWave1 {
 		r.HoldStartedAt, r.HoldUntil = &w.holdStarted, &w.holdUntil
 	}
@@ -233,4 +234,28 @@ func TestDecideRolloutReleasesEarlyBeforeAWaveTwoCertificateExpires(t *testing.T
 func TestCanaryGrace(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, canaryGrace(30*time.Second))
 	assert.Equal(t, 20*time.Minute, canaryGrace(10*time.Minute))
+}
+
+// Final review C1 (R65): a wave-1 website that never gets a deployment (a planner stopped offering it) must not keep the
+// others holding forever: once the rollout is older than CanaryWave1Limit, it fails and reverts the holds.
+func TestDecideRolloutFailsAWaveOneThatNeverCompletes(t *testing.T) {
+	w := newAdvanceWorld()
+	pass := func(i int) rolloutDeployment { return w.holding(i, "pass", 10*time.Second, 0) }
+	r := w.rollout(RolloutWave1, RolloutOriginACME)
+	r.CreatedAt = w.now.Add(-CanaryWave1Limit + time.Minute)
+	got := decideRollout(rolloutSnapshot{r: r, now: w.now, deployments: []rolloutDeployment{pass(0), pass(1)}})
+	assert.Equal(t, RolloutWave1, got.next, "younger than the limit: it waits")
+	assert.Empty(t, got.revert)
+
+	r.CreatedAt = w.now.Add(-CanaryWave1Limit)
+	got = decideRollout(rolloutSnapshot{r: r, now: w.now, deployments: []rolloutDeployment{pass(0), pass(1)}})
+	assert.Equal(t, RolloutFailed, got.next)
+	assert.Equal(t, RolloutReasonWave1Incomplete, got.reason)
+	assert.Equal(t, "wave1_incomplete", got.reasonParams["cause"])
+	assert.Equal(t, map[uuid.UUID]string{w.dep[0]: ReasonCanaryWaveFailed, w.dep[1]: ReasonCanaryWaveFailed}, got.revert)
+
+	// Every wave-1 website has a deployment (one still sending): the limit does not apply.
+	got = decideRollout(rolloutSnapshot{r: r, now: w.now, deployments: []rolloutDeployment{pass(0), pass(1),
+		w.dep1(2, DeployStateDeploying, DeployStatusRunning, "")}})
+	assert.Equal(t, RolloutWave1, got.next)
 }

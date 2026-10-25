@@ -2747,7 +2747,7 @@ The usual reason is that the website does not send the file Alice wrote: another
 
 **Meaning.** This website was in wave 1 of a canary deployment that failed for a reason other than its own checks: another wave-1 deployment failed, the checks could not run until the hold and its grace had passed, the new certificate was revoked or its key marked compromised, or every wave-1 website went away. Alice rolled this website back to its previous certificate; `params.cause` names the reason. (HTTP 409, reason `deployment.canary_wave_failed`.)
 
-**Likely cause.** See `cause`: `deployment_failed` (another wave-1 website failed: its own deployment says why), `check_unavailable` (Alice could not reach the servers to observe them: an unknown result never counts as a pass), `certificate_revoked`, `wave_gone`.
+**Likely cause.** See `cause`: `deployment_failed` (another wave-1 website failed: its own deployment says why), `check_unavailable` (Alice could not reach the servers to observe them: an unknown result never counts as a pass), `certificate_revoked`, `wave_gone`, `wave1_incomplete` (a first-wave website still had no deployment an hour after the canary began, for example because automatic deployment was switched off there).
 
 **What to do.** Fix the cause shown on the canary panel, then deploy again.
 

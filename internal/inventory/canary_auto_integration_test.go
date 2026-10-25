@@ -178,3 +178,42 @@ func TestFailedPersonsRolloutStopsTheAutomaticDeployment(t *testing.T) {
 	assert.Equal(t, ver(5), stopped)
 	assert.Zero(t, f.plan())
 }
+
+// Final review C1 (R65): a wave-1 website that stops being a planner candidate after its rollout was created (here its
+// automatic deployment is switched off before it got a deployment) fails the rollout after CanaryWave1Limit, and the
+// held website is put back instead of holding forever.
+func TestAWaveOneWebsiteThatStopsBeingACandidateFailsTheRollout(t *testing.T) {
+	w := newACMEDeployWorld(t)
+	w.h.setPolicy(w.h.defaultService(), `{"schema":1,"canary":{"enabled":true,"subset":{"count":2},"hold":"10m","interval":"30s"}}`)
+	c, cur := w.issued("www.example.test")
+	w.bind(c, true, w.loc1, w.loc2, w.loc3onTarget2)
+	require.Equal(t, 2, w.plan().Created)
+	deps := w.deps(cur)
+	require.Len(t, deps, 2)
+	r := w.h.rolloutOf(deps[0].ID)
+	require.Len(t, r.Wave1, 2)
+	// The second wave-1 website never gets its deployment: its row goes and its automatic deployment is switched off.
+	_, err := w.h.db.Owner.Exec(w.h.ctx, "DELETE FROM jobs WHERE id = (SELECT job_id FROM deployments WHERE id = $1)", deps[1].ID)
+	require.NoError(t, err)
+	_, err = w.h.db.Owner.Exec(w.h.ctx, "DELETE FROM deployments WHERE id = $1", deps[1].ID)
+	require.NoError(t, err)
+	_, err = w.h.db.Owner.Exec(w.h.ctx, "UPDATE acme_bindings SET auto_deploy = false WHERE acme_certificate_id = $1 AND location_id = $2", c.ID,
+		deps[1].Location)
+	require.NoError(t, err)
+	w.start(deps[0].ID)
+	require.NoError(t, w.succeed(deps[0].ID, stringOf('e', 64)))
+	assert.Zero(t, w.plan().Created, "the website is no candidate any more")
+
+	_, err = w.h.svc.AdvanceRollouts(w.h.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.RolloutWave1, w.h.rolloutOf(deps[0].ID).State, "younger than the limit: it waits")
+	w.h.clock.Advance(inventory.CanaryWave1Limit)
+	_, err = w.h.svc.AdvanceRollouts(w.h.ctx)
+	require.NoError(t, err)
+	got := w.h.rolloutOf(deps[0].ID)
+	assert.Equal(t, inventory.RolloutFailed, got.State)
+	assert.Equal(t, inventory.RolloutReasonWave1Incomplete, got.Reason)
+	d := w.deployFixture.get(deps[0].ID)
+	assert.Equal(t, inventory.DeployStateRecovering, d.State, "the hold is put back")
+	assert.Equal(t, inventory.ReasonCanaryWaveFailed, d.RevertReason)
+}
