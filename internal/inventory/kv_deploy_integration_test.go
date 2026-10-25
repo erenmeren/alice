@@ -182,6 +182,8 @@ func TestRequestKVDeployment(t *testing.T) {
 	// Location refusals are Phase 4's (target not ready, key type).
 	b.setTargetStatus(b.target1, "auth_failed")
 	refused("a server that is not connected", inventory.ErrTargetNotReady, "target_not_ready", b.admin, v1, b.loc1)
+	b.setTargetStatus(b.target1, inventory.StatusDisabled) // FX-01 (R66 ruling 2)
+	refused("a disabled server", inventory.ErrTargetDisabled, "target_disabled", b.admin, v1, b.loc1)
 	b.setTargetStatus(b.target1, "ok")
 	b.exec("UPDATE certificate_locations SET key_type = 'rsa' WHERE id = $1", b.loc1)
 	_, err = request(b.admin, v1, b.loc1)

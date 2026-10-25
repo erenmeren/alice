@@ -787,6 +787,12 @@ func TestACMEAutoDeploySkipsWhatIsNotReady(t *testing.T) {
 	w.setTargetStatus(w.target2, inventory.StatusAuthFailed)
 	assert.Equal(t, 1, w.plan().Created)
 	assert.Equal(t, []uuid.UUID{w.loc1}, locationsOf(w.deps(cur)))
+	// FX-01 (R66 ruling 3): a disabled server is skipped as silently as one that is not ready: no deployment, no
+	// denial audit (loc1's deployment from the step above is still running).
+	w.setTargetStatus(w.target2, inventory.StatusDisabled)
+	assert.Zero(t, w.plan().Created)
+	assert.Equal(t, []uuid.UUID{w.loc1}, locationsOf(w.deps(cur)))
+	assert.Zero(t, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.denied'"))
 	w.setTargetStatus(w.target2, inventory.StatusOK)
 
 	// A person's deployment of loc2 appears between the checks and the insert: the savepoint keeps the run going.

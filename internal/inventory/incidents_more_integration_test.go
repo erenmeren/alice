@@ -357,11 +357,12 @@ func TestACMEIncidentOfARevokedVersionAndItsPlaces(t *testing.T) {
 	assert.Equal(t, inventory.IncidentRevocationRevoked, d["revocation"])
 }
 
-// A place on a disabled server (HB-01, R64 ruling 23): RequestDeployment refuses a disabled server as not ready (F-31),
-// before any key-change rule, so the incident waits for it like a busy place and fails it busy after its last attempt;
-// it never stores internal.unexpected. ErrTargetDisabled itself does not reach the incident engine on this path; its
-// code (target.disabled) is locked against the API catalogue by internal/api:TestIncidentRefusalCodesMatchTheCatalogue.
-func TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy(t *testing.T) {
+// A place on a disabled server (HB-01, FX-02; R66 ruling 2 and 4): RequestDeployment refuses a disabled server as
+// disabled (checkDeployLocation), so the place fails at once with target.disabled instead of waiting like a busy place:
+// a disabled server needs a person, not time. The places of other servers go ahead, and a retry after the server is
+// enabled again requests the place anew. The code is locked against the API catalogue by
+// internal/api:TestIncidentRefusalCodesMatchTheCatalogue.
+func TestIncidentPlaceOnADisabledServerFailsAtOnce(t *testing.T) {
 	f := newDeployFixture(t)
 	h := f.h
 	h.installLicense("LIC-INCIDENT-DISABLED", 5, 365)
@@ -377,16 +378,24 @@ func TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy(t *testing.T) {
 	require.NoError(t, err)
 	w.advance()
 	i = w.incident(i.ID)
-	assert.Equal(t, "pending", locationStatus(i)[f.loc2], "a disabled server's place waits")
-	assert.Positive(t, incidentLocation(t, i, f.loc2).Attempts)
+	assert.Equal(t, "failed:target.disabled", locationStatus(i)[f.loc2], "a disabled server's place fails at once")
+	assert.Equal(t, 1, incidentLocation(t, i, f.loc2).Attempts)
 	assert.Equal(t, "deploying", locationStatus(i)[f.loc1], "the places of an enabled server go ahead")
 
-	_, err = h.db.Owner.Exec(h.ctx, `UPDATE certificate_incident_locations SET attempts = 29 WHERE incident_id = $1
-AND location_id IN (SELECT id FROM certificate_locations WHERE target_id = $2)`, i.ID, f.target2)
-	require.NoError(t, err)
+	// The other places end; the incident needs a person, who enables the server and retries.
+	for loc, st := range locationStatus(i) {
+		if st == "deploying" {
+			w.finish(*incidentLocation(t, i, loc).DeploymentID, inventory.DeployStatusSucceeded, "")
+		}
+	}
 	w.advance()
 	i = w.incident(i.ID)
-	assert.Equal(t, "failed:"+inventory.IncidentCodeLocationBusy, locationStatus(i)[f.loc2])
+	require.Equal(t, inventory.IncidentNeedsAttention, i.State)
+	f.setTargetStatus(f.target2, inventory.StatusOK)
+	_, err = h.svc.RetryIncident(h.ctx, f.admin, i.ID)
+	require.NoError(t, err)
+	w.advance()
+	assert.Equal(t, "deploying", locationStatus(w.incident(i.ID))[f.loc2], "a retry after enabling deploys the place")
 }
 
 // D2 (HB-05, R64): the incident list pages newest first without a repeat or a gap, filters by state and open, and a

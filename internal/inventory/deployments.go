@@ -361,7 +361,8 @@ func (l *deployLocation) deployableDest() []any {
 
 // targetReady are the statuses a deployment may be requested in: connected, or reachable again
 // by the job's own retries (unreachable), or being re-tested (checking). A server that needs a
-// person (pending or changed host key, failed sign-in) or is disabled is refused (F-31).
+// person (pending or changed host key, failed sign-in) is refused (F-31); a disabled server is
+// refused before this rule by its own, as ErrTargetDisabled (R66).
 var targetReady = []string{StatusOK, StatusUnreachable, StatusChecking}
 
 // RequestDeployment validates and queues one deployment per location (spec §12.6): all or
@@ -372,7 +373,7 @@ var targetReady = []string{StatusOK, StatusUnreachable, StatusChecking}
 // location, after locking the targets (id order) and the locations (id order) as discovery does:
 // ErrNotFound (unknown, or its server deleted); ErrLocationUnsupported (missing at the last scan,
 // unsupported, a path the helper cannot take, or not on a server whose provider deploys);
-// ErrTargetNotReady; ErrNginxConfigInvalid; *KeyTypeMismatchError; ErrRecoveryPending (a
+// ErrTargetDisabled (R66); ErrTargetNotReady; ErrNginxConfigInvalid; *KeyTypeMismatchError; ErrRecoveryPending (a
 // deployment on the server is being recovered); ErrDeploymentInProgress (F-15; the unique index
 // deployments_one_active decides between concurrent requests). A refusal decided for one location
 // (and an unknown location) is a *LocationRefusalError naming it. Each refusal is audited
@@ -548,6 +549,10 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 		return "location_unsupported", ErrLocationUnsupported
 	case !s.canDeploy(t.Type):
 		return "location_unsupported", ErrLocationUnsupported
+	case t.Status == StatusDisabled:
+		// A disabled server is refused as disabled on every deploy path (R66): ALC-TGT-0006 on the manual routes,
+		// target.disabled for an incident place, a silent skip in the planners, as the deploy job records at send time.
+		return "target_disabled", ErrTargetDisabled
 	case !slices.Contains(targetReady, t.Status):
 		return "target_not_ready", ErrTargetNotReady
 	case l.kind.IsFile() && (t.Facts.WebServer == nil || !t.Facts.WebServer.ConfigValid):

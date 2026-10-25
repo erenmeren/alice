@@ -1344,7 +1344,7 @@
       },
       "target_not_ready": {
         "title": "Alice cannot deploy to this server now.",
-        "cause": "The server is not connected: its host key fingerprint is not confirmed or has changed, Alice cannot sign in, or the server is disabled.",
+        "cause": "The server is not connected: its host key fingerprint is not confirmed or has changed, or Alice cannot sign in.",
         "action": "Open the server's page, solve the problem shown there, then deploy again."
       },
       "verify_chain": {

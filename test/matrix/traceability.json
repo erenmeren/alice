@@ -2546,7 +2546,7 @@
    "internal/api:TestIncidentRefusalCodesMatchTheCatalogue",
    "internal/api:TestSSHKeyDeployRefusalsMatchTheCatalogue",
    "internal/inventory:TestIncidentRefusalCodes",
-   "internal/inventory:TestIncidentPlaceOnADisabledServerWaitsAndFailsBusy"
+   "internal/inventory:TestIncidentPlaceOnADisabledServerFailsAtOnce"
   ]
  },
  {
