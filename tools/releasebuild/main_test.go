@@ -334,90 +334,105 @@ func sumLine(t *testing.T, dir, rel, name string) string {
 
 // The production path (make release) refuses whatever a test package may lack (M-6, R43 row 51).
 func TestStageRefusesAMissingInput(t *testing.T) {
-	for name, change := range map[string]func(t *testing.T, cfg *stageConfig){
-		"no SECURITY-REPORT.md": func(t *testing.T, cfg *stageConfig) {
+	// winLine is a well-formed line of alice-winhelper.sha256 for the fixture's binary of arch (R66 ruling 9).
+	winLine := func(arch, name string) string {
+		sum := sha256.Sum256([]byte("windows " + arch + " binary"))
+		return hex.EncodeToString(sum[:]) + "  " + name + "\n"
+	}
+	amd64, arm64 := winLine("amd64", "alice-winhelper-windows-amd64.exe"), winLine("arm64", "alice-winhelper-windows-arm64.exe")
+	winSums := func(t *testing.T, cfg *stageConfig, body string) {
+		write(t, filepath.Join(cfg.Helper, "alice-winhelper.sha256"), body, 0o644)
+	}
+	// Each row names what its refusal must name.
+	for _, row := range []struct {
+		name   string
+		names  []string
+		change func(t *testing.T, cfg *stageConfig)
+	}{
+		{"no SECURITY-REPORT.md", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "SECURITY-REPORT.md")))
-		},
-		"no gates log":        func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.GatesLog)) },
-		"empty gates log":     func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "", 0o644) },
-		"failed gate":         func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t1\tv2\n", 0o644) },
-		"malformed gates log": func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint passed\n", 0o644) },
-		"placeholder LICENSE": func(t *testing.T, cfg *stageConfig) { write(t, cfg.License, draftLicense+"\n", 0o644) },
-		"missing guide": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no gates log", nil, func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.GatesLog)) }},
+		{"empty gates log", nil, func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "", 0o644) }},
+		{"failed gate", nil, func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t1\tv2\n", 0o644) }},
+		{"malformed gates log", nil, func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint passed\n", 0o644) }},
+		{"placeholder LICENSE", nil, func(t *testing.T, cfg *stageConfig) { write(t, cfg.License, draftLicense+"\n", 0o644) }},
+		{"missing guide", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "docs/install-guide.md")))
-		},
-		"no CHANGELOG.md": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no CHANGELOG.md", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "CHANGELOG.md")))
-		},
-		"no install.sh": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no install.sh", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/install.sh")))
-		},
-		"no env.template": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no env.template", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/env.template")))
-		},
-		"no roles script": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no roles script", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/postgres/initdb/10-alice-roles.sh")))
-		},
-		"no notices": func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.Notices)) },
-		"no source SBOM": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no notices", nil, func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.Notices)) }},
+		{"no source SBOM", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.SBOM, "source-1.0.0.cdx.json")))
-		},
-		"no arm64 helper": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no arm64 helper", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-helper-linux-arm64")))
-		},
-		"helper checksum differs": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"helper checksum differs", []string{"alice-helper.sha256", "make helper"}, func(t *testing.T, cfg *stageConfig) {
 			write(t, filepath.Join(cfg.Helper, "alice-helper-linux-amd64"), "changed", 0o644)
-		},
-		"no Windows arm64 helper": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no Windows arm64 helper", []string{"alice-winhelper-windows-arm64.exe"}, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-winhelper-windows-arm64.exe")))
-		},
-		"Windows helper checksum differs": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"Windows helper checksum differs", []string{"alice-winhelper.sha256", "make winhelper"}, func(t *testing.T, cfg *stageConfig) {
 			write(t, filepath.Join(cfg.Helper, "alice-winhelper-windows-amd64.exe"), "changed", 0o644)
-		},
-		"no Windows checksum file": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no Windows checksum file", []string{"alice-winhelper.sha256"}, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-winhelper.sha256")))
-		},
-		"no release key": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"no release key", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.Remove(filepath.Join(cfg.Keys, "rk-2026-01.pem")))
-		},
-		"bad version":     func(_ *testing.T, cfg *stageConfig) { cfg.Version = "1.0" },
-		"bad commit":      func(_ *testing.T, cfg *stageConfig) { cfg.Commit = "abc" },
-		"bad build time":  func(_ *testing.T, cfg *stageConfig) { cfg.BuildTime = "yesterday" },
-		"bad min upgrade": func(_ *testing.T, cfg *stageConfig) { cfg.MinUpgradeFrom = "one" },
-		"no migrations": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"bad version", nil, func(_ *testing.T, cfg *stageConfig) { cfg.Version = "1.0" }},
+		{"bad commit", nil, func(_ *testing.T, cfg *stageConfig) { cfg.Commit = "abc" }},
+		{"bad build time", nil, func(_ *testing.T, cfg *stageConfig) { cfg.BuildTime = "yesterday" }},
+		{"bad min upgrade", nil, func(_ *testing.T, cfg *stageConfig) { cfg.MinUpgradeFrom = "one" }},
+		{"no migrations", nil, func(t *testing.T, cfg *stageConfig) {
 			require.NoError(t, os.RemoveAll(filepath.Join(cfg.Root, "migrations")))
-		},
-		"bad image name": func(_ *testing.T, cfg *stageConfig) { cfg.AliceImage = "Alice Image" },
-		"stale gates log": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"bad image name", nil, func(_ *testing.T, cfg *stageConfig) { cfg.AliceImage = "Alice Image" }},
+		{"stale gates log", nil, func(t *testing.T, cfg *stageConfig) {
 			write(t, cfg.GatesLog, "commit\t"+strings.Repeat("f", 40)+"\nlint\t0\tv2\n", 0o644)
-		},
-		"gates log without commit": func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t0\tv2\n", 0o644) },
-		"gates log with only a commit": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"gates log without commit", nil, func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t0\tv2\n", 0o644) }},
+		{"gates log with only a commit", nil, func(t *testing.T, cfg *stageConfig) {
 			write(t, cfg.GatesLog, "commit\t"+testCommit+"\n", 0o644)
-		},
-		"gates log with a failed gate among all": func(t *testing.T, cfg *stageConfig) {
+		}},
+		{"gates log with a failed gate among all", nil, func(t *testing.T, cfg *stageConfig) {
 			write(t, cfg.GatesLog, strings.Replace(fullGatesLog(testCommit), "testssl\t0\t", "testssl\t1\t", 1), 0o644)
-		},
+		}},
+		// FX-06: a Windows checksum file lists exactly its two binaries, each once, in sha256sum form.
+		{"a Windows checksum file without its arm64 line", []string{"alice-winhelper.sha256", "make winhelper"}, func(t *testing.T, cfg *stageConfig) { winSums(t, cfg, amd64) }},
+		{"a duplicate line", []string{"alice-winhelper.sha256", "make winhelper"}, func(t *testing.T, cfg *stageConfig) { winSums(t, cfg, amd64+amd64+arm64) }},
+		{"an extra line", []string{"alice-winhelper.sha256", "make winhelper"}, func(t *testing.T, cfg *stageConfig) {
+			winSums(t, cfg, amd64+arm64+winLine("386", "alice-winhelper-windows-386.exe"))
+		}},
+		{"a malformed line", []string{"alice-winhelper.sha256", "make winhelper"}, func(t *testing.T, cfg *stageConfig) {
+			winSums(t, cfg, strings.Replace(amd64, "  ", " ", 1)+arm64)
+		}},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(row.name, func(t *testing.T) {
 			cfg, _ := fixture(t)
-			change(t, &cfg)
+			row.change(t, &cfg)
 			err := stage(cfg, &fakeImages{})
 			require.Error(t, err)
-			for _, want := range refusalNames[name] {
+			for _, want := range row.names {
 				assert.ErrorContains(t, err, want)
 			}
 			assert.NoDirExists(t, cfg.Out, "a refused stage leaves nothing behind")
 		})
 	}
-}
-
-// refusalNames: what the refusal of a TestStageRefusesAMissingInput row must name.
-var refusalNames = map[string][]string{
-	"helper checksum differs":         {"alice-helper.sha256", "make helper"},
-	"Windows helper checksum differs": {"alice-winhelper.sha256", "make winhelper"},
-	"no Windows arm64 helper":         {"alice-winhelper-windows-arm64.exe"},
-	"no Windows checksum file":        {"alice-winhelper.sha256"},
 }
 
 // R63 Ruling 11: SHA256SUMS lists the Windows helpers and their checksum file with the hashes of the

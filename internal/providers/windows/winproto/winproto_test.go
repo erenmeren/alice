@@ -633,4 +633,11 @@ func TestReleasedHelperVersion(t *testing.T) {
 	if !winproto.VersionAtLeast("1.0.0", "0.3.0") {
 		t.Error("1.0.0 must compare above 0.3.0 numerically")
 	}
+	// R66: the discriminating case; as text "0.10.0" sorts below "0.9.0".
+	if !winproto.VersionAtLeast("0.10.0", "0.9.0") {
+		t.Error("0.10.0 must compare above 0.9.0 numerically")
+	}
+	if winproto.VersionAtLeast("0.9.0", "0.10.0") {
+		t.Error("0.9.0 must compare below 0.10.0 numerically")
+	}
 }
