@@ -253,6 +253,17 @@ Independent review of `917c568a` ("fix first"); each finding was fixed test firs
   the read and report a clean end of the body. `httpcheck` now answers `canary.timeout` whenever its context ended,
   whatever the copy returned. Cost if wrong: none (a check that outlived its timeout never passed).
 
+## Gate evidence (Task 14)
+
+After the merge of `main` at `07c55ec8` (R66), at `bd1e7618`: `make ci E2E_PROJECT=alice-e2e-canary ALICE_E2E_PORT=9979`
+passed lint and stopped in `test` on `route53:TestContextEnds` (a 100 ms deadline under load, outside R65; it passes
+alone three times in a row). Staged fallback, each stage alone: test, coverage, perf, test-backup-cycle, test-ssh,
+build, release-symcheck, i18n-check, web-lint, web-coverage, vuln, secrets-scan (gitleaks over the whole history,
+the branch included), fs-scan, e2e (165 passed, 4 skipped, 50.4 min; the five canary journeys among them), image-check
+and image-scan: all exit 0. Coverage against floors: inventory 89.0 (89), api 96.9 (95), jobs 90.9 (89), canaryjobs
+95.1 (95), deployjobs 99.2 (99), httpcheck 97.8 (95). The GitHub ci.yml failure at `bd1e7618` (`TestCheckTimeouts`
+slow-loris on the runners) is fixed in the commit after it; windows.yml passed.
+
 ## Owner to confirm
 
 - Every default of design §24 (rulings 1-29) and the plan's rulings 30-34, as written there.
