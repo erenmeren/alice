@@ -22,7 +22,7 @@
 <dt>Features</dt><dd>{{range $i, $f := .Data.Request.Features}}{{if $i}}, {{end}}{{$f}}{{else}}none{{end}}</dd>
 {{if .Data.Request.Replaces}}<dt>Replaces</dt><dd class="mono">{{.Data.Request.Replaces}}</dd>{{end}}
 <dt>Requested by</dt><dd>{{.Data.Request.RequestedBy}}</dd>
-<dt>Requested at</dt><dd>{{.Data.Request.RequestedAt.Format "2006-01-02 15:04 MST"}}</dd>
+<dt>Requested at</dt><dd>{{.Data.Request.RequestedAt.UTC.Format "2006-01-02 15:04 MST"}}</dd>
 </dl>
 </div>
 {{end}}

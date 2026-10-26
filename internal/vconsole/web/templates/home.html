@@ -41,7 +41,7 @@
 <div class="table-wrap"><table>
 <thead><tr><th>License</th><th>Customer</th><th>Ends</th></tr></thead>
 <tbody>
-{{range .}}<tr><td class="mono">{{.LicenseID}}</td><td>{{.Customer}}</td><td><span class="badge badge-warn">{{.ValidUntil.Format "2006-01-02"}}</span></td></tr>
+{{range .}}<tr><td class="mono">{{.LicenseID}}</td><td>{{.Customer}}</td><td><span class="badge badge-warn">{{.ValidUntil.UTC.Format "2006-01-02"}}</span></td></tr>
 {{end}}</tbody>
 </table></div>
 {{else}}

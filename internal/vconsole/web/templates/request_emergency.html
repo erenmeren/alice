@@ -9,7 +9,7 @@
 <dt>Installation</dt><dd class="mono">{{.Data.Basis.Installation}}</dd>
 <dt>Targets</dt><dd>{{.Data.Basis.Targets}}</dd>
 <dt>Features</dt><dd>{{range $i, $f := .Data.Basis.Features}}{{if $i}}, {{end}}{{$f}}{{else}}none{{end}}</dd>
-<dt>Carried over from</dt><dd><span class="mono">{{.Data.Basis.LicenseID}}</span> <span class="muted">(valid until {{.Data.Basis.ValidUntil.Format "2006-01-02"}})</span></dd>
+<dt>Carried over from</dt><dd><span class="mono">{{.Data.Basis.LicenseID}}</span> <span class="muted">(valid until {{.Data.Basis.ValidUntil.UTC.Format "2006-01-02"}})</span></dd>
 </dl>
 </div>
 <section class="section">

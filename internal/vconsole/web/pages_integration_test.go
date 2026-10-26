@@ -140,19 +140,25 @@ func TestSecondUserSeesButCannotCancelTheFirstUsersRequest(t *testing.T) {
 	assert.Contains(t, e.do(http.MethodGet, loc, "", ayse).Body.String(), "cancelled")
 }
 
+// TestLicenseListShowsEndDatesAndExpiryFilter: the 30/90-day filters and the order by end date,
+// and the end dates printed as UTC dates whatever the machine's zone. The licenses end at 23:30
+// UTC, so a zone east of UTC (run it under TZ=Asia/Tokyo) would move them to the next date if a
+// page printed the process's local time (R67 Ruling 6).
 func TestLicenseListShowsEndDatesAndExpiryFilter(t *testing.T) {
 	e := newEnv(t, "https://licenses.example.test")
 	ayse := e.signIn("ayse")
 	cid := e.addCustomer(ayse, "Delta Ltd")
 	now := time.Now().UTC()
 	day := 24 * time.Hour
-	near, mid, far := now.Add(10*day), now.Add(50*day), now.Add(200*day)
+	late := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 23, 30, 0, 0, time.UTC) }
+	near, mid, far := late(now.Add(10*day)), late(now.Add(50*day)), late(now.Add(200*day))
 	e.seedLicense(cid, "LIC-FAR", far, []byte("f"))
 	e.seedLicense(cid, "LIC-NEAR", near, []byte("n"))
 	e.seedLicense(cid, "LIC-MID", mid, []byte("m"))
 
 	body := e.do(http.MethodGet, "/licenses?ending=90", "", ayse).Body.String()
 	assert.Contains(t, body, near.Format("2006-01-02"))
+	assert.NotContains(t, body, near.AddDate(0, 0, 1).Format("2006-01-02"), "the UTC date, not the machine's")
 	assert.Contains(t, body, mid.Format("2006-01-02"))
 	assert.NotContains(t, body, far.Format("2006-01-02"))
 	assert.NotContains(t, body, "LIC-FAR")
