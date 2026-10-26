@@ -434,7 +434,7 @@ func TestParseWholeConfigurationLimits(t *testing.T) {
 		allocated := after.TotalAlloc - before.TotalAlloc
 		t.Logf("allocated %d bytes in %v", allocated, elapsed)
 		assert.Less(t, allocated, uint64(64<<20))
-		assert.Less(t, elapsed, 2*time.Second*raceSlowdown)
+		assert.Less(t, elapsed, 2*time.Second*slowdown())
 	})
 	t.Run("one section line of many expansions stops at the budget", func(t *testing.T) {
 		cfg := "Define A /" + strings.Repeat("a", 7999) + "\n<VirtualHost" + strings.Repeat(" ${A}:443", 100000) + ">\n</VirtualHost>\n"
@@ -476,7 +476,7 @@ func TestParseWholeConfigurationLimits(t *testing.T) {
 
 // TestParseHostileShapes: shapes that would be quadratic or deep in a naive walk stay fast.
 func TestParseHostileShapes(t *testing.T) {
-	limit := 3 * time.Second * raceSlowdown
+	limit := 3 * time.Second * slowdown()
 	for name, in := range map[string]Input{
 		"many vhosts on one address": testInput(root(strings.Repeat("<VirtualHost *:443>\nSSLEngine on\nSSLCertificateFile /a.pem\n</VirtualHost>\n", 60000))),
 		"many children at one line": func() Input {

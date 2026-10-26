@@ -402,7 +402,7 @@ func TestHostileSizesFinishQuickly(t *testing.T) {
 			start := time.Now()
 			_, err := Parse([]byte(in), "/etc/nginx")
 			assert.Error(t, err)
-			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+			assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 		})
 	}
 }
