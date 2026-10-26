@@ -2750,6 +2750,55 @@
   ]
  },
  {
+  "id": "FX-07",
+  "status": "test",
+  "tests": [
+   "internal/acme/solver/dnsapi/cloudflare:TestDeadContextAndDeadline",
+   "internal/acme/solver/dnsapi/cloudflare:TestZeroSendsNothing",
+   "internal/acme/solver/dnsapi/route53:TestContextEnds"
+  ]
+ },
+ {
+  "id": "FX-08",
+  "status": "test",
+  "tests": [
+   "internal/providers/nginx/nginxconf:TestHostileSizesFinishQuickly",
+   "internal/providers/apacheconf:TestParseWholeConfigurationLimits",
+   "internal/providers/apacheconf:TestParseHostileShapes"
+  ]
+ },
+ {
+  "id": "FX-09",
+  "status": "test",
+  "tests": [
+   "web/src/components/SavedViews.test.tsx:holds only menu items in the open menu",
+   "web/src/pages/AcmeCertificatePage.test.tsx:deploys now to the chosen websites"
+  ]
+ },
+ {
+  "id": "FX-10",
+  "status": "test",
+  "tests": [
+   "internal/vconsole/web:TestLicenseListShowsEndDatesAndExpiryFilter"
+  ]
+ },
+ {
+  "id": "FX-11",
+  "status": "test",
+  "tests": [
+   "internal/api:TestDirectoryLockoutReservesParallelAttempts"
+  ]
+ },
+ {
+  "id": "FX-12",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestACMEQueuedDeploymentIsJudgedAgain",
+   "internal/jobs/deployjobs:TestKVAutoDeployForbiddenWhileQueued",
+   "internal/jobs/deployjobs:TestEveryNeutralReasonCanBeProducedByTheEngine"
+  ]
+ },
+ {
   "id": "S-12",
   "status": "test",
   "tests": [

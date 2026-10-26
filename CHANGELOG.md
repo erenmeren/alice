@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Fixes batch 2 (R67)
+
+**Changed**
+- An automatic deployment that was still queued when its service's policy forbade automatic deployment now ends with
+  `service.auto_deploy_forbidden` before anything is sent, instead of going ahead; deployments a person asked for are
+  unchanged.
+
+**Fixed**
+- The vendor console's pages print dates in UTC on every page.
+
 ## Unreleased — Canary deployment (R65)
 
 **Added**

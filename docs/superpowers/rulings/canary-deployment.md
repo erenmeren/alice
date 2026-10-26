@@ -285,5 +285,7 @@ slow-loris on the runners) is fixed in the commit after it; windows.yml passed.
   `45310`..`45399`, run on the Windows runner) listen on fixed `127.0.0.1` ports inside an ephemeral range (Windows':
   49152-65535 does not include them; Linux's 32768-60999 would): an outgoing connection of another process can hold one,
   as `45428` and `45422` did on CI. Fixed here for the canary's packages (`httpcheck`, `canaryjobs`); the others are
-  outside the canary scope (C5). Cost of leaving it: a rare flaky "address already in use".
+  outside the canary scope (C5). Cost of leaving it: a rare flaky "address already in use". Closed in R67 as not
+  applicable (`docs/superpowers/rulings/fixes-2026-10-26.md`): the ports are IIS/http.sys bindings, not listeners, and
+  lie outside Windows' ephemeral range.
 

@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10; fixes batch 2, R67: FX-07..FX-12, §24.11). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -481,6 +481,19 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | CAN-30 | `canary_override` on the three deploy routes | A fresh browser step-up; a token is refused; ALC-SVC-0020 when the policy forbids it |
 | CAN-31 | The web: policy section, deploy dialogs, rollout panel, list badge | As design §19, in EN and TR |
 | CAN-32 | Canary journeys on the e2e stack | Pass to wave 2; a failing check reverts wave 1 and wave 2 keeps its files (read on the target); abort; deploy to all at once with a step-up, audited; the pass journey in Turkish |
+
+### 24.11 Fixes batch 2 (R67)
+
+(Plan `docs/superpowers/plans/2026-10-26-fixes-batch-2.md`; rulings `docs/superpowers/rulings/fixes-2026-10-26.md`.)
+
+| ID | Case | Expected |
+|---|---|---|
+| FX-07 | A DNS API call with a dead context, or whose deadline ends during the provider's delay; a call after `Zero` | `context.Canceled` / `context.DeadlineExceeded`; after `Zero` a permanent provider error and no request, on a fake with nothing in flight |
+| FX-08 | Hostile Nginx and Apache configurations under the race detector and coverage instrumentation | Each refused within its bound × 10 (race) × 5 (coverage); a cubic regression still fails |
+| FX-09 | A Vitest page test on a loaded machine | Passes within 60 s; a hang still fails |
+| FX-10 | The vendor console's license pages on a machine in any time zone | End dates printed as UTC dates; the 30/90-day filters and order unchanged |
+| FX-11 | Ten parallel directory sign-ins for one name while the directory holds | Exactly 3 reach the directory, 7 are refused with 429 at once; every slot released |
+| FX-12 | An automatic (ACME renewal or Key Vault) deployment queued before its service's policy forbade automatic deployment | Ends `service.auto_deploy_forbidden` before any server or vault contact; the planner counts it as no failure; a person's deployment under the same policy goes ahead |
 
 ## 25. Security Test Plan
 
