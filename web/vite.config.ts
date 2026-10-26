@@ -22,7 +22,9 @@ export default defineConfig({
     // A few page tests render a long form and take about 5 s under `make coverage` with 144 test
     // files running in parallel (AcmeCertificatePage 'deploys now' took 5.1-6.8 s): the default
     // 5 s test timeout made `make ci` flaky. Passing tests are not slower; only hangs wait longer.
-    testTimeout: 20_000,
+    // The 20 s bound was then passed by eight files when another `make ci` loaded the machine to
+    // 15-21 (R66 F2/F3, R67); axe runs once per file where it runs at all.
+    testTimeout: 60_000,
     // make web-coverage (npm run coverage) enforces the thresholds (AUD-23). Spec §22.7 asks for
     // 70 %; they are the values measured when they were set (2026-10-16: statements 96.21, branches
     // 92.61, functions 95.82, lines 97.33), rounded down; branches one point lower, because
