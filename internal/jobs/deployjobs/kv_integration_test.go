@@ -343,6 +343,22 @@ func TestKVAutoDeployForbiddenWhileQueued(t *testing.T) {
 	// The control: a person's deployment under the same policy is not judged.
 	id2 := w.deploy(b, false)[0]
 	assert.Equal(t, inventory.DeployStatusSucceeded, w.settle(id2).Status)
+
+	// Judged on the vault's service, not the server's: with the server in another service that trusts the vault's,
+	// a policy forbidding automatic deployment on the server's service alone lets the automatic deployment go.
+	pay := w.newService("Payments")
+	w.moveTarget(s.target, pay)
+	w.trust(w.defaultService(), pay)
+	w.setPolicy(w.defaultService(), `{"schema":1}`)
+	w.setPolicy(pay, `{"schema":1,"deployment":{"auto_deploy":"forbidden"}}`)
+	calls = len(w.az.Calls())
+	id3 := w.deploy(b, false)[0]
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", id3)
+	require.NoError(t, err)
+	d3 := w.settle(id3)
+	assert.NotEqual(t, inventory.DeployStatusFailed, d3.Status, "the server already serves it: unchanged, not refused")
+	assert.Empty(t, d3.ErrorCode)
+	assert.Greater(t, len(w.az.Calls()), calls, "the vault was read: the first send went ahead")
 }
 
 // L-80 and L-82 with a vault deployment. L-80: the license locks while the send is in flight; the
