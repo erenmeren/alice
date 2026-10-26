@@ -142,9 +142,15 @@ func TestSecondUserSeesButCannotCancelTheFirstUsersRequest(t *testing.T) {
 
 // TestLicenseListShowsEndDatesAndExpiryFilter: the 30/90-day filters and the order by end date,
 // and the end dates printed as UTC dates whatever the machine's zone. The licenses end at 23:30
-// UTC, so a zone east of UTC (run it under TZ=Asia/Tokyo) would move them to the next date if a
-// page printed the process's local time (R67 Ruling 6).
+// UTC, so a zone east of UTC would move them to the next date if a page printed the process's local
+// time: the test sets the process's zone to Asia/Tokyo (pgx returns times in time.Local), so it
+// discriminates on a UTC CI runner too (R67 Ruling 6; no test in this package runs in parallel).
 func TestLicenseListShowsEndDatesAndExpiryFilter(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	require.NoError(t, err)
+	old := time.Local
+	time.Local = tokyo
+	t.Cleanup(func() { time.Local = old })
 	e := newEnv(t, "https://licenses.example.test")
 	ayse := e.signIn("ayse")
 	cid := e.addCustomer(ayse, "Delta Ltd")
