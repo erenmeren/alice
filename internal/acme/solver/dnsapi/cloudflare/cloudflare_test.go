@@ -371,7 +371,7 @@ func TestIdenticalRecordCodes(t *testing.T) {
 	assert.Equal(t, acme.ReasonDNSProviderError, acme.ReasonOf(err))
 }
 
-func TestDeadContextAndZero(t *testing.T) {
+func TestDeadContextAndDeadline(t *testing.T) {
 	f := newFake(t, fcf.Options{Zones: []string{"example.com"}})
 	p := providerFor(t, f)
 	s := solverFor(t, p)
@@ -383,10 +383,15 @@ func TestDeadContextAndZero(t *testing.T) {
 	defer cancel2()
 	_, err := p.FindZone(short, "_acme-challenge.example.com")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
 
+// A fresh fake: a delayed request from another test step may be recorded late under load and move the count (R67 Ruling 2).
+func TestZeroSendsNothing(t *testing.T) {
+	f := newFake(t, fcf.Options{Zones: []string{"example.com"}})
+	p := providerFor(t, f)
 	before := len(f.Requests())
 	p.Zero()
-	_, err = p.FindZone(ctx(t), "_acme-challenge.example.com")
+	_, err := p.FindZone(ctx(t), "_acme-challenge.example.com")
 	assert.Equal(t, acme.ReasonDNSProviderError, acme.ReasonOf(err))
 	assert.Equal(t, acme.ClassPermanent, acme.FailureClass(err))
 	assert.Len(t, f.Requests(), before, "nothing is sent after Zero")
