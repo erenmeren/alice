@@ -880,7 +880,9 @@ func (s *stack) requireNoDirectoryCanary(t *testing.T) {
 }
 
 // Parallel attempts reserve their slots: with the directory holding every answer, at most 3 attempts for one name reach
-// it; every slot is released on every outcome (an unreachable directory, a cancelled request, a panic).
+// it; every slot is released on every outcome (an unreachable directory, a cancelled request, a panic). A slot is
+// reserved before the directory is called, so the count is read once the 3 have arrived, and again after they
+// answered: never a fourth (R67 Ruling 7).
 func TestDirectoryLockoutReservesParallelAttempts(t *testing.T) {
 	s, admin, adminAcct := installed(t)
 	dir := s.directoryReady(t, admin, adminAcct, true)
@@ -906,7 +908,7 @@ func TestDirectoryLockoutReservesParallelAttempts(t *testing.T) {
 			t.Fatalf("only %d attempts were refused", refused)
 		}
 	}
-	assert.Equal(t, 3, s.dir.calls(), "at most 3 attempts reached the directory")
+	require.Eventually(t, func() bool { return s.dir.calls() == 3 }, 5*time.Second, time.Millisecond, "exactly 3 attempts reach the directory")
 	close(hold)
 	// The held attempts now fail and wait for the refusal floor on the stack clock.
 	deadline := time.After(20 * time.Second)
@@ -921,6 +923,7 @@ func TestDirectoryLockoutReservesParallelAttempts(t *testing.T) {
 			t.Fatal("the held attempts did not answer")
 		}
 	}
+	assert.Equal(t, 3, s.dir.calls(), "no later attempt reached the directory")
 	assert.True(t, s.api.s.ldapLockout.Locked(ldapLoginKey(uuid.MustParse(dir), "deniz")), "the 3 failures locked the name")
 	s.dir.set(func(f *fakeDirectory) { f.hold = nil })
 
