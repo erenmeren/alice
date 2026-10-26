@@ -3850,7 +3850,8 @@ who holds the role on all services to change the domains.
 websites) of a service whose policy says `auto_deploy: forbidden`. Nothing was changed. (HTTP 422, reason
 `service.auto_deploy_forbidden`.) Automatic deployments that were on before the policy changed are not switched off:
 they wait, and their websites show the mark `service.auto_deploy_forbidden`, until the policy allows automatic
-deployment again; then they resume at the planner's next run.
+deployment again; then they resume at the planner's next run. An automatic deployment that was already queued when the
+policy changed ends with this reason before anything is sent (R67); a deployment a person asked for is not affected.
 
 **What to do.** Deploy by hand with **Deploy now**, or ask an Administrator of the service to set **Automatic
 deployment** to allowed on the service's **Policy** tab.

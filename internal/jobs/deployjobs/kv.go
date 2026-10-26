@@ -135,6 +135,8 @@ var kvRefusals = []struct {
 	{inventory.ErrCertificateCompromised, inventory.ReasonCertificateCompromised},
 	// Any queued deployment whose server's service no longer accepts the source's keys (a trust removed, R49).
 	{inventory.ErrServiceUntrusted, inventory.ReasonServiceUntrusted},
+	// A queued automatic deployment whose source's service forbade automatic deployment before the first send (R67).
+	{inventory.ErrAutoDeployForbidden, inventory.ReasonAutoDeployForbidden},
 }
 
 // kvRefusal is the closed reason of an inventory refusal in kvRefusals.

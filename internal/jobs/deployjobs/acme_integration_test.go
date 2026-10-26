@@ -433,6 +433,10 @@ func TestACMEQueuedDeploymentIsJudgedAgain(t *testing.T) {
 WHERE id = $1`, c.ID, cert2)
 			require.NoError(w.t, err)
 		}, inventory.ReasonACMEDeployHeld},
+		// R67: the policy of the ACME certificate's service forbade automatic deployment after the deployment was queued.
+		{"the service's policy forbade automatic deployment", func(w *acmeWorld, _ inventory.ACMECertificate, _, _ uuid.UUID) {
+			w.setPolicy(w.defaultService(), `{"schema":1,"deployment":{"auto_deploy":"forbidden"}}`)
+		}, inventory.ReasonAutoDeployForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newACMEWorld(t)

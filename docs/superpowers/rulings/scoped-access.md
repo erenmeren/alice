@@ -384,7 +384,7 @@ SEC-029, SEC-108 and SEC-109 in `alice-v1/04-security.md`; the data model in `al
     no stop, no notice). A newly marked set is audited once (`acme.auto_deploy.forbidden`, `kv.auto_deploy.forbidden`)
     and sends no e-mail: the policy change is the cause and is audited with its author. When the policy allows it again
     the marks clear and the next run deploys. Deployments queued before the policy changed are not stopped (the engine's
-    first send does not read the policy), and Deploy now is never held. Switching automatic deployment off (the ACME
+    first send does not read the policy; until R67, `docs/superpowers/rulings/fixes-2026-10-26.md`), and Deploy now is never held. Switching automatic deployment off (the ACME
     certificate, one of its websites, a Key Vault binding) clears its marks: the planner does not visit it again. **Owner
     to confirm** "no e-mail".
 12. **Defaults.** `acme.renew_before_days` is used when a new ACME certificate names no window; `incident.revoke_mode`
@@ -402,6 +402,6 @@ SEC-029, SEC-108 and SEC-109 in `alice-v1/04-security.md`; the data model in `al
   policy's renewal window applies to API calls that give none. The policy-aware hints in the create dialogs (allowed
   names, sources) are not built; the refusal names the rule.
 - The engine's first send does not re-check `deployment.auto_deploy`; a deployment queued before the policy forbade it
-  still goes.
+  still goes. Done in R67.
 - Done in Phase 4 (R56): `notifications` is read by the routing.
 

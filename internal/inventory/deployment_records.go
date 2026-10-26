@@ -362,6 +362,10 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		if err := checkDeploymentTrust(ctx, s.pool, d); err != nil {
 			return Material{}, err
 		}
+		// Nor an automatic one whose source's service forbade automatic deployment while it waited (R67, design §7.3).
+		if err := checkAutoDeployPolicy(ctx, s.pool, d); err != nil {
+			return Material{}, err
+		}
 	}
 	var f Facts
 	if err := json.Unmarshal(facts, &f); err != nil {
@@ -472,6 +476,31 @@ FROM targets t WHERE t.id = $1`, d.TargetID, d.CertificateID, d.LocationID, d.Bi
 		return &authz.UntrustedError{Source: source, Target: target}
 	}
 	return nil
+}
+
+// checkAutoDeployPolicy is design §7.3 (deployment.auto_deploy) at an automatic deployment's first send (R67): while
+// the policy of the source's service forbids automatic deployment, a deployment the planners queued before is refused
+// with ErrAutoDeployForbidden. It is judged on the source's service as the planners judge it: the vault's for a Key
+// Vault deployment, the ACME certificate's for one Alice ordered, else the certificate's. A person's deployment,
+// Deploy now, a drift repair and a rollout's second wave (trigger manual) are not judged.
+func checkAutoDeployPolicy(ctx context.Context, q db.Querier, d Deployment) error {
+	if d.Trigger != TriggerACMERenewal && d.Trigger != triggerKVRenewal {
+		return nil
+	}
+	var source uuid.UUID
+	err := q.QueryRow(ctx, `SELECT coalesce(
+    (SELECT v.service_id FROM bindings b JOIN targets v ON v.id = b.kv_target_id WHERE b.id = $2),
+    (SELECT ac.service_id FROM acme_orders o JOIN acme_certificates ac ON ac.id = o.acme_certificate_id
+        WHERE o.certificate_id = $1 ORDER BY o.finished_at DESC NULLS LAST LIMIT 1),
+    (SELECT c.service_id FROM certificates c WHERE c.id = $1))`, d.CertificateID, d.BindingID).Scan(&source)
+	if err != nil {
+		return fmt.Errorf("inventory: read the deployment's source service: %w", err)
+	}
+	p, err := authz.LoadPolicy(ctx, q, source)
+	if err != nil {
+		return err
+	}
+	return p.CheckAutoDeploy()
 }
 
 // kvSource reads the vault, certificate and version a Key Vault deployment names.

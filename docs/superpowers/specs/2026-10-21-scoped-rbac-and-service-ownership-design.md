@@ -1113,7 +1113,7 @@ What Phase 5 delivers, and where it differs from the text above (rulings in `doc
   versions with what changed and who saved them); the Key Vault binding's held websites show their mark.
 - Tests SR-30 to SR-34 (numbered apart from Phases 3 and 4, built in parallel).
 - Not built: the ACME create dialog's default window from the policy (no create dialog has a service picker yet), the
-  policy-aware hints in the create dialogs, a re-check of `auto_deploy` at the engine's first send.
+  policy-aware hints in the create dialogs, a re-check of `auto_deploy` at the engine's first send (built in R67).
 
 ### Documents per phase
 
@@ -1161,7 +1161,7 @@ e-mail routing; the service policy. What remains across the phases (each in its 
 
 - **Authorization depth**: the re-check under the row lock inside the service functions (`authz.Assert`, §5.4); the
   rotation runner's check of `approved_service_ids` before a run starts or continues (§5.7; the approvals are
-  recorded); the engine's first send does not re-check the policy's `deployment.auto_deploy`.
+  recorded); the engine's first send does not re-check the policy's `deployment.auto_deploy` (built in R67).
 - **Answers**: derived rows (deployments, bindings, jobs, incidents) do not show their `service` and their lists have no
   `service_id`/`environment_id` filters (they are filtered by reach); a body-dependent conflict against a resource of
   another service is not exercised by the leak check.

@@ -40,6 +40,16 @@ func (e *env) defaultService() uuid.UUID {
 	return id
 }
 
+// setPolicy stores doc as the service's next policy version (what PUT /services/{id}/policy does).
+func (e *env) setPolicy(service uuid.UUID, doc string) {
+	e.t.Helper()
+	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO service_policies (service_id, version, body, created_at)
+SELECT id, policy_version + 1, $2::jsonb, now() FROM services WHERE id = $1`, service, doc)
+	require.NoError(e.t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE services SET policy_version = policy_version + 1 WHERE id = $1", service)
+	require.NoError(e.t, err)
+}
+
 func (e *env) trust(source, target uuid.UUID) uuid.UUID {
 	e.t.Helper()
 	id := uuid.Must(uuid.NewV7())

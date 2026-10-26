@@ -87,6 +87,10 @@ const (
 // naming both services; a queued deployment refused for it at its first send ends with ReasonServiceUntrusted.
 var ErrServiceUntrusted = authz.ErrUntrusted
 
+// ErrAutoDeployForbidden: the policy of the source's service forbids automatic deployment (design §7.3). An automatic
+// deployment refused for it at its first send ends with ReasonAutoDeployForbidden (R67).
+var ErrAutoDeployForbidden = authz.ErrAutoDeployForbidden
+
 // ReasonServiceUntrusted is the closed reason (deployments.error_code, a binding's attention code) of a deployment across
 // services without a trust.
 const ReasonServiceUntrusted = "service.untrusted"

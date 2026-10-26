@@ -320,6 +320,31 @@ func TestKVAutoDeploySwitchedOffWhileQueued(t *testing.T) {
 	w.untouched(s, cmds)
 }
 
+// R67 (design §7.3): an automatic deployment whose vault's service's policy forbade automatic deployment while it
+// waited ends with service.auto_deploy_forbidden before any vault or server contact; a deployment a person asks for
+// under the same policy goes ahead (Deploy now is never held, R55 Ruling 11).
+func TestKVAutoDeployForbiddenWhileQueued(t *testing.T) {
+	w := newKVWorld(t)
+	s := w.addServer("web-01", wwwSite())
+	b := w.bind(s.locs[wwwCert])
+	b, err := w.inv.SetAutoDeploy(w.ctx, w.admin, b.ID, b.Version, true)
+	require.NoError(t, err)
+	cmds, calls := len(s.srv.Commands()), len(w.az.Calls())
+	id := w.deploy(b, false)[0]
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE deployments SET trigger = 'kv_renewal' WHERE id = $1", id)
+	require.NoError(t, err)
+	w.setPolicy(w.defaultService(), `{"schema":1,"deployment":{"auto_deploy":"forbidden"}}`)
+	d := w.settle(id)
+	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+	assert.Equal(t, inventory.ReasonAutoDeployForbidden, d.ErrorCode)
+	assert.Equal(t, calls, len(w.az.Calls()), "not one vault call")
+	w.untouched(s, cmds)
+
+	// The control: a person's deployment under the same policy is not judged.
+	id2 := w.deploy(b, false)[0]
+	assert.Equal(t, inventory.DeployStatusSucceeded, w.settle(id2).Status)
+}
+
 // L-80 and L-82 with a vault deployment. L-80: the license locks while the send is in flight; the
 // deployment completes and is recorded. L-82: its reload fails as the lock begins; the recovery
 // (ClassAlways) rolls back without any vault access.

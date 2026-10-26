@@ -160,7 +160,9 @@ func NeutralDeploymentReasons() []string {
 		// The ACME planner's queued deployments judged again at run time (acmeDeployPrecheck).
 		ReasonACMEBindingGone, ReasonACMEAutoDeployOff, ReasonACMESuperseded, ReasonACMEDeployStopped, ReasonACMEDeployHeld,
 		// A queued deployment across services whose trust was removed before its first send (R49).
-		ReasonServiceUntrusted}
+		ReasonServiceUntrusted,
+		// A queued automatic deployment whose source's policy forbade automatic deployment before its first send (R67).
+		ReasonAutoDeployForbidden}
 }
 
 func neutralReason(code string) bool {
