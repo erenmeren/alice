@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,9 +38,6 @@ import (
 )
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
-
-// healthPort is this package's local HTTPS server (127.0.0.1:45422; httpcheck's tests take ports the system chooses).
-const healthPort = 45422
 
 // stack is PostgreSQL, the real queue and runner with the deployment and canary handlers, the inventory and the fake
 // Nginx provider; the round's HTTP check is the product's httpcheck against a local TLS server serving the deployed
@@ -98,6 +94,11 @@ VALUES ($1, 'ada', 'ada@example.com', 'Ada', 'x', 'admin', $2, $2)`, id, now)
 	require.NoError(t, err)
 	s.admin = inventory.Actor{Audit: audit.Actor{Type: audit.ActorUser, ID: id, Name: "ada"}, UserID: id, Role: rbac.Admin}
 
+	// The health server listens on a port the system chooses (a fixed one collided on CI); the websites name it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	healthPort := ln.Addr().(*net.TCPAddr).Port
+
 	// One Nginx server on 127.0.0.1 with two websites listening on the health server's port, holding an old leaf.
 	tg, _, err := s.inv.CreateTarget(s.ctx, s.admin, inventory.NewTarget{Name: "web-01", Type: inventory.TypeNginx, Host: "127.0.0.1", Port: 22})
 	require.NoError(t, err)
@@ -130,8 +131,6 @@ VALUES ($1, 'ada', 'ada@example.com', 'Ada', 'x', 'admin', $2, $2)`, id, now)
 	require.NoError(t, err)
 
 	// The health server serves the deployed leaf.
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(healthPort))
-	require.NoError(t, err)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
 			w.WriteHeader(http.StatusNotFound)

@@ -97,8 +97,8 @@ No number of the design or the plan changed.
 - **Task 4. Ports** (superseded after CI run 40215904071). `httpcheck`'s tests first used the fixed ports
   `127.0.0.1:45420`..`45431`; `45428` was in use on the CI runner (a fixed port inside Linux's ephemeral range meets
   another process's outgoing connection), so they now listen on a port the system chooses (`listen` on `:0`).
-  `canaryjobs` keeps `45422`: its location row, which names the port, is written before the server starts. Cost if
-  wrong: one fixed port left that can collide the same way (see "Found, not fixed").
+  `canaryjobs` first kept `45422`; it collided on CI too (run 40246061327), so its health server now also listens on
+  `:0` before the location rows that name its port are written. Cost if wrong: none.
 - **Task 4. Reasons by phase.** A failure before the TLS connection is up is `canary.unreachable`, after it
   `canary.protocol`; a body cut by the timeout (slow-loris) is `canary.timeout` with the status kept; a cancelled
   context is `canary.timeout`. Why: design §9.3 lists the reasons, not where each applies. Cost if wrong: a reason text.
@@ -281,9 +281,9 @@ slow-loris on the runners) is fixed in the commit after it; windows.yml passed.
 
 ## Found, not fixed
 
-- **Fixed test ports inside the ephemeral range.** `canaryjobs` (`45422`) and the Windows helper's fidelity tests
-  (`cmd/alice-winhelper`, `45310`..`45399`, run on the Windows runner) listen on fixed `127.0.0.1` ports between 32768
-  and 60999, Linux's ephemeral range (Windows': 49152-65535): an outgoing connection of another process can hold one,
-  as `45428` did on CI. Fixed here only for `httpcheck`; the others are outside the
-  canary scope (C5). Cost of leaving it: a rare flaky "address already in use".
+- **Fixed test ports inside the ephemeral range.** The Windows helper's fidelity tests (`cmd/alice-winhelper`,
+  `45310`..`45399`, run on the Windows runner) listen on fixed `127.0.0.1` ports inside an ephemeral range (Windows':
+  49152-65535 does not include them; Linux's 32768-60999 would): an outgoing connection of another process can hold one,
+  as `45428` and `45422` did on CI. Fixed here for the canary's packages (`httpcheck`, `canaryjobs`); the others are
+  outside the canary scope (C5). Cost of leaving it: a rare flaky "address already in use".
 
