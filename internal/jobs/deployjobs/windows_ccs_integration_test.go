@@ -408,6 +408,47 @@ func TestWindowsCCSDriftRepaired(t *testing.T) {
 	assert.Empty(t, d.repairNow(), "nothing more to repair")
 }
 
+// W5 Ruling 8 and Review Focus 3: a file no IIS binding uses is deployable and verified by the helper's read-back
+// only (level 1); the verify step's ccs_unlinked param reaches the deployment record.
+func TestWindowsCCSUnlinkedIsReadBackOnly(t *testing.T) {
+	e := newEnv(t)
+	s := e.addCCSServer("iis-01")
+	const name = "_.unlinked.test.pfx"
+	s.model.PutCCSFile(name, e.old.Cert, []*x509.Certificate{e.ca.Intermediate}, e.old.Key, s.pw)
+	_, err := e.inv.RequestDiscovery(e.ctx, e.admin, s.target)
+	require.NoError(t, err)
+	e.drain()
+	list, err := e.inv.ListLocations(e.ctx, s.target, false)
+	require.NoError(t, err)
+	var loc uuid.UUID
+	for _, l := range list.Items {
+		if l.CertPath == ccsFolder+`\`+name {
+			require.True(t, l.Deployable, "an unlinked file is deployable: %s", l.UnsupportedReason)
+			loc = l.ID
+		}
+	}
+	require.NotEqual(t, uuid.Nil, loc)
+	id := e.request(loc)[0]
+	e.drain()
+	d := e.deployment(id)
+	require.Equal(t, inventory.DeployStatusSucceeded, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
+	assert.Equal(t, providers.LevelInstalled, d.Level)
+	assert.Equal(t, "skipped", d.Verified)
+	var params map[string]string
+	for _, st := range d.Steps {
+		if st.Name == providers.StepNameVerify && st.Status != "started" {
+			params = st.Params
+		}
+	}
+	assert.Equal(t, "true", params["ccs_unlinked"], "the verify step says why it was skipped")
+	data, _ := s.model.CCSFile(name)
+	leaf, _, _, err := pki.OpenPFXKey(data, []byte(s.pw))
+	require.NoError(t, err)
+	c, err := x509.ParseCertificate(leaf)
+	require.NoError(t, err)
+	assert.Equal(t, pki.Fingerprint(e.nw.Cert), pki.Fingerprint(c), "the file holds the new certificate")
+}
+
 // W5 Ruling 17: CCS turned off after the location was discovered: the queued deployment is refused by the helper
 // with nothing changed (windows.ccs_disabled, ALC-WIN-0015).
 func TestWindowsCCSDisabledRefuses(t *testing.T) {

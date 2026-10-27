@@ -419,6 +419,9 @@ var stepParamRules = map[string]*regexp.Regexp{
 	// R61 Ruling 16: a Windows verify step whose served chain is not the one Alice deployed (chain_differs "true") and
 	// the two lengths: what Alice deployed and what Windows built.
 	"chain_differs": paramTrueRE, "deployed_chain": chainLengthRE, "built_chain": chainLengthRE,
+	// W5 (R68): a CCS file's verify step verified by the helper's read-back only (no IIS binding uses the file,
+	// Ruling 8), and a write_file or restore step after which the helper's refresh of the http.sys ccs records failed.
+	"ccs_unlinked": paramTrueRE, "ccs_refresh_failed": paramTrueRE,
 }
 
 var (

@@ -309,6 +309,25 @@ func TestChainDiffersStepParamsAreKept(t *testing.T) {
 	assert.Equal(t, map[string]string{"chain_differs": "true", "deployed_chain": "2", "built_chain": "3", "port": "443"}, last.Params)
 }
 
+// W5 (R68): a CCS file's step params are kept: ccs_unlinked on the verify step (Ruling 8) and ccs_refresh_failed on
+// the write_file and restore steps (F15 route (a)).
+func TestCCSStepParamsAreKept(t *testing.T) {
+	f := newWinDeployFixture(t)
+	h := f.h
+	r := f.request(f.bound)
+	f.start(r.ID, nil)
+	require.NoError(t, h.svc.RecordDeploymentStep(h.ctx, r.ID, providers.StepNameWriteFile, providers.StepOK,
+		map[string]string{"ccs_refresh_failed": "true", "other": "x"}))
+	require.NoError(t, h.svc.RecordDeploymentStep(h.ctx, r.ID, providers.StepNameVerify, providers.StepSkipped,
+		map[string]string{"ccs_unlinked": "true", "mode": "skipped"}))
+	d, err := h.svc.Deployment(h.ctx, r.ID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(d.Steps), 2)
+	steps := d.Steps[len(d.Steps)-2:]
+	assert.Equal(t, map[string]string{"ccs_refresh_failed": "true"}, steps[0].Params)
+	assert.Equal(t, map[string]string{"ccs_unlinked": "true", "mode": "skipped"}, steps[1].Params)
+}
+
 // R61 helper_outdated names both versions (Ruling 3): a refusal's params are kept.
 func TestWindowsRefusalParamsAreKept(t *testing.T) {
 	f := newWinDeployFixture(t)

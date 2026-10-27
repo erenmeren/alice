@@ -9213,7 +9213,10 @@ components:
             unfinished earlier change), trust (on verify: trusted, untrusted or unchecked), trust_error (why a
             served chain did not verify; R51), and on a Windows binding's verify chain_differs (true when Windows
             serves a chain of another length than Alice deployed) with deployed_chain and built_chain (the two
-            lengths, 1-99; R61).
+            lengths, 1-99; R61). On a Centralized Certificate Store file (R68): ccs_unlinked on verify (true: no IIS
+            binding uses the file, so the helper's read-back was the only check) and ccs_refresh_failed on write_file
+            or restore (true: the helper could not refresh the http.sys ccs records afterwards; the verification
+            decides).
           additionalProperties: { type: string }
     Deployment:
       type: object

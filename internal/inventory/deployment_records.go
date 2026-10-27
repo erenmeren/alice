@@ -793,9 +793,11 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 
 // stepParamKeys are the step params a record keeps (providers.StepLogger's primitives; reason is the
 // failed verification's reason code, which a recovery reads back after a crash; chain_differs,
-// deployed_chain and built_chain: Windows serves a chain other than the one Alice deployed, W2 Ruling 16).
+// deployed_chain and built_chain: Windows serves a chain other than the one Alice deployed, W2 Ruling 16;
+// ccs_unlinked: a CCS file no IIS binding uses, verified by the helper's read-back only, W5 Ruling 8;
+// ccs_refresh_failed: the helper's refresh of the http.sys ccs records after a CCS write or restore failed, W5 F15).
 var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error",
-	"chain_differs", "deployed_chain", "built_chain"}
+	"chain_differs", "deployed_chain", "built_chain", "ccs_unlinked", "ccs_refresh_failed"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
@@ -1076,8 +1078,11 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 		return ErrDeploymentState
 	}
 	if success && verified == "skipped" && !f.release {
+		// A CCS file no IIS binding uses (discovery stored no servers) has no endpoint to probe: the helper's read-back
+		// is its only check (W5 Ruling 8), so its provider answers skipped although the location does not skip.
 		var skip bool
-		if err := tx.QueryRow(ctx, "SELECT skip_verify FROM certificate_locations WHERE id = $1", d.location).Scan(&skip); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT skip_verify OR (kind = $2 AND servers = '[]'::jsonb) FROM certificate_locations WHERE id = $1`,
+			d.location, providers.LocationWinCCSFile).Scan(&skip); err != nil {
 			return fmt.Errorf("inventory: read the location's verification settings: %w", err)
 		}
 		if !skip {

@@ -101,6 +101,21 @@ func TestWindowsVerifyStepParams(t *testing.T) {
 	assert.Equal(t, map[string]string{}, out.Steps[1].Params)
 }
 
+// W5 (R68): a CCS file's verify step shows ccs_unlinked (Ruling 8) and its write_file and restore steps
+// ccs_refresh_failed (F15 route (a)); a value other than "true" is dropped.
+func TestCCSStepParams(t *testing.T) {
+	d := inventory.Deployment{ID: uuid.New(), Steps: []inventory.DeploymentStep{
+		{N: 1, Name: "write_file", Status: "ok", Params: map[string]string{"ccs_refresh_failed": "true"}},
+		{N: 2, Name: "verify", Status: "skipped", Params: map[string]string{"ccs_unlinked": "true", "mode": "skipped"}},
+		{N: 3, Name: "restore", Status: "ok", Params: map[string]string{"ccs_refresh_failed": "yes", "ccs_unlinked": "1"}},
+	}}
+	out := deploymentDetailJSON(d)
+	require.Len(t, out.Steps, 3)
+	assert.Equal(t, map[string]string{"ccs_refresh_failed": "true"}, out.Steps[0].Params)
+	assert.Equal(t, map[string]string{"ccs_unlinked": "true", "mode": "skipped"}, out.Steps[1].Params)
+	assert.Equal(t, map[string]string{}, out.Steps[2].Params)
+}
+
 // R62 Ruling 18: a deployment always names the kind of its location: win_sslbinding for an IIS binding, server_file
 // for a certificate file (and for a record that names none).
 func TestDeploymentDTOHasLocationKind(t *testing.T) {
