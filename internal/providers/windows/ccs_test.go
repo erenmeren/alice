@@ -924,6 +924,39 @@ func TestConvertCCSUnreadableBindingIsNotUnlinked(t *testing.T) {
 	assert.Empty(t, vr.Params[ccsUnlinkedParam])
 }
 
+// Final review M1 (F17 measured: an explicit http.sys hostnameport record for host:port wins over CCS): a CCS binding
+// that such a record shadows is not linked to its file, and the file's location says win_ccs_shadowed, so a deployment
+// to it never probes a host IIS serves from the hostnameport record (it would roll back every time). A shadowed
+// binding without a file is no cert_missing location either.
+func TestConvertCCSHostnamePortShadows(t *testing.T) {
+	f := newDump(t)
+	leaf := func(cn string) pki.Leaf { return f.ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}}, f.now) }
+	www, shop := leaf("www.example.test"), leaf("shop.example.test")
+	f.d.Bindings = []winproto.SSLBinding{
+		{Type: winproto.BindingHostnamePort, Host: "WWW.example.test", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingHostnamePort, Host: "shop.example.test", Port: 443, AppID: winproto.AppIDIIS},
+		{Type: winproto.BindingHostnamePort, Host: "gone.example.test", Port: 443, AppID: winproto.AppIDIIS},
+	}
+	f.d.Sites = []winproto.Site{
+		ccsSite("Web", "*:443:www.example.test", 3),
+		ccsSite("Admin", "*:9443:www.example.test", 3), // another port: not shadowed
+		ccsSite("Shop", "*:443:shop.example.test", 3),
+		ccsSite("Gone", "*:443:gone.example.test", 3),
+	}
+	certs, warns := convertCCS(f.d, ccsDump(ccsFileOf("www.example.test.pfx", www), ccsFileOf("shop.example.test.pfx", shop)))
+	assert.Empty(t, codes(warns))
+	got := byPath(certs)
+	require.Len(t, certs, 2, "no cert_missing location for the shadowed gone.example.test")
+	w := got[`C:\CCS\www.example.test.pfx`].Location
+	assert.Equal(t, []providers.CertServer{{Names: []string{"www.example.test"}, Listens: []providers.CertListen{{Addr: "*", Port: 9443}}, Section: "Admin"}},
+		w.Servers, "the shadowed binding on 443 is not linked")
+	assert.Equal(t, []string{WarnCCSShadowed}, w.Warnings)
+	s := got[`C:\CCS\shop.example.test.pfx`].Location
+	assert.Empty(t, s.Servers)
+	assert.Equal(t, []string{WarnCCSUnlinked, WarnCCSShadowed}, s.Warnings, "no binding left: read-back only")
+	assert.True(t, unlinkedCCS(s))
+}
+
 // F17 (Ruling 6 as amended by ruling W5-13): the file IIS serves a host from: the exact file, then the nearest
 // wildcard file of a suffix at any depth that keeps two labels, never the wildcard's own parent.
 func TestCCSFileFor(t *testing.T) {

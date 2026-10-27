@@ -18,13 +18,14 @@ import (
 // folder, linked to the IIS https bindings IIS serves from it, written by ccs-deploy with the server's CCS password and
 // restored from the backup through iis-restore.
 
-// Warnings of the CCS: server level (the first three) and location level (WarnCCSUnlinked). Codes have no dot, as
-// inventory stores only ^[a-z][a-z_]{0,39}$.
+// Warnings of the CCS: server level (the first three) and location level (WarnCCSUnlinked, WarnCCSShadowed). Codes
+// have no dot, as inventory stores only ^[a-z][a-z_]{0,39}$.
 const (
 	WarnCCSPasswordMissing  = "win_ccs_password_missing"  // Alice holds no CCS password of the server: no files read (Ruling 18)
 	WarnCCSHelperOutdated   = "win_ccs_helper_outdated"   // the helper is below CCSMinVersion: no files read (Ruling 2)
 	WarnCCSPasswordMismatch = "win_ccs_password_mismatch" // param count: the files Alice's password does not open (Ruling 12)
 	WarnCCSUnlinked         = "win_ccs_unlinked"          // no IIS binding uses the file: verified by the read-back only (Ruling 8)
+	WarnCCSShadowed         = "win_ccs_shadowed"          // an http.sys hostnameport record serves a host of the file instead (F17)
 )
 
 // ccsUnlinkedParam is the verify step's param of a file no IIS binding uses (Ruling 8).
@@ -149,13 +150,16 @@ func ccsDumpInput(pw []byte) ([]byte, bool) {
 
 // ccsFile is one file of the folder while the bindings are linked.
 type ccsFile struct {
-	f   winproto.CCSFile
-	loc location
+	f        winproto.CCSFile
+	loc      location
+	shadowed bool // a binding of the file is served by a hostnameport record instead (F17)
 }
 
 // convertCCS turns a ccs-dump answer into win_ccs_file locations (W5 Rulings 5-8, 12, 19): one per .pfx whose name
 // gives a host, linked to the IIS https bindings with the CCS flag that IIS serves from it (ccsFileFor), and one
-// cert_missing location per such binding whose host maps to no file. Each location's token is its leaf DER's SHA-256
+// cert_missing location per such binding whose host maps to no file. A binding whose host:port has an http.sys
+// hostnameport record is served from that record (F17): it is linked to no file and makes no cert_missing location,
+// and the file it would use says win_ccs_shadowed. Each location's token is its leaf DER's SHA-256
 // and its chain the leaf and the file's intermediates, parsed again (certificateChain's rule). A folder Alice does not
 // manage gives its server warning and no location; a folder the helper cut (truncated) or files Alice left out give
 // list_truncated and locations_dropped, and then no cert_missing location (a missing file is not proven). An https
@@ -186,6 +190,13 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 		files[host] = &ccsFile{f: f}
 	}
 
+	// F17: an http.sys hostnameport record for host:port wins over CCS, so IIS never serves that binding from a file.
+	hostPorts := map[string]bool{}
+	for _, b := range d.Bindings {
+		if h, ok := hostName(b.Host); ok && b.Type == winproto.BindingHostnamePort {
+			hostPorts[h+":"+strconv.Itoa(b.Port)] = true
+		}
+	}
 	missing := map[string]*location{}
 	memberships, sitesCut := 0, false
 	for _, site := range d.Sites {
@@ -206,7 +217,14 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 			memberships++
 			srv := server{cs: providers.CertServer{Names: []string{k.host}, Listens: []providers.CertListen{{Addr: k.ip, Port: k.port}},
 				Section: name}, site: name, info: sb.Information}
-			if host, ok := ccsFileFor(k.host, func(h string) bool { return files[h] != nil }); ok {
+			host, ok := ccsFileFor(k.host, func(h string) bool { return files[h] != nil })
+			switch {
+			case hostPorts[k.host+":"+strconv.Itoa(k.port)]:
+				if ok {
+					files[host].shadowed = true // not linked: a probe would see the hostnameport record's certificate
+				}
+				continue
+			case ok:
 				files[host].loc.add(srv)
 				continue
 			}
@@ -317,6 +335,9 @@ func finishCCS(folder, host string, cf *ccsFile) providers.DiscoveredCertificate
 	loc.Details["modified_at"] = modified
 	if len(loc.Servers) == 0 && !cf.loc.cut {
 		loc.Warnings = append([]string{WarnCCSUnlinked}, loc.Warnings...)
+	}
+	if cf.shadowed {
+		loc.Warnings = append(loc.Warnings, WarnCCSShadowed)
 	}
 	dc := providers.DiscoveredCertificate{}
 	switch f.Problem {

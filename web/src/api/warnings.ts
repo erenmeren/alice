@@ -98,8 +98,10 @@ export const LOCATION_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   mail_tls: [],
   chain_unresolved: [],
   win_ctl: [],
-  // R68: a CCS file no IIS binding uses (internal/providers/windows/ccs.go).
+  // R68: a CCS file no IIS binding uses, and one a binding of which an http.sys hostnameport record serves instead
+  // (internal/providers/windows/ccs.go).
   win_ccs_unlinked: [],
+  win_ccs_shadowed: [],
 };
 
 // locationWarningKey is the text key of a location warning; a code from a newer server gets the

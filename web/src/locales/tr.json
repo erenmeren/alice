@@ -1957,7 +1957,8 @@
       "unknown": "Alice bu web sitesi hakkında bu sürümün açıklayamadığı bir not bildirdi.",
       "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde belirleyemedi; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor.",
       "win_ctl": "Bu bağlama ayrıca güvenilen veren listesi veya istemci sertifikaları kullanıyor. Alice bunları modellemiyor.",
-      "win_ccs_unlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor. Alice dosyaya dağıtım yapabilir ve dosyayı geri okuyarak denetler; hiçbir web sitesi yoklanamaz."
+      "win_ccs_unlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor. Alice dosyaya dağıtım yapabilir ve dosyayı geri okuyarak denetler; hiçbir web sitesi yoklanamaz.",
+      "win_ccs_shadowed": "Bu dosyayı kullanacak biçimde ayarlanmış bir siteyi ana bilgisayar adının ve bağlantı noktasının http.sys bağlaması sunuyor; bu yüzden IIS o siteyi dosyadan sunmaz. Alice dosyaya yapılan bir dağıtımdan sonra o siteyi yoklamaz; sitenin sunduğunu değiştirmek için http.sys bağlamasına dağıtın."
     },
     "unsupported": {
       "variable": "Yol bir değişken kullanıyor, bu yüzden Alice hangi dosyanın kullanıldığını bilemez.",

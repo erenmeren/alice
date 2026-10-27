@@ -171,8 +171,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   // never a location or a server warning, so the SPA has no label for them. A new Warn* constant of winproto
   // is a dump warning unless it is named here (the assertion below pins this list against the Go source).
   const cleanupPlanWarnings = ['journal_unreadable', 'binding_record_unreadable'];
-  // R68: the Windows provider's own CCS warnings (internal/providers/windows/ccs.go): win_ccs_unlinked of a location,
-  // the others of the server.
+  // R68: the Windows provider's own CCS warnings (internal/providers/windows/ccs.go): win_ccs_unlinked and
+  // win_ccs_shadowed of a location, the others of the server.
   const ccsWarnings = goConsts('internal/providers/windows/ccs.go', /^Warn/);
   const winWarnings = [...winAllWarnings.filter((w) => !cleanupPlanWarnings.includes(w)), ...ccsWarnings];
   // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
@@ -267,9 +267,10 @@ describe('Nginx deployment, website and fact labels cover the specification and 
       'win_ccs_helper_outdated',
       'win_ccs_password_mismatch',
     ];
-    expect(winWarnings).toEqual(expect.arrayContaining([...windowsOnly, 'win_ctl', 'win_ccs_unlinked']));
+    expect(winWarnings).toEqual(expect.arrayContaining([...windowsOnly, 'win_ctl', 'win_ccs_unlinked', 'win_ccs_shadowed']));
     expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ctl');
     expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ccs_unlinked');
+    expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ccs_shadowed');
     expect(haproxyconfWarnings).toContain('config_file_not_read');
     const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_helper_too_old', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'config_dir_not_read', 'config_file_not_read', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
@@ -313,7 +314,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
 
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
     for (const w of [...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
-    for (const w of winWarnings.filter((x) => x !== 'win_ctl' && x !== 'win_ccs_unlinked')) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    for (const w of winWarnings.filter((x) => x !== 'win_ctl' && x !== 'win_ccs_unlinked' && x !== 'win_ccs_shadowed')) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
     expect(warningKey({ code: 'win_expired_in_store', params: { count: '3' } })).toBe('warnings.win_expired_in_store');
     for (const code of ['win_ccs_files_ignored', 'win_ccs_password_mismatch']) {
       expect(warningKey({ code, params: { count: '2' } })).toBe(`warnings.${code}`);

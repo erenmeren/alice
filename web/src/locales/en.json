@@ -1957,7 +1957,8 @@
       "unknown": "Alice reported a note about this website that this version cannot describe.",
       "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete.",
       "win_ctl": "This binding also uses a trusted-issuers list or client certificates. Alice does not model those.",
-      "win_ccs_unlinked": "No IIS site uses this file. Alice can deploy to it and checks the file by reading it back; no website can be probed."
+      "win_ccs_unlinked": "No IIS site uses this file. Alice can deploy to it and checks the file by reading it back; no website can be probed.",
+      "win_ccs_shadowed": "An http.sys binding of the host name and port serves a site set to use this file, so IIS does not serve that site from the file. Alice does not probe that site after a deployment to the file; deploy to the http.sys binding to change what the site serves."
     },
     "unsupported": {
       "variable": "The path uses a variable, so Alice cannot know which file is used.",
