@@ -1730,9 +1730,13 @@ The plan's 26 rulings stand as written, except where an entry says "Amended" or 
    the helper's own version reads `1.1.0` (Task 1, the W4 deferred minor), `TestReleasedHelperVersion` gained a case
    that discriminates numerically, `TestFidelityVersionAndRefusals` still probes `rdp-deploy`.
 3. **Supported layout: a local CCS folder.** As written. Precision (Tasks 1, 3): `ValidCCSPath` is an ASCII drive
-   letter, `:\`, at most 240 bytes, one trailing backslash, no `:` or `/` after the drive and no `.` or `..` segment.
-   Precision (Task 2): a folder that is a reparse point is the sentinel `ErrCCSFolderUnsupported`, answered
-   `local: false`, so discovery warns `win_ccs_path_unsupported` (a UNC path warns `win_ccs_remote`).
+   letter, `:\`, at most 240 bytes, one trailing backslash, no `:` or `/` after the drive and no `.` or `..` segment;
+   since the final review (M3) no segment that ends in `.` or a space either (Win32 strips both, so `C:\CCS.` would
+   name `C:\CCS`). Precision (Task 2): a folder that is a reparse point is the sentinel `ErrCCSFolderUnsupported`,
+   answered `local: false`, so discovery warns `win_ccs_path_unsupported` (a UNC path warns `win_ccs_remote`).
+   Precision (final review M2): only the CCS folder itself is checked for a reparse point, not its parent folders; a
+   junction above it is followed. The registry value that names the folder is writable by Administrators only, who can
+   point IIS anywhere already, so the parent check was not built (found, not fixed; owner item).
 4. **The path comes from the server only.** As written. Precision (Task 3): the registry checks run disabled, then
    unsupported, then changed (a UNC registry path is `CCS_PATH_UNSUPPORTED`); `ccs-deploy` lists the folder before the
    read so a reparse-point folder is refused; a derived name holding `:`, `\` or `/` is `INVALID_ARGUMENT`. Precision
@@ -1820,7 +1824,8 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   `ccs:<port>` record was served after 8-12 ms. The file keeps its ACL; the backup holds the replaced bytes; `.bak` and
   `.tmp` files are never served. An appcmd binding with `sslFlags=3` creates no `ccs` record (the fixture adds it with
   netsh). Ruling W5-10. The no-op proof of the refresh (every `ccs` record, base and extended parameters, equal before
-  and after) runs from run 6 (<https://github.com/erenmeren/alice/actions/runs/40499784360>): verdict pending.
+  and after) passed in run 6 (<https://github.com/erenmeren/alice/actions/runs/40499784360>, `e0752599`, both images):
+  `F15: refresh no-op: 1 ccs records read the same, base and extended parameters, after RefreshCCSRecords`.
 - **F16: confirmed.** Runs 2 and 4 (<https://github.com/erenmeren/alice/actions/runs/40484509608>,
   <https://github.com/erenmeren/alice/actions/runs/40491733346>). IIS serves a `BuildPFX` file; a file under another
   password is not served (HttpEvent 15301/15302, no Application event of IIS); `PFXImportCertStore(PKCS12_NO_PERSIST_KEY)`
@@ -1849,14 +1854,20 @@ exact first; keep at least one runner run for the final code head).
 | 3 | <https://github.com/erenmeren/alice/actions/runs/40488480626> | `b0e60d22` | fail / fail | F15 again (9-10 ms); a second folder served 5 s after Enable and a refresh (W5-11's premise wrong, the shared folder kept as harmless); a new port's first serve dead for about 150 s; F17: a wildcard served two labels down |
 | 4 | <https://github.com/erenmeren/alice/actions/runs/40491733346> | `30294923` | fail / fail | Only `TestRealCCSNameRules` and `TestRealCCSServedChain` failed; F16 fully measured; F18 measured; DIAG named `PollingInterval` |
 | 5 | <https://github.com/erenmeren/alice/actions/runs/40494994143> | `632c6ef5` | **pass / pass** | F17 and F18 final (pre-placed files, `PollingInterval` 10 s) |
-| 6 | <https://github.com/erenmeren/alice/actions/runs/40499784360> | `e0752599` | pending | The refresh no-op proof (`F15: refresh no-op:`), W5-13 in the emulator, the step params, W5-15 (the controller fills this row) |
+| 6 | <https://github.com/erenmeren/alice/actions/runs/40499784360> | `e0752599` | **pass / pass** | `windows-required` green; the refresh no-op proven (`F15: refresh no-op: 1 ccs records read the same, base and extended parameters, after RefreshCCSRecords`); W5-13 in the emulator, the step params and W5-15 green |
 | 7 | reserved | | | The final code head after the final review's fixes (Ruling P8) |
 | 8 | reserved (spare) | | | |
 
-The `ci.yml` runs of the same pushes: 40479436681 (go green; coverage failed on `TestServeStartsOnAPhase3Database`
-expecting migration 35, fixed in `362b7893`; web failed on the enum and label tests, fixed by Task 8), 40484509526
-(coverage failed on `internal/inventory` 88.9 % < 89, fixed by Task 6; web failed while Task 8 was in progress),
-40488480505, 40491733481, 40494994086 and 40499784357 (the controller records their results).
+The `ci.yml` runs of the same pushes:
+
+| Run | ci.yml | go | coverage | web |
+|---|---|---|---|---|
+| 1 | 40479436681 | pass | fail: `TestServeStartsOnAPhase3Database` expected migration 35, now 36 (fixed in `362b7893`) | fail: the enum and label tests (fixed by Task 8) |
+| 2 | 40484509526 | pass | fail: `internal/inventory` 88.9 % < 89 | fail (Task 8 in progress) |
+| 3 | 40488480505 | pass | fail: the `internal/inventory` floor | fail (Task 8 in progress) |
+| 4 | 40491733481 | pass | fail: the `internal/inventory` floor | fail (Task 8 in progress) |
+| 5 | 40494994086 | pass | fail: the `internal/inventory` floor | fail (until Task 8) |
+| 6 | 40499784357 | pass | pending when this was written | pass |
 
 ## Rulings made during execution (W5)
 
@@ -1902,7 +1913,9 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - W5-8: the location warning code is `win_ccs_unlinked`, not `win.ccs_unlinked` — inventory's `codeRE`
   `^[a-z][a-z_]{0,39}$` (`locations.go:49`, the column CHECK) drops dotted codes.
 - W5-9: a cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning beside `locations_dropped` —
-  accepted: a warning only, corrected by the next full scan.
+  accepted: a warning only, corrected by the next full scan. **Superseded (final review I1):** a cut site list now
+  cuts every CCS file location (`list_truncated`, never `win_ccs_unlinked`), because an unlinked file's verification
+  is skipped.
 - W5-10: F15 route (a): after every CCS replace and every CCS restore the helper makes a same-record update of every
   http.sys `ccs:<port>` record (the helper does not know the links; the update is idempotent); `CCSPickupWait` stays 0
   — measured on both images; cost: an extra http.sys write per deployment.
@@ -2151,7 +2164,42 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 
 ## Final review fixes (W5)
 
-Pending (Task 10 step 6): the independent review of `e15fad4b..HEAD` and every finding fixed or declined with a reason.
+The coordinator's independent final review of `e15fad4b..e0752599` (verdict: fix first, no security blocker). One line
+per finding: the finding, what was done, why.
+
+- **I1 (Important, Review Focus 3, WN-21):** `convertCCS` skipped an https binding it could not read (or one past
+  `maxMembershipsPerDump`) silently, so a file whose only binding was skipped became `win_ccs_unlinked` and its
+  deployment skipped the probe. Fixed: such a skip sets `list_truncated` and `locations_dropped` and cuts every file
+  location (`list_truncated`, no `win_ccs_unlinked`); `unlinkedCCS` never answers true for a location with
+  `list_truncated`, so its verification probes (no endpoint known: `verify_unreachable`, the house rule, and the
+  backup is restored); the deployment material now carries the stored location warnings of a location that is not a
+  file, so the provider sees the cut at deploy time and W5-15's inventory exception (`servers = '[]'`) is never
+  reached for such a location (`TestConvertCCSUnreadableBindingIsNotUnlinked`,
+  `TestWindowsCCSCutBindingIsNeverSkipped`). Why: a write IIS cannot open must never stay unverified.
+- **I2 (Important):** the Task 9 rulings were written before run 6 finished. Fixed: run 6's row, the F15 no-op verdict,
+  the owner item and the `ci.yml` results are filled in. Why: the as-built record must hold the measured verdicts.
+- **M1 (Minor, F17):** the measured `hostnameport` precedence was recorded only. Fixed: a CCS binding whose host and
+  port have an http.sys `hostnameport` record is linked to no file and makes no `cert_missing` location, and the file
+  it would use gets the location warning `win_ccs_shadowed` (EN and TR texts); a file left with no binding is
+  `win_ccs_unlinked` as well (`TestConvertCCSHostnamePortShadows`). Ruling: the `hostnameport` location itself gets no
+  warning, because it serves the host and its own deployment is probed correctly; the plan's `win.ccs_shadows` was
+  for the outcome F17 measured false. Why: a deployment to the file would otherwise probe the `hostnameport`
+  record's certificate and roll back every time.
+- **M2 (Minor):** the helper checks only the CCS folder itself for a reparse point, not its parents. Not fixed:
+  recorded in Ruling 3 as built and under owner items. Why: the folder comes from a registry value only
+  Administrators can write.
+- **M3 (Minor):** `ValidCCSPath` accepted a segment that ends in `.` or a space, which Win32 strips. Fixed: refused,
+  with new table rows in `TestValidCCSPath` (`winproto` coverage stays 100 %). Why: the name checked must be the name
+  Windows opens.
+- **M4 (Minor):** the `BACKUP_MISSING` answer of a CCS restore used the certificate-store text. Fixed: a CCS journal
+  answers the fixed text "the CCS file's backup is missing or was changed" (no path, no password;
+  `TestCCSRestoreRules`). Why: the message must name what is missing.
+- **M5 (Minor):** the CCS password field help omitted "printable ASCII". Fixed in EN and TR, as the API, the 422 text
+  and the troubleshooting entry say. Why: the help must state the whole rule.
+
+Found, not fixed:
+
+- The CCS folder's parent folders are not checked for a reparse point (M2 above; Ruling 3 as built).
 
 ## Acceptance (design §13 W5)
 
@@ -2202,9 +2250,14 @@ Added during execution:
   `PollingInterval`). Alice only replaces existing files, so its own deployments are not affected; the host guide tells
   administrators to place the first file before the site's first request.
 - **The refresh touches every http.sys `ccs` record of the server** (W5-10), not only the linked ports, with each
-  record's own values. The runner proves the update changes no record and no extended parameter (`F15: refresh
-  no-op:`, run 6 <https://github.com/erenmeren/alice/actions/runs/40499784360>, verdict pending); a failure of another
-  application's record reports `ccs_refresh_failed` on the deployment.
+  record's own values. The runner proved the update changes no record and no extended parameter in run 6
+  (<https://github.com/erenmeren/alice/actions/runs/40499784360>, both images: `F15: refresh no-op: 1 ccs records read
+  the same, base and extended parameters, after RefreshCCSRecords`); a failure of another application's record
+  reports `ccs_refresh_failed` on the deployment.
+- **The CCS folder's parents are not checked for a reparse point** (final review M2, Ruling 3 as built): only the
+  folder itself is. The registry value that names it is Administrator-owned. Confirm, or ask for the parent check.
+- **`win_ccs_shadowed` (final review M1):** a CCS binding that an http.sys `hostnameport` record serves is linked to no
+  file; the file says `win_ccs_shadowed`, and the `hostnameport` location gets no warning. Confirm.
 - **The W4 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode, the helper
   update procedure): a 1.1.0 helper needs the same "update the helpers first, then Alice" step.
 
@@ -2225,8 +2278,8 @@ Added during execution:
   case of `TestReleasedHelperVersion`); not built in W4 (a real-Windows ARM64 leg, `ci.yml` checks required, a Windows
   gate in `make release-gates`, a `merge_group` trigger, removing intermediates from `CA`, a cleanup history page).
 - **Minors deferred during W5 (known debt)**:
-  - `ValidCCSPath` accepts an empty segment (`C:\a\\b`) and a trailing dot or space — the path comes from the registry
-    only (Task 1).
+  - `ValidCCSPath` accepts an empty segment (`C:\a\\b`) — the path comes from the registry only (Task 1); a trailing
+    dot or space is refused since the final review (M3).
   - `CCSHost` maps a literal `*.example.com.pfx` to `*.example.com` — unreachable on NTFS (Task 1).
   - A test uses an all-zero 8-digit operation instead of a UUID in the temporary-file case (Task 1).
   - The reparse-folder check on a restore runs before the gate, not just before `RestoreCCS` (a time-of-check gap, as
@@ -2245,4 +2298,4 @@ Added during execution:
   - The web's `win_ccs_enabled` text stays after the password is set; a busy double submit of the password panel is
     possible (nil risk, per the review); the deploy dialog's summary follows the opening location's
     kind; "Select all bindings of this certificate" also selects CCS files (Task 8).
-  - A cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning (W5-9).
+  - A cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning (W5-9) — closed by final review I1.
