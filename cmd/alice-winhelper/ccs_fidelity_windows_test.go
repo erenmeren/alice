@@ -118,7 +118,14 @@ func TestFidelityCCS(t *testing.T) {
 	got := dump()
 	assert.Equal(t, true, got["local"], "%v", got)
 	assert.EqualValues(t, 1, got["ignored"], "bad name.pfx")
-	assert.Len(t, asList(got["files"]), 4, "f, w, junk and big; not the link, the directory or readme.txt")
+	var dumped []string
+	for _, file := range asList(got["files"]) {
+		dumped = append(dumped, asString(file["name"]))
+	}
+	assert.Subset(t, dumped, []string{"f.alice-w5.test.pfx", "w.alice-w5.test.pfx", "junk.alice-w5.test.pfx", "big.alice-w5.test.pfx"})
+	for _, n := range []string{"s.alice-w5.test.pfx", "sub.alice-w5.test.pfx", "readme.txt"} {
+		assert.NotContains(t, dumped, n, "not the link, the directory or readme.txt")
+	}
 	_, got = f.both([]byte(`{"password":"`+string(other)+`"}`), winproto.SubCCSDump)
 	assert.Equal(t, true, got["ok"], "another valid password: every file a mismatch, %v", got)
 	for _, c := range []struct {

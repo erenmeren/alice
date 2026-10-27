@@ -16,6 +16,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 
 	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 // sharedCCS is the package's CCS configuration.
@@ -46,6 +48,9 @@ var sharedCCS struct {
 	start     time.Time
 	// recordByIIS: appcmd's sslFlags=3 bindings made the http.sys ccs record (else netsh did).
 	recordByIIS bool
+	pollingWas  string // PollingInterval as found (after the first Enable)
+	polling     string // as read after the fixture set it
+	pre         prePlaced
 
 	mu       sync.Mutex
 	cleanups []func(logf func(string, ...any)) // run in reverse by tearDownSharedCCS
@@ -190,6 +195,21 @@ Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $env:ALICE_W5_ACCOUNT`); err !=
 	case !enabled || path != folder:
 		return fmt.Errorf("the helper reads CCS enabled %v at %q, not %q", enabled, path, folder)
 	}
+	// PollingInterval (run 4): recorded, set to ccsPollSeconds, CCS enabled again so the provider reads
+	// it; the teardown's reg import puts the key back as found.
+	was := pollingInterval()
+	if err := setPollingInterval(ccsPollSeconds); err != nil {
+		return fmt.Errorf("PollingInterval: %w", err)
+	}
+	if err := enableCCSAt(folder); err != nil {
+		return err
+	}
+	sharedCCS.pollingWas, sharedCCS.polling = was, pollingInterval()
+	logf("F17: polling interval: the CentralCertProvider's PollingInterval was %s, set to %d, reads %s", was, ccsPollSeconds, sharedCCS.polling)
+	// The F17 and F18 files, before any CCS handshake for their hosts (run 4).
+	if sharedCCS.pre, err = placePre(folder, sharedCCS.password); err != nil {
+		return err
+	}
 	// The one site every CCS test serves from, made before any CCS handshake (run 3).
 	addSharedCleanup(func(logf func(string, ...any)) { removeCCSSite(logf, ccsSiteName, portCCSShared, ccsSiteDir) })
 	byIIS, err := createCCSSite(ccsSiteName, portCCSShared, ccsSiteDir, ccsSiteHosts)
@@ -263,7 +283,7 @@ func TestRealCCSSharedFolderRemoved(t *testing.T) {
 // working path did; DIAG measures a site of its own made later (TestRealCCSServedChain).
 var ccsSiteHosts = []string{"r.alice-w5.test", "n.alice-w5.test", "nf.alice-w5.test", "good.alice-w5.test", "bad.alice-w5.test",
 	"x.alice-w5.test", "exact.alice-w5.test", "up.alice-w5.test", "y.alice-w5.test", "a.b.alice-w5.test", "neg.alice-w5.test",
-	"f18a.alice-w5.test", "f18b.alice-w5.test", "f18c.alice-w5.test", "j.alice-w5.test", "s.alice-w5.test", "f.alice-w5.test"}
+	"f18a.alice-w5.test", "f18b.alice-w5.test", "f18c.alice-w5.test", "late.alice-w5.test", "j.alice-w5.test", "s.alice-w5.test", "f.alice-w5.test"}
 
 const (
 	ccsSiteName = "alice-w5-ccs"
@@ -350,7 +370,7 @@ func removeCCSSite(logf func(string, ...any), name string, port int, dir string)
 
 // ccsDiag logs, with the prefix DIAG:, what decides whether port serves from CCS: the http.sys ccs
 // record (netsh), the URLs http.sys has registered on the port, the site's and the application pools'
-// state, the CentralCertProvider values (never a password: Enabled and CertStoreLocation, and the
+// state, the CentralCertProvider values (never a password: Enabled, CertStoreLocation and PollingInterval, and the
 // other value names only), and the latest IIS, HTTP and schannel events since CCS was enabled.
 func ccsDiag(logf func(string, ...any), port int, site string) {
 	run := func(what string, name string, args ...string) {
@@ -379,7 +399,7 @@ func ccsDiag(logf func(string, ...any), port int, site string) {
 	run("app pools", appcmdPath(), "list", "apppool")
 	out, err := runPowershell(nil, `$k = Get-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\IIS\CentralCertProvider' -ErrorAction SilentlyContinue
 if ($k) {
-    "Enabled=$($k.GetValue('Enabled')) CertStoreLocation=$($k.GetValue('CertStoreLocation'))"
+    "Enabled=$($k.GetValue('Enabled')) CertStoreLocation=$($k.GetValue('CertStoreLocation')) PollingInterval=$($k.GetValue('PollingInterval'))"
     "value names: $($k.GetValueNames() -join ',')"
 } else { 'no CentralCertProvider key' }`)
 	logf("DIAG: CentralCertProvider: %s %v", strings.Join(strings.Fields(string(out)), " "), err)
@@ -396,5 +416,89 @@ Get-WinEvent -FilterHashtable @{LogName = 'Application', 'System'; StartTime = $
 	}
 	if err != nil {
 		logf("DIAG: events: %v", err)
+	}
+}
+
+// ccsPollSeconds is the CCS provider's PollingInterval the shared fixture sets (run 4: the value is in
+// the CentralCertProvider key; the hypothesis is that IIS re-reads the folder's file set every
+// PollingInterval seconds, so a file for a host it has not seen appears only then). The key is
+// restored as found by the teardown (reg import of the key saved before Enable).
+const ccsPollSeconds = 10
+
+// prePlaced are the F17 and F18 files the shared setup puts into the folder before any CCS handshake
+// (run 4: files placed later were not served within 30 s to 2 minutes), by key.
+type prePlaced struct {
+	ca                    *pki.CA
+	wild, exact, upper, d pki.Leaf // _.alice-w5.test.pfx, exact., UP.Alice-W5.Test.PFX, y.
+	f18a, f18b, f18c      pki.Leaf // f18a with the intermediate in the file, the others without
+	placed                time.Time
+}
+
+// ccsPreNames are the pre-placed file names.
+var ccsPreNames = []string{"_.alice-w5.test.pfx", "exact.alice-w5.test.pfx", "UP.Alice-W5.Test.PFX", "y.alice-w5.test.pfx",
+	"f18a.alice-w5.test.pfx", "f18b.alice-w5.test.pfx", "f18c.alice-w5.test.pfx"}
+
+// pollingInterval reads the CentralCertProvider's PollingInterval ("absent" when there is none).
+func pollingInterval() string {
+	k, err := openKey(keyCentralCert)
+	if err != nil {
+		return "unreadable: " + err.Error()
+	}
+	defer func() { _ = k.Close() }()
+	v, _, err := k.GetIntegerValue("PollingInterval")
+	if errors.Is(err, registry.ErrNotExist) {
+		return "absent"
+	}
+	if err != nil {
+		return "unreadable: " + err.Error()
+	}
+	return strconv.FormatUint(v, 10)
+}
+
+// setPollingInterval writes PollingInterval (seconds, REG_DWORD).
+func setPollingInterval(seconds uint32) error {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, keyCentralCert, registry.SET_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = k.Close() }()
+	return k.SetDWordValue("PollingInterval", seconds)
+}
+
+// placePre builds the pre-placed files with the store's password and writes them.
+func placePre(folder string, password []byte) (prePlaced, error) {
+	now := time.Now()
+	p := prePlaced{ca: pki.NewCA("alice-w5-f18", pki.ECDSA256, now)}
+	self := func(cn string) pki.Leaf { return pki.SelfSigned(cn, pki.ECDSA256, now) }
+	issue := func(cn string) pki.Leaf { return p.ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}}, now) }
+	p.wild, p.exact, p.upper, p.d = self("alice-w5-wild.test"), self("alice-w5-exact.test"), self("alice-w5-upper.test"), self("alice-w5-d.test")
+	p.f18a, p.f18b, p.f18c = issue("f18a.alice-w5.test"), issue("f18b.alice-w5.test"), issue("f18c.alice-w5.test")
+	for i, l := range []pki.Leaf{p.wild, p.exact, p.upper, p.d, p.f18a, p.f18b, p.f18c} {
+		pkcs8, err := x509.MarshalPKCS8PrivateKey(l.Key)
+		if err != nil {
+			return p, err
+		}
+		var inter [][]byte
+		if ccsPreNames[i] == "f18a.alice-w5.test.pfx" {
+			inter = [][]byte{p.ca.Intermediate.Raw}
+		}
+		pfx, err := winhelper.BuildPFX(l.Cert.Raw, pkcs8, password, inter...)
+		if err != nil {
+			return p, err
+		}
+		if err := os.WriteFile(filepath.Join(folder, ccsPreNames[i]), pfx, 0o600); err != nil {
+			return p, err
+		}
+	}
+	p.placed = time.Now()
+	return p, nil
+}
+
+// waitPolled sleeps until one polling interval and a margin have passed since the files were placed.
+func waitPolled(t *testing.T) {
+	t.Helper()
+	if d := time.Until(sharedCCS.pre.placed.Add((ccsPollSeconds + 5) * time.Second)); d > 0 {
+		t.Logf("waiting %v for the CCS provider's polling interval", d.Round(time.Millisecond))
+		time.Sleep(d)
 	}
 }
