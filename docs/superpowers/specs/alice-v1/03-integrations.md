@@ -845,9 +845,11 @@ services, naming store and thumbprint, once no place of the incident on the serv
   serves from it, as measured (F17): the exact `<host>.pfx` first, otherwise the nearest `_.<suffix>.pfx` found by
   stripping leftmost labels (any depth, the suffix keeps at least two labels, never the wildcard's own parent);
   names compared without case. A binding without a valid host header links nothing. An explicit `hostnameport`
-  record of `h:port` wins over the CCS binding on the same port. An IIS CCS binding whose host maps to no file is a
-  `cert_missing` location (unsupported; place the first file). A file no binding uses is supported, with the location
-  warning `win_ccs_unlinked`.
+  record of `h:port` wins over the CCS binding on the same port: such a binding is linked to no file and makes no
+  `cert_missing` location, and the file it would use has the location warning `win_ccs_shadowed`. An IIS CCS binding
+  whose host maps to no file is a `cert_missing` location (unsupported; place the first file). A file no binding uses
+  is supported, with the location warning `win_ccs_unlinked`; when discovery could not read an https binding, every
+  file location is cut (`list_truncated`, never `win_ccs_unlinked`) and its verification probes.
 - **Problems.** `ccs_password_mismatch` (server warning `win_ccs_password_mismatch`, `count`), `not_a_certificate`,
   `too_large`, `key_missing`: the location is unsupported (`file_problem`) and never deployed over. Files ignored by
   name: `win_ccs_files_ignored` (`count`).
