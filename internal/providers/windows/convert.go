@@ -275,7 +275,7 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 	// What W2 Ruling 18 must know of a cut: the helper's own cut (truncated, list_truncated: any list may
 	// lack entries), an entry Alice could not read (an IIS binding may want it), a site binding Alice could
 	// not read or no longer counted (it may use an entry).
-	helperCut := d.Truncated || slices.Contains(d.Warnings, winproto.WarnListTruncated)
+	helperCut := dumpCut(d)
 	entriesCut, sitesCut := helperCut, helperCut
 	locs := map[string]*location{}
 	entries := 0
@@ -360,6 +360,12 @@ func convert(d winproto.IISDumpResponse) (certs []providers.DiscoveredCertificat
 		warns = append(warns, warning(providers.WarnListTruncated))
 	}
 	return certs, warns, facts
+}
+
+// dumpCut reports the helper's own cut of an iis-dump (truncated, or list_truncated): any of its lists, the sites and
+// their bindings among them, may lack entries.
+func dumpCut(d winproto.IISDumpResponse) bool {
+	return d.Truncated || slices.Contains(d.Warnings, winproto.WarnListTruncated)
 }
 
 func warning(code string) providers.Warning {

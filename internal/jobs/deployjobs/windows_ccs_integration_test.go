@@ -481,7 +481,8 @@ func TestWindowsCCSCutBindingIsNeverSkipped(t *testing.T) {
 	for _, st := range d.Steps {
 		assert.Empty(t, st.Params["ccs_unlinked"], st.Name)
 	}
-	data, _ := s.model.CCSFile(name)
+	data, found := s.model.CCSFile(name)
+	require.True(t, found, "the file is still there")
 	leaf, _, _, err := pki.OpenPFXKey(data, []byte(s.pw))
 	require.NoError(t, err)
 	c, err := x509.ParseCertificate(leaf)

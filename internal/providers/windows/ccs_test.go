@@ -915,6 +915,21 @@ func TestConvertCCSUnreadableBindingIsNotUnlinked(t *testing.T) {
 	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
 	assert.False(t, unlinkedCCS(loc), "a cut location is never read-back only")
 
+	// The helper's own cut of the iis-dump (truncated, or the list_truncated warning): the same, and no cert_missing.
+	for _, cut := range []func(d *winproto.IISDumpResponse){
+		func(d *winproto.IISDumpResponse) { d.Truncated = true },
+		func(d *winproto.IISDumpResponse) { d.Warnings = []string{winproto.WarnListTruncated} },
+	} {
+		d := newDump(t).d
+		d.Sites = []winproto.Site{ccsSite("Gone", "*:443:gone.example.test", 3)}
+		cut(&d)
+		certs, warns := convertCCS(d, ccsDump(ccsFileOf("www.example.test.pfx", www)))
+		require.Len(t, certs, 1, "no cert_missing location under the helper's cut")
+		assert.Equal(t, []string{providers.WarnListTruncated}, certs[0].Location.Warnings, "cut, not win_ccs_unlinked")
+		assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
+		assert.False(t, unlinkedCCS(certs[0].Location))
+	}
+
 	c := newCEnv(t)
 	c.cloc.Servers, c.cloc.Warnings = []providers.CertServer{}, []string{providers.WarnListTruncated}
 	vr, err := c.csession(t).VerifyDeployment(context.Background(), providers.VerifyRequest{Location: c.cloc, Fingerprint: derSHA256(c.old.Cert.Raw)})

@@ -163,8 +163,9 @@ type ccsFile struct {
 // and its chain the leaf and the file's intermediates, parsed again (certificateChain's rule). A folder Alice does not
 // manage gives its server warning and no location; a folder the helper cut (truncated) or files Alice left out give
 // list_truncated and locations_dropped, and then no cert_missing location (a missing file is not proven). An https
-// binding it cannot read (or one past maxMembershipsPerDump) gives them too and cuts every file location
-// (list_truncated, never win_ccs_unlinked): any file may lose a binding there.
+// binding it cannot read (or one past maxMembershipsPerDump) or the helper's own cut of the iis-dump (dumpCut) gives
+// them too and cuts every file location (list_truncated, never win_ccs_unlinked): any file may lose a binding there;
+// the helper's cut also leaves out the cert_missing locations (a shadowing hostnameport record may be missing).
 func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
 	warns := []providers.Warning{}
 	switch {
@@ -198,7 +199,10 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 		}
 	}
 	missing := map[string]*location{}
-	memberships, sitesCut := 0, false
+	// The helper's own cut may have left out a binding of any file (final review I1), and an http.sys hostnameport
+	// record that shadows one.
+	helperCut := dumpCut(d)
+	memberships, sitesCut := 0, helperCut
 	for _, site := range d.Sites {
 		name := cleanValue(site.Name, maxNameLength)
 		for _, sb := range site.Bindings {
@@ -245,7 +249,7 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 		}
 		certs = append(certs, dc)
 	}
-	if !dropped {
+	if !dropped && !helperCut {
 		for host, l := range missing {
 			name, _ := winproto.CCSFileName(host)
 			loc := ccsLocation(folder, host, l)
