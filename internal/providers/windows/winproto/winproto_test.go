@@ -704,6 +704,8 @@ func TestValidCCSPath(t *testing.T) {
 		`C:\` + strings.Repeat("a", 237): true, `C:\` + strings.Repeat("a", 238): false,
 		`C:\a:b`: false, `C:\a/b`: false, `C:\.\a`: false, `C:\a\.`: false, `C:\.`: false, `C:\..`: false,
 		`C:\a.b`: true, `C:\..a\.b`: true, `z:\x`: true, `[:\x`: false, `@:\x`: false,
+		`C:\a.`: false, `C:\a.\b`: false, `C:\a `: false, `C:\a \b`: false, `C:\a.b.\`: false, `C:\a. \`: false,
+		`C:\ a`: true, `C:\a b`: true, `C:\.a`: true,
 	} {
 		if got := winproto.ValidCCSPath(p); got != want {
 			t.Errorf("ValidCCSPath(%q) = %v", p, got)
