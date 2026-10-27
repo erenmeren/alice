@@ -24,18 +24,21 @@ import (
 
 // targetColumns is the column list every target read uses (scanTarget's order).
 //
-// The last column is the public information of a vault's own credential ('null' for a server);
-// every query that uses the list reads FROM targets without an alias.
+// The last two columns are the public information of a vault's own credential ('null' for a server) and when the
+// newest CCS password of a Windows server was set (NULL for none); every query that uses the list reads FROM targets
+// without an alias.
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
 discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at, service_id,
-certificate_cleanup, coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb)`
+certificate_cleanup, coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb),
+(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_ccs')`
 
 func scanTarget(row pgx.Row) (Target, error) {
 	var t Target
 	var cfg, facts, vaultInfoRaw []byte
 	var interval int
 	err := row.Scan(&t.ID, &t.Name, &t.Type, &cfg, &t.Status, &t.LastErrorCode, &t.LastSuccessAt, &t.LastDiscoveryAt,
-		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &t.CertificateCleanup, &vaultInfoRaw)
+		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &t.CertificateCleanup, &vaultInfoRaw,
+		&t.CCSPasswordSetAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
@@ -52,7 +55,7 @@ func scanTarget(row pgx.Row) (Target, error) {
 	t.Host, t.Port, t.Username = c.Host, c.Port, c.Username
 	t.DiscoveryInterval = time.Duration(interval) * time.Second
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
-	t.LastSuccessAt, t.LastDiscoveryAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt)
+	t.LastSuccessAt, t.LastDiscoveryAt, t.CCSPasswordSetAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt), utcPtr(t.CCSPasswordSetAt)
 	if t.Capabilities == nil {
 		t.Capabilities = []string{}
 	}

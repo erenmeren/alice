@@ -312,6 +312,17 @@ var (
 	ErrWINDriftNotRepairable    = ErrorCode{Code: "ALC-WIN-0013", Reason: "windows.drift_not_repairable", Status: http.StatusConflict}
 	ErrWINCleanupOutcomeUnknown = ErrorCode{Code: "ALC-WIN-0014", Reason: "windows.cleanup_outcome_unknown", Status: http.StatusBadGateway, Retryable: true}
 
+	// R68 (W5): the Centralized Certificate Store. A deployment to a CCS file is refused, nothing changed, when CCS is
+	// turned off or its folder changed since the discovery (Ruling 17), when Alice's password does not open the file or
+	// Alice has none (Rulings 12 and 18), or when the file is gone (Ruling 7); setting a password outside the rule of
+	// Ruling 10 is 422 and nothing is stored.
+	ErrWINCCSDisabled         = ErrorCode{Code: "ALC-WIN-0015", Reason: "windows.ccs_disabled", Status: http.StatusConflict}
+	ErrWINCCSPathChanged      = ErrorCode{Code: "ALC-WIN-0016", Reason: "windows.ccs_path_changed", Status: http.StatusConflict}
+	ErrWINCCSPasswordMismatch = ErrorCode{Code: "ALC-WIN-0017", Reason: "windows.ccs_password_mismatch", Status: http.StatusConflict}
+	ErrWINCCSPasswordMissing  = ErrorCode{Code: "ALC-WIN-0018", Reason: "windows.ccs_password_missing", Status: http.StatusConflict}
+	ErrWINCCSPasswordInvalid  = ErrorCode{Code: "ALC-WIN-0019", Reason: "windows.ccs_password_invalid", Status: http.StatusUnprocessableEntity}
+	ErrWINCCSFileNotFound     = ErrorCode{Code: "ALC-WIN-0020", Reason: "windows.ccs_file_not_found", Status: http.StatusConflict}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -665,7 +676,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrHAProxyNotFound, ErrHAProxyConfigInvalid, ErrHAProxyProfileMissing, ErrHAProxyHelperTooOld,
 		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated, ErrWINBindingChanged, ErrWINBindingNotFound, ErrWINBusy,
 		ErrWINIOError, ErrWINStoreError, ErrWINKeyUnusable, ErrWINBackupMissing, ErrWINLocationUnsupported, ErrWINHelperRefused,
-		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown,
+		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown, ErrWINCCSDisabled, ErrWINCCSPathChanged, ErrWINCCSPasswordMismatch,
+		ErrWINCCSPasswordMissing, ErrWINCCSPasswordInvalid, ErrWINCCSFileNotFound,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
@@ -859,6 +871,9 @@ var errorMap = []struct {
 	{inventory.ErrDriftNotBound, ErrDeployDriftNotBound, nil},
 	{inventory.ErrDriftNotDrifted, ErrDeployNotDrifted, nil},
 	{inventory.ErrDriftNotRepairable, ErrWINDriftNotRepairable, nil}, // R62 Ruling 14
+	// The CCS password (R68, W5 Rulings 9 and 10).
+	{inventory.ErrCCSPasswordInvalid, ErrWINCCSPasswordInvalid, nil},
+	{inventory.ErrNotWindowsTarget, ErrWINLocationUnsupported, nil},
 	// Canary deployment (R65).
 	{inventory.ErrRolloutNotFound, ErrDeployRolloutNotFound, nil},
 	{inventory.ErrRolloutState, ErrDeployRolloutState, nil},

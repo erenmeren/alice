@@ -1160,6 +1160,36 @@
         "title": "Alice sertifika temizliğinin bitip bitmediğini öğrenemedi.",
         "cause": "Yardımcı, Alice'in içe aktardığı sertifikaları kaldırırken sunucuyla bağlantı kesildi; bu yüzden Alice işin nereye kadar geldiğini bilmiyor. Bir bağlamanın kullandığı hiçbir şey kaldırılmaz.",
         "action": "Genellikle yapılacak bir şey yok: sonraki temizlik çalıştırması sunucuya yeniden bakar ve durumu kesinleştirir. Sürekli başarısız olursa sunucuyla bağlantıyı ve yardımcıyı denetleyin."
+      },
+      "ccs_disabled": {
+        "title": "Sunucunun Merkezi Sertifika Deposu kapalı.",
+        "cause": "Sunucudaki IIS artık Merkezi Sertifika Deposu'nu kullanmıyor; bu yüzden Alice dosyayı yazmadı. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucu bu depoyu kullanacaksa Merkezi Sertifika Deposu'nu IIS Yöneticisi'nde yeniden açın, ardından sunucuyu Alice'te yeniden tarayın."
+      },
+      "ccs_path_changed": {
+        "title": "Sunucunun Merkezi Sertifika Deposu klasörü değişti.",
+        "cause": "IIS sertifika dosyalarını artık Alice'in son taramada bulduğu klasörden değil, başka bir klasörden okuyor; bu yüzden Alice dosyayı yazmadı. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucuyu Alice'te yeniden tarayın: yeni klasördeki dosyalar kendi konumları olur. Ardından yeniden dağıtın."
+      },
+      "ccs_password_mismatch": {
+        "title": "Alice'teki CCS parolası sertifika dosyasını açmıyor.",
+        "cause": "Dosya, Alice'in bu sunucu için tuttuğu parola dışında bir özel anahtar parolasıyla yazılmış; bu yüzden Alice dosyayı değiştirmedi. Hiçbir şey değiştirilmedi.",
+        "action": "IIS'in Merkezi Sertifika Deposu ayarlarındaki özel anahtar parolasını denetleyin, aynı parolayı Alice'te sunucunun sayfasında girin, ardından sunucuyu yeniden tarayın."
+      },
+      "ccs_password_missing": {
+        "title": "Alice'te bu sunucu için CCS parolası yok.",
+        "cause": "Alice'in, sunucunun Merkezi Sertifika Deposu'ndaki sertifika dosyalarını okuyup yazabilmesi için deponun özel anahtar parolası gerekir ve bu parola girilmemiş. Hiçbir şey değiştirilmedi.",
+        "action": "Bir Yönetici parolayı Alice'te sunucunun sayfasında girer. Ardından sunucuyu yeniden tarayın."
+      },
+      "ccs_password_invalid": {
+        "title": "Bu CCS parolası kullanılamaz.",
+        "cause": "Alice, parolası boşluksuz ve yazdırılabilir ASCII karakterlerden oluşan, 12 ile 128 karakter arasında bir Merkezi Sertifika Deposu'nu yönetir. Parola saklanmadı.",
+        "action": "Parolayı IIS'te ayarlandığı gibi girin. Bu kurala uymuyorsa IIS'te yeni bir parola seçin (dosyaları da bu parolayla dışa aktarın), ardından buraya girin."
+      },
+      "ccs_file_not_found": {
+        "title": "Sertifika dosyası artık deponun klasöründe değil.",
+        "cause": "Dosya son taramadan sonra silinmiş ya da adı değiştirilmiş. Alice yalnızca var olan dosyaları değiştirir, yeni dosya oluşturmaz. Hiçbir şey değiştirilmedi.",
+        "action": "Dosyayı klasöre geri koyun (bilerek silindiyse sunucuyu yeniden tarayın), ardından yeniden dağıtın."
       }
     },
     "certificate": {

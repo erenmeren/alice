@@ -21,9 +21,12 @@ import (
 
 func TestLocationKinds(t *testing.T) {
 	for _, k := range []providers.LocationKind{providers.LocationServerFile, providers.LocationWinSSLBinding, providers.LocationF5ClientSSL,
-		providers.LocationK8sTLSSecret} {
+		providers.LocationK8sTLSSecret, providers.LocationWinCCSFile} {
 		assert.True(t, k.Known(), k)
 	}
+	assert.Equal(t, providers.LocationKind("win_ccs_file"), providers.LocationWinCCSFile)
+	assert.False(t, providers.LocationWinCCSFile.IsFile(), "a CCS file has a locator and no key path (W5 Ruling 21)")
+	assert.Equal(t, "write_file", providers.StepNameWriteFile)
 	for _, k := range []providers.LocationKind{"", "nginx_file", "SERVER_FILE"} {
 		assert.False(t, k.Known(), k)
 	}

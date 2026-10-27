@@ -302,3 +302,9 @@ func NewCertSHA256(kind providers.LocationKind, certPEM []byte) string {
 
 // LeafThumbprint exposes leafThumbprint: the thumbprint a Windows location records after a deployment of chain.
 func LeafThumbprint(chain []byte, token string) string { return leafThumbprint(chain, token) }
+
+// ErrForeignCredential exposes errForeignCredential to the CCS password tests.
+var ErrForeignCredential = errForeignCredential
+
+// ValidCCSPassword exposes validCCSPassword to the test that compares it with winproto.ValidCCSPassword.
+func ValidCCSPassword(pw []byte) bool { return validCCSPassword(pw) }

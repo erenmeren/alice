@@ -149,6 +149,9 @@ type targetDTO struct {
 	Version            int       `json:"version"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
+	// CCSPasswordSetAt is when the CCS password of a Windows server was set (W5 Ruling 9): a time or null for a Windows
+	// server, left out for every other target. The password itself is never answered.
+	CCSPasswordSetAt **time.Time `json:"ccs_password_set_at,omitempty"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
 	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
@@ -206,6 +209,11 @@ func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 	if slices.Contains(t.Capabilities, string(providers.CapCleanupCertificates)) {
 		cleanup = &t.CertificateCleanup
 	}
+	var ccs **time.Time
+	if t.Type == inventory.TypeWindows {
+		at := utcPtr(t.CCSPasswordSetAt)
+		ccs = &at
+	}
 	return targetDTO{
 		CertificateCleanup: cleanup,
 		ID:                 t.ID.String(), Name: t.Name, Type: t.Type, Host: t.Host, Port: t.Port, Username: t.Username,
@@ -214,6 +222,7 @@ func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,
 		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Vault: vaultJSON(t), Version: t.Version,
 		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), Service: refs.of(t.ServiceID), AllowedActions: refs.actions(t.ServiceID),
+		CCSPasswordSetAt: ccs,
 	}
 }
 

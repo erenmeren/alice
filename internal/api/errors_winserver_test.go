@@ -19,7 +19,8 @@ import (
 	"alice/locales"
 )
 
-// windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012, R62 0013-0014).
+// windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012, R62 0013-0014, R68
+// 0015-0020).
 var windowsTable = []struct {
 	code, reason string
 	status       int
@@ -39,6 +40,12 @@ var windowsTable = []struct {
 	{"ALC-WIN-0012", "windows.helper_refused", 502, false},
 	{"ALC-WIN-0013", "windows.drift_not_repairable", 409, false},
 	{"ALC-WIN-0014", "windows.cleanup_outcome_unknown", 502, true},
+	{"ALC-WIN-0015", "windows.ccs_disabled", 409, false},
+	{"ALC-WIN-0016", "windows.ccs_path_changed", 409, false},
+	{"ALC-WIN-0017", "windows.ccs_password_mismatch", 409, false},
+	{"ALC-WIN-0018", "windows.ccs_password_missing", 409, false},
+	{"ALC-WIN-0019", "windows.ccs_password_invalid", 422, false},
+	{"ALC-WIN-0020", "windows.ccs_file_not_found", 409, false},
 }
 
 // Each Windows code is registered as the table says, has EN and TR texts without placeholders (the provider sends

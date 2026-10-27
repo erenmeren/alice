@@ -199,3 +199,14 @@ func TestTheRecordedThumbprintIsTheTokensCertificate(t *testing.T) {
 	assert.Empty(t, inventory.LeafThumbprint(leaf.FullchainPEM, ""), "no token: nothing")
 	assert.Empty(t, inventory.LeafThumbprint([]byte("not PEM"), token))
 }
+
+// The inventory may not import winproto (archtest), so it mirrors winproto.ValidCCSPassword (W5 Ruling 10); the helper
+// and BuildPFX need exactly that alphabet. Both must agree on the edges of length and alphabet.
+func TestCCSPasswordRuleEqualsTheHelpers(t *testing.T) {
+	cases := []string{"", strings.Repeat("a", 11), strings.Repeat("a", 12), strings.Repeat("~", 128), strings.Repeat("!", 129),
+		"abcdefgh ijkl", "abcdefgh\tijkl", "abcdefghijk\u00e9", "abcdefghijk\x00", "abcdefghijk\x7f", "abcdefghijk\x20",
+		"!\"#$%&'()*+,-./0123456789:;<=>?@AZ[\\]^_`az{|}~", "Ccs-0123456789"}
+	for _, s := range cases {
+		assert.Equal(t, winproto.ValidCCSPassword([]byte(s)), inventory.ValidCCSPassword([]byte(s)), "%q", s)
+	}
+}

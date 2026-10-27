@@ -1160,6 +1160,36 @@
         "title": "Alice could not tell whether the certificate cleanup finished.",
         "cause": "The connection to the server ended while the helper was removing certificates Alice had imported, so Alice does not know how far it got. Nothing a binding uses is ever removed.",
         "action": "Nothing, usually: the next cleanup run looks at the server again and settles it. If it keeps failing, check the connection to the server and the helper."
+      },
+      "ccs_disabled": {
+        "title": "The server's Centralized Certificate Store is turned off.",
+        "cause": "IIS on the server no longer uses the Centralized Certificate Store, so Alice did not write the file. Nothing was changed.",
+        "action": "Turn the Centralized Certificate Store on again in IIS Manager if the server should use it, then scan the server again in Alice."
+      },
+      "ccs_path_changed": {
+        "title": "The folder of the server's Centralized Certificate Store changed.",
+        "cause": "IIS now reads its certificate files from another folder than the one Alice found at the last scan, so Alice did not write the file. Nothing was changed.",
+        "action": "Scan the server again in Alice: its files in the new folder become locations of their own. Then deploy again."
+      },
+      "ccs_password_mismatch": {
+        "title": "The CCS password in Alice does not open the certificate file.",
+        "cause": "The file was written with another private-key password than the one Alice holds for this server, so Alice did not replace it. Nothing was changed.",
+        "action": "Check the private-key password in the Centralized Certificate Store settings of IIS, set the same password in Alice on the server's page, then scan the server again."
+      },
+      "ccs_password_missing": {
+        "title": "Alice has no CCS password for this server.",
+        "cause": "Alice needs the private-key password of the server's Centralized Certificate Store to read and write its certificate files, and none was set. Nothing was changed.",
+        "action": "An Administrator sets the password on the server's page in Alice. Then scan the server again."
+      },
+      "ccs_password_invalid": {
+        "title": "This CCS password cannot be used.",
+        "cause": "Alice manages a Centralized Certificate Store whose password has 12 to 128 characters of printable ASCII without spaces. The password was not stored.",
+        "action": "Enter the password exactly as it is set in IIS. If it does not follow this rule, choose a new one in IIS (and export the files with it), then enter it here."
+      },
+      "ccs_file_not_found": {
+        "title": "The certificate file is no longer in the store's folder.",
+        "cause": "The file was removed or renamed after the last scan. Alice replaces existing files only and does not create a new one. Nothing was changed.",
+        "action": "Put the file back in the folder (or scan the server again if it was removed on purpose), then deploy again."
       }
     },
     "certificate": {

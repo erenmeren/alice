@@ -152,6 +152,8 @@ var notReasons = map[string]bool{
 	"deployment.rollout_continued": true, "deployment.rollout_released": true, "deployment.rollout_wave2_started": true,
 	"deployment.rollout_aborted": true, "deployment.rollout_failed": true, "deployment.rollout_stopped": true,
 	"deployment.rollout_preempted": true, "deployment.rollout_completed": true,
+	// The CCS password of a Windows server (R68): an audit action
+	"target.ccs_password_set": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

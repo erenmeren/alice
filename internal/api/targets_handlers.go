@@ -15,6 +15,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
+	"alice/internal/secrets"
 )
 
 // targetRoutes manage servers and their host keys (spec §9.6 "targets", R37 items 8 and 12). Adding,
@@ -35,6 +36,8 @@ func (s *server) targetRoutes() []route {
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listTargetKeys},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listTargetLocations},
+		// W5 Ruling 9: the CCS password is a credential, set as a vault's (an Administrator with step-up, never a token).
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/ccs-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.setCCSPassword},
 	}
 }
 
@@ -148,6 +151,40 @@ func (s *server) getTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := s.deps.Inventory.GetTarget(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", etag(t.Version))
+	writeJSON(w, http.StatusOK, targetJSON(t, refs))
+}
+
+// maxCCSBody caps PUT /targets/{id}/ccs-password (W5 Ruling 9).
+const maxCCSBody = 4 << 10
+
+// setCCSPassword sets the CCS password of a Windows server (W5 Rulings 9-11). The password is a secretText the handler
+// zeroes on every path; the answer is the target, which says when the password was set and never what it is.
+func (s *server) setCCSPassword(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	version, ok := ifMatch(r)
+	if !ok {
+		s.writeError(w, r, ErrPreconditionFailed)
+		return
+	}
+	var req struct {
+		Password secretText `json:"password"`
+	}
+	defer func() { req.Password.zero() }()
+	if !s.decodeExact(w, r, &req, maxCCSBody, "password") {
+		return
+	}
+	t, err := s.deps.Inventory.SetCCSPassword(r.Context(), s.actor(r), id, version, secrets.NewPlaintext(req.Password))
+	req.Password.zero()
 	if err != nil {
 		s.fail(w, r, err)
 		return

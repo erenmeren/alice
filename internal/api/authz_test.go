@@ -429,7 +429,7 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.LicenseRead
 		// Phase 5 (R40 row 11, S6): everything that adds a vault, replaces its credentials, switches automatic
 		// deployment, releases a held version or moves a private key into a vault is credentials.manage.
-		case p == "/api/v1/key-vaults" && !safeMethod(rt.method), strings.HasSuffix(p, "/vault-credentials"),
+		case p == "/api/v1/key-vaults" && !safeMethod(rt.method), strings.HasSuffix(p, "/vault-credentials"), strings.HasSuffix(p, "/ccs-password"),
 			strings.HasSuffix(p, "/auto-deploy"), strings.HasSuffix(p, "/actions/import-to-key-vault"),
 			strings.HasSuffix(p, "/versions/{version_id}/actions/release"):
 			want = rbac.CredentialsManage

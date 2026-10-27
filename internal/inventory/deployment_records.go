@@ -245,7 +245,7 @@ func sha256Hex(b []byte) string {
 // is not a CERTIFICATE gives "", which no binding's token equals: the next deployment is then refused (HASH_MISMATCH,
 // nothing changed) until a discovery reads the binding's token again; it never names a wrong certificate.
 func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
-	if kind != providers.LocationWinSSLBinding {
+	if kind != providers.LocationWinSSLBinding && kind != providers.LocationWinCCSFile { // a CCS file's token is its leaf too (W5 Ruling 13)
 		return sha256Hex(certPEM)
 	}
 	b, _ := pem.Decode(certPEM)
@@ -714,6 +714,10 @@ func startBackupRef(ctx context.Context, tx pgx.Tx, id uuid.UUID, token string) 
 FROM deployments d LEFT JOIN certificate_locations l ON l.id = d.location_id WHERE d.id = $1`, id).Scan(&kind, &store, &sha1, &fileSHA)
 	if err != nil {
 		return providers.BackupRef{}, fmt.Errorf("inventory: read the location's previous certificate: %w", err)
+	}
+	if kind == providers.LocationWinCCSFile {
+		// The helper's journal names the CCS file's backup (W5 Ruling 21); a binding's store and thumbprint do not apply.
+		return providers.BackupRef{OperationID: id, PreviousSHA256: token}, nil
 	}
 	if kind != providers.LocationWinSSLBinding {
 		return providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()}, nil
@@ -1310,7 +1314,8 @@ ORDER BY created_at DESC, id DESC LIMIT 1), $2), (SELECT location_kind FROM depl
 	if err != nil {
 		return "", fmt.Errorf("inventory: read the recovery's cause: %w", err)
 	}
-	windowsLost := kind == providers.LocationWinSSLBinding && (cause == interruptedCode || cause == windowsHelperMissing)
+	windowsLost := (kind == providers.LocationWinSSLBinding || kind == providers.LocationWinCCSFile) &&
+		(cause == interruptedCode || cause == windowsHelperMissing)
 	if strings.HasPrefix(cause, "ssh.") || windowsLost {
 		return TemplateDeploymentNeedsAttention, nil
 	}

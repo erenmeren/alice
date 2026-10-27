@@ -23,6 +23,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/reports"
+	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
 )
@@ -547,6 +548,7 @@ type fakeInventory struct {
 
 	CreateVaultFn                  func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
+	SetCCSPasswordFn               func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
 	DeleteVaultFn                  func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
 	RequestAccessCheckFn           func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
 	ListKVCertificatesFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
@@ -825,6 +827,13 @@ func (f *fakeInventory) ReplaceVaultCredentials(ctx context.Context, a inventory
 		return f.ReplaceVaultCredentialsFn(ctx, a, id, v, in)
 	}
 	return inventory.Target{}, providers.ConnectionReport{}, uuid.Nil, errNotConfigured
+}
+
+func (f *fakeInventory) SetCCSPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, v int, pw secrets.Plaintext) (inventory.Target, error) {
+	if f.SetCCSPasswordFn != nil {
+		return f.SetCCSPasswordFn(ctx, a, target, v, pw)
+	}
+	return inventory.Target{}, errNotConfigured
 }
 
 func (f *fakeInventory) DeleteVault(ctx context.Context, a inventory.Actor, id uuid.UUID, remove bool) error {

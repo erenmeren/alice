@@ -2507,6 +2507,51 @@ paths:
         "502": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/ccs-password:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    put:
+      operationId: setCCSPassword
+      summary: Set the Centralized Certificate Store password of a Windows server (R68)
+      description: >-
+        The private-key password IIS's Centralized Certificate Store (CCS) opens its PFX files with, one per Windows server.
+        Alice stores it sealed, as a credential of the server, and sends it to the server's helper only on standard input
+        when it reads or writes a CCS file; a new password replaces the old one (both are kept sealed as history; there is
+        no delete). The answer is the target, whose ccs_password_set_at says when the password was set; the password is
+        never answered, logged or audited (audited as target.ccs_password_set, without it). It must have 12 to 128
+        characters of printable ASCII without spaces (422 ALC-WIN-0019 otherwise, nothing stored). A target that is not a
+        Windows server is 409 ALC-WIN-0011. If-Match with the target's ETag is required (412 ALC-SYS-0008); the body is
+        at most 4 KiB. Deployments to CCS files are refused with ALC-WIN-0015 (CCS turned off), ALC-WIN-0016 (its folder
+        changed), ALC-WIN-0017 (this password does not open the file), ALC-WIN-0018 (no password set) or ALC-WIN-0020
+        (the file is gone), nothing changed. Needs an Administrator's browser session with a fresh step-up verification
+        code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403
+        ALC-LIC-0001 while the license is locked.
+      x-permission: credentials.manage
+      x-scope: resource
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CCSPassword" }
+      responses:
+        "200":
+          description: The Windows server with its new ccs_password_set_at
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/kv/certificates:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -7192,7 +7237,7 @@ components:
         target_id: { type: string, format: uuid }
         target_name: { type: string }
         cert_path: { type: string }
-        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret], description: 'R63. The kind of the bound location, always present: server_file for a certificate file, win_sslbinding for an IIS binding' }
+        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret, win_ccs_file], description: 'R63. The kind of the bound location, always present: server_file for a certificate file, win_sslbinding for an IIS binding, win_ccs_file for a file of an IIS Centralized Certificate Store (R68)' }
         auto_deploy: { type: boolean }
         state: { type: string, enum: [current, pending, attention, drifted], description: 'attention: the last automatic deployment of the current certificate failed. current (since R52): the location got the current certificate and no observation newer than that deployment disagrees; a past success alone no longer makes it current. drifted (R52): it had the current certificate and a newer observation found another one. observation.health says how the location is observed today.' }
         attention_at: { type: [string, "null"], format: date-time }
@@ -7244,6 +7289,12 @@ components:
         pfx_base64: { type: string, writeOnly: true, description: The certificate and key as a PFX in base64; request only }
         pfx_password: { type: string, writeOnly: true, description: The PFX password; request only }
         poll_interval_minutes: { type: integer, minimum: 5, maximum: 1440, description: 0 or absent means 15 }
+    CCSPassword:
+      type: object
+      required: [password]
+      additionalProperties: false
+      properties:
+        password: { type: string, minLength: 12, maxLength: 128, writeOnly: true, description: 'R68. Printable ASCII (0x21-0x7E) without spaces' }
     VaultCredentials:
       type: object
       required: [auth]
@@ -8189,6 +8240,13 @@ components:
             R62. Only for a server whose provider can clean up certificates (capability cleanup_certificates; absent
             otherwise): the per-server switch "remove certificates Alice imported once nothing uses them", true by
             default. Change it with PATCH.
+        ccs_password_set_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            R68. Only for a Windows server (absent otherwise): when an Administrator last set its Centralized Certificate
+            Store password (PUT /targets/{id}/ccs-password); null when none was set. The password itself is never
+            answered.
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -8917,10 +8975,11 @@ components:
           description: "The server's target type (its web server software, or windows for the http.sys bindings of a Windows server); f5_bigip and kubernetes are reserved (R59)"
         kind:
           type: string
-          enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret]
+          enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret, win_ccs_file]
           description: >-
             R59. The location's kind: a certificate file (server_file), or a Windows http.sys SSL binding, a BIG-IP
-            client SSL profile entry, a Kubernetes TLS Secret (reserved for the targets that report them).
+            client SSL profile entry, a Kubernetes TLS Secret (reserved for the targets that report them), or a PFX file
+            of a Windows server's Centralized Certificate Store (win_ccs_file, R68).
         locator:
           description: >-
             R59. The identity of a location that is not a file (a flat object of short strings, integers and booleans);
@@ -9220,7 +9279,7 @@ components:
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change and always "" for a Windows binding' }
-        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret], description: 'R62. The kind of the deployment''s location, always present: server_file for a certificate file, win_sslbinding for an IIS binding' }
+        location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret, win_ccs_file], description: 'R62. The kind of the deployment''s location, always present: server_file for a certificate file, win_sslbinding for an IIS binding, win_ccs_file for a file of an IIS Centralized Certificate Store (R68)' }
         backup_store: { type: string, pattern: '^([Mm][Yy]|[Ww][Ee][Bb][Hh][Oo][Ss][Tt][Ii][Nn][Gg])$', description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate, My or WebHosting in any letter case (a binding without a store name reads MY)' }
         backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
         requested_by: { type: [string, "null"], format: uuid }

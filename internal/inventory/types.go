@@ -133,6 +133,8 @@ type Target struct {
 	Capabilities         []string
 	CertificateCleanup   bool      // the cleanup switch (targets.certificate_cleanup, on by default); meaningful for a server with the cleanup_certificates capability (R62 Ruling 13)
 	ServiceID            uuid.UUID // the owning service (R49)
+	// CCSPasswordSetAt is when the newest CCS password of a Windows server was set (W5 Ruling 9); nil when none was.
+	CCSPasswordSetAt     *time.Time
 	Version              int
 	CreatedAt, UpdatedAt time.Time
 }

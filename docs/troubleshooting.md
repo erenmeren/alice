@@ -2242,6 +2242,54 @@ None of these files holds key material.
 
 **What to do.** Usually nothing: the next run of the cleanup finishes the work. If it keeps failing, check that Alice can reach the server and that `alice-helper.exe` comes from the current Alice bundle.
 
+## ALC-WIN-0015: The server's Centralized Certificate Store is turned off
+
+**Meaning.** A deployment to a file of the Centralized Certificate Store (CCS) was refused because IIS on the server no longer uses the store. The helper read this from the registry before it changed anything; nothing was changed. (HTTP 409, reason `windows.ccs_disabled`.)
+
+**Likely cause.** Someone turned the Centralized Certificate Store off in IIS Manager (or removed its configuration) after Alice's last scan.
+
+**What to do.** If the server should use the store, turn it on again in IIS Manager and scan the server again in Alice. If not, the CCS locations go missing at the next scan.
+
+## ALC-WIN-0016: The folder of the server's Centralized Certificate Store changed
+
+**Meaning.** A deployment to a CCS file was refused because IIS now reads its certificate files from another folder than the one Alice found at the last scan. Nothing was changed. (HTTP 409, reason `windows.ccs_path_changed`.)
+
+**Likely cause.** The physical path of the Centralized Certificate Store was changed in IIS Manager after Alice's last scan.
+
+**What to do.** Scan the server again in Alice: the files in the new folder become locations of their own. Then deploy again.
+
+## ALC-WIN-0017: The CCS password in Alice does not open the certificate file
+
+**Meaning.** The file was written with another private-key password than the one Alice holds for this server, so Alice did not replace it. Nothing was changed. (HTTP 409, reason `windows.ccs_password_mismatch`.)
+
+**Likely cause.** The private-key password of the Centralized Certificate Store was changed in IIS, or the file was exported with another password.
+
+**What to do.** Check the private-key password in the Centralized Certificate Store settings of IIS, set the same password in Alice on the server's page, then scan the server again.
+
+## ALC-WIN-0018: Alice has no CCS password for this server
+
+**Meaning.** Alice needs the private-key password of the server's Centralized Certificate Store to read and write its certificate files, and none was set. Nothing was changed. (HTTP 409, reason `windows.ccs_password_missing`.)
+
+**Likely cause.** The server uses the Centralized Certificate Store and no Administrator has entered its password in Alice yet.
+
+**What to do.** An Administrator sets the password on the server's page in Alice (this asks for step-up verification). Then scan the server again.
+
+## ALC-WIN-0019: This CCS password cannot be used
+
+**Meaning.** The password was refused and not stored: Alice manages a Centralized Certificate Store whose password has 12 to 128 characters of printable ASCII without spaces. (HTTP 422, reason `windows.ccs_password_invalid`.)
+
+**Likely cause.** The password is shorter than 12 characters, or holds a space or a character outside printable ASCII.
+
+**What to do.** Enter the password exactly as it is set in IIS. If it does not follow this rule, choose a new one in IIS, export the files with it, then enter it in Alice.
+
+## ALC-WIN-0020: The certificate file is no longer in the store's folder
+
+**Meaning.** A deployment to a CCS file was refused because the file is no longer in the folder. Alice replaces existing files only and does not create a new one. Nothing was changed. (HTTP 409, reason `windows.ccs_file_not_found`.)
+
+**Likely cause.** The file was removed or renamed on the server after Alice's last scan.
+
+**What to do.** Put the file back in the folder, or scan the server again if it was removed on purpose. Then deploy again.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)
