@@ -170,8 +170,9 @@ var (
 	// ErrCredentialNotTheTargets: the database refused a credential that does not belong to the
 	// target it was set on (SQLSTATE Z1006). Correct code never gets it.
 	ErrCredentialNotTheTargets = errors.New("inventory: the credential does not belong to this target")
-	// errForeignCredential: a vault's credential row names another vault; it is never used.
-	errForeignCredential = errors.New("inventory: the vault's credential belongs to another target")
+	// errForeignCredential: a credential row that belongs to another target, or does not suit its target; it is never
+	// used.
+	errForeignCredential = errors.New("inventory: the credential belongs to another target")
 	// errNotAnSSHTarget: a vault's credential source offers no SSH key.
 	errNotAnSSHTarget = errors.New("inventory: a Key Vault has no SSH credential")
 )

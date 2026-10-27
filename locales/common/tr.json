@@ -2289,6 +2289,18 @@
       "needs_attention_unconfirmed_windows": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
         "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının nasıl sonuçlandığını henüz doğrulayamıyor (bağlama: {{cert_path}}): sunucu beklendiği gibi yanıt vermedi.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini denetleyin. Dağıtım: {{deployment_id}}"
+      },
+      "rollback_failed_windows_ccs": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (Merkezi Sertifika Deposu dosyası: {{cert_path}}). Değişiklik başarısız oldu ve önceki dosyanın geri konması da başarısız oldu.\n\nÖnceki dosya aynı klasörde, adı .alice-<id>.bak ile biten bir yedek olarak durur (<id>: dağıtım geçmişindeki işlemin son 8 karakteri). Önceki sertifika: {{previous_certificate}}. Web sitesini hemen denetleyin, sonra IIS Yöneticisi'nde bu dosyayı kullanan siteleri denetleyin. Dosyada yanlış sertifika varsa dosyayı yedekle değiştirin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "outcome_unknown_windows_ccs": {
+        "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını doğrulayamadı",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (Merkezi Sertifika Deposu dosyası: {{cert_path}}), ancak nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nWeb sitesini hemen denetleyin, IIS Yöneticisi'nde de bu dosyayı kullanan siteleri denetleyin. Değişiklik sunucuya ulaştıysa önceki dosya aynı klasörde, adı .alice-<id>.bak ile biten bir yedek olarak durur (<id>: dağıtım geçmişindeki işlemin son 8 karakteri). Önceki sertifika: {{previous_certificate}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "restored_unverified_windows_ccs": {
+        "subject": "{{target_name}} sunucusunda önceki sertifika dosyası geri kondu, ancak Alice web sitesinin onu sunduğunu doğrulayamadı",
+        "body": "{{target_name}} sunucusunda bir sertifika dağıtımı başarısız oldu (Merkezi Sertifika Deposu dosyası: {{cert_path}}) ve Alice önceki dosyayı geri koydu. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin sunucunun önündeki bir yük dengeleyici yanıt veriyor ya da denetim bağlanamadı.\n\nWeb sitesini hemen denetleyin. Yanlışsa IIS Yöneticisi'nde bu dosyayı kullanan siteleri denetleyin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       }
     },
     "location": {

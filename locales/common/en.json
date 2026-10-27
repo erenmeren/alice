@@ -2289,6 +2289,18 @@
       "needs_attention_unconfirmed_windows": {
         "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
         "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (binding {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"
+      },
+      "rollback_failed_windows_ccs": {
+        "subject": "Manual action needed: certificate restore failed on {{target_name}}",
+        "body": "Alice deployed a certificate on the server {{target_name}} (Centralized Certificate Store file {{cert_path}}). The change failed, and putting the previous file back failed too.\n\nThe previous file is kept beside it in the same folder, as a backup whose name ends in .alice-<id>.bak (<id>: the last 8 characters of the operation in the deployment history). Previous certificate: {{previous_certificate}}. Check the website now, then in IIS Manager check the sites that use this file. If the file holds the wrong certificate, replace it with the backup. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "outcome_unknown_windows_ccs": {
+        "subject": "Alice could not confirm a certificate deployment on {{target_name}}",
+        "body": "Alice started deploying a certificate on the server {{target_name}} (Centralized Certificate Store file {{cert_path}}), but could not confirm how it ended and has stopped trying.\n\nCheck the website now, and in IIS Manager the sites that use this file. If the change reached the server, the previous file is kept beside it in the same folder, as a backup whose name ends in .alice-<id>.bak (<id>: the last 8 characters of the operation in the deployment history). Previous certificate: {{previous_certificate}}. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+      },
+      "restored_unverified_windows_ccs": {
+        "subject": "The previous certificate file is back on {{target_name}} but Alice could not confirm the website serves it",
+        "body": "A certificate deployment on the server {{target_name}} failed (Centralized Certificate Store file {{cert_path}}), and Alice put the previous file back. Alice could not confirm that the website serves the previous certificate, for example because a load balancer in front of the server answers, or because the check could not connect.\n\nCheck the website now. If it is wrong, check in IIS Manager the sites that use this file. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
       }
     },
     "location": {

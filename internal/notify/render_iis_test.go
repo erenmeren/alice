@@ -156,3 +156,41 @@ func TestWindowsDriftTemplatesRenderInBothLanguages(t *testing.T) {
 	}
 	assert.Contains(t, s.Render("ada@example.com", "location.drift_flapping_windows", "en", params).Subject, "another tool keeps changing it")
 }
+
+// W5-5 (R68): a CCS file's rollback_failed, outcome_unknown and restored_unverified e-mails have texts of their own that
+// name the file and IIS Manager, never the Linux helper's backup folder, Nginx, systemctl or netsh; the first two name
+// the previous certificate and the backup beside the file. A CCS file's other deployment e-mails are the file texts.
+func TestWindowsCCSDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "iis-01 (İzmir)", "cert_path": `C:\CCS\www.example.test.pfx`,
+		"deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "previous_certificate": "SHA-256 " + strings.Repeat("ab", 32)}
+	want := []string{inventory.WindowsCCSTemplate(inventory.TemplateDeploymentRollbackFailed),
+		inventory.WindowsCCSTemplate(inventory.TemplateDeploymentOutcomeUnknown),
+		inventory.WindowsCCSTemplate(inventory.TemplateDeploymentRestoredUnverified)}
+	require.Equal(t, want, inventory.WindowsCCSDeploymentTemplates())
+	notLinux := regexp.MustCompile(`(?i)nginx|/var/lib|/usr/local|alice-helper|systemctl|netsh|reload`)
+	for _, tpl := range want {
+		assert.NotContains(t, inventory.Templates(), tpl, "the CCS texts are their own keys")
+		assert.NotContains(t, inventory.WindowsDeploymentTemplates(), tpl)
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			text := m.Subject + "\n" + m.Body
+			assert.NotContains(t, text, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.Contains(t, m.Subject, "iis-01 (İzmir)", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, `C:\CCS\www.example.test.pfx`, "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "0190f5a0-0000-7000-8000-00000000abcd", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "IIS", "%s %s", tpl, lang)
+			assert.NotRegexp(t, notLinux, text, "%s %s", tpl, lang)
+		}
+	}
+	for _, tpl := range want[:2] {
+		for _, lang := range []string{"en", "tr"} {
+			body := s.Render("ada@example.com", tpl, lang, params).Body
+			assert.Contains(t, body, params["previous_certificate"], "%s %s", tpl, lang)
+			assert.Contains(t, body, ".alice-<id>.bak", "%s %s", tpl, lang)
+		}
+	}
+}

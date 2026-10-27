@@ -123,6 +123,10 @@ SELECT $2, purpose, kind, ciphertext, nonce, wrapped_dek, key_version, created_a
 	require.NoError(t, err)
 	_, _, err = src.CCSPassword(h.ctx, b.ID)
 	require.ErrorIs(t, err, inventory.ErrNotFound, "a deleted server has no password")
+	_, err = setCCS(t, h, admin, b, ccsPassword())
+	require.ErrorIs(t, err, inventory.ErrNotFound, "a deleted server takes no password")
+	_, err = h.svc.SetCCSPassword(h.ctx, admin, uuid.New(), 1, secrets.NewPlaintext(ccsPassword()))
+	require.ErrorIs(t, err, inventory.ErrNotFound)
 	_, _, err = src.CCSPassword(h.ctx, uuid.New())
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 }
@@ -211,4 +215,26 @@ func TestWindowsLostIncludesCCS(t *testing.T) {
 	mails := f.deploymentMails(r.ID)
 	require.Len(t, mails, 1)
 	assert.Equal(t, inventory.TemplateDeploymentNeedsAttention, mails[0].Template, "the lost-connection text, not the unconfirmed one")
+}
+
+// W5-5: a CCS file's rollback_failed e-mail is its CCS text, naming the previous certificate in place of backup_dir; a
+// deployment that failed before any change keeps the file text.
+func TestCCSDeploymentEmails(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.h
+	base := func(id uuid.UUID) map[string]string {
+		return map[string]string{"target_name": "iis-02", "cert_path": `C:\CCS\www.example.test.pfx`, "deployment_id": id.String()}
+	}
+	r := f.request(f.file)
+	f.start(r.ID, nil)
+	require.NoError(t, h.svc.FinishDeployment(h.ctx, r.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed,
+		Result: "rollback_failed", FailedStep: "restore", ErrorCode: "windows.backup_missing"}))
+	want := base(r.ID)
+	want["previous_certificate"] = "SHA-256 " + derSHA(f.old)
+	assert.Equal(t, []queuedMail{{inventory.WindowsCCSTemplate(inventory.TemplateDeploymentRollbackFailed), want}}, f.deploymentMails(r.ID))
+
+	r2 := f.request(f.file)
+	require.NoError(t, h.svc.FinishDeployment(h.ctx, r2.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
+		ErrorCode: "windows.ccs_disabled"}))
+	assert.Equal(t, []queuedMail{{inventory.TemplateDeploymentFailed, base(r2.ID)}}, f.deploymentMails(r2.ID), "the file text")
 }

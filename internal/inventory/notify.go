@@ -251,15 +251,39 @@ func WindowsDeploymentTemplates() []string {
 	return out
 }
 
+// windowsCCSTemplateSuffix makes the CCS text of a deployment e-mail (WindowsCCSTemplate).
+const windowsCCSTemplateSuffix = "_windows_ccs"
+
+// WindowsCCSTemplate is the text of the deployment e-mail template for a file of a Windows server's Centralized Certificate
+// Store (W5 Ruling W5-5), for the templates whose file text names the Linux helper's backup folder or Nginx
+// (ccsDeploymentTemplates). It names the file (cert_path), the backup the helper keeps beside it, IIS Manager, and on
+// rollback_failed and outcome_unknown the previous certificate (previous_certificate). A CCS file's other deployment
+// e-mails are the file texts.
+func WindowsCCSTemplate(template string) string { return template + windowsCCSTemplateSuffix }
+
+// WindowsCCSDeploymentTemplates lists the CCS texts of the deployment e-mails (render tests).
+func WindowsCCSDeploymentTemplates() []string {
+	out := make([]string, 0, len(ccsDeploymentTemplates))
+	for _, t := range ccsDeploymentTemplates {
+		out = append(out, WindowsCCSTemplate(t))
+	}
+	return out
+}
+
+// ccsDeploymentTemplates are the deployment e-mails a CCS file gets a text of its own for.
+var ccsDeploymentTemplates = []string{TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified}
+
 // deploymentTemplates are the deployment e-mails (deployment.*), each with a Windows text.
 var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown,
 	TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
 	TemplateDeploymentRollbackForbidden, TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed}
 
 // windowsDeploymentMail is the template and params of a deployment e-mail as queued. A deployment to anything but an
-// http.sys binding keeps both as given, byte for byte. A binding's (R61) is the Windows text (WindowsTemplate) and, in
-// place of backup_dir (a Linux folder; a binding has none), previous_certificate on the texts that named it: what the
-// start record wrote of the certificate the binding named before the change (previousCertificate).
+// http.sys binding or a CCS file keeps both as given, byte for byte. A binding's (R61) is the Windows text
+// (WindowsTemplate) and, in place of backup_dir (a Linux folder; a binding has none), previous_certificate on the texts
+// that named it: what the start record wrote of the certificate the binding named before the change
+// (previousCertificate). A CCS file's is the file text, except for ccsDeploymentTemplates: the CCS text
+// (WindowsCCSTemplate), without backup_dir, with previous_certificate where the binding's text has it (W5-5).
 func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string,
 	params map[string]string) (string, map[string]string, error) {
 	var (
@@ -270,7 +294,8 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 	if err != nil {
 		return "", nil, fmt.Errorf("inventory: read the deployment's location kind: %w", err)
 	}
-	if kind != providers.LocationWinSSLBinding || !slices.Contains(deploymentTemplates, template) {
+	ccs := kind == providers.LocationWinCCSFile && slices.Contains(ccsDeploymentTemplates, template)
+	if !ccs && (kind != providers.LocationWinSSLBinding || !slices.Contains(deploymentTemplates, template)) {
 		return template, params, nil
 	}
 	out := make(map[string]string, len(params))
@@ -288,6 +313,9 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 			}
 		}
 		out["previous_certificate"] = previousCertificate(ref)
+	}
+	if ccs {
+		return WindowsCCSTemplate(template), out, nil
 	}
 	return WindowsTemplate(template), out, nil
 }
