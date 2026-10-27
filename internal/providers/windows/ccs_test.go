@@ -28,17 +28,22 @@ import (
 )
 
 // ccsCred is the platform credential source of a Windows server with a CCS password (providers.CCSPasswordSource);
-// pw "" answers as inventory does for a server without one (ErrNotFound).
+// pw "" answers as inventory does for a server without one (its ErrNotFound wrapping providers.ErrNoCCSPassword); a
+// non-nil err is answered instead (a database failure, an unusable credential).
 type ccsCred struct {
 	*fakeCred
 	pw    string
+	err   error
 	asked []uuid.UUID
 }
 
 func (c *ccsCred) CCSPassword(_ context.Context, target uuid.UUID) (secrets.Plaintext, func(), error) {
 	c.asked = append(c.asked, target)
-	if c.pw == "" {
-		return secrets.Plaintext{}, nil, errors.New("inventory: not found")
+	switch {
+	case c.err != nil:
+		return secrets.Plaintext{}, nil, c.err
+	case c.pw == "":
+		return secrets.Plaintext{}, nil, fmt.Errorf("%w: %w", errors.New("inventory: not found"), providers.ErrNoCCSPassword)
 	}
 	pt := secrets.NewPlaintext([]byte(c.pw))
 	return pt, pt.Zero, nil
@@ -336,6 +341,31 @@ func TestDiscoverCCSLinks(t *testing.T) {
 		})
 	}
 
+	// A password that could not be read says nothing about the files (fix round 1): no ccs-dump is sent, the bindings
+	// are kept and nothing is marked missing; only ErrNoCCSPassword is win_ccs_password_missing.
+	e.srv.SetHandler(m.Handler())
+	for _, tc := range []struct {
+		name string
+		pw   string
+		err  error
+	}{
+		{"a database failure", "", errors.New("inventory: read the CCS password: connection refused")},
+		{"an unusable credential", "", fmt.Errorf("inventory: cannot be decrypted: %w", providers.ErrCCSPasswordUnusable)},
+		{"a password the helper would refuse", "short", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cred.pw, cred.err = tc.pw, tc.err
+			t.Cleanup(func() { cred.pw, cred.err = m.CCSPassword(), nil })
+			before := len(e.srv.Commands())
+			res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"iis-dump"}, e.srv.Commands()[before:], "no ccs-dump")
+			assert.Empty(t, ccsLocations(res.Certificates))
+			assert.Len(t, res.Certificates, 4, "the bindings are kept")
+			assert.Equal(t, []string{winproto.WarnCCSEnabled, providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
+		})
+	}
+
 	// The end of the context during ccs-dump is the discovery's error, not a failed ccs-dump.
 	ctx, cancel := context.WithCancel(context.Background())
 	inner := m.Handler()
@@ -437,11 +467,38 @@ func TestCCSPasswordIsNeverOutsideStdin(t *testing.T) {
 		KeyPEM: string(req.PrivateKeyPEM.Bytes()), Password: c.pw, ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}}, d)
 	_, ok = ccsDeployInput(cl, req.ExpectCertSHA256, req.CertificatePEM, req.PrivateKeyPEM.Bytes(), []byte("é"), req.Guard)
 	assert.False(t, ok, "a password outside ASCII")
-	in = ccsDumpInput([]byte(`a"b\c`))
+	in, ok = ccsDumpInput([]byte(`a"b\c-0123456789`))
+	require.True(t, ok)
 	assert.Equal(t, cap(in), len(in))
 	var di winproto.CCSDumpInput
 	require.NoError(t, json.Unmarshal(in, &di))
-	assert.Equal(t, `a"b\c`, di.Password)
+	assert.Equal(t, `a"b\c-0123456789`, di.Password)
+	for _, bad := range []string{"short", strings.Repeat("ä", winproto.MinCCSPassword), "with a space in it"} {
+		_, ok = ccsDumpInput([]byte(bad))
+		assert.False(t, ok, "a password the helper would refuse is not sent: %q", bad)
+	}
+}
+
+// Fix round 1: a deployment's refusal when the password could not be read, by the source's error.
+func TestCCSPasswordRefusal(t *testing.T) {
+	ctx := context.Background()
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	for _, tc := range []struct {
+		ctx       context.Context
+		err       error
+		code      string
+		retryable bool
+	}{
+		{ctx, fmt.Errorf("inventory: not found: %w", providers.ErrNoCCSPassword), ReasonCCSPasswordMissing, false},
+		{done, context.Canceled, "ssh.timeout", true},
+		{ctx, providers.ErrCCSPasswordUnusable, reasonUnexpected, false},
+		{ctx, errors.New("connection refused"), ReasonIOError, true},
+	} {
+		e := ccsPasswordRefusal(tc.ctx, tc.err)
+		assert.Equal(t, tc.code, e.Code, "%v", tc.err)
+		assert.Equal(t, tc.retryable, e.Retryable, "%v", tc.err)
+	}
 }
 
 // The shape table of a CCS deployment (W5 Ruling 14; mirror of TestDeployOutcomeTable): one row per refusal code of
@@ -500,6 +557,12 @@ func TestCCSDeployOutcomeTable(t *testing.T) {
 		{"a password that is not ASCII: refused before sending", func(_ *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) {
 			c.ccs.pw = strings.Repeat("ä", winproto.MinCCSPassword)
 		}, notSent(reasonInvalidCertificate)},
+		{"the password could not be read (the database): retryable, refused before sending", func(_ *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) {
+			c.ccs.err = errors.New("inventory: read the CCS password: connection refused")
+		}, want{result: providers.DeployNoChange, reason: ReasonIOError, errCode: ReasonIOError, retryable: true, file: "old", noDeploySent: true}},
+		{"the stored password is unusable: final, refused before sending", func(_ *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) {
+			c.ccs.err = fmt.Errorf("inventory: the credential belongs to another target: %w", providers.ErrCCSPasswordUnusable)
+		}, notSent(reasonUnexpected)},
 		{"a locator Alice does not deploy to", func(_ *testing.T, _ *cenv, _ pki.Leaf, r *providers.DeployRequest) {
 			r.Location.Locator = providers.Locator{"type": winproto.LocatorCCSFile, "path": `\\files\ccs`, "host": ccsHost}
 		}, notSent(ReasonLocationUnsupported)},

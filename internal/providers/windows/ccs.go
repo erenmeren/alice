@@ -3,6 +3,7 @@ package windows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,33 +41,49 @@ func (s *session) ccsReady() error {
 }
 
 // ccsPassword is the server's CCS password for one helper call (W5 Ruling 11): from the platform credential source
-// when it is a providers.CCSPasswordSource, for this session's own target only. ok is false when there is none.
-// Inventory answers its ErrNotFound for a server without a password, which this package cannot name (it may not import
-// inventory), so every error is "none": discovery then warns win_ccs_password_missing and a deployment is refused. The
-// caller calls release as soon as the password is copied into the input.
-func (s *session) ccsPassword(ctx context.Context) (pw []byte, release func(), ok bool) {
+// when it is a providers.CCSPasswordSource, for this session's own target only. The error is the source's:
+// providers.ErrNoCCSPassword when none is set (also for a source that cannot hold one), providers.ErrCCSPasswordUnusable
+// for a stored one that will never open, anything else a failure that says nothing about the password (the database,
+// the end of ctx). The caller calls release as soon as the password is copied into the input.
+func (s *session) ccsPassword(ctx context.Context) (pw []byte, release func(), err error) {
 	src, isSource := s.cred.(providers.CCSPasswordSource)
 	if !isSource {
-		return nil, nil, false
+		return nil, nil, providers.ErrNoCCSPassword
 	}
 	pt, release, err := src.CCSPassword(ctx, s.target)
 	if err != nil {
 		if release != nil {
 			release()
 		}
-		return nil, nil, false
+		return nil, nil, err
 	}
 	if release == nil {
 		release = pt.Zero
 	}
-	return pt.Bytes(), release, true
+	return pt.Bytes(), release, nil
+}
+
+// ccsPasswordRefusal is a deployment's refusal when the password could not be read (nothing was sent): none set is
+// windows.ccs_password_missing, a password that will never open internal.unexpected, both final; the end of ctx is
+// ssh.timeout and any other failure windows.io_error, both retryable.
+func ccsPasswordRefusal(ctx context.Context, err error) *providers.Error {
+	switch {
+	case errors.Is(err, providers.ErrNoCCSPassword):
+		return providers.NewError(ReasonCCSPasswordMissing, false, nil, nil)
+	case ctx.Err() != nil:
+		return providers.NewError("ssh.timeout", true, ctx.Err(), map[string]string{"subcommand": winproto.SubCCSDeploy})
+	case errors.Is(err, providers.ErrCCSPasswordUnusable):
+		return providers.NewError(reasonUnexpected, false, err, nil)
+	}
+	return providers.NewError(ReasonIOError, true, err, nil)
 }
 
 // discoverCCS is the second call of Discover (W5 Ruling 18): ccs-dump on a connection of its own, only when iis-dump
 // says CCS is on with a local folder, the helper is at least 1.1.0 and Alice holds the server's password; otherwise a
-// server warning says why no file is listed. A failed ccs-dump (an error, its budget, an answer over the output bound
-// or one that does not decode) keeps the iis-dump result and adds list_truncated and locations_dropped, so inventory
-// marks nothing missing. Only the end of ctx is an error.
+// server warning says why no file is listed (win_ccs_password_missing only when the source says none is set). A
+// password that could not be read for another reason, or a failed ccs-dump (an error, its budget, an answer over the
+// output bound or one that does not decode), keeps the iis-dump result and adds list_truncated and locations_dropped,
+// so inventory marks nothing missing. Only the end of ctx is an error.
 func (s *session) discoverCCS(ctx context.Context, d winproto.IISDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning, error) {
 	switch {
 	case !d.IIS.CCSEnabled:
@@ -76,23 +93,31 @@ func (s *session) discoverCCS(ctx context.Context, d winproto.IISDumpResponse) (
 	case s.ccsReady() != nil:
 		return nil, []providers.Warning{warning(WarnCCSHelperOutdated)}, nil
 	}
-	pw, release, ok := s.ccsPassword(ctx)
-	if !ok {
+	dropped := []providers.Warning{warning(providers.WarnListTruncated), warning(providers.WarnLocationsDropped)}
+	pw, release, err := s.ccsPassword(ctx)
+	switch {
+	case errors.Is(err, providers.ErrNoCCSPassword):
 		return nil, []providers.Warning{warning(WarnCCSPasswordMissing)}, nil
+	case ctx.Err() != nil:
+		return nil, nil, providers.NewError("ssh.timeout", true, ctx.Err(), map[string]string{"subcommand": winproto.SubCCSDump})
+	case err != nil:
+		return nil, dropped, nil
 	}
-	in := ccsDumpInput(pw)
+	in, ok := ccsDumpInput(pw)
 	release()
 	defer clear(in)
+	if !ok {
+		return nil, dropped, nil // a password the helper would refuse: nothing is sent
+	}
 	if inputHook != nil {
 		inputHook(in)
 	}
 	c, _, err := callIn[winproto.CCSDumpResponse](ctx, s, winproto.SubCCSDump, in)
-	clear(in)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, err
 		}
-		return nil, []providers.Warning{warning(providers.WarnListTruncated), warning(providers.WarnLocationsDropped)}, nil
+		return nil, dropped, nil
 	}
 	certs, warns := convertCCS(d, c)
 	return certs, warns, nil
@@ -108,14 +133,18 @@ func ccsPathWarning(path string) providers.Warning {
 }
 
 // ccsDumpInput is the JSON of winproto.CCSDumpInput, built by hand in one allocation (no string copy of the
-// password). The caller clears it.
-func ccsDumpInput(pw []byte) []byte {
+// password). ok is false for a password that is not winproto.ValidCCSPassword (the helper would refuse it); the
+// caller clears the buffer.
+func ccsDumpInput(pw []byte) ([]byte, bool) {
 	const head, tail = `{"password":`, `}`
-	n, _ := jsonStringLen(pw) // a non-ASCII byte is sent as it is: the helper refuses the password (INVALID_ARGUMENT)
+	n, ascii := jsonStringLen(pw)
+	if !ascii || !winproto.ValidCCSPassword(pw) {
+		return nil, false
+	}
 	out := make([]byte, 0, len(head)+n+len(tail))
 	out = append(out, head...)
 	out = appendJSONString(out, pw)
-	return append(out, tail...)
+	return append(out, tail...), true
 }
 
 // ccsFile is one file of the folder while the bindings are linked.
@@ -390,9 +419,9 @@ func (d *deployment) deployCCS(ctx context.Context, l ccsLocator) (providers.Dep
 	if err := s.ccsReady(); err != nil {
 		return d.refuse(asProviderError(err))
 	}
-	pw, release, ok := s.ccsPassword(ctx)
-	if !ok {
-		return d.refuse(providers.NewError(ReasonCCSPasswordMissing, false, nil, nil))
+	pw, release, err := s.ccsPassword(ctx)
+	if err != nil {
+		return d.refuse(ccsPasswordRefusal(ctx, err))
 	}
 	input, ok := ccsDeployInput(l, req.ExpectCertSHA256, req.CertificatePEM, req.PrivateKeyPEM.Bytes(), pw, req.Guard)
 	release()

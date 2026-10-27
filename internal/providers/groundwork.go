@@ -364,11 +364,21 @@ type TargetSecretSource interface {
 
 // CCSPasswordSource is implemented by the platform credential source when it can answer the Centralized Certificate
 // Store password of a Windows server (W5 Rulings 9 and 11): the password an Administrator set for target, or an error
-// that is the inventory's ErrNotFound when none was set. It answers only for a live Windows server and only with that
-// server's own credential. release zeroes the password; the caller calls it as soon as the password was sent.
+// that matches ErrNoCCSPassword (and the inventory's ErrNotFound) when none was set. Any other error (the database, the
+// master key, a credential of another target) says nothing about whether a password is set; ErrCCSPasswordUnusable
+// marks the ones that will not pass. It answers only for a live Windows server and only with that server's own
+// credential. release zeroes the password; the caller calls it as soon as the password was sent.
 type CCSPasswordSource interface {
 	CCSPassword(ctx context.Context, target uuid.UUID) (secrets.Plaintext, func(), error)
 }
+
+// CCSPasswordSource's sentinel errors: ErrNoCCSPassword for a Windows server that has no CCS password set,
+// ErrCCSPasswordUnusable for a stored password that cannot be used however often it is read again (a credential of
+// another target or kind, or one this master key cannot decrypt). Any other error may pass (the database).
+var (
+	ErrNoCCSPassword       = errors.New("providers: no CCS password is set")
+	ErrCCSPasswordUnusable = errors.New("providers: the CCS password cannot be used")
+)
 
 // HostKeyTypeTLSSPKI is host_keys.key_type of a TLS server identity (G2): the SubjectPublicKeyInfo of the certificate an
 // API target presents, pinned and confirmed like an SSH host key.

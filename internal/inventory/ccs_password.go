@@ -11,6 +11,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/license"
 	"alice/internal/platform/db"
+	"alice/internal/providers"
 	"alice/internal/secrets"
 )
 
@@ -103,8 +104,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 }
 
 // CCSPassword implements providers.CCSPasswordSource: it decrypts the newest CCS password of live Windows server target
-// for one helper call. ErrNotFound when the server has none (or is not a live target); a row that does not suit the
-// target (another type, another kind) is refused (errForeignCredential), never opened. release zeroes the password.
+// for one helper call. ErrNotFound wrapping providers.ErrNoCCSPassword when the server has none (or is not a live
+// target); a row that does not suit the target (another type, another kind) is refused (errForeignCredential), never
+// opened. release zeroes the password.
 // Errors carry no secret.
 func (c platformCredentials) CCSPassword(ctx context.Context, target uuid.UUID) (secrets.Plaintext, func(), error) {
 	var (
@@ -119,17 +121,17 @@ WHERE t.id = $1 AND t.deleted_at IS NULL
 ORDER BY c.created_at DESC, c.id DESC LIMIT 1`, target, purposeWinCCS).
 		Scan(&id, &kind, &env.Ciphertext, &env.Nonce, &env.WrappedDEK, &env.KeyVersion, &typ)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return emptyValue, nil, ErrNotFound
+		return emptyValue, nil, fmt.Errorf("%w: %w", ErrNotFound, providers.ErrNoCCSPassword)
 	}
 	if err != nil {
 		return emptyValue, nil, fmt.Errorf("inventory: read the CCS password: %w", err)
 	}
 	if typ != TypeWindows || kind != kindWinCCS {
-		return emptyValue, nil, errForeignCredential
+		return emptyValue, nil, fmt.Errorf("%w: %w", errForeignCredential, providers.ErrCCSPasswordUnusable)
 	}
 	pt, err := c.s.keyring.Open(credentialLocation(id), env)
 	if err != nil { // secrets.ErrDecrypt, which says nothing about why
-		return emptyValue, nil, errors.New("inventory: the CCS password cannot be decrypted with this master key")
+		return emptyValue, nil, fmt.Errorf("inventory: the CCS password cannot be decrypted with this master key: %w", providers.ErrCCSPasswordUnusable)
 	}
 	return pt, pt.Zero, nil
 }
