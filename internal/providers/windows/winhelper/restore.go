@@ -111,6 +111,14 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 		j.Steps = append(j.Steps, stepOK(winproto.StepRestore))
 		// The cause's class, not a failed earlier restore's (a restore of a committed operation has none).
 		j.Phase, j.FailedStep, j.Error = winproto.PhaseRestored, j.CauseStep, j.CauseError
+		if j.CCS != nil {
+			// IIS serves the file put back only after a refresh (F15, ruling W5-10), also when it was put
+			// back before (restoreDone: a restore killed before its refresh).
+			c := *j.CCS
+			_, err := h.RefreshCCSRecords(ctx)
+			c.RefreshFailed = err != nil
+			j.CCS = &c
+		}
 		_ = writeJournal(h, j)
 		if j.CCS != nil {
 			_ = h.RemoveCCS(ctx, j.CCS.Path, j.CCS.Temp) // best effort: an interrupted write's temporary file; pruning removes it otherwise
@@ -222,7 +230,7 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	}
 	answer := func(j journal, from int) winproto.RestoreResponse {
 		return winproto.RestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
-			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):])}
+			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):]), CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed}
 	}
 	switch {
 	case j.Phase == winproto.PhasePrepared, j.Phase == winproto.PhaseUnchanged, j.Phase == winproto.PhaseRestored,

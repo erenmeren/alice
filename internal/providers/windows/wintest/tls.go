@@ -119,10 +119,10 @@ func (m *Model) certificateLocked(ip string, port int, sni string) (*tls.Certifi
 }
 
 // ccsPresentedLocked is IIS's CCS lookup for an SNI host (F17 as modelled): <host>.pfx, else
-// _.<parent>.pfx of the one-label parent, compared without case, in the folder the registry names now,
-// at every handshake (F15: a fresh handshake sees a replaced file). The file is opened with the store's
-// password; one it does not open serves nothing (F16). The chain is the file's intermediates (F18 as
-// modelled). ServeStaleCCS's listener serves the bytes it kept.
+// _.<parent>.pfx of the one-label parent, compared without case, in the folder the registry names now.
+// A file the helper replaced or restored is served as it was until RefreshCCSRecords (F15, pinLocked).
+// The file is opened with the store's password; one it does not open serves nothing (F16). The chain is
+// the file's intermediates (F18 as modelled).
 func (m *Model) ccsPresentedLocked(sni string) (*tls.Certificate, error) {
 	host := fold(sni)
 	names := []string{host + ".pfx"}

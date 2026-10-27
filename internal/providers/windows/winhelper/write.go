@@ -86,7 +86,8 @@ type WriteHost interface {
 	// ErrCCSFileUnsupported. found is false when there is none.
 	ReadCCS(ctx context.Context, folder, name string, limit int) (data []byte, found bool, err error)
 	// OpenPFX reads a PFX's certificates under password without keeping its key: the leaf (the
-	// certificate that has the key) and the other certificates in the file's order. problem is a
+	// certificate that has the key) and the other certificates in chain order (the leaf's issuer, its
+	// issuer, ..., then the rest; BuildPFX's file order). problem is a
 	// winproto.CCSProblem* ("" when it opened); err is a failure of the host itself. The caller
 	// clears password.
 	OpenPFX(data, password []byte) (leafDER []byte, chain [][]byte, problem string, err error)
@@ -100,6 +101,10 @@ type WriteHost interface {
 	RestoreCCS(ctx context.Context, folder, backupName, name string) error
 	// RemoveCCS removes folder\name, a .tmp or .bak name only; one that is absent is nil.
 	RemoveCCS(ctx context.Context, folder, name string) error
+	// RefreshCCSRecords sends every http.sys ccs record back as it is (a same-record update, which
+	// is idempotent): IIS serves a replaced CCS file only after one (F15, ruling W5-10). n is the
+	// number of records updated; err the first failure (the others are still sent).
+	RefreshCCSRecords(ctx context.Context) (n int, err error)
 }
 
 // CCSEntry is one file ListCCS found.

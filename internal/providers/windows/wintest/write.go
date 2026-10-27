@@ -714,6 +714,11 @@ func (m *Model) PutRawCCSFile(name string, data []byte) {
 		panic("wintest: SetCCS names no folder")
 	}
 	m.ccsDirLocked(m.iis.CCSPath)[fold(name)] = &ccsFile{name: name, data: slices.Clone(data), mod: m.nowLocked()}
+	if !m.ccsStale {
+		// A third party's write is served (IIS Manager refreshes; a test's file is read at once): only
+		// the helper's own ReplaceFileW waits for its refresh.
+		delete(m.ccsPinned, fold(name))
+	}
 }
 
 // CCSFile reads a file of the CCS folder the registry names now (any case).
@@ -746,9 +751,9 @@ func (m *Model) FailReplace(on bool) {
 	m.failReplace = on
 }
 
-// ServeStaleCCS(true) is IIS that does not pick a replaced file up (F15 route (b) modelled): from the
-// next replace or restore of a file on, TLS keeps serving the file as it was before it. ServeStaleCCS(false)
-// serves the files again.
+// ServeStaleCCS(true) is IIS that does not pick a replaced file up even after a refresh: from the next
+// replace or restore of a file on, TLS keeps serving the file as it was before it, and
+// RefreshCCSRecords does not end that. ServeStaleCCS(false) serves the files again.
 func (m *Model) ServeStaleCCS(on bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -758,16 +763,46 @@ func (m *Model) ServeStaleCCS(on bool) {
 	}
 }
 
-// pinLocked keeps what TLS serves for a file name before a change, when stale (the first change's
-// bytes stay until ServeStaleCCS(false), as StaleTLS keeps a record's). The pin is keyed by the name
-// only: IIS caches what it serves by host, so it still applies to the folder the registry names after a
-// path change.
+// pinLocked keeps what TLS serves for a file name before the helper replaces or restores it: IIS
+// keeps serving a file it read until the http.sys ccs record is updated (F15 as measured, ruling
+// W5-10: a plain ReplaceFileW was not picked up within 120 s, one followed by a same-record update in
+// about 10 ms). RefreshCCSRecords ends the pins, except while ServeStaleCCS is on. The first change's
+// bytes stay. The pin is keyed by the name only: IIS caches what it serves by host, so it still
+// applies to the folder the registry names after a path change.
 func (m *Model) pinLocked(name string, served []byte) {
-	if k := fold(name); m.ccsStale {
-		if _, ok := m.ccsPinned[k]; !ok {
-			m.ccsPinned[k] = slices.Clone(served)
+	if k := fold(name); m.ccsPinned[k] == nil {
+		m.ccsPinned[k] = slices.Clone(served)
+	}
+}
+
+// FailCCSRefresh makes every RefreshCCSRecords fail while on (nothing is refreshed).
+func (m *Model) FailCCSRefresh(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failRefresh = on
+}
+
+var errCCSRefresh = errors.New("wintest: the ccs records could not be updated")
+
+// RefreshCCSRecords is the same-record update of every http.sys ccs record: IIS reads the CCS files
+// again (the pins end) unless ServeStaleCCS is on. n is the number of ccs records.
+func (h host) RefreshCCSRecords(context.Context) (int, error) {
+	m := h.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failRefresh {
+		return 0, errCCSRefresh
+	}
+	n := 0
+	for _, b := range m.bindings {
+		if b.Type == winproto.BindingCCS {
+			n++
 		}
 	}
+	if !m.ccsStale {
+		clear(m.ccsPinned)
+	}
+	return n, nil
 }
 
 func (h host) CCSConfig(context.Context) (bool, string, error) {
@@ -841,8 +876,10 @@ func (h host) WriteCCSTemp(_ context.Context, folder, tmpName string, data []byt
 	return nil
 }
 
-// ReplaceCCS is ReplaceFileW: name's bytes go to backupName (replacing one there), tmpName's to name
-// (which keeps its spelling), tmpName is gone. FailReplace fails it before anything moved.
+// ReplaceCCS is ReplaceFileW: name's bytes go to backupName (replacing one there), tmpName's to name,
+// spelled as name is given (F17 as measured: over UP.Alice-W5.Test.PFX the file is then
+// up.alice-w5.test.pfx), tmpName is gone. TLS keeps serving the old bytes until a refresh (pinLocked).
+// FailReplace fails it before anything moved.
 func (h host) ReplaceCCS(_ context.Context, folder, name, tmpName, backupName string) error {
 	m := h.m
 	m.mu.Lock()
@@ -858,7 +895,7 @@ func (h host) ReplaceCCS(_ context.Context, folder, name, tmpName, backupName st
 	}
 	m.pinLocked(name, old.data)
 	d[fold(backupName)] = &ccsFile{name: backupName, data: old.data, mod: old.mod}
-	d[fold(name)] = &ccsFile{name: old.name, data: tmp.data, mod: m.nowLocked()}
+	d[fold(name)] = &ccsFile{name: name, data: tmp.data, mod: m.nowLocked()}
 	delete(d, fold(tmpName))
 	return nil
 }

@@ -96,6 +96,9 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	left, err = filepath.Glob(`C:\alice-w5-ccs-*`)
 	require.NoError(t, err)
 	assert.Empty(t, left, "CCS fixture folders are left")
+	left, err = filepath.Glob(filepath.Join(os.Getenv("SystemDrive")+`\`, "Users", "alice-w5-ccs*"))
+	require.NoError(t, err)
+	assert.Empty(t, left, "the CCS fixture account's profile is left")
 	users := powershell(t, `$u = Get-LocalUser -Name 'alice-w5-ccs' -ErrorAction SilentlyContinue; if ($u) { 'left' } else { 'none' }`)
 	assert.Equal(t, "none", strings.TrimSpace(string(users)), "the CCS fixture account alice-w5-ccs is left")
 }

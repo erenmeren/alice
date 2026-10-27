@@ -27,6 +27,7 @@ package main
 // ERROR_INVALID_PARAMETER. Windows Server 2022 answers ERROR_NOT_FOUND (1168) for a type not set.
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -241,7 +242,45 @@ func keyOf(typ, ip, host string, port int) (key, error) {
 		}
 		return key{typ: typ, addr: putSockaddr(netip.IPv4Unspecified(), port), host: host}, nil
 	}
-	return key{}, errBadValue // ccs records are not read or written by key (not deployable)
+	return key{}, errBadValue // ccs records are not read or written by key (not deployable); refreshCCSRecords only
+}
+
+// refreshCCSRecords sends every http.sys ccs record back as the listing read it: one base update
+// (HttpUpdateServiceConfiguration of HTTP_SERVICE_CONFIG_SSL_CCS_SET) each, which keeps the record's
+// extended parameters (F9) and makes IIS read its CCS files again (F15 route (a), ruling W5-10). This
+// same-record write is the only one a ccs record ever gets: keyOf still refuses the type, so Binding
+// and UpdateBinding never reach one. n counts the records updated; err is the first failure, the
+// others are still sent.
+func refreshCCSRecords() (int, error) {
+	list, err := sslBindings()
+	if err != nil {
+		return 0, err
+	}
+	if procHttpUpdateServiceConfiguration.Find() != nil {
+		return 0, errHTTPAPIMissing
+	}
+	n := 0
+	var first error
+	err = withHTTP(func() error {
+		for _, b := range list {
+			if b.Type != winproto.BindingCCS {
+				continue
+			}
+			ip, err := netip.ParseAddr(b.IP)
+			if err != nil || b.Port < 1 || b.Port > 65535 {
+				first = cmp.Or(first, errBadValue)
+				continue
+			}
+			k := key{typ: winproto.BindingCCS, addr: putSockaddr(ip.Unmap(), b.Port)}
+			if err := updateBase(k, b); err != nil {
+				first = cmp.Or(first, err)
+				continue
+			}
+			n++
+		}
+		return nil
+	})
+	return n, cmp.Or(err, first)
 }
 
 // withHTTP runs f between HttpInitialize and HttpTerminate.
@@ -476,8 +515,8 @@ func updateBase(k key, b winproto.SSLBinding) error {
 // encodeBase builds the HTTP_SERVICE_CONFIG_SSL_SET or _SNI_SET of b in one arena.
 func encodeBase(k key, b winproto.SSLBinding) (*arena, uint32, uintptr, uintptr, error) {
 	hash, err := hex.DecodeString(b.CertSHA1)
-	if err != nil || len(hash) == 0 || len(hash) > maxHashBytes {
-		return nil, 0, 0, 0, errBadValue
+	if err != nil || len(hash) == 0 && k.typ != winproto.BindingCCS || len(hash) > maxHashBytes {
+		return nil, 0, 0, 0, errBadValue // only a ccs record names no certificate
 	}
 	appID, err := windows.GUIDFromString(b.AppID)
 	if err != nil {
@@ -503,6 +542,11 @@ func encodeBase(k key, b winproto.SSLBinding) (*arena, uint32, uintptr, uintptr,
 		copy(a.b[addr:], storageBytes(&k.addr))
 		s.IPPort = a.addr(addr)
 		param, id, inLen = &s.Param, configSSLCertInfo, unsafe.Sizeof(*s)
+	case winproto.BindingCCS:
+		off := a.alloc(int(unsafe.Sizeof(sslCcsSet{})))
+		s := (*sslCcsSet)(unsafe.Pointer(&a.b[off]))
+		s.LocalAddress = k.addr
+		param, id, inLen = &s.Param, configSSLCcsCertInfo, unsafe.Sizeof(*s)
 	default:
 		off := a.alloc(int(unsafe.Sizeof(sslSniSet{})))
 		s := (*sslSniSet)(unsafe.Pointer(&a.b[off]))

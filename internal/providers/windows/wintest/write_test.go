@@ -1446,3 +1446,81 @@ func TestModelServeStaleCCSAcrossAPathChange(t *testing.T) {
 		t.Fatal("the stale certificate follows the host")
 	}
 }
+
+// F15 as measured (ruling W5-10): IIS serves a file the helper replaced only after the ccs records are
+// refreshed; ServeStaleCCS keeps the old bytes across a refresh; a third party's write is served.
+func TestModelCCSServedAfterRefresh(t *testing.T) {
+	f := newCCSFixture(t)
+	ctx := context.Background()
+	h := f.m.Host()
+	served := func() string {
+		t.Helper()
+		leaf, _, ok := f.m.Served("127.0.0.1", 443, "ccs.example.test")
+		if !ok {
+			t.Fatal("nothing served")
+		}
+		return leaf
+	}
+	replace := func(l pki.Leaf, op8 string) {
+		t.Helper()
+		pkcs8, err := x509.MarshalPKCS8PrivateKey(l.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pfx, err := winhelper.BuildPFX(l.Cert.Raw, pkcs8, []byte(f.password))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp, bak := ".alice-"+opID(1)+".tmp", "ccs.example.test.pfx.alice-"+op8+".bak"
+		if err := h.WriteCCSTemp(ctx, ccsFolder, tmp, pfx); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.ReplaceCCS(ctx, ccsFolder, "ccs.example.test.pfx", tmp, bak); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if served() != sum256(f.old.Cert.Raw) {
+		t.Fatal("positive control")
+	}
+	a := f.issue("ccs.example.test")
+	replace(a, "0000000a")
+	if served() != sum256(f.old.Cert.Raw) {
+		t.Fatal("a replaced file is served before the refresh")
+	}
+	if n, err := h.RefreshCCSRecords(ctx); n != 1 || err != nil {
+		t.Fatalf("%d %v", n, err)
+	}
+	if served() != sum256(a.Cert.Raw) {
+		t.Fatal("the refresh did not serve the new file")
+	}
+
+	f.m.FailCCSRefresh(true)
+	b := f.issue("ccs.example.test")
+	replace(b, "0000000b")
+	if _, err := h.RefreshCCSRecords(ctx); err == nil || served() != sum256(a.Cert.Raw) {
+		t.Fatalf("a failed refresh: %v", err)
+	}
+	f.m.FailCCSRefresh(false)
+
+	f.m.ServeStaleCCS(true)
+	if _, err := h.RefreshCCSRecords(ctx); err != nil || served() != sum256(a.Cert.Raw) {
+		t.Fatal("ServeStaleCCS keeps the old bytes across a refresh")
+	}
+	f.m.ServeStaleCCS(false)
+	if served() != sum256(b.Cert.Raw) {
+		t.Fatal("ServeStaleCCS(false) serves the file")
+	}
+
+	c := f.issue("ccs.example.test")
+	replace(c, "0000000c")
+	f.put("CCS.example.test.pfx", f.old) // a third party's write is served at once
+	if served() != sum256(f.old.Cert.Raw) {
+		t.Fatal("a third party's write is not served")
+	}
+	// ReplaceFileW leaves the name as the helper spells it (F17 as measured).
+	f.put("CCS.Example.Test.PFX", f.old)
+	replace(c, "0000000d")
+	if names := f.m.CCSNames(); !slices.Contains(names, "ccs.example.test.pfx") {
+		t.Fatalf("%v", names)
+	}
+}

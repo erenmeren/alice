@@ -572,6 +572,10 @@ type DeployResponse struct {
 	Store            string `json:"store"`
 	AliceImported    bool   `json:"alice_imported"`
 	BuiltChainLength int    `json:"built_chain_length"`
+	// CCSRefreshFailed is set on a CCS answer when the same-record update of the http.sys ccs records
+	// that makes IIS read the file again (F15 route (a), ruling W5-10) failed after the file was
+	// written or restored: the file is right, what IIS serves is for the verification to judge.
+	CCSRefreshFailed bool `json:"ccs_refresh_failed,omitempty"`
 }
 
 // RestoreInput is the JSON on iis-restore's stdin, at most MaxRestoreInput bytes: the rollback guard as
@@ -590,6 +594,8 @@ type RestoreResponse struct {
 	CauseStep  string `json:"cause_step"`
 	Error      string `json:"error"`
 	Steps      []Step `json:"steps"`
+	// CCSRefreshFailed is DeployResponse's, for the restore of a CCS file.
+	CCSRefreshFailed bool `json:"ccs_refresh_failed,omitempty"`
 }
 
 // StatusResponse answers iis-status and iis-fence (helperproto.NginxStatusResponse without

@@ -40,8 +40,9 @@ import (
 var (
 	modkernel32           = windows.NewLazySystemDLL("kernel32.dll")
 	procReplaceFileW      = modkernel32.NewProc("ReplaceFileW")
+	procFindFirstFileExW  = modkernel32.NewProc("FindFirstFileExW")
 	procPFXIsPFXBlob      = modcrypt32.NewProc("PFXIsPFXBlob")
-	procPFXVerifyPassword = modcrypt32.NewProc("PFXVerifyPassword")
+	procPFXVerifyPassword = modcrypt32.NewProc("PFXVerifyPassword") // F16's measurement only (the tests)
 )
 
 const (
@@ -56,6 +57,9 @@ const (
 	certKeyContextPropID      = 5
 	certNCryptKeyHandlePropID = 78
 	certKeyHandlePropID       = 79
+
+	// findExInfoBasic is FindExInfoBasic: no 8.3 short name is looked up or returned.
+	findExInfoBasic = 1
 )
 
 var (
@@ -74,13 +78,29 @@ func (host) CCSConfig(ctx context.Context) (bool, string, error) {
 }
 
 // ccsDir is a CCS folder as the helper opens it: a supported local path with one trailing backslash
-// trimmed, except a drive's root ("C:" alone names the drive's current directory).
+// trimmed, except a drive's root ("C:" alone names the drive's current directory). Every host method
+// passes through it, so a folder that is a reparse point is winhelper.ErrCCSFolderUnsupported to each
+// of them (W5 Ruling 3); a folder that does not exist is left to the method.
 func ccsDir(folder string) (string, error) {
 	if !winproto.ValidCCSPath(folder) {
 		return "", errBadValue
 	}
 	if len(folder) > 3 {
 		folder = strings.TrimSuffix(folder, `\`)
+	}
+	p, err := windows.UTF16PtrFromString(folder)
+	if err != nil {
+		return "", errBadValue
+	}
+	attrs, err := windows.GetFileAttributes(p)
+	switch {
+	case notFound(err):
+	case err != nil:
+		return "", err
+	case attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0:
+		return "", winhelper.ErrCCSFolderUnsupported
+	case attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0:
+		return "", errBadValue
 	}
 	return folder, nil
 }
@@ -113,34 +133,15 @@ func notFound(err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
 }
 
-// ListCCS lists the regular *.pfx files of folder (FindFirstFile of <folder>\*.pfx). The pattern also
-// matches a long name through its 8.3 short name ("a.pfxold" is "A~1.PFX"), so each long name is
-// checked again. A folder that does not exist lists nothing (ruling W5-3, as the emulator); one that is
+// ListCCS lists the regular *.pfx files of folder (FindFirstFileExW of <folder>\*.pfx, basic info).
+// The pattern may also match a long name through its 8.3 short name ("a.pfxold" is "A~1.PFX"), so each
+// long name is checked again. A folder that does not exist lists nothing (ruling W5-3, as the emulator); one that is
 // a reparse point is winhelper.ErrCCSFolderUnsupported (W5 Ruling 3).
 func (host) ListCCS(ctx context.Context, folder string) ([]winhelper.CCSEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dir, err := ccsDir(folder)
-	if err != nil {
-		return nil, err
-	}
-	p, err := windows.UTF16PtrFromString(dir)
-	if err != nil {
-		return nil, errBadValue
-	}
-	attrs, err := windows.GetFileAttributes(p)
-	switch {
-	case notFound(err):
-		return []winhelper.CCSEntry{}, nil
-	case err != nil:
-		return nil, err
-	case attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0:
-		return nil, winhelper.ErrCCSFolderUnsupported
-	case attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0:
-		return nil, errBadValue
-	}
-	pattern, err := ccsFilePath(folder, "*.pfx")
+	pattern, err := ccsFilePath(folder, "*.pfx") // ccsDir: a reparse-point folder is refused here
 	if err != nil {
 		return nil, err
 	}
@@ -149,9 +150,9 @@ func (host) ListCCS(ctx context.Context, folder string) ([]winhelper.CCSEntry, e
 		return nil, errBadValue
 	}
 	var fd windows.Win32finddata
-	fh, err := windows.FindFirstFile(pp, &fd)
+	fh, err := findFirstFileBasic(pp, &fd)
 	if notFound(err) {
-		return []winhelper.CCSEntry{}, nil // no match, or the folder went meanwhile
+		return []winhelper.CCSEntry{}, nil // no match, or no folder (ruling W5-3)
 	}
 	if err != nil {
 		return nil, err
@@ -176,6 +177,28 @@ func (host) ListCCS(ctx context.Context, folder string) ([]winhelper.CCSEntry, e
 			return nil, err
 		}
 	}
+}
+
+// findFirstFileBasic is FindFirstFileExW(FindExInfoBasic, FindExSearchNameMatch): FindFirstFile without
+// the 8.3 short names.
+func findFirstFileBasic(pattern *uint16, fd *windows.Win32finddata) (windows.Handle, error) {
+	if err := procFindFirstFileExW.Find(); err != nil {
+		return 0, err
+	}
+	// unsafe: the pattern and the find data are alive for the call.
+	r, _, e := procFindFirstFileExW.Call(uintptr(unsafe.Pointer(pattern)), findExInfoBasic, uintptr(unsafe.Pointer(fd)), 0, 0, 0)
+	if windows.Handle(r) == windows.InvalidHandle {
+		return 0, e
+	}
+	return windows.Handle(r), nil
+}
+
+// RefreshCCSRecords sends every http.sys ccs record back as it is (refreshCCSRecords).
+func (host) RefreshCCSRecords(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return refreshCCSRecords()
 }
 
 // ReadCCS reads at most limit+1 bytes of folder\name, opened with FILE_FLAG_OPEN_REPARSE_POINT (and
@@ -224,10 +247,10 @@ func (host) ReadCCS(ctx context.Context, folder, name string, limit int) ([]byte
 
 // OpenPFX reads a PFX's certificates under password into a memory store with PKCS12_NO_PERSIST_KEY,
 // so no key file is written (F16): the leaf is the one certificate that has a key, the others follow
-// in chain order (pfxChainOrder). PFXIsPFXBlob tells a PFX; PFXVerifyPassword's "no" is confirmed by
-// the import (the import is the judge: a MAC Windows cannot verify must not read as a wrong password
-// when the import opens the file). The problem is always one of winproto.CCSProblem*; err is a failure
-// of the host. The UTF-16 copy of the password is cleared here; the caller clears password.
+// in chain order (pfxChainOrder). PFXIsPFXBlob tells a PFX; the import judges the password:
+// ERROR_INVALID_PASSWORD is a mismatch, any other refusal (a corrupt file) not_a_pfx. The problem is
+// always one of winproto.CCSProblem*; err is a failure of the host. The UTF-16 copy of the password is
+// cleared here; the caller clears password.
 func (host) OpenPFX(data, password []byte) ([]byte, [][]byte, string, error) {
 	if len(data) == 0 {
 		return nil, nil, winproto.CCSProblemNotPFX, nil
@@ -235,7 +258,7 @@ func (host) OpenPFX(data, password []byte) ([]byte, [][]byte, string, error) {
 	if len(data) > winproto.MaxCCSFile {
 		return nil, nil, "", errBadValue
 	}
-	if procPFXIsPFXBlob.Find() != nil || procPFXVerifyPassword.Find() != nil {
+	if procPFXIsPFXBlob.Find() != nil {
 		return nil, nil, "", errStore
 	}
 	pw := make([]uint16, len(password)+1)
@@ -252,14 +275,13 @@ func (host) OpenPFX(data, password []byte) ([]byte, [][]byte, string, error) {
 		runtime.KeepAlive(data)
 		return nil, nil, winproto.CCSProblemNotPFX, nil
 	}
-	verified, _, _ := procPFXVerifyPassword.Call(uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&pw[0])), 0)
 	st, err := windows.PFXImportCertStore(&blob, &pw[0], windows.PKCS12_NO_PERSIST_KEY)
 	clear(pw)
 	runtime.KeepAlive(data)
-	if err != nil {
-		if verified == 0 || errors.Is(err, windows.ERROR_INVALID_PASSWORD) {
-			return nil, nil, winproto.CCSProblemPasswordMismatch, nil
-		}
+	switch {
+	case errors.Is(err, windows.ERROR_INVALID_PASSWORD):
+		return nil, nil, winproto.CCSProblemPasswordMismatch, nil
+	case err != nil:
 		return nil, nil, winproto.CCSProblemNotPFX, nil
 	}
 	defer func() { _ = windows.CertCloseStore(st, 0) }()

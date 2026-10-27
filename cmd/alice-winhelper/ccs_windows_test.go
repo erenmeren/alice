@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,6 +117,7 @@ type ccsReal struct {
 	port     int
 	w        host
 	start    time.Time // when CCS was enabled
+	served   bool      // requireServed ran once
 }
 
 // randomHex is n random bytes in hex.
@@ -233,7 +233,18 @@ Enable-WebCentralCertProvider -CertStoreLocation $env:ALICE_W5_FOLDER -UserName 
 	}
 	tw.addSite(fmt.Sprintf("alice-w5-%d", port), bindings...)
 	f.ensureCCSRecord()
+	// IIS keeps reading the folder it read before until the ccs records are refreshed (run 1: a new
+	// folder was never served without one): the helper's own refresh (ruling W5-10).
+	f.refresh()
 	return f
+}
+
+// refresh is the helper's RefreshCCSRecords, required to update at least the fixture's record.
+func (f *ccsReal) refresh() {
+	f.t.Helper()
+	n, err := f.w.RefreshCCSRecords(context.Background())
+	require.NoError(f.t, err, "RefreshCCSRecords")
+	require.Positive(f.t, n, "RefreshCCSRecords updated the ccs:%d record", f.port)
 }
 
 // restoreCCSRegistry disables CCS and puts the key back as it was found (deleted when there was none).
@@ -355,9 +366,19 @@ func pickup(addr, sni, want string, limit time.Duration) (time.Duration, bool, [
 }
 
 // requireServed waits until sni is served want (a positive control) and returns the chain served.
+// The fixture's first serve refreshes the ccs records once more right before it polls, and logs how
+// long the serve took after that refresh.
 func (f *ccsReal) requireServed(sni string, want *x509.Certificate) []string {
 	f.t.Helper()
+	first := !f.served
+	if first {
+		f.refresh()
+		f.served = true
+	}
 	d, ok, last, err := pickup(f.addr(), sni, sum256hex(want.Raw), ccsPickupLimit)
+	if first {
+		f.t.Logf("F15: first serve after refresh (ccs:%d, %s): %v, after %v", f.port, sni, ok, d.Round(time.Millisecond))
+	}
 	require.True(f.t, ok, "%s on %d is served %s within %v (last %v, %v)", sni, f.port, want.Subject.CommonName, ccsPickupLimit, last, err)
 	f.t.Logf("%s served %s after %v", sni, want.Subject.CommonName, d.Round(time.Millisecond))
 	return last
@@ -372,48 +393,12 @@ func sddl(t *testing.T, path string) string {
 	return sd.String()
 }
 
-// updateCCSRecordSame sends the ccs record of port back to http.sys as it is
-// (HttpUpdateServiceConfiguration of HTTP_SERVICE_CONFIG_SSL_CCS_SET with the base fields read): F15
-// route (a)'s same-record update, measured here before the helper has it.
-func updateCCSRecordSame(t *testing.T, port int) error {
-	t.Helper()
-	b, ok := ccsRecord(t, port)
-	require.True(t, ok)
-	ip, err := netip.ParseAddr(b.IP)
-	require.NoError(t, err)
-	appID, err := windows.GUIDFromString(b.AppID)
-	require.NoError(t, err)
-	hash, err := hex.DecodeString(b.CertSHA1)
-	require.NoError(t, err)
-	a := newArena(int(unsafe.Sizeof(sslCcsSet{})) + len(hash) + 8 + stringBytes(b.Store) + stringBytes(b.CTLIdentifier) +
-		stringBytes(b.CTLStore))
-	off := a.alloc(int(unsafe.Sizeof(sslCcsSet{})))
-	// unsafe: the structure is laid over the arena's first bytes (aligned, no Go pointers inside).
-	s := (*sslCcsSet)(unsafe.Pointer(&a.b[off]))
-	s.LocalAddress = putSockaddr(ip.Unmap(), port)
-	s.Param.SslHashLength = uint32(len(hash)) //nolint:gosec // G115: a short hash
-	s.Param.SslHash = a.put(hash)
-	s.Param.AppID = appID
-	s.Param.SslCertStoreName = a.putString(b.Store)
-	s.Param.DefaultCertCheckMode = b.CertCheckMode
-	s.Param.DefaultRevocationFreshnessTime = b.RevocationFreshnessTime
-	s.Param.DefaultRevocationURLRetrievalTimeout = b.URLRetrievalTimeout
-	s.Param.DefaultSslCtlIdentifier = a.putString(b.CTLIdentifier)
-	s.Param.DefaultSslCtlStoreName = a.putString(b.CTLStore)
-	s.Param.DefaultFlags = b.Flags
-	return withHTTP(func() error {
-		r, _, _ := procHttpUpdateServiceConfiguration.Call(0, configSSLCcsCertInfo, a.addr(off), unsafe.Sizeof(*s), 0)
-		runtime.KeepAlive(a)
-		return ulongResult(r)
-	})
-}
-
 // ---- F15 ---------------------------------------------------------------------------------------------
 
-// TestRealCCSReplaceIsPickedUp measures F15: ccs-deploy's ReplaceFileW is served at a fresh handshake
-// (the delay of a plain replace, twice, and of a replace followed by a same-record update of the ccs
-// record), the backup holds the bytes replaced, the file keeps its ACL, and a .bak or .tmp file is
-// never served.
+// TestRealCCSReplaceIsPickedUp checks F15 route (a) (ruling W5-10): ccs-deploy's ReplaceFileW and
+// refresh are served at a fresh handshake (the delay of each is logged), a plain ReplaceFileW without
+// a refresh is not (within 10 s) and is once refreshed; the backup holds the bytes replaced, the file
+// keeps its ACL, and a .bak or .tmp file is never served.
 func TestRealCCSReplaceIsPickedUp(t *testing.T) {
 	const host, file = "r.alice-w5.test", "r.alice-w5.test.pfx"
 	f := newCCSReal(t, portCCSReplace, host, "n.alice-w5.test")
@@ -438,41 +423,48 @@ func TestRealCCSReplaceIsPickedUp(t *testing.T) {
 	require.NoError(t, err)
 	prev := old
 	var delays []string
-	for i, c := range []struct {
-		op     string
-		update bool
-	}{{op1, false}, {op2, false}, {op3, true}} {
-		leaf := pki.SelfSigned(fmt.Sprintf("alice-w5-r-%d.test", i+1), pki.ECDSA256, time.Now())
-		f.deployReal(c.op, host, leaf, sum256hex(prev.Cert.Raw), winproto.PhaseCommitted)
-		kind := "plain replace"
-		if c.update {
-			kind = "replace followed by a same-record ccs update"
-			if err := updateCCSRecordSame(t, f.port); err != nil {
-				t.Logf("F15: the same-record update of ccs:%d failed: %v", f.port, err)
-			}
-		}
-		d, ok, last, err := pickup(f.addr(), host, sum256hex(leaf.Cert.Raw), ccsPickupLimit)
+	check := func(i int, op, kind string, leaf pki.Leaf, limit time.Duration) bool {
+		t.Helper()
+		d, ok, last, err := pickup(f.addr(), host, sum256hex(leaf.Cert.Raw), limit)
 		if ok {
-			t.Logf("F15: %s %d picked up after %v (fresh handshakes every %v)", kind, i+1, d.Round(time.Millisecond), ccsPoll)
+			t.Logf("F15: %s %d picked up after %v (fresh handshakes every %v)", kind, i, d.Round(time.Millisecond), ccsPoll)
 			delays = append(delays, fmt.Sprintf("%s %v", kind, d.Round(time.Millisecond)))
 		} else {
-			t.Logf("F15: %s %d NOT picked up within %v (last %v, %v)", kind, i+1, ccsPickupLimit, last, err)
+			t.Logf("F15: %s %d NOT picked up within %v (last %v, %v)", kind, i, limit, last, err)
 			delays = append(delays, kind+" never")
 		}
-		assert.True(t, ok, "F15: the new file is served without a restart")
-
-		bak, err := os.ReadFile(f.path(backupName(file, c.op)))
-		require.NoError(t, err, "the backup of %s", c.op)
+		bak, err := os.ReadFile(f.path(backupName(file, op)))
+		require.NoError(t, err, "the backup of %s", op)
 		assert.Equal(t, prevBytes, bak, "the backup holds the bytes replaced")
-		_, err = os.Stat(f.path(".alice-" + c.op + ".tmp"))
+		_, err = os.Stat(f.path(".alice-" + op + ".tmp"))
 		assert.ErrorIs(t, err, os.ErrNotExist, "no temporary file left")
 		after := sddl(t, f.path(file))
-		t.Logf("F15: ACL kept by ReplaceFileW (%d): %v", i+1, after == acl)
+		t.Logf("F15: ACL kept by ReplaceFileW (%d): %v", i, after == acl)
 		assert.Equal(t, acl, after, "the file's ACL")
 		prev = leaf
 		prevBytes, err = os.ReadFile(f.path(file))
 		require.NoError(t, err)
+		return ok
 	}
+	// ccs-deploy: the replace, then the refresh of every ccs record (route (a), ruling W5-10).
+	for i, op := range []string{op1, op2} {
+		leaf := pki.SelfSigned(fmt.Sprintf("alice-w5-r-%d.test", i+1), pki.ECDSA256, time.Now())
+		got := f.deployReal(op, host, leaf, sum256hex(prev.Cert.Raw), winproto.PhaseCommitted)
+		assert.Nil(t, got["ccs_refresh_failed"], "the refresh succeeded")
+		assert.True(t, check(i+1, op, "ccs-deploy (replace and refresh)", leaf, ccsPickupLimit), "F15: ccs-deploy's file is served")
+	}
+	// The host's ReplaceCCS alone, then its refresh: the model the emulator follows.
+	leaf := pki.SelfSigned("alice-w5-r-3.test", pki.ECDSA256, time.Now())
+	tmp := ".alice-" + op3 + ".tmp"
+	ctx := context.Background()
+	require.NoError(t, f.w.WriteCCSTemp(ctx, f.folder, tmp, ccsPFX(t, leaf, f.password)))
+	require.NoError(t, f.w.ReplaceCCS(ctx, f.folder, file, tmp, backupName(file, op3)))
+	plain := check(3, op3, "plain ReplaceFileW without a refresh", leaf, 10*time.Second)
+	f.refresh()
+	d, ok, _, _ := pickup(f.addr(), host, sum256hex(leaf.Cert.Raw), ccsPickupLimit)
+	t.Logf("F15: the plain replace after RefreshCCSRecords: picked up %v after %v", ok, d.Round(time.Millisecond))
+	assert.False(t, plain, "F15 as measured in run 1: a plain replace is not picked up")
+	assert.True(t, ok, "the refresh makes IIS serve it")
 	t.Logf("F15: verdict: %s", strings.Join(delays, "; "))
 
 	got, err := served(f.addr(), "n.alice-w5.test")
@@ -542,49 +534,47 @@ func TestRealCCSWrongPasswordIsNotServed(t *testing.T) {
 	bad := pki.SelfSigned("alice-w5-bad.test", pki.ECDSA256, now)
 	other := winhelper.NewPFXPassword()
 	goodPFX, badPFX := ccsPFX(t, good, f.password), ccsPFX(t, bad, other)
-	f.put("good.alice-w5.test.pfx", goodPFX)
-	f.put("bad.alice-w5.test.pfx", badPFX)
-	f.requireServed("good.alice-w5.test", good.Cert)
-	t.Logf("F16: IIS serves a file BuildPFX wrote with the CCS password (PBES2/AES-256-CBC, HMAC-SHA256 MAC, RSA key): true")
 
-	_, ok, last, err := pickup(f.addr(), "bad.alice-w5.test", sum256hex(bad.Cert.Raw), 15*time.Second)
-	t.Logf("F16: a file with another password is served: %v; the client sees %v, %v", ok, last, err)
-	assert.False(t, ok, "a file IIS cannot open is never served")
-	events, err := runPowershell(map[string]string{"ALICE_W5_SINCE": f.start.UTC().Format(time.RFC3339)},
-		`$since = [DateTime]::Parse($env:ALICE_W5_SINCE, $null, [Globalization.DateTimeStyles]::RoundtripKind)
-foreach ($log in @('Application', 'System')) {
-    Get-WinEvent -FilterHashtable @{LogName = $log; StartTime = $since; Level = 1, 2, 3} -MaxEvents 30 -ErrorAction SilentlyContinue |
-        ForEach-Object { $m = "$($_.Message)" -replace '\s+', ' '; if ($m.Length -gt 240) { $m = $m.Substring(0, 240) }
-            "$log $($_.ProviderName) $($_.Id) $m" }
-}`)
-	require.NoError(t, err)
-	if lines := strings.TrimSpace(string(events)); lines == "" {
-		t.Logf("F16: no Application or System warning or error since the fixture")
-	} else {
-		for _, l := range strings.Split(lines, "\n") {
-			t.Logf("F16: event %s", strings.TrimSpace(l))
-		}
-	}
-
-	// The measured error of the import under another password, and PFXVerifyPassword's answer.
+	// OpenPFX first, so these are measured whatever IIS serves. The import under another password: its
+	// measured code, and PFXVerifyPassword's answer (recorded only; OpenPFX does not use it).
 	pw := make([]uint16, len(f.password)+1)
 	for i, c := range f.password {
 		pw[i] = uint16(c)
 	}
-	blob := windows.CryptDataBlob{Size: uint32(len(badPFX)), Data: &badPFX[0]} //nolint:gosec // G115: a small file
-	verified, _, _ := procPFXVerifyPassword.Call(uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&pw[0])), 0)
-	st, err := windows.PFXImportCertStore(&blob, &pw[0], windows.PKCS12_NO_PERSIST_KEY)
-	runtime.KeepAlive(badPFX)
-	if err == nil {
-		_ = windows.CertCloseStore(st, 0)
+	importCode := func(pfx []byte) (bool, error) {
+		blob := windows.CryptDataBlob{Size: uint32(len(pfx)), Data: &pfx[0]} //nolint:gosec // G115: a small file
+		verified, _, _ := procPFXVerifyPassword.Call(uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&pw[0])), 0)
+		st, err := windows.PFXImportCertStore(&blob, &pw[0], windows.PKCS12_NO_PERSIST_KEY)
+		runtime.KeepAlive(pfx)
+		if err == nil {
+			_ = windows.CertCloseStore(st, 0)
+		}
+		return verified != 0, err
 	}
-	var en windows.Errno
-	_ = errors.As(err, &en)
-	t.Logf("F16: PFXVerifyPassword with another password: %v; PFXImportCertStore: %v (code %d, 0x%08x)", verified != 0, err, uint32(en), uint32(en))
+	code := func(err error) string {
+		var en windows.Errno
+		if !errors.As(err, &en) {
+			return fmt.Sprint(err)
+		}
+		return fmt.Sprintf("%d (0x%08x)", uint32(en), uint32(en))
+	}
+	verified, err := importCode(badPFX)
+	t.Logf("F16: another password: PFXVerifyPassword %v; PFXImportCertStore code %s", verified, code(err))
 	require.Error(t, err, "the import refuses another password")
 	_, _, problem, err := f.w.OpenPFX(badPFX, f.password)
 	require.NoError(t, err)
 	assert.Equal(t, winproto.CCSProblemPasswordMismatch, problem)
+	// A corrupt file (one byte in the middle flipped) and a certificates-only PFX.
+	corrupt := slices.Clone(goodPFX)
+	corrupt[len(corrupt)/2] ^= 0xff
+	verified, err = importCode(corrupt)
+	_, _, problem, oerr := f.w.OpenPFX(corrupt, f.password)
+	t.Logf("F16: a corrupt PFX: PFXVerifyPassword %v; PFXImportCertStore code %s; OpenPFX problem %q (%v)", verified, code(err), problem, oerr)
+	certsOnly := pki.CertificatesOnlyPFX(string(f.password), good.Cert)
+	_, _, problem, oerr = f.w.OpenPFX(certsOnly, f.password)
+	t.Logf("F16: a certificates-only PFX (an encrypted safe, no key): OpenPFX problem %q (%v)", problem, oerr)
+	require.NoError(t, oerr)
+	assert.Equal(t, winproto.CCSProblemNoKey, problem)
 
 	// The right password: the leaf and no key file (machine and user key directories, by name).
 	before := keyFiles(t)
@@ -603,7 +593,37 @@ foreach ($log in @('Application', 'System')) {
 	t.Logf("F16: OpenPFX (PFXImportCertStore PKCS12_NO_PERSIST_KEY) left key files: %d %v (%d before)", len(left), left, len(before))
 	logKeyProperties(t, goodPFX, f.password)
 	assert.Empty(t, left, "PKCS12_NO_PERSIST_KEY leaves no key file")
+
+	// What IIS serves.
+	f.put("good.alice-w5.test.pfx", goodPFX)
+	f.put("bad.alice-w5.test.pfx", badPFX)
+	f.requireServed("good.alice-w5.test", good.Cert)
+	t.Logf("F16: IIS serves a file BuildPFX wrote with the CCS password (PBES2/AES-256-CBC, HMAC-SHA256 MAC, RSA key): true")
+	_, ok, last, err := pickup(f.addr(), "bad.alice-w5.test", sum256hex(bad.Cert.Raw), 15*time.Second)
+	t.Logf("F16: a file with another password is served: %v; the client sees %v, %v", ok, last, err)
+	assert.False(t, ok, "a file IIS cannot open is never served")
+	f.logEvents("F16")
 	t.Logf("F16: machine key files created while IIS served the CCS files: %v", machineKeysSince(t, f.start))
+}
+
+// logEvents logs the Application and System warnings and errors since CCS was enabled, as lines of fact.
+func (f *ccsReal) logEvents(fact string) {
+	f.t.Helper()
+	events, err := runPowershell(map[string]string{"ALICE_W5_SINCE": f.start.UTC().Format(time.RFC3339)},
+		`$since = [DateTime]::Parse($env:ALICE_W5_SINCE, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+foreach ($log in @('Application', 'System')) {
+    Get-WinEvent -FilterHashtable @{LogName = $log; StartTime = $since; Level = 1, 2, 3} -MaxEvents 30 -ErrorAction SilentlyContinue |
+        ForEach-Object { $m = "$($_.Message)" -replace '\s+', ' '; if ($m.Length -gt 240) { $m = $m.Substring(0, 240) }
+            "$log $($_.ProviderName) $($_.Id) $m" }
+}`)
+	require.NoError(f.t, err)
+	if lines := strings.TrimSpace(string(events)); lines == "" {
+		f.t.Logf("%s: no Application or System warning or error since the fixture", fact)
+	} else {
+		for _, l := range strings.Split(lines, "\n") {
+			f.t.Logf("%s: event %s", fact, strings.TrimSpace(l))
+		}
+	}
 }
 
 // ---- F17 ---------------------------------------------------------------------------------------------
@@ -716,6 +736,13 @@ func TestRealCCSServedChain(t *testing.T) {
 	againB, err := served(f.addr(), "f18b.alice-w5.test")
 	require.NoError(t, err)
 	report("the intermediate in CA only (the file served before the import)", againB)
+	f.refresh()
+	again, err = served(f.addr(), "f18a.alice-w5.test")
+	require.NoError(t, err)
+	report("the intermediate in the PFX and in CA (after a refresh)", again)
+	againB, err = served(f.addr(), "f18b.alice-w5.test")
+	require.NoError(t, err)
+	report("the intermediate in CA only (after a refresh)", againB)
 	f.put("f18c.alice-w5.test.pfx", ccsPFX(t, c, f.password))
 	report("the intermediate in CA only (a file first served after the import)", f.requireServed("f18c.alice-w5.test", c.Cert))
 }
@@ -802,6 +829,13 @@ func TestRealCCSRefusesReparsePoints(t *testing.T) {
 	setCCSRegistry(t, true, junction)
 	_, err := f.w.ListCCS(ctx, junction)
 	assert.ErrorIs(t, err, winhelper.ErrCCSFolderUnsupported)
+	// Every host method refuses the junction folder (ccsDir), not only the listing.
+	_, _, err = f.w.ReadCCS(ctx, junction, "j.alice-w5.test.pfx", winproto.MaxCCSFile)
+	assert.ErrorIs(t, err, winhelper.ErrCCSFolderUnsupported, "ReadCCS")
+	assert.ErrorIs(t, f.w.WriteCCSTemp(ctx, junction, ".alice-"+op2+".tmp", []byte("x")), winhelper.ErrCCSFolderUnsupported, "WriteCCSTemp")
+	assert.ErrorIs(t, f.w.RemoveCCS(ctx, junction, ".alice-"+op2+".tmp"), winhelper.ErrCCSFolderUnsupported, "RemoveCCS")
+	assert.ErrorIs(t, f.w.RestoreCCS(ctx, junction, "j.alice-w5.test.pfx.alice-11111111.bak", "j.alice-w5.test.pfx"),
+		winhelper.ErrCCSFolderUnsupported, "RestoreCCS")
 	d := dump()
 	assert.False(t, d.Local, "%+v", d)
 	assert.Empty(t, d.Files)

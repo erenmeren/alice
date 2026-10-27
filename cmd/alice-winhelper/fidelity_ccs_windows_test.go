@@ -168,7 +168,7 @@ func TestFidelityCCS(t *testing.T) {
 		code   string
 	}{
 		{name: "CCS disabled", setup: setReg(false, f.folder), exit: 3, code: winproto.CodeCCSDisabled},
-		{name: "a UNC registry path", setup: setReg(true, `\\alice-w5-fs\certs`), exit: 3, code: winproto.CodeCCSPathUnsupported},
+		{name: "a UNC registry path", setup: setReg(true, `\\alice-w5-fs.invalid\certs`), exit: 3, code: winproto.CodeCCSPathUnsupported},
 		{name: "another folder", edit: func(in *winproto.CCSDeployInput) { in.Path = `C:\alice-w5-other` }, exit: 3, code: winproto.CodeCCSPathChanged},
 		{name: "an absent file", host: "none.alice-w5.test", exit: 3, code: winproto.CodeCCSFileNotFound},
 		{name: "another password", edit: func(in *winproto.CCSDeployInput) { in.Password = string(other) }, exit: 3,
@@ -232,6 +232,9 @@ func TestFidelityCCS(t *testing.T) {
 			assert.Equal(t, c.code, got["code"], "%v", got)
 			if c.setup != nil {
 				dump() // the registry's state as both hosts read it
+				// Back to the fixture's folder before the names are compared: the model lists the
+				// folder the registry names now (run 1: the UNC row compared the model's empty one).
+				restore()
 			}
 			f.sameNames()
 		})

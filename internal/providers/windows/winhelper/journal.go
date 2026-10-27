@@ -117,6 +117,9 @@ type ccsJournal struct {
 	PreviousFileSHA256 string `json:"previous_file_sha256"`
 	NewFileSHA256      string `json:"new_file_sha256"`
 	PreviousSPKISHA256 string `json:"previous_spki_sha256"`
+	// RefreshFailed: the last RefreshCCSRecords of this operation (after its replace or its restore)
+	// failed (ruling W5-10); answered as ccs_refresh_failed.
+	RefreshFailed bool `json:"refresh_failed,omitempty"`
 }
 
 // ccsRecordKey is the file record's key of a CCS file: a binding record keyed by "ccs/<file>".

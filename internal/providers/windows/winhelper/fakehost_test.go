@@ -225,6 +225,7 @@ type fakeWriteHost struct {
 	ccsPasswords  [][]byte
 	ccsWriteErr   error
 	ccsReplaceErr error
+	ccsRefreshErr error // RefreshCCSRecords answers it (logged all the same: the updates were tried)
 }
 
 // fakeCCSFile is one file of the fake CCS folder.
@@ -788,6 +789,15 @@ func (f *fakeWriteHost) RestoreCCS(_ context.Context, folder, backupName, name s
 	delete(f.ccsFiles, backupName)
 	f.log = append(f.log, "ccs-restore "+name)
 	return nil
+}
+
+// RefreshCCSRecords counts the fake's ccs records and logs the refresh.
+func (f *fakeWriteHost) RefreshCCSRecords(context.Context) (int, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	f.log = append(f.log, "ccs-refresh")
+	return 1, f.ccsRefreshErr
 }
 
 // RemoveCCS removes a .tmp or .bak only; one that is absent is nil.

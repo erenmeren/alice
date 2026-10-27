@@ -383,8 +383,8 @@ func cmdCCSDeploy(ctx context.Context, c *call) (any, error) {
 }
 
 // runCCS is ccs-deploy after its gate (Ruling 14 steps 4-9): every outcome is recorded in the journal.
-// The F15 route (a) step (a same-record update of each linked ccs record after the replace) is not
-// built: F15 is measured on a runner first.
+// Step 7 is F15 route (a) (ruling W5-10): after the replace, every http.sys ccs record is updated as it
+// is, since the helper does not know which ports the file is linked to.
 func (t *deployTx) runCCS(in content, intermediates [][]byte, password []byte, sec *secrets) (any, error) {
 	h, j := t.h, &t.j
 	c := j.CCS
@@ -434,6 +434,11 @@ func (t *deployTx) runCCS(in content, intermediates [][]byte, password []byte, s
 	if err := point(h, "ccs.replaced"); err != nil {
 		return nil, err
 	}
+	// F15 route (a), ruling W5-10: IIS serves the new file only after a same-record update of the
+	// http.sys ccs records. A failed refresh is no rollback by itself: the file is right, and the
+	// verification judges what IIS serves (ccs_refresh_failed in the answer).
+	_, rerr := h.RefreshCCSRecords(t.ctx)
+	c.RefreshFailed = rerr != nil
 	// Read back: the bytes are the PFX built, and the password opens them to the new leaf.
 	back, found, err := h.ReadCCS(t.ctx, c.Path, c.File, winproto.MaxCCSFile)
 	sec.keep(back)

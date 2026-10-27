@@ -116,7 +116,8 @@ type Model struct {
 	ccsPassword string                         // IIS's private-key password (SetCCSPassword)
 	failReplace bool
 	ccsStale    bool
-	ccsPinned   map[string][]byte // ServeStaleCCS: the bytes a stale listener keeps serving, by folded file name
+	ccsPinned   map[string][]byte // what IIS keeps serving for a file name until a refresh (F15), by folded file name
+	failRefresh bool              // FailCCSRefresh
 	ccsReparse  map[string]bool   // SetCCSReparse: the folders and files that are reparse points, by folderKey
 }
 

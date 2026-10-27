@@ -465,7 +465,8 @@ func TestCCSDeployCommits(t *testing.T) {
 			machine = append(machine, w)
 		}
 	}
-	if !slices.Equal(machine, []string{"intermediate " + f.interSHA1, "ccs-write " + ccsTemp(op1), "ccs-replace " + ccsName, "event 1004"}) {
+	if !slices.Equal(machine, []string{"intermediate " + f.interSHA1, "ccs-write " + ccsTemp(op1), "ccs-replace " + ccsName, "ccs-refresh",
+		"event 1004"}) || r.CCSRefreshFailed || bytes.Contains(out, []byte("ccs_refresh_failed")) {
 		t.Fatalf("%v", machine)
 	}
 	// The answer and the event carry no secret.
@@ -635,6 +636,83 @@ type failMove struct{ *fakeWriteHost }
 
 func (failMove) RestoreCCS(context.Context, string, string, string) error {
 	return errors.New("denied")
+}
+
+// TestCCSRefresh is ruling W5-10: the ccs records are refreshed after the replace, after a
+// self-restore and after an iis-restore (also one that finds the file put back already); a failed
+// refresh is answered, never a rollback by itself.
+func TestCCSRefresh(t *testing.T) {
+	after := func(t *testing.T, log []string, what string) {
+		t.Helper()
+		i := slices.Index(log, what)
+		if i < 0 || !slices.Contains(log[i:], "ccs-refresh") {
+			t.Fatalf("no refresh after %s: %v", what, log)
+		}
+	}
+	f := newCCSFixture(t)
+	f.h.ccsRefreshErr = errors.New("http.sys")
+	o, r, out := f.ccsDeploy(op1, f.in())
+	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || !r.CCSRefreshFailed || !f.journal(op1).CCS.RefreshFailed {
+		t.Fatalf("%+v %s", o, out)
+	}
+	after(t, f.h.writes(), "ccs-replace "+ccsName)
+
+	f.h.ccsRefreshErr = nil
+	restore := func() winproto.RestoreResponse {
+		t.Helper()
+		o, out := execute(t, context.Background(), f.h, bytes.NewReader(restoreInput([]string{}, []string{})), winproto.SubIISRestore,
+			winproto.ArgOp, op1)
+		var rr winproto.RestoreResponse
+		if err := json.Unmarshal(out, &rr); err != nil || o.Exit != 0 || rr.Phase != winproto.PhaseRestored {
+			t.Fatalf("%+v %s", o, out)
+		}
+		return rr
+	}
+	if rr := restore(); rr.CCSRefreshFailed || f.journal(op1).CCS.RefreshFailed {
+		t.Fatalf("%+v", rr)
+	}
+	after(t, f.h.writes(), "ccs-restore "+ccsName)
+
+	// A restore killed after the file was put back, before its refresh: the next one finds the file
+	// restored already and refreshes all the same; its failure is answered.
+	g := newCCSFixture(t)
+	g.ccsCommitted(op1, g.in())
+	g.h.pointErr = func(name string) error {
+		if name == "restore.bound" {
+			return errors.New("killed")
+		}
+		return nil
+	}
+	var killed bytes.Buffer
+	if o := Execute(context.Background(), g.h, []string{winproto.SubIISRestore, winproto.ArgOp, op1},
+		bytes.NewReader(restoreInput([]string{}, []string{})), &killed); !o.Killed {
+		t.Fatalf("%+v", o)
+	}
+	g.h.pointErr = nil
+	g.reset()
+	g.h.ccsRefreshErr = errors.New("http.sys")
+	f = g
+	if rr := restore(); !rr.CCSRefreshFailed {
+		t.Fatalf("%+v", rr)
+	}
+	if w := g.h.writes(); slices.Contains(w, "ccs-restore "+ccsName) || !slices.Contains(w, "ccs-refresh") {
+		t.Fatalf("%v", w)
+	}
+
+	// A self-restore (the read-back fails) refreshes after it put the backup back.
+	f = newCCSFixture(t)
+	once := false
+	f.h.ccsReadData = func(name string, data []byte) []byte {
+		if name == ccsName && slices.Contains(f.h.log, "ccs-replace "+ccsName) && !once {
+			once = true
+			return []byte("other bytes")
+		}
+		return data
+	}
+	if _, r, out := f.ccsDeploy(op1, f.in()); r.Phase != winproto.PhaseRestored || r.CCSRefreshFailed {
+		t.Fatalf("%s", out)
+	}
+	after(t, f.h.writes(), "ccs-restore "+ccsName)
 }
 
 // TestCCSDeployReadBackRestores is Review Focus 3 within the helper.
