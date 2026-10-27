@@ -5,7 +5,9 @@ WinRM, SSTP and other applications share), the IIS sites that use each binding, 
 from the machine store, with its expiry and store. The bindings appear under **Websites on this server** with the
 column **IIS site**, grouped by the certificate they serve, and the certificates under **Certificates** like any
 certificate Alice found. Alice deploys certificates to the bindings IIS uses: it imports the certificate into the
-machine store and points the binding to it ([What a deployment changes](#what-a-deployment-changes)). It never
+machine store and points the binding to it ([What a deployment changes](#what-a-deployment-changes)), and to the
+files of IIS's Centralized Certificate Store, which it replaces in place ([Centralized Certificate
+Store](#centralized-certificate-store)). It never
 changes IIS's own configuration (`applicationHost.config`) and never restarts a service. It removes a certificate
 only when it imported it itself and nothing has used it for 7 days ([What the cleanup removes](#what-the-cleanup-removes)).
 
@@ -241,6 +243,62 @@ A copy of an Alice certificate that you made in another store by hand and that s
 Alice removes its own copy, unless that copy is bound. To keep a certificate Alice imported, bind it, or switch
 **Remove certificates Alice imported once nothing uses them** off on the server's page in Alice (off, Alice removes
 nothing on that server).
+
+## Centralized Certificate Store
+
+When IIS reads its certificates from a Centralized Certificate Store (CCS; IIS Manager, **Centralized Certificates**),
+Alice can manage the PFX files of the store as well (helper 1.1.0 or later). Each file is a location of its own in
+Alice, linked to the IIS sites IIS serves from it. Prepare the store like this:
+
+- **A local folder.** The store's **Physical path** must be a folder on the server itself, with a drive letter, for
+  example `D:\CCS`. A share of another computer (`\\fileserver\certs`), a `\\?\` or `\\.\` path, or a folder that is a
+  link or junction is not managed: Alice names the reason on the server's page and lists no files. The helper reads the
+  folder under Alice's administrator account, so the folder's permissions must let Administrators read and write it
+ . The account IIS uses to read the store needs read access only.
+- **The private-key password.** Every file of the store is encrypted with the store's one private-key password (IIS
+  Manager, **Edit Feature Settings** of **Centralized Certificates**). Alice manages a store whose password has 12 to
+  128 printable ASCII characters and no spaces; choose such a password in IIS before you export the files with it. An
+  Administrator enters the same password in Alice on the server's page (**CCS password**, with step-up). Alice never
+  reads the password IIS keeps in the registry; a file the password in Alice does not open is shown as a problem and
+  never written.
+- **File names.** `<host>.pfx` for a host (`www.example.com.pfx`) and `_.<domain>.pfx` for a wildcard
+  (`_.example.com.pfx`, which IIS uses for every name below `example.com`, also two or more labels down, but not for
+  `example.com` itself). IIS compares names without regard to case and prefers the exact file. A name that gives no
+  host is ignored and counted on the server's page.
+- **The first file is yours.** Alice replaces existing files and never creates a new one: place the first file for a
+  host in the folder yourself. Do it before the site's first request: IIS may take several minutes to serve a file for
+  a host it has never served (on the test systems not within 40 seconds, even with a short polling interval). IIS
+  checks the folder every `PollingInterval` seconds (registry key
+  `HKLM\SOFTWARE\Microsoft\IIS\CentralCertProvider`, default 300).
+- **The http.sys entry of the port.** IIS serves CCS files through an http.sys entry `ccs=<port>` (`netsh http show
+  sslcert`). A binding added with `appcmd` alone did not create it on the test systems; then add it with
+  `netsh http add sslcert ccs=<port> appid={4dc3e181-e14b-4a21-b022-59fc669b0914}`.
+
+What a deployment to a CCS file changes:
+
+- **`LocalMachine\CA`**: the intermediate certificates, as for a binding (never replaced or removed).
+- **The file**, in place. The helper writes the new PFX (certificate, private key and intermediates, encrypted with
+  the CCS password) as `.alice-<operation>.tmp` in the same folder, then replaces the file with it in one step
+  (Windows' `ReplaceFile`, which keeps the file's permissions) and keeps the previous file as
+  `<file>.alice-<8 hex>.bak` (the last 8 characters of the operation). Neither name ends in `.pfx`, so IIS never serves
+  them.
+- **The http.sys `ccs` entries.** IIS does not pick up a replaced CCS file by itself (on the test systems it kept
+  serving the old certificate). After every write and every restore, the helper refreshes every http.sys `ccs` entry of
+  the server with its own values, a same-value update that changes nothing else (the test systems compare every entry
+  and its extended settings before and after); IIS then serves the new file to the next connection. If the refresh
+  fails, the deployment's step says so and the check of the sites decides.
+- **`C:\ProgramData\Alice\helper`**: the journal of the change, as for a binding. The password is never written there,
+  nor to an event or a log.
+- **The Application event log**, source `Alice Helper`: event **1004** `ccs file <name> sha256 <old> -> <new> op
+  <operation>` after a write (the SHA-256 of the old and the new certificate), **1002** after the previous file was put
+  back.
+
+When the check after the change fails, the helper moves the backup back over the file. The `.bak` file holds the
+previous certificate and its private key, encrypted with the CCS password and protected by the folder's permissions.
+It lives at most 7 days: the daily cleanup removes the backups and temporary files of changes finished 7 days ago
+(also of the latest change of a file, whose journal it keeps), so after that Alice can no longer roll that change back.
+The cleanup removes a backup only when its bytes are still those of the previous file, and never touches another
+file of the folder.
 
 ## Troubleshooting
 

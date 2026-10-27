@@ -1443,7 +1443,8 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 ### Windows servers
 
 A **Windows server** (Windows Server 2019, 2022 or 2025, with or without IIS) is a server Alice discovers and deploys
-certificates to (the HTTPS bindings of http.sys, which IIS uses). Alice
+certificates to (the HTTPS bindings of http.sys, which IIS uses, and the files of IIS's Centralized Certificate
+Store). Alice
 signs in over the Windows OpenSSH Server with its own key, as a local account `alice` or a domain account such as
 `CORP\alice-svc`, and sshd runs only **alice-helper.exe** for that account: Alice never gets a shell. Prepare the
 server once with the PowerShell setup script that **Add server** shows for **Windows server**; see
@@ -1454,7 +1455,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   `ALC-WIN-0003`, see [troubleshooting.md](troubleshooting.md)).
 - **Discover** (in **Websites on this server**) lists every HTTPS binding of http.sys, with the IIS sites that use it
   in the column **IIS site** and the certificate bound there, which **Certificates** shows like any certificate Alice
-  found. Bindings of other applications (WinRM, SSTP, AD FS, IIS Express), Centralized Certificate Store bindings and
+  found. Bindings of other applications (WinRM, SSTP, AD FS, IIS Express), the http.sys entry of a Centralized
+  Certificate Store (its files are locations of their own, see **Centralized Certificate Store** below) and
   bindings in a store other than Personal (`My`) or Web Hosting are listed as not supported, with the reason. A
   certificate missing from its store, a missing key or a key Windows cannot use is shown as a problem.
 - **Websites on this server** groups the bindings of a Windows server by the certificate they serve: a group row
@@ -1482,6 +1484,39 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   put back (the helper checks it on the server too); the deployment then ends **rollback failed** and names it so you
   can choose another certificate. The previous certificate stays in its store at least 7 days, so a rollback can
   always find it (see **Cleanup** below).
+- **Centralized Certificate Store (CCS).** When IIS reads its certificates from the PFX files of a CCS folder on the
+  server itself (IIS Manager, **Centralized Certificates**), each file of the folder is a location of its own under
+  **Websites on this server**: `www.example.com.pfx` for a host, `_.example.com.pfx` for a wildcard (it serves every
+  name below `example.com`, not `example.com` itself). The column **IIS site** shows the sites IIS serves from the file:
+  the exact file when there is one, else the nearest wildcard file. Alice needs:
+  - helper 1.1.0 or later on the server (an older one keeps working for bindings; the page says the helper is too old
+    for the store);
+  - a local folder (`D:\CCS`, not a share `\\server\certs`, a link or a device path; otherwise the page names the
+    reason and lists no files);
+  - the store's private-key password, which an Administrator enters once in the **CCS password** panel of the server's
+    page (with step-up): 12 to 128 printable ASCII characters, no spaces. One password per server, as IIS has one for
+    the whole store. It is sealed on the Alice server, goes to the helper only on standard input while a file is read
+    or written, and is never shown again; the panel shows the date it was set and lets an Administrator replace it.
+    Then choose **Discover**.
+
+  A file the password does not open is shown as a problem and never written (`ALC-WIN-0017`); the page counts such
+  files. An IIS site whose host has no file is shown with the hint to place the first file in the folder: Alice
+  replaces existing files and never creates one. A file no IIS site uses can be deployed; Alice then checks it by
+  reading it back, and the page says so.
+- **What a deployment to a CCS file does.** The helper imports the intermediate certificates into `CA`, writes the new
+  PFX (the certificate, its private key and the intermediates, encrypted with the CCS password) as a temporary file in
+  the same folder, then replaces the file with it in one step and keeps the previous file beside it as
+  `<file>.alice-<8 hex>.bak` (the last 8 characters of the operation). IIS does not read a replaced file by itself, so
+  the helper then tells http.sys to refresh its Centralized Certificate Store entries (a same-value update of each one,
+  which changes nothing else) and reads the file back. The deployment's page shows **Import the chain**, **Write the
+  file** and **Verify**. Alice checks each IIS site that uses the file by its host name (a wildcard as
+  `alice-check.<domain>`); when the check fails, the backup is put back. If the refresh failed, the step says so and
+  the check decides. Alice refuses before changing anything when the store was turned off (`ALC-WIN-0015`), moved to
+  another folder (`ALC-WIN-0016`) or the file is gone (`ALC-WIN-0020`). A file replaced outside Alice is drifted and
+  can be repaired; ACME and Key Vault certificates deploy to CCS files automatically like to any location. The daily
+  cleanup removes the backup and any temporary file after at most 7 days, so a rollback is possible only within that
+  time. Each write is event **1004** in the Application log (`ccs file <name> sha256 <old> -> <new> op <operation>`,
+  the certificates' SHA-256, never a key or the password).
 - **Event Log.** Each change is written to the server's Application log, source **Alice Helper**: event **1001** after
   a deployment, **1002** after a restore and **1003** after the cleanup removed a certificate, with the operation, the
   binding and the old and new SHA-256, or for 1003 the store, the SHA-1 and SHA-256 and the reason (never a key). The
@@ -1518,8 +1553,9 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   never be rolled back to), if Alice imported it and nothing else uses it. If a compromised certificate stays in a
   store (Alice did not import it, something still uses it, or the setting is off), the server's and the certificate's
   services get one e-mail naming the store and the thumbprint, so an administrator can replace it there and delete it.
-- Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair
-  and `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it) (see
+- Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair,
+  `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it) and `ALC-WIN-0015` to `ALC-WIN-0020` the
+  Centralized Certificate Store (see
   [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
   (`ALC-WIN-0002`) before changing anything.
 - **Where the helper comes from.** Each Alice package carries the Windows helper in its `helper\` folder:
@@ -1529,8 +1565,9 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   `C:\Program Files\Alice\alice-helper.exe` and refuses any other file (see
   [windows-host-preparation.md](windows-host-preparation.md)). The helper is not signed with Authenticode, so an
   application control policy (WDAC or AppLocker) must allow it by its hash, not by a publisher.
-- **Helper versions.** 1.0.0 is the first released helper and 1.1.0 adds the Centralized Certificate Store. Alice manages CCS files with a helper of 1.1.0 or later, deploys with a helper of 0.2.0 or later and cleans up
-  with 0.3.0 or later, so a server with an older helper keeps working with what it supports. When you update Alice,
+- **Helper versions.** 1.0.0 is the first released helper and 1.1.0 adds the Centralized Certificate Store. Alice
+  manages CCS files with a helper of 1.1.0 or later, deploys with a helper of 0.2.0 or later and cleans up with 0.3.0
+  or later, so a server with an older helper keeps working with what it supports. When you update Alice,
   check the new package's signature and the helper's checksum, copy the helper to the Windows servers, then update
   Alice, as the operator guide's [Updates](operator-guide.md#updates) describes.
 - **What is tested on real Windows.** Every change to the helper and the Windows provider, every night and every
@@ -1542,9 +1579,11 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   switched on and a Remote Desktop listener with its own certificate are checked by hand before each release, AD FS
   and ARM64 servers when available, otherwise the release notes say so (the release checklist's section "Windows
   servers before release").
-- Alice does not manage the SSH keys of a Windows server. Not deployable in this release: Centralized Certificate
-  Store bindings, bindings of other applications or other stores, a binding whose only problem is its key, and a host
-  name written with non-ASCII letters (use its `xn--` form in IIS).
+- Alice does not manage the SSH keys of a Windows server. Not deployable in this release: bindings of other
+  applications or other stores, a binding whose only problem is its key, a host name written with non-ASCII letters
+  (use its `xn--` form in IIS), a Centralized Certificate Store on a share of another server, a CCS file that does not
+  exist yet, and a store whose password does not follow the rule above. The CCS password cannot be removed, only
+  replaced.
 
 ## SSH keys
 

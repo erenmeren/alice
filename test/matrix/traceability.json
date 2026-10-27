@@ -2540,6 +2540,130 @@
   "owner": "docs/release-checklist.md section 8 (rows 8.1-8.8)"
  },
  {
+  "id": "WIN-46",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestDiscoverCCSLinks",
+   "internal/providers/windows:TestDiscoverWithoutPasswordIsW4",
+   "internal/providers/windows:TestDiscoverCCSFolderNotManaged",
+   "internal/providers/windows:TestConvertCCS",
+   "internal/providers/windows:TestCCSFileFor",
+   "internal/providers/windows/winhelper:TestCCSDump",
+   "internal/providers/windows/winhelper:TestCCSDumpRefusals",
+   "internal/providers/windows/winhelper:TestCCSDumpHostProblemsAndIgnored",
+   "internal/providers/windows/winproto:TestCCSFileNameRule",
+   "internal/providers/windows/winproto:TestValidCCSPath"
+  ]
+ },
+ {
+  "id": "WIN-47",
+  "status": "test",
+  "tests": [
+   "internal/api:TestCCSPasswordNeverEchoed",
+   "internal/api:TestSetCCSPasswordHandler",
+   "internal/inventory:TestSetCCSPassword",
+   "internal/inventory:TestCCSPasswordForeign",
+   "internal/inventory:TestCCSPasswordRuleEqualsTheHelpers",
+   "internal/providers/windows:TestCCSPasswordIsNeverOutsideStdin",
+   "internal/providers/windows:TestCCSPasswordRefusal",
+   "internal/providers/windows/winproto:TestCCSInputsRedact",
+   "internal/providers/windows/winproto:TestValidCCSPassword",
+   "internal/providers/windows/winhelper:TestCCSJournalHoldsNoPassword",
+   "migrations:TestMigration00036WindowsCCS"
+  ]
+ },
+ {
+  "id": "WIN-48",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestCCSDeployCommits",
+   "internal/providers/windows/winhelper:TestCCSDeployUnchanged",
+   "internal/providers/windows/winhelper:TestCCSDeployRefusesBeforeAnyWrite",
+   "internal/providers/windows/winhelper:TestCCSDeployReadBackRestores",
+   "internal/providers/windows/winhelper:TestCCSRefresh",
+   "internal/providers/windows:TestCCSDeployOutcomeTable"
+  ]
+ },
+ {
+  "id": "WIN-49",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestCCSEndpoints",
+   "internal/providers/windows:TestCCSUnlinkedIsReadBackOnly",
+   "internal/providers/windows:TestCCSRefreshFailedIsReported",
+   "internal/jobs/deployjobs:TestCCSFailedVerificationRestoresBackup",
+   "internal/jobs/deployjobs:TestWindowsCCSGuardForbids",
+   "internal/jobs/deployjobs:TestWindowsCCSUnlinkedIsReadBackOnly",
+   "internal/jobs/deployjobs:TestWindowsCCSManualDeploy",
+   "internal/inventory:TestCCSStepParamsAreKept",
+   "internal/api:TestCCSStepParams"
+  ]
+ },
+ {
+  "id": "WIN-50",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestCCSKillAtEveryPoint",
+   "internal/providers/windows/winhelper:TestCCSRestoreRules",
+   "internal/providers/windows/winhelper:TestCCSInterruptedThenChangedByAThirdParty",
+   "internal/providers/windows/winhelper:TestCCSAfterThePathChanged",
+   "internal/jobs/deployjobs:TestWindowsCCSCrashTable",
+   "internal/providers/windows:TestCCSRollbackDeployment",
+   "internal/inventory:TestCCSDeploymentEmails",
+   "internal/notify:TestWindowsCCSDeploymentTemplatesRenderInBothLanguages"
+  ]
+ },
+ {
+  "id": "WIN-51",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsCCSDriftRepaired",
+   "internal/jobs/deployjobs:TestWindowsCCSACMEAndKeyVault"
+  ]
+ },
+ {
+  "id": "WIN-52",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestPruneCCSBackups",
+   "internal/providers/windows/winhelper:TestCCSBackupNameIsTheOperationsLastDigits",
+   "internal/jobs/deployjobs:TestWindowsCCSDisabledRefuses"
+  ]
+ },
+ {
+  "id": "WIN-53",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winproto:TestReleasedHelperVersion",
+   "internal/providers/windows/winproto:TestCCSConstants",
+   "internal/providers/windows:TestCCSNeedsHelper110"
+  ]
+ },
+ {
+  "id": "WIN-54",
+  "status": "test",
+  "tests": [
+   "cmd/alice-winhelper:TestFidelityCCS",
+   "cmd/alice-winhelper:TestRealCCSReplaceIsPickedUp",
+   "cmd/alice-winhelper:TestRealCCSWrongPasswordIsNotServed",
+   "cmd/alice-winhelper:TestRealCCSNameRules",
+   "cmd/alice-winhelper:TestRealCCSServedChain",
+   "cmd/alice-winhelper:TestRealCCSRefusesReparsePoints",
+   "cmd/alice-winhelper:TestRealCCSSharedFolderRemoved",
+   "cmd/alice-winhelper:TestRealRunnerIsClean",
+   "internal/providers/windows/wintest:TestModelCCSServedAfterRefresh",
+   "internal/providers/windows/wintest:TestModelCCSWildcard",
+   "internal/providers/windows/wintest:TestModelCCSReparsePoints"
+  ]
+ },
+ {
+  "id": "WIN-55",
+  "status": "test",
+  "tests": [
+   "web/e2e/windows-ccs.spec.ts:set the CCS password with step-up, see the CCS files, deploy to a file and roll back to its backup"
+  ]
+ },
+ {
   "id": "HB-01",
   "status": "test",
   "tests": [

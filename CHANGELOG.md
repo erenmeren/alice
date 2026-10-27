@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — Windows servers (Centralized Certificate Store, R68)
+
+**Added**
+- Windows servers whose IIS reads its certificates from a Centralized Certificate Store (CCS) in a local folder: each
+  PFX file of the folder (`<host>.pfx`, `_.<domain>.pfx` for a wildcard) is a location of its own, listed under
+  **Websites on this server** with the IIS sites that IIS serves from it (the exact file first, else the nearest
+  wildcard file). An IIS site whose host has no file is shown with the hint to place the first file; a file no IIS site
+  uses can be deployed and is checked by reading it back.
+- **CCS password** panel on a Windows server's page: an Administrator enters the store's private-key password once
+  (with step-up; 12 to 128 printable ASCII characters, no spaces). It is sealed on the Alice server, goes to the
+  server's helper only on standard input while a file is read or written, and is never shown again; the panel shows
+  the date it was set. API `PUT /api/v1/targets/{id}/ccs-password`; `ccs_password_set_at` on a Windows server; audit
+  `target.ccs_password_set`.
+- A deployment to a CCS file writes the certificate into the file in place: a temporary file in the same folder, then
+  Windows' `ReplaceFile` with a backup `<file>.alice-<8 hex>.bak` beside it; the helper then tells IIS to read the file
+  again and reads it back. The IIS sites that use the file are checked by their host names; when the check fails, the
+  backup is put back. The deployment's steps are **Import the chain**, **Write the file** and **Verify**. A file
+  replaced outside Alice is drifted and can be repaired; ACME renewals and Key Vault versions reach CCS files like any
+  location. The daily cleanup removes the backups and temporary files after at most 7 days. Each write is event 1004 in
+  the server's Application log.
+- Codes `ALC-WIN-0015` to `ALC-WIN-0020` (the store turned off, its folder changed, a password that does not open the
+  file, no password, a password Alice cannot use, a file no longer in the folder; see
+  [troubleshooting.md](docs/troubleshooting.md)). The e-mails of a failed rollback, an unknown outcome and an unverified
+  restore of a CCS file name the file, its backup and IIS Manager. English and Turkish.
+
+**Changed**
+- `alice-helper.exe` 1.1.0 adds `ccs-dump` and `ccs-deploy` (protocol 1). Alice manages CCS files only with a 1.1.0
+  helper; a 1.0.0 helper keeps every other feature and is never sent a CCS command. Update the helpers first, then
+  Alice.
+- The http.sys entry that sends IIS to the store stays not supported (it names no certificate); its text and the
+  server warning now point to the CCS files and the password panel.
+
+**Not in this release**
+- A CCS folder on a share of another server, creating a CCS file that does not exist yet, removing the CCS password,
+  and a store whose password does not follow the rule above.
+
+Rulings: `docs/superpowers/rulings/windows-iis.md` "W5 (R68)". Migration `00036` (the location kind `win_ccs_file` and
+the credential purpose `win_ccs`).
+
 ## Unreleased — Fixes batch 2 (R67)
 
 **Changed**

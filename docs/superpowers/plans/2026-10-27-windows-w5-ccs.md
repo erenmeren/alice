@@ -123,7 +123,7 @@ Four facts are new. Task 5's real tests check them before the code that depends 
    - The engine's compare-and-swap needs an existing token (the Linux helper refuses an absent `--expect-sha256` too). Allowing an "absent" token would change inventory's supported-location rule (`locations.go:204-211`).
    - Creation is deferred.
 8. **A file no IIS binding uses (unlinked) is deployable.**
-   - The location is supported with the location warning `win.ccs_unlinked`.
+   - The location is supported with the location warning `win_ccs_unlinked`.
    - Its verification is the helper's read-back only (Ruling 14 step 8). `VerifyDeployment` answers it as a skipped verification (R51 level 1) with the param `ccs_unlinked` on the verify step.
 9. **The CCS password: one per Windows server, entered by an Administrator.**
    - IIS's CCS has one private-key password for every file of the store, so Alice keeps one per server, not one per location. (The brief said "a location secret"; this ruling narrows it.)
@@ -534,7 +534,7 @@ Expected: PASS; the OpenAPI conformance tests green.
   - `ccs_test.go` (over SSH with `wintest.NewServer`):
     - `TestCCSNeedsHelper110` (Review Focus 5): a model answering `1.0.0` → `Discover` sends `version`, `iis-dump` and no `ccs-dump`, and carries the warning `win_ccs_helper_outdated`; a deployment to a `win_ccs_file` location → `windows.helper_outdated` `required_version 1.1.0`, and only `version` was sent; a `1.0.0` model still deploys to a binding.
     - `TestDiscoverWithoutPasswordIsW4`: the binding locations are unchanged, with no `win_ccs_file` locations and `win_ccs_password_missing`.
-    - `TestDiscoverCCSLinks`: the demo host gives the linked file with its site as server, the unlinked one with `win.ccs_unlinked`, and an IIS CCS binding without a file as `cert_missing`. A mismatching file gives `ccs_password_mismatch` and the server warning with `count 1`. A failed `ccs-dump` gives `locations_dropped`.
+    - `TestDiscoverCCSLinks`: the demo host gives the linked file with its site as server, the unlinked one with `win_ccs_unlinked`, and an IIS CCS binding without a file as `cert_missing`. A mismatching file gives `ccs_password_mismatch` and the server warning with `count 1`. A failed `ccs-dump` gives `locations_dropped`.
     - `TestEachCCSCallUsesItsOwnConnection`.
     - `TestCCSPasswordIsNeverOutsideStdin` (Review Focus 2): the emulator's recorded `SSH_ORIGINAL_COMMAND`s never contain the password; the input buffer is cleared after the send (`inputHook`).
     - `TestCCSDeployOutcomeTable`: one row per refusal code of Task 3 → its reason, plus committed, unchanged, restored and uncertain (`OUTCOME_UNKNOWN`). Every return passes `providers.CheckDeployReturn`.

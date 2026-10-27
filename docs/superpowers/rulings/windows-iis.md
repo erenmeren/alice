@@ -1708,3 +1708,541 @@ for a Windows one (the push of `main` at `95873255`, before `2ec69c8c`, ran all 
 - **Not built**: a real-Windows ARM64 leg (no hosted Windows Server ARM64 runner); `ci.yml` checks made required (the
   owner's choice); a Windows gate in `make release-gates`; a `merge_group` trigger (add it if a merge queue is enabled);
   removing intermediates Alice added to `CA` (design §6.7: never); a cleanup history page.
+
+# W5 (R68)
+
+Phase W5 (Centralized Certificate Store) was built on branch `windows-w5` from the plan
+`docs/superpowers/plans/2026-10-27-windows-w5-ccs.md` (10 tasks), assigned by the coordinator on 2026-10-27 under the
+owner's approval of the Windows design with its §15 defaults. Spec: R68 in `docs/superpowers/specs/alice-v1/00-decisions.md`,
+`03-integrations.md` §13A.15-13A.17, `04-security.md` §14.4 (WN-19..WN-22) and §15.11, `06-quality.md` §24.7
+(WIN-46..WIN-55), design §13 W5, §14 (F15-F18) and §20. One migration, `00036`; error codes `ALC-WIN-0015`..`ALC-WIN-0020`.
+None of the rulings below is a pricing decision; the ones the owner should confirm or act on are listed under
+[Owner items (W5)](#owner-items-w5).
+
+## The plan's rulings as built (W5)
+
+The plan's 26 rulings stand as written, except where an entry says "Amended" or "Precision".
+
+1. **Decision R68; one migration, `00036`.** As written: the six CHECKs widened with `win_ccs_file`, purpose `win_ccs`
+   and kind `win_ccs_password`. Precision (Task 6): the Down refuses with SQLSTATE `Z1034` (the next free code after
+   00035's `Z1033`) while a `win_ccs_file` location, deployment or `win_ccs` credential exists.
+2. **Helper 1.1.0, protocol 1, `CCSMinVersion` 1.1.0; two new subcommands only.** As written: every site that asserted
+   the helper's own version reads `1.1.0` (Task 1, the W4 deferred minor), `TestReleasedHelperVersion` gained a case
+   that discriminates numerically, `TestFidelityVersionAndRefusals` still probes `rdp-deploy`.
+3. **Supported layout: a local CCS folder.** As written. Precision (Tasks 1, 3): `ValidCCSPath` is an ASCII drive
+   letter, `:\`, at most 240 bytes, one trailing backslash, no `:` or `/` after the drive and no `.` or `..` segment.
+   Precision (Task 2): a folder that is a reparse point is the sentinel `ErrCCSFolderUnsupported`, answered
+   `local: false`, so discovery warns `win_ccs_path_unsupported` (a UNC path warns `win_ccs_remote`).
+4. **The path comes from the server only.** As written. Precision (Task 3): the registry checks run disabled, then
+   unsupported, then changed (a UNC registry path is `CCS_PATH_UNSUPPORTED`); `ccs-deploy` lists the folder before the
+   read so a reparse-point folder is refused; a derived name holding `:`, `\` or `/` is `INVALID_ARGUMENT`. Precision
+   (W5-7): a CCS file that is a reparse point answers `INVALID_ARGUMENT` through the sentinel `ErrCCSFileUnsupported`.
+5. **File-name rule.** As written. Precision (Task 1): `CCSHost` folds ASCII only (Unicode folding maps the Kelvin sign
+   to `k`); `CCSFileName` replaces only a leading `*.`. Precision (Task 3): `ignored` counts every host-less name, also
+   past the cut.
+6. **One location per file; links derived by Alice.** **Amended (W5-13, F17 measured):** the exact `<host>.pfx` first,
+   otherwise the nearest `_.<suffix>.pfx` found by stripping leftmost labels, at any depth, the suffix keeping at least
+   two labels, never the wildcard's own parent; the emulator's TLS lookup is the same. Precision (Task 7): `cert_path`
+   is the canonical lower-case name, `file_name` the name as listed; a binding without a valid host header links
+   nothing; a listing Alice cut gives no `cert_missing` location.
+7. **No file creation in W5.** As written: the absent marker in `expect_sha256` is `INVALID_ARGUMENT`. Precision
+   (W5-14): a new host's first file may not be served by IIS for minutes; Alice only replaces existing files.
+8. **An unlinked file is deployable.** **Amended (W5-8):** the location warning is `win_ccs_unlinked` (the plan's
+   `win.ccs_unlinked` would be dropped by inventory's code rule). **Amended (W5-15):** inventory accepts the skipped
+   verification of a `win_ccs_file` location whose stored servers are `[]` as a success, besides `skip_verify`.
+9. **One CCS password per Windows server.** As written. Precision (Task 6): setting it bumps `targets.version`; the
+   answer is the bare target DTO; `public_info` is `{}`; a soft-deleted or unknown target is 404.
+10. **Password rule.** As written. Precision (Task 6): inventory checks the rule itself, pinned to
+    `winproto.ValidCCSPassword` by `TestCCSPasswordRuleEqualsTheHelpers`, before the target's type (deferred minor).
+11. **Password transport.** As written. **Amended (Task 7 review, hardened):** `providers.ErrNoCCSPassword` (no row) and
+    `providers.ErrCCSPasswordUnusable` (a foreign row or one that does not decrypt) are wrapped by inventory; any other
+    error says nothing about the password. The foreign-credential error text is neutral.
+12. **Alice never reads IIS's stored password.** As written. Precision (W5-12): a corrupt PFX that Windows answers with
+    86 is `ccs_password_mismatch`, as a wrong password.
+13. **Token = the leaf's DER SHA-256.** As written.
+14. **`ccs-deploy` transaction.** **Amended: step 7 is built** (F15 route (a), W5-10): after every CCS replace and every
+    CCS restore the helper makes a same-record base update of every http.sys `ccs` record of the server (keyed by the
+    record's own `SOCKADDR_STORAGE`); a failure is the answer field `ccs_refresh_failed` (kept in the journal), the step
+    param `ccs_refresh_failed` on `write_file` or `restore`, and never a rollback trigger; `CCSPickupWait` stays 0.
+    **Amended (W5-2):** the backup is `<file>.alice-<last 8 hex digits of the op>.bak`. Precision (Task 3): `unchanged`
+    writes no journal; a file that is not a PFX or has no key is `HASH_MISMATCH`, one over `MaxCCSFile`
+    `INVALID_ARGUMENT`; the new bytes' hash is written with the `writing` journal; a failed `ReplaceCCS` is followed by
+    a read of the file (unwritten, or self-restore); event 1004 carries the leaf hashes; `BuiltChainLength` is 0.
+15. **Rollback through `iis-restore`.** As written. Precision (Task 3): `SUPERSEDED` only for a committed journal, an
+    interrupted one over a third party's file ends `restore_failed` `file_changed`; an interrupted journal without its
+    backup answers `BACKUP_MISSING` and stays `writing`; the restore never opens the backup (it has no password) and
+    removes the temporary file; it acts in the journal's folder and refuses one that became a reparse point
+    (`CCS_PATH_UNSUPPORTED`). Precision (W5-10): every restore that ends `restored` refreshes, `restoreDone` included.
+16. **Backups, temporary files and W3 cleanup.** **Amended (W5-1, coordinator-approved):** a final CCS journal older than
+    7 days that its file record still needs keeps the journal and loses its `.tmp` and `.bak`; `iis-restore` then
+    answers `BACKUP_MISSING` with nothing written. Why: WN-22 and owner item 6 promise a backup lives at most 7 days,
+    and the rule as written kept the latest backup of every file forever. Precision (Task 3): these removals run after
+    the normal prunes, outside `MaxPrunePerRun`, not counted in `Pruned`, with no marker; the leftovers are read before
+    the gate; a backup that cannot be read keeps its journal. Precision (W5-3): `ListCCS` of a missing folder is empty.
+17. **CCS turned off, or its path changed.** As written. Precision (Task 3): the `WriteHost` folder contract is
+    "CCSConfig's folder, or the folder of a valid journal".
+18. **Discovery.** As written. **Amended (Task 7 review, hardened):** `ErrNoCCSPassword` gives
+    `win_ccs_password_missing`; `ErrCCSPasswordUnusable`, any other password read error and a password the helper
+    would refuse give `list_truncated` and `locations_dropped` with no `ccs-dump` sent (nothing is marked missing); the
+    end of the context is the scan's error. Precision (Tasks 2, 7): an answer over `DumpOutput` is a failed dump; the
+    dump's own budget is 40 s (`truncated`); the files are sorted by name; a host problem outside the `CCSProblem*` list
+    drops the file.
+19. **The http.sys `ccs` record location stays.** As written; its text and `win_ccs_enabled` point to the files and the
+    password panel (Task 8).
+20. **Verification endpoints.** As written. Precision (Task 7, F18): the served chain is compared with the deployed
+    chain and `win.chain_differs` is never reported for a CCS file; endpoints are deduplicated by port, SNI and listen
+    address; route (a) needs no longer verification window.
+21. **Engine and inventory.** As written, except the notify line. **Amended (W5-5):** a CCS deployment keeps the file
+    e-mail texts except `rollback_failed`, `outcome_unknown` and `restored_unverified`, which have `_windows_ccs` texts
+    (the file path, the `.bak` beside it, IIS Manager) with `previous_certificate` instead of `backup_dir`; the
+    `restored_unverified` text names no `.bak` (the restore consumed it). Precision (Task 7): `ccs_unlinked` and
+    `ccs_refresh_failed` are on inventory's and the API's step-param allowlists.
+22. **Drift.** As written.
+23. **Interactions.** As written.
+24. **Test IDs and STRIDE.** As written: `WIN-46`..`WIN-55`, `WN-19`..`WN-22`.
+25. **e2e.** As written. Precision (Tasks 4, 8): the demo's CCS binding is the site "CCS Site" (id 3, `https
+    *:443:ccs.example.test`, sslFlags 3) on the existing TLS port and `ccs` record, so no compose change; `ctl
+    stale-tls-on` also switches `ServeStaleCCS`; the journey forces step-up with `advanceClock`.
+26. **Runner hygiene and budget.** As written, with precisions (Task 5): one shared CCS folder and one site
+    `alice-w5-ccs` on 45480 per test binary, made before any CCS handshake, torn down by `TestRealCCSSharedFolderRemoved`
+    (W5-11 and fix 3); the fixture sets `PollingInterval` to 10 s and the teardown restores the key as found; the
+    account `alice-w5-ccs` is added to BUILTIN\Users; the helper package's `go test` has `-timeout 30m`.
+
+## W5 facts measured on real runners
+
+Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
+2025 Datacenter, Desktop Experience). Each verdict holds on both images.
+
+- **F15: route (a).** Runs 1-5 (<https://github.com/erenmeren/alice/actions/runs/40479436831>,
+  <https://github.com/erenmeren/alice/actions/runs/40484509608>,
+  <https://github.com/erenmeren/alice/actions/runs/40488480626>). A plain `ReplaceFileW` of a CCS file was not picked
+  up within 2 minutes (run 1) nor within 10 s (runs 2-5); the replace followed by a same-record update of the
+  `ccs:<port>` record was served after 8-12 ms. The file keeps its ACL; the backup holds the replaced bytes; `.bak` and
+  `.tmp` files are never served. An appcmd binding with `sslFlags=3` creates no `ccs` record (the fixture adds it with
+  netsh). Ruling W5-10. The no-op proof of the refresh (every `ccs` record, base and extended parameters, equal before
+  and after) runs from run 6 (<https://github.com/erenmeren/alice/actions/runs/40499784360>): verdict pending.
+- **F16: confirmed.** Runs 2 and 4 (<https://github.com/erenmeren/alice/actions/runs/40484509608>,
+  <https://github.com/erenmeren/alice/actions/runs/40491733346>). IIS serves a `BuildPFX` file; a file under another
+  password is not served (HttpEvent 15301/15302, no Application event of IIS); `PFXImportCertStore(PKCS12_NO_PERSIST_KEY)`
+  leaves no key file (properties 5 and 79 set); another password and a corrupt file both answer 86 (W5-12); a
+  certificates-only PFX is `key_missing`. No fallback route needed.
+- **F17: amended.** Runs 3-5, final run 5 (<https://github.com/erenmeren/alice/actions/runs/40494994143>). The exact
+  file wins; a wildcard serves a name any number of labels below it, never its own parent; names compared without
+  case; `ReplaceFileW` leaves the replacement's spelling; an explicit `hostnameport` record wins over the CCS binding
+  (no `win.ccs_shadows`). `PollingInterval` defaults to 300 s and reads back 10 when set; a file for a host IIS had
+  not served was not served within 40 s even at 10 s, while files present before IIS's first lookups are. Rulings
+  W5-13 and W5-14.
+- **F18: the PFX's intermediates.** Runs 4 and 5 (<https://github.com/erenmeren/alice/actions/runs/40491733346>,
+  <https://github.com/erenmeren/alice/actions/runs/40494994143>). A file carrying the intermediate sends it; an
+  intermediate only in `LocalMachine\CA` is sent only after a refresh, or for a file first served after the import.
+  `import_chain` stays; the chain comparison uses the deployed chain.
+
+The coordinator accepted F15 route (a), F16 and F18, and ruled F17 as above (change Ruling 6 to the measured rule,
+exact first; keep at least one runner run for the final code head).
+
+### Runner runs used (6 of 8)
+
+| Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
+|---|---|---|---|---|
+| 1 | <https://github.com/erenmeren/alice/actions/runs/40479436831> | `1e77429a` | fail / fail | F15 route (a) measured; ACL kept; `.bak`/`.tmp` never served; appcmd creates no `ccs` record; F17 partial (hostnameport wins, names without case, the replacement's spelling); F16/F18 unmeasured (fixtures in a new folder never served); `TestRealRunnerIsClean` passed |
+| 2 | <https://github.com/erenmeren/alice/actions/runs/40484509608> | `57b3dc71` | fail / fail | F15 confirmed with the refresh (12 ms; plain replace not within 10 s); F16 (86 for another password and a corrupt file, `key_missing`, no key file); fixtures in a new folder not served (W5-11); the junction test's error passthrough bug; `TestFidelityCCS` and `TestRealRunnerIsClean` passed |
+| 3 | <https://github.com/erenmeren/alice/actions/runs/40488480626> | `b0e60d22` | fail / fail | F15 again (9-10 ms); a second folder served 5 s after Enable and a refresh (W5-11's premise wrong, the shared folder kept as harmless); a new port's first serve dead for about 150 s; F17: a wildcard served two labels down |
+| 4 | <https://github.com/erenmeren/alice/actions/runs/40491733346> | `30294923` | fail / fail | Only `TestRealCCSNameRules` and `TestRealCCSServedChain` failed; F16 fully measured; F18 measured; DIAG named `PollingInterval` |
+| 5 | <https://github.com/erenmeren/alice/actions/runs/40494994143> | `632c6ef5` | **pass / pass** | F17 and F18 final (pre-placed files, `PollingInterval` 10 s) |
+| 6 | <https://github.com/erenmeren/alice/actions/runs/40499784360> | `e0752599` | pending | The refresh no-op proof (`F15: refresh no-op:`), W5-13 in the emulator, the step params, W5-15 (the controller fills this row) |
+| 7 | reserved | | | The final code head after the final review's fixes (Ruling P8) |
+| 8 | reserved (spare) | | | |
+
+The `ci.yml` runs of the same pushes: 40479436681 (go green; coverage failed on `TestServeStartsOnAPhase3Database`
+expecting migration 35, fixed in `362b7893`; web failed on the enum and label tests, fixed by Task 8), 40484509526
+(coverage failed on `internal/inventory` 88.9 % < 89, fixed by Task 6; web failed while Task 8 was in progress),
+40488480505, 40491733481, 40494994086 and 40499784357 (the controller records their results).
+
+## Rulings made during execution (W5)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- P1: Tasks 4, 5 and 6 ran one after another (4, 5, 6), not in parallel; Task 6 ran while runner run 1 was in flight —
+  the skill forbids parallel implementers in one worktree and Task 5's `TestFidelityCCS` needs Task 4's emulator (cost:
+  wall-clock only).
+- P2: runner run 1 was pushed once Task 5's runner tests existed, not right after Task 3 — Task 3's code alone has no
+  real CCS test to run; F15-F18 were still known before Task 7 needed them.
+- P3: Task 2's implementer was dispatched while Task 1's review ran — the reviewer is read-only and Task 2 touches no
+  `winproto` file.
+- P4: commit `39b58279` carries the trailer "Claude Opus 5.5"; it was not amended (no history surgery), and later
+  dispatches state C4 explicitly — the subagent followed its harness attribution rule over C4; cosmetic (owner item).
+- P5: Task 6 was dispatched in parallel with Task 3's review — disjoint files, the reviewer read-only.
+- P6: Task 7 ran concurrently with Task 5, with the F15, F17 and F18 dependent spots kept in single named functions
+  (`pickupAttempts`, `ccsFileFor`, `comparedChain`) and adjusted after the runs — it saved hours of serial wait.
+- P7: Task 8 was dispatched while Task 5's runner fixes and Task 7's re-review ran — `web/**` is disjoint; the e2e may
+  need a rerun after the emulator's refresh change.
+- P8: Task 5's refresh fix and Task 7's W5-13 emulator change go to the runner together as run 6; run 7 is reserved for
+  the final head after the final review's fixes; run 8 is spare.
+- P9: Task 9 (these documents) started before the Task 5 and Task 7 follow-up re-reviews closed — the documents are as
+  built, and a late code change gets a docs touch in the final fix wave (cost: one doc edit).
+- W5-1: a CCS backup lives at most 7 days after its journal is final, even when the record still needs the journal
+  (Ruling 16 amended; coordinator-approved) — WN-22 and owner item 6 promise 7 days; cost: no rollback of an operation
+  older than 7 days (verification is immediate, so none in practice).
+- W5-2: the backup name uses the last 8 hex digits of the operation id — ids are UUIDv7, whose first 8 hex digits are
+  time bits, so two operations on one file within about 65 s would share a name.
+- W5-3: `ListCCS` of a missing folder answers an empty list (real host and emulator) — a journal whose folder was
+  removed after a path change can still be restored or pruned.
+- W5-4: the emulator compares CCS file names without case (NTFS) and folders with ASCII case folded and one trailing
+  backslash trimmed — as Windows does (confirmed by F17).
+- W5-5: the CCS `rollback_failed`, `outcome_unknown` and `restored_unverified` e-mails get Windows CCS texts (Ruling 21
+  amended) — those mails reach an operator who must act by hand, and Linux/Nginx steps there are an operations hazard;
+  cost: 3 texts in 2 languages.
+- W5-6: Task 4 fixed `TestDiscoverListsBindingsWithSites`, which its demo change broke (scope widened to
+  `discover_test.go`).
+- W5-7: a CCS file that is a reparse point answers `INVALID_ARGUMENT` (Ruling 4) through the sentinel
+  `winhelper.ErrCCSFileUnsupported` of the real host and the emulator — before it every `ReadCCS` error was
+  `IO_ERROR` (exit 1, the "outcome uncertain" class).
+- W5-8: the location warning code is `win_ccs_unlinked`, not `win.ccs_unlinked` — inventory's `codeRE`
+  `^[a-z][a-z_]{0,39}$` (`locations.go:49`, the column CHECK) drops dotted codes.
+- W5-9: a cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning beside `locations_dropped` —
+  accepted: a warning only, corrected by the next full scan.
+- W5-10: F15 route (a): after every CCS replace and every CCS restore the helper makes a same-record update of every
+  http.sys `ccs:<port>` record (the helper does not know the links; the update is idempotent); `CCSPickupWait` stays 0
+  — measured on both images; cost: an extra http.sys write per deployment.
+- W5-11: the real tests share one CCS folder per test binary — run 2 showed fixtures in a new folder not served; run 3
+  showed the premise wrong (a second folder was served after Enable and a refresh), and the shared folder stays as
+  harmless test design.
+- W5-12: a corrupt PFX that Windows answers with 86 stays `ccs_password_mismatch` — Windows cannot distinguish it from
+  a wrong password; cost: a damaged file counted in the mismatch warning.
+- W5-13 (F17): Ruling 6's linking is the exact file first, else the nearest `_.<suffix>.pfx` stripping leftmost labels
+  (any depth, suffix of at least two labels, never the parent); the emulator's TLS lookup is the same — measured on
+  both images; cost if wrong: the order between two wildcards (nearest first) is not measured.
+- W5-14 (F17, product fact): a CCS file for a host IIS has not served before may not be served for minutes (not within
+  40 s even at `PollingInterval` 10); Alice only replaces existing files (Ruling 7), whose replacement is served at once
+  after the refresh — documented in the host guide; no cost to Alice's flow.
+- W5-15: inventory accepts a skipped verification success for a `win_ccs_file` location whose stored servers are `[]`
+  (Ruling 8, read-back only), besides `skip_verify` — `FinishDeployment`'s `errSkipNotAllowed` made every unlinked CCS
+  deployment end uncertain; the exception rests on what discovery stored, not on the provider's word; cost: an
+  unlinked file deploys without a probe, as Ruling 8 intends.
+- Task 1's `ValidCCSPath` minors (`:` after the drive, `.` segments) were carried into Task 3 and fixed there; the
+  empty segment and a trailing dot or space stay deferred (the path comes from the registry only).
+- Task 2's carried minors (the host problem allowlist, the `ignored` count) were fixed in Task 3; the whole `ccs-dump`
+  answer's size is bounded on the provider side (`DumpOutput`, Task 7); the test PFX reader's padding and iteration
+  bound moved to Task 4 (`maxPFXIterations` 100000).
+- Task 4's reparse-point gap was closed in its fix round (`Model.SetCCSReparse`); Task 5's review minors went into its
+  post-run fix commit.
+
+### Coordinator
+
+- C1: Docker and the gate are free (nothing else runs on the machine); never two Docker-based runs at once, and a known
+  load-sensitive test gets the staged fallback (run alone, captured with `-v`) instead of a weaker proof.
+- C2: the executor may push `windows-w5` only; never `main`, no pull request, no repository setting, no tag.
+- C3: the backup stays in the CCS folder as planned (Ruling 16); the owner decides (owner item 6); the
+  `C:\ProgramData\Alice\helper` alternative was not built.
+- C4: every commit trailer is `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`, every subject ends `(R68)`,
+  staging by explicit path only.
+- C5: Playwright picks up `web/e2e/windows-ccs.spec.ts` (`testDir ./e2e`, no `testMatch`), and `cmd/alice-fakewindows`
+  is the same compose service, so no compose change is needed.
+- C6: `graphify query` before the first grep or source read of a codebase question; the graph reflects `main`
+  `e15fad4b`, so files new on this branch are read directly; no `graphify update`.
+- Approved W5-1 (Ruling 16 amended), with the reason WN-22 / owner item 6, and asked that an engine test show a restore
+  after pruning fails closed (`BACKUP_MISSING`, nothing written): Task 7's crash-table subtest and
+  `TestCCSRollbackDeployment`.
+- Ruled commit `39b58279`'s trailer stays as it is (W2 and W3 precedent), listed under owner items.
+- Accepted F15 route (a), F16 and F18; ruled F17 (Ruling 6 changed to the measured rule if run 5 confirmed it, exact
+  first) and asked to keep at least one runner run for the final code head.
+
+### Task 1 (winproto)
+
+- `CCSHost` folds ASCII only (a manual loop, not `strings.ToLower`) — Unicode lower-casing maps U+212A (Kelvin) to `k`
+  and would accept a name the folder comparison never meant.
+- `ValidCCSPath` requires `X:\` with an ASCII drive letter, allows one trailing backslash and counts bytes (at most 240)
+  — Ruling 4's comparison trims one backslash.
+- `CCSFileName` replaces only a leading `*.` — `ValidHost` allows `*` only there, so the inverse stays exact.
+- `CCSPickupWait` is a typed `time.Duration` constant, 0 (route (a) kept it so).
+
+### Task 2 (winhelper: CCS host surface, BuildPFX, ccs-dump)
+
+- The shared PFX reader is `pki.OpenPFX` in `internal/testutil/pki/pfxread.go` — archtest already allows `wintest` to
+  import the test PKI; the release helper links no test package; go-pkcs12 takes the first certBag as the leaf.
+- A CCS folder that is a reparse point is `ErrCCSFolderUnsupported`, answered `local: false` — Ruling 3 wants it
+  unmanaged, not an I/O failure.
+- `ccs-dump`'s time budget is `HelperBudget*4/5` (40 s) on the host clock, ending the list with `truncated` — the
+  answer must leave before `Execute`'s call budget ends.
+- A file whose read or open fails with a host error, or whose certificates exceed the bounds, is dropped with
+  `truncated`; a file that vanished after the list is skipped — as iis-dump's dropped certificate (nothing marked
+  missing).
+- A `too_large` file has no `file_sha256`, and its size is the listed size — the helper never reads past
+  `MaxCCSFile+1`.
+- The files are sorted by name before the bounds apply; ignored names do not count toward `MaxCCSFiles` — a
+  deterministic answer and cut.
+- `Execute` reads standard input before the elevation check (the common path), so 4 KiB + 1 is `TOO_LARGE`; a
+  non-elevated call is still refused before any parse or host read.
+
+### Task 3 (winhelper: ccs-deploy, restore, status, fence, pruning)
+
+- The journal's folder field is `ccsJournal.Path` (JSON `path`), not `Folder` — W2's `TestJournalHoldsNoKeyMaterial`
+  refuses any field name containing "der".
+- An `OpenPFX` problem outside the three `CCSProblem*` values is an error for that file (dump: dropped, `truncated`;
+  deploy: `IO_ERROR`) — a host's words never reach the answer.
+- The registry order is disabled, then unsupported, then changed — a UNC registry path is `CCS_PATH_UNSUPPORTED`.
+- `ccs-deploy` lists the folder before the read to refuse a reparse-point folder — `ReadCCS` guards only the file.
+- `unchanged` writes nothing, not even a journal — Ruling 14 places it before the prepared journal.
+- A non-PFX or keyless file is `HASH_MISMATCH`; a file over `MaxCCSFile` is `INVALID_ARGUMENT` — the token cannot
+  match, and discovery already marks both as problems.
+- `expect_sha256` is the leaf DER SHA-256, and the absent marker is `INVALID_ARGUMENT` (Rulings 7, 13); the
+  `CCSDeployInput` comment was corrected to say so (fix 1).
+- `NewFileSHA256` is written with the `writing` journal, after the PFX is built — restore and status then recognise
+  exactly the bytes this operation wrote.
+- A failed `ReplaceCCS` is followed by a read of the file: the previous bytes mean unwritten (temporary file removed,
+  `restored`, `failed_step write_file`), anything else a self-restore — `ReplaceFileW` can fail after moving the file
+  (`ERROR_UNABLE_TO_MOVE_REPLACEMENT_2`).
+- The restore checks the guard on the journal's previous leaf and SPKI hashes and never opens the backup — it has no
+  password; the backup's bytes must equal the previous file's.
+- A restore that ends `restored` removes the operation's temporary file (best effort) — the kill between the temporary
+  write and the replace.
+- A kill after `prepared` is recovered by `iis-fence`, as in W2.
+- Kill points: `ccs.locked`, `ccs.prepared`, `ccs.import_chain`, `ccs.writing`, `ccs.temp_written`, `ccs.replaced`,
+  `ccs.read_back`, `ccs.committed`; the restore points keep W2's names.
+- Event 1004 is `ccs file <name> sha256 <old leaf> -> <new leaf> op <op>` — the token's hashes, not the bytes'.
+- `BuiltChainLength` is 0 for CCS — no `WriteHost` method builds a chain for a leaf outside a store; F18 made it moot.
+- `deployTx` is reused for CCS and the `import_chain` loop is shared as `importChain` — one transaction type.
+- Fix 1: the WN-22 removals run after the normal prunes, outside `MaxPrunePerRun`, not counted in `Pruned`, with no
+  journal marker — a journal a record always needs would otherwise take a slot on every plan.
+- Fix 2: `SUPERSEDED` only for a committed journal; an interrupted one over a foreign file ends `restore_failed`
+  `file_changed` — as in W2; the next deployment's compare-and-swap decides.
+- Fix 2: an interrupted CCS journal whose backup is missing or changed answers `BACKUP_MISSING` before any write and
+  stays `writing` — as W2 does for a missing previous certificate.
+- Fix 2: a read-back that lastingly finds neither the previous nor the new bytes ends `restore_failed` `file_changed` —
+  nothing is moved over bytes of unknown origin.
+- Fix 2: restore and prune use the journal's folder after a path change and list it first; a folder that became a
+  reparse point is refused (restore `CCS_PATH_UNSUPPORTED`; prune keeps the journal and its files).
+- Fix 2: prune reads a CCS journal's leftovers before the gate and enters the gate only to remove something.
+
+### Task 4 (wintest and cmd/alice-fakewindows)
+
+- `ListCCS` of a missing folder is empty, `ReadCCS` not found and `RemoveCCS` nil (W5-3).
+- File names compared without case, folders with ASCII case folded (W5-4).
+- IIS's private-key password is model state (`Model.SetCCSPassword`, `Model.CCSPassword`) — TLS must decide whether
+  IIS opens a file, and `ctl ccs-password` prints the demo's password.
+- `PutCCSFile` writes `BuildPFX`'s format and TLS reads every file with `pki.OpenPFXKey` under the store password — one
+  path serves third-party files and files the helper wrote.
+- TLS selection is `hostnameport`, then the port's `ccs` record (CCS on and an SNI given), then `ipport`, without
+  falling through once the `ccs` record is selected — F17 confirmed `hostnameport` wins.
+- The chain served from a CCS file is the PFX's own intermediates — as F18 then measured.
+- `ServeStaleCCS` pins the bytes served before the first replace or restore while stale, keyed by the folded file name
+  (fix round: it follows the host across a path change) — mirrors `StaleTLS` so a rollback under stale TLS verifies.
+- `ctl stale-tls-on` and `stale-tls-off` also switch `ServeStaleCCS`; no separate ctl command — Ruling 25 step 5.
+- The demo's CCS binding is the site "CCS Site" (id 3, `https *:443:ccs.example.test`, sslFlags 3) on the existing
+  `ccs` 443 record and TLS port — no new port, no compose change.
+- `pki.maxPFXIterations` is 100000 — `BuildPFX` writes 10000 and 2048; 2^31 would hang a test.
+- Fix round: `Model.SetCCSReparse` models a reparse-point folder or file.
+
+### Task 5 (cmd/alice-winhelper, the real CCS half)
+
+- W5-7 as specified: `ErrCCSFileUnsupported` is `INVALID_ARGUMENT` in `ccs-deploy` and "not listed" in `ccs-dump`; the
+  other `ReadCCS` callers treat it as an ordinary error — a link in place of a file Alice wrote should stop, not be
+  followed.
+- Only the folder itself is checked for a reparse point, not its parent components — Ruling 3 names "a folder that is a
+  reparse point", and a parent junction still resolves to one folder.
+- `OpenPFX` returns the non-leaf certificates in chain order (issuer upward, then the rest) — a memory store's order is
+  not documented; this keeps `unchanged` working.
+- `PFXImportCertStore` judges the password; a corrupt PFX is a mismatch only on `ERROR_INVALID_PASSWORD`, otherwise
+  `not_a_pfx` (fix 1; then W5-12 for 86).
+- `hasKey` accepts any key property or a key `CryptAcquireCertificatePrivateKey` reaches — which property
+  `PKCS12_NO_PERSIST_KEY` sets is not documented (F16 logged 5 and 79).
+- `OpenPFX` uses `PKCS12_NO_PERSIST_KEY` only, without `PKCS12_ALWAYS_CNG_KSP` — F16 found no leftover key file.
+- `RemoveCCS` refuses a reparse point, as `RemoveState` does, and `RestoreCCS` refuses a backup that is one — a planted
+  link is never removed or moved into the file's place.
+- `ReplaceCCS` retries on sharing violation, access denied and `ERROR_UNABLE_TO_REMOVE_REPLACED` — IIS may hold the file
+  while it reads it, and each leaves both files under their own names.
+- `writeFlushed` gains a `flags` argument — the state-file writer is reused for the temporary file.
+- The helper package's `go test` has `-timeout 30m` — F15's polling can exceed the default 10 minutes.
+- The CCS fixture account is added to BUILTIN\Users (S-1-5-32-545) — `New-LocalUser` does not add it.
+- `TestFidelityCCS` drops `modified_at` and `file_sha256` after checking each host's hash against its own bytes —
+  `BuildPFX` salts every write.
+- Fix 1: a failed refresh is the response field `ccs_refresh_failed` (and the journal's `refresh_failed`), not a step —
+  `winproto.Step` has no params, and a new step name would make every answer undecodable to an older provider.
+- Fix 1: the refresh runs after the replace and before the read-back; every restore that ends `restored` refreshes,
+  `restoreDone` included.
+- Fix 1: `refreshCCSRecords` is base-only, one update per `ccs` record — F9 showed a base update keeps the extended
+  parameters; `keyOf` still refuses `ccs`, so no deploy path reaches a `ccs` record.
+- Fix 1: the emulator pins the served bytes on every helper replace or restore and a refresh clears the pins; a third
+  party's `PutRawCCSFile` is served at once (deliberate, deferred) — models IIS as measured without breaking staged
+  files.
+- Fix 1: the emulator's `ReplaceCCS` spells the file as the helper gave the name (F17, run 1); `RestoreCCS` keeps its
+  spelling rule (unmeasured).
+- Fix 1: a certificates-only PFX is not staged in `TestFidelityCCS`; the emulator answers `not_a_pfx` where Windows
+  answers `key_missing` — both map to `HASH_MISMATCH` in `ccs-deploy`; only the dump's word differs.
+- Fix 2: one CCS folder for the whole test binary, torn down by `TestRealCCSSharedFolderRemoved` (required by name),
+  `TestMain` as a safety net — the teardown runs before `TestRealRunnerIsClean`.
+- Fix 2: `ccsFilePath` and `ReadCCS` pass `ccsDir`'s error through — a reparse-point folder is
+  `ErrCCSFolderUnsupported` for every host method.
+- Fix 3: one shared site `alice-w5-ccs` on 45480 made before any CCS handshake; DIAG lines on a failed serve — a new
+  port's first serve was dead for about 150 s.
+- Fix 4: the fixture sets `PollingInterval` to 10 s and pre-places the F17 and F18 files before the site exists — F17's
+  first-serve delay.
+- Fix 5: the refresh writes each `ccs` record over its own `SOCKADDR_STORAGE` — a key rebuilt from decoded text could
+  name another record (an IPv4-mapped IPv6 address); an undecodable record counts as a refresh failure.
+- Fix 5: the no-op proof compares the extended-parameter query answers as text, query errors included — an
+  unsupported table must answer the same both times.
+
+### Task 6 (migration, inventory, API)
+
+- Inventory implements the password rule itself, pinned to `winproto.ValidCCSPassword` by
+  `TestCCSPasswordRuleEqualsTheHelpers` — archtest does not let inventory import `winproto`.
+- 00036's Down refuses with `Z1034` — each refusing Down has its own code.
+- The `ALC-WIN-0015..0020` troubleshooting sections were written in Task 6 — `TestWindowsErrorCodes` requires a
+  section for every registered code.
+- Setting the password bumps `targets.version` and `updated_at` — the ETag and `ccs_password_set_at` change.
+- `public_info` of a `win_ccs` row is `{}` — nothing about the password is public; the date is `created_at`.
+- The route answers the bare target DTO — there is no job or access report to carry.
+- The rule check (422) comes before the licence check inside inventory — the route already gates ClassChange.
+- Kind and step-name tests in `groundwork_test.go`, the DTO field in `inventory_dto.go`, the target field in
+  `types.go` — where those lists and types live.
+- W5-5 texts: `restored_unverified_windows_ccs` names no `.bak` and no `previous_certificate` — the restore moved the
+  backup onto the file.
+- The backup is named in the e-mail text as `.alice-<id>.bak` ("the last 8 characters of the operation"), not as a
+  computed param — inventory may not import the helper's name rule.
+
+### Task 7 (Windows provider and engine tests)
+
+- The server warnings are `win_ccs_password_missing`, `win_ccs_helper_outdated` and `win_ccs_password_mismatch`
+  (`count`); `win_ccs_remote`, `win_ccs_path_unsupported` and `win_ccs_files_ignored` (`count`) are `winproto`'s.
+- Discovery checks CCS on, the folder (`ValidCCSPath`: UNC `win_ccs_remote`, else `win_ccs_path_unsupported`), the
+  helper version, then the password; CCS turned off between the two calls means no files and no warning.
+- A failed `ccs-dump` (error, undecodable, refused, over `DumpOutput`) keeps the `iis-dump` result with
+  `list_truncated` and `locations_dropped`; the end of the context is the scan's error.
+- File problems map: `ccs_password_mismatch` stays, `not_a_pfx` is `not_a_certificate`, `too_large` stays,
+  `key_missing` is the key problem; every problem makes the location unsupported `file_problem` without chain or
+  token.
+- A folder listing Alice cut (truncated, a duplicate host, more than `MaxCCSFiles`) gives no `cert_missing` locations.
+- The CCS backup reference is `{OperationID, PreviousSHA256}` in the provider too; a CCS `rollback_failed` has params
+  `{}`.
+- The verification of an unlinked file is `{OK, skipped, installed, ccs_unlinked}` and `verifyNew` copies `ccs_unlinked`
+  onto the verify step — `StepParams()` alone drops params on an OK result.
+- A non-ASCII CCS password is refused before sending with `certificate.invalid` — inventory never stores one.
+- Fix 1: `ErrCCSPasswordUnusable` keeps foreign or undecryptable rows final (`internal.unexpected`); in discovery it is
+  the `locations_dropped` path, not `win_ccs_password_missing` — a password is set.
+- Fix 1: a deployment's password refusal: no password `windows.ccs_password_missing` (final), the end of the context
+  `ssh.timeout`, unusable `internal.unexpected` (final), any other error `windows.io_error` (retryable); none sends.
+- Fix 2: the flag `ccs_refresh_failed` goes on `write_file` for a `ccs-deploy` answer (even after the helper's own
+  restore) and on `restore` for an `iis-restore` answer — the step of the change the answer is about.
+- Fix 3: W5-13 in `ccsFileFor` and the emulator (`shortcut:` comment: nearest-first between two wildcards is not
+  measured); `ccs_unlinked` and `ccs_refresh_failed` on inventory's `stepParamKeys` and the API's `stepParamRules`
+  (`^true$`); W5-15.
+
+### Task 8 (web and e2e)
+
+- `api/openapi.yaml` names `write_file` among the step names — `enums.test.ts` compares the step list with the Go
+  sources and the spec.
+- `setCCSPassword` lives in `web/src/api/endpoints.ts` — every target call is there.
+- The panel shows when the scan warning `win_ccs_enabled` is present — `WindowsFacts` has no CCS field.
+- The panel is shown to anyone who can see the server, the field only with `credentials.manage` — the API enforces the
+  permission and the date is useful to Operators.
+- The field is emptied on every submit, also after a refusal — the password is never kept after submit.
+- `isWindowsDeployment` stays binding-only and the CCS kind has `isCCSDeployment` — a CCS file is a file; the binding
+  texts must not apply.
+- The `windows.ccs_*` reasons are excluded from the binding-wording check and get a check of their own — they speak of
+  a file.
+- `enums.test.ts` also reads the `Warn*` constants of `internal/providers/windows/ccs.go` — those codes come from the
+  provider.
+- The e2e forces step-up with `advanceClock(STEP_UP_SECONDS + 1)` — Ruling 25 requires that setting the password asks
+  for step-up.
+- Fix round: the deploy dialog's summary follows the location it was opened from; "Select all bindings of this
+  certificate" keeps its wording (deferred minor).
+
+## Final review fixes (W5)
+
+Pending (Task 10 step 6): the independent review of `e15fad4b..HEAD` and every finding fixed or declined with a reason.
+
+## Acceptance (design §13 W5)
+
+Status: **pending** until the final gates (Task 10). Each line is completed by the controller.
+
+- A CCS location belongs to the Windows server that hosts the folder (Tasks 6-7): pending.
+- Kind `win_ccs_file`, named `<host>.pfx` or `_.<domain>.pfx` (Task 1): pending.
+- Written with the CCS password entered by an Administrator (Task 6): pending.
+- Atomically, with a backup kept for rollback (Tasks 3, 5): pending.
+- The IIS servers' `ccs` bindings linked for verification (Task 7): pending.
+- No double hop (Ruling 3): pending.
+
+## Owner items (W5)
+
+From the plan:
+
+1. **Ruling 3:** only a local CCS folder on the IIS server itself is managed in W5; the shared-folder farm layout is
+   deferred.
+2. **Ruling 7:** Alice never creates a CCS file in W5. The first file for a host is placed by the administrator; Alice
+   then manages it.
+3. **Ruling 9:** one CCS password per Windows server (not per location), set through the API with step-up,
+   append-only, with no delete in W5.
+4. **Ruling 10:** the password must be 12-128 printable ASCII characters without spaces. A CCS whose configured
+   password does not meet that cannot be managed.
+5. **Ruling 12:** Alice does not read IIS's stored password. A wrong password shows as files it cannot open, and a
+   wrong write is caught by the probe of a linked host. An unlinked file is checked by read-back only (Ruling 8).
+6. **Rulings 14-16, WN-22:** each write leaves a backup `<file>.alice-<8 hex>.bak` (the last 8 hex digits of the
+   operation, W5-2) in the CCS folder for at most 7 days (pruned by the daily `windows.cleanup`). It holds the previous
+   private key, encrypted with the CCS password, under the folder's ACL. If that is not acceptable, the alternative is
+   a backup under `C:\ProgramData\Alice\helper` (same volume only, F15); it was not built (C3).
+7. **Ruling 2:** restore, status and fence of CCS operations reuse the `iis-*` subcommands by journal kind, instead of
+   adding `ccs-restore` and `ccs-status`.
+8. **Ruling 26:** the runner tests install `Web-CertProvider` and leave it installed on the hosted runner images (they
+   are discarded after each job).
+9. **The F15-F18 verdicts** ([W5 facts measured on real runners](#w5-facts-measured-on-real-runners)), especially F15
+   route (a): Alice rewrites the http.sys `ccs` records after every write and restore.
+
+Added during execution:
+
+- **Commit `39b58279`'s trailer** reads "Claude Opus 5.5" instead of "Claude Fable 5.1" (P4); the coordinator ruled it
+  stays as it is (W2/W3 precedent, no history surgery).
+- **Ruling 16 amended (W5-1):** a backup lives at most 7 days even for the latest operation of a file, whose journal is
+  kept; a rollback of an operation older than 7 days then fails closed (`BACKUP_MISSING`, nothing written). Confirm the
+  bound.
+- **W5-13:** between two wildcard files that both match a host (`_.b.example.com.pfx` and `_.example.com.pfx` for
+  `a.b.example.com`), Alice links the nearest; IIS's order there was not measured.
+- **W5-14:** a new host's first CCS file may not be served by IIS for minutes (not within 40 s even at a 10 s
+  `PollingInterval`). Alice only replaces existing files, so its own deployments are not affected; the host guide tells
+  administrators to place the first file before the site's first request.
+- **The refresh touches every http.sys `ccs` record of the server** (W5-10), not only the linked ports, with each
+  record's own values. The runner proves the update changes no record and no extended parameter (`F15: refresh
+  no-op:`, run 6 <https://github.com/erenmeren/alice/actions/runs/40499784360>, verdict pending); a failure of another
+  application's record reports `ccs_refresh_failed` on the deployment.
+- **The W4 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode, the helper
+  update procedure): a 1.1.0 helper needs the same "update the helpers first, then Alice" step.
+
+## Deferred to W6+
+
+- **W6-W7, on demand**: RDP deployment (`win_rdp`), WinRM transport.
+- **Deferred by W5**: the farm layout (a CCS folder on a share of another server, the file server as the target, links
+  across targets, the share-to-folder resolution; Ruling 3); creating a CCS file for an IIS CCS binding that has none
+  (Ruling 7); removing or clearing the CCS password; a CCS whose password Alice's rule refuses (Ruling 10);
+  `win.ccs_shadows` (not needed: `hostnameport` wins, F17).
+- **Carried from W2-W4, not decided in W5**: a third party's intermediate added after Alice's commit makes a redeploy
+  answer `unchanged` with `win.chain_differs`; the emulator's slow-host fault and the abandoned-call marking it needs;
+  deploying to a binding whose only problem is its key; IDN host headers in their U-label form; a manual "roll back
+  this deployment" action; W3's deferred minors (the heal step may clear a chain for a DER still present in another
+  store; no test of the `maxImports` trim of adopted entries; `cleanup.go` not split; the provider's plan check accepts
+  duplicate candidates; `UpdateTarget` writes `certificate_cleanup` back on every edit; a skipped incident place queues
+  one extra cleanup); W4's minors other than the two closed in W5 (the helper version literal sites and the numeric
+  case of `TestReleasedHelperVersion`); not built in W4 (a real-Windows ARM64 leg, `ci.yml` checks required, a Windows
+  gate in `make release-gates`, a `merge_group` trigger, removing intermediates from `CA`, a cleanup history page).
+- **Minors deferred during W5 (known debt)**:
+  - `ValidCCSPath` accepts an empty segment (`C:\a\\b`) and a trailing dot or space — the path comes from the registry
+    only (Task 1).
+  - `CCSHost` maps a literal `*.example.com.pfx` to `*.example.com` — unreachable on NTFS (Task 1).
+  - A test uses an all-zero 8-digit operation instead of a UUID in the temporary-file case (Task 1).
+  - The reparse-folder check on a restore runs before the gate, not just before `RestoreCCS` (a time-of-check gap, as
+    in W2's planning design; Task 3).
+  - `SetCCSPassword` checks the password rule before the target's type, so a bad password on an Nginx target is 422,
+    not 409 (Task 6).
+  - The database does not tie a `win_ccs` credential to a Windows target; inventory checks it on write and read
+    (accepted, Ruling 1).
+  - The emulator's `ReadCCS` with a negative limit would panic (unreachable); the model has no way to delete a CCS
+    folder or file (Task 4).
+  - The emulator serves a third party's `PutRawCCSFile` at once, where real IIS would not without a refresh
+    (deliberate); its `RestoreCCS` spelling rule is unmeasured; it answers `not_a_pfx` for a certificates-only PFX
+    where Windows answers `key_missing` (Task 5).
+  - `ccsDir` checks the leaf folder only; a parent junction is followed (Task 5 ruling).
+  - The real fixture adopts a pre-existing `ccs:45480` record on a dirty runner (Task 5).
+  - The web's `win_ccs_enabled` text stays after the password is set; a busy double submit of the password panel is
+    possible (nil risk, per the review); the deploy dialog's summary follows the opening location's
+    kind; "Select all bindings of this certificate" also selects CCS files (Task 8).
+  - A cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning (W5-9).

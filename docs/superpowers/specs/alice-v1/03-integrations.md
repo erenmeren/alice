@@ -480,12 +480,13 @@ Details:
 - No API-token download of private keys.
 - No Windows or macOS targets.
 
-## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62)
+## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62, R68)
 
 (Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
 rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
 target, connection and discovery. Amendment R61 (phase W2): deployment, verification, rollback and recovery
-(13A.8-13A.11). Amendment R62 (phase W3): drift and cleanup (13A.12-13A.14).
+(13A.8-13A.11). Amendment R62 (phase W3): drift and cleanup (13A.12-13A.14). Amendment R68 (phase W5): the
+Centralized Certificate Store (13A.15-13A.17).
 
 ### 13A.1 Supported systems
 
@@ -547,7 +548,7 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 
 | Subcommand | Elevation | Answer |
 |---|---|---|
-| `version` | not needed | helper version (`0.3.0` since W3; W2's was `0.2.0`, W1's `0.1.0`), protocol 1, `MinProtocol` 1 |
+| `version` | not needed | helper version (`1.1.0` since W5, `1.0.0` the first released; W3's was `0.3.0`, W2's `0.2.0`, W1's `0.1.0`), protocol 1, `MinProtocol` 1 |
 | `win-facts` | not needed | OS product, build, installation type; IIS installed and version; elevated or not; stores; OpenSSH version |
 | `iis-dump` | required (`NOT_ELEVATED`, exit 2) | http.sys SSL bindings, their certificates, IIS sites, warning facts (13A.5) |
 | `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa>` | not needed | the chain served on that address, as the Linux helper's probe |
@@ -556,12 +557,15 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 | `iis-status --op <uuid>` (W2) | required | the operation's journal phase and whether another process holds the helper lock now |
 | `iis-fence --op <uuid>` (W2) | required | a `fenced` tombstone for an operation that never wrote, or the phase it reached |
 | `iis-cleanup --plan` / `--apply` (W3) | required | `winproto.CleanupPlanInput` / `CleanupApplyInput` on standard input (at most 64 KiB); the plan answers candidates, watched certificates, warnings and how many state files it pruned, the apply one result per item (13A.13) |
+| `ccs-dump` (W5) | required | `winproto.CCSDumpInput` (the CCS password) on standard input (at most 4 KiB); answers the store's state and its files (13A.15) |
+| `ccs-deploy --op <uuid>` (W5) | required | `winproto.CCSDeployInput` on standard input (at most 256 KiB); writes one CCS file with a backup; answers as `iis-deploy`; restore, status and fence are `iis-restore`, `iis-status` and `iis-fence` on the CCS journal (13A.17) |
 
 Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 added `iis-deploy`, `iis-restore`,
 `iis-status`, `iis-fence` to protocol 1 (helper `0.2.0`); W1's helper answers `UNKNOWN_SUBCOMMAND` for them, and Alice
 refuses before sending to a helper older than `0.2.0` (`windows.helper_outdated`). W3 added `iis-cleanup` (helper
 `0.3.0`): a `0.2.0` helper answers it `UNKNOWN_SUBCOMMAND`, and Alice refuses before sending it to a helper older than
-`0.3.0` (`windows.helper_outdated`; that helper still deploys). Every answer is bounded by the 50 s budget and the output caps: a read
+`0.3.0` (`windows.helper_outdated`; that helper still deploys). W5 added `ccs-dump` and `ccs-deploy` (helper `1.1.0`,
+`CCSMinVersion`): a `1.0.0` helper answers them `UNKNOWN_SUBCOMMAND`, and Alice never sends them to it. Every answer is bounded by the 50 s budget and the output caps: a read
 subcommand answers `IO_ERROR` when it ends; a write subcommand answers `IO_ERROR` only before its first durable write
 and `OUTCOME_UNKNOWN` (exit 4, uncertain) after it (13A.8).
 
@@ -807,3 +811,134 @@ services, naming store and thumbprint, once no place of the incident on the serv
 - A cleanup apply that ends `OUTCOME_UNKNOWN` records no audit row for what the helper may have removed (event 1003 is
   the trace).
 - The real-Windows workflow is not yet a required check and the helper is not yet in the release bundle (W4).
+
+### 13A.15 Centralized Certificate Store files (amendment, R68)
+
+(Amendment, R68, phase W5; design §13 W5 and §20; rulings `docs/superpowers/rulings/windows-iis.md` "W5 (R68)".)
+
+- **Supported layout.** A CCS folder on the IIS server itself: IIS's `CertStoreLocation`
+  (`HKLM\SOFTWARE\Microsoft\IIS\CentralCertProvider`, read by `win-facts` since W1) is an absolute drive path
+  (`winproto.ValidCCSPath`: `X:\`, no `:` or `/` after the drive, no `.` or `..` segment, at most 240 bytes, one
+  trailing backslash allowed). A UNC path gives the server warning `win_ccs_remote`; a `\\?\` or `\\.\` path, a relative
+  path or a folder that is a reparse point gives `win_ccs_path_unsupported`; neither lists files. The helper writes a
+  local path only (no double hop). The farm layout (a share of another server) is not supported.
+- **`ccs-dump`** (helper 1.1.0, elevated, no lock): standard input is exactly `{"password":"..."}` (at most 4 KiB, strict
+  decoding, the password `winproto.ValidCCSPassword`); the helper reads `Enabled` and `CertStoreLocation` itself. A
+  disabled store answers `enabled: false`; a folder outside the rule or a reparse point answers `local: false` with the
+  path. Otherwise the `*.pfx` entries, sorted by name, at most `MaxCCSFiles` (500) and within 40 s (else `truncated`),
+  each read up to `MaxCCSFile` (256 KiB, larger: problem `too_large`) and opened with the password
+  (`PFXImportCertStore(PKCS12_NO_PERSIST_KEY)` on Windows, no key file left; F16): name, size, modification time, the
+  bytes' SHA-256, the leaf and the other certificates in chain order, or a problem (`ccs_password_mismatch`, also for a
+  corrupt file Windows answers with 86; `not_a_pfx`; `key_missing`). A name that gives no host is counted
+  (`ignored`); a reparse-point or non-regular file is not listed. The password buffer is cleared before the answer.
+- **Discovery.** `Discover` calls `ccs-dump` after `iis-dump`, on a fresh connection, only when the dump says CCS is on
+  with a local path, the helper is at least `CCSMinVersion` 1.1.0 and the server has a password; otherwise no
+  `win_ccs_file` location and the warning `win_ccs_helper_outdated` or `win_ccs_password_missing`. A failed `ccs-dump`
+  (error, refusal, an undecodable answer or one over `DumpOutput`), a password Alice holds but cannot use, or a listing
+  the helper cut keeps the `iis-dump` result and adds `list_truncated` and `locations_dropped`: nothing is marked
+  missing (W2 Ruling 18).
+- **Locations.** One per file: kind `win_ccs_file`, locator `{"type":"ccs_file","path":"<folder as read>","host":"<host>"}`,
+  `cert_path` `<folder>\<host>.pfx` (`*.` as `_.`, the canonical lower-case name), details `ccs_path`, `file_name` (as
+  listed), `file_sha256`, `file_size`, `modified_at`. The token is the SHA-256 of the leaf's DER, as for a binding: a
+  re-export of the same certificate is no change.
+- **Links.** The servers of a file are the IIS `https` bindings with the CCS flag (`sslFlags & 2`) whose host header IIS
+  serves from it, as measured (F17): the exact `<host>.pfx` first, otherwise the nearest `_.<suffix>.pfx` found by
+  stripping leftmost labels (any depth, the suffix keeps at least two labels, never the wildcard's own parent);
+  names compared without case. A binding without a valid host header links nothing. An explicit `hostnameport`
+  record of `h:port` wins over the CCS binding on the same port. An IIS CCS binding whose host maps to no file is a
+  `cert_missing` location (unsupported; place the first file). A file no binding uses is supported, with the location
+  warning `win_ccs_unlinked`.
+- **Problems.** `ccs_password_mismatch` (server warning `win_ccs_password_mismatch`, `count`), `not_a_certificate`,
+  `too_large`, `key_missing`: the location is unsupported (`file_problem`) and never deployed over. Files ignored by
+  name: `win_ccs_files_ignored` (`count`).
+- The http.sys `ccs:<port>` record stays a `win_sslbinding` location, unsupported `win_ccs` (it names no certificate);
+  its text and the warning `win_ccs_enabled` point to the files and the password panel.
+
+### 13A.16 The CCS password (amendment, R68)
+
+- One per Windows server, because IIS's store has one private-key password for every file. Set and replaced through
+  `PUT /api/v1/targets/{id}/ccs-password` (`{"password": "..."}`, at most 4 KiB, `If-Match` required): permission
+  `credentials.manage`, an Administrator's browser session with a fresh step-up, never an API token; licence
+  `ClassChange`; a Windows server only (else `ALC-WIN-0011`, 409). The rule is 12 to 128 printable ASCII characters
+  `0x21`-`0x7E`, `BuildPFX`'s alphabet (else `ALC-WIN-0019`, 422, nothing stored; the rule is checked before the
+  target's type). The answer is the target DTO, whose `ccs_password_set_at` (RFC 3339 or null, Windows servers only)
+  is the newest row's creation time; the target's version is bumped. Audit `target.ccs_password_set` (no secret).
+- Storage: a `credentials` row (purpose `win_ccs`, kind `win_ccs_password`, `target_id` = the server, sealed with AAD
+  `credentials/<id>/ciphertext`, `public_info` `{}`). Rows are append-only; the newest is the password. No delete in
+  W5. Migration `00036` widens the six CHECKs (location kinds of locations and deployments, the credential purpose and
+  kind and their pairings); its Down refuses with `Z1034` while a `win_ccs_file` location, deployment or `win_ccs`
+  credential exists.
+- Transport: the provider asks `providers.CCSPasswordSource.CCSPassword(ctx, target)` for its own target only;
+  inventory answers only for a live Windows target and a row of that target. No row is `providers.ErrNoCCSPassword`;
+  a row of another target or one that does not decrypt is `providers.ErrCCSPasswordUnusable`. The password travels
+  only inside the JSON on standard input of `ccs-dump` and `ccs-deploy`; `CCSDumpInput` and `CCSDeployInput` redact it
+  in `String`, `GoString` and `LogValue`; every buffer is cleared after the send. It never appears in a command line,
+  journal, event, log line, error, API answer, audit row, job payload or fixture file. Alice never reads IIS's stored
+  `PrivateKeyPassword`.
+
+### 13A.17 Writing a CCS file and its rollback (amendment, R68)
+
+`ccs-deploy --op <uuid>` (helper 1.1.0) takes `winproto.CCSDeployInput` on standard input (at most 256 KiB: the
+folder Alice discovered and the host, the leaf DER SHA-256 Alice last saw, the chain and key PEM, the password, the
+R48 lists). Order; every refusal before step 5 changes nothing:
+
+1. Strict decoding, elevation, the helper lock; `OPERATION_EXISTS`, `FENCED` or `RECOVERY_PENDING` on the file record.
+2. The registry, read by the helper: `CCS_DISABLED`, then `CCS_PATH_UNSUPPORTED`, then `CCS_PATH_CHANGED` (the folder
+   compared with Alice's, ASCII case folded, one trailing backslash trimmed); a folder that is a reparse point is
+   `CCS_PATH_UNSUPPORTED`.
+3. The file (name derived from the host, opened with `FILE_FLAG_OPEN_REPARSE_POINT`; a reparse point or non-regular
+   file is `INVALID_ARGUMENT`; a name holding `:`, `\` or `/` is `INVALID_ARGUMENT`): absent `CCS_FILE_NOT_FOUND`; the
+   password does not open it `CCS_PASSWORD_MISMATCH`; its leaf is not `expect_sha256` (the absent marker is refused:
+   no file creation) `HASH_MISMATCH`; the same leaf and intermediates in order answer `unchanged`, with no journal.
+4. Journal `prepared` with `kind` `ccs_file` and the folder, file, host, backup and temporary names, the previous
+   leaf's hashes and the previous file's bytes hash; the file record `ccs/<file>` names the operation.
+5. `import_chain` (W2's step: intermediates into `LocalMachine\CA`, never replaced).
+6. Journal `writing` (with the new bytes' hash), step `write_file`: `BuildPFX` (leaf, key and intermediates with the
+   password), `.alice-<op>.tmp` (`CREATE_NEW`, write-through, flushed), `ReplaceFileW(file, tmp,
+   <file>.alice-<last 8 hex of op>.bak, REPLACEFILE_WRITE_THROUGH)` (the file keeps its ACL, F15). A failure before the
+   replace removes the temporary file and answers `restored` with `failed_step write_file` and no write; a replace
+   that fails after moving the file away self-restores from the backup.
+7. The refresh (F15 route (a)): IIS does not pick up a replaced file by itself, so the helper writes every http.sys
+   `ccs` record of the server again with its own values (a base update keyed by the record's own address, which the
+   runners prove changes no record and no extended parameter). A failure is the answer field `ccs_refresh_failed`
+   (kept in the journal), shown as the step param `ccs_refresh_failed` on `write_file` or `restore`; it never starts a
+   rollback by itself.
+8. Read-back: the bytes' SHA-256 equals the built PFX's and the password opens it to the new leaf; otherwise
+   self-restore under the guard.
+9. Journal `committed`; Application event 1004 `ccs file <name> sha256 <old leaf> -> <new leaf> op <op>`.
+
+The answer is `winproto.DeployResponse` with `Store` empty, `AliceImported` false and `BuiltChainLength` 0.
+
+- **Verification.** One endpoint per linked binding (its port; SNI its host header, a `*.` host as `alice-check.`; W2's
+  address rules), at most `maxEndpoints`; the served chain is compared with the deployed chain (F18: IIS sends the
+  PFX's intermediates), and `win.chain_differs` is never reported for a CCS file. An unlinked file is a skipped
+  verification (level 1, `installed`) with the step param `ccs_unlinked`: the read-back is its only check, and
+  inventory accepts that skip only for a `win_ccs_file` location whose stored servers are empty.
+- **Rollback.** `iis-restore` on a CCS journal checks the R48 guard on the previous leaf and SPKI hashes, then the
+  file: bytes equal to the previous file are done; other bytes after a commit are `SUPERSEDED`, during an interrupted
+  operation `restore_failed` `file_changed`, both with nothing written; the backup must hold the previous file's
+  bytes (else `BACKUP_MISSING`, `windows.backup_missing`). Then `MoveFileEx(backup, file, REPLACE_EXISTING |
+  WRITE_THROUGH)`, the refresh, a read-back, journal `restored`, event 1002. A restore after a path change acts in the
+  journal's folder; a journal folder that became a reparse point is `CCS_PATH_UNSUPPORTED`. `iis-status` answers
+  `current_cert_sha256` from the file (the new leaf, the previous one, else empty); `iis-fence` is W2's.
+- **Pruning.** `iis-cleanup --plan` removes a final CCS journal after 7 days (30 for `restore_failed`; never `writing`
+  or `restoring`) with its temporary file and its backup (the backup only when its name is the journal's and its bytes
+  are the previous file's). The latest operation of a file keeps its journal but loses its `.tmp` and `.bak` after 7
+  days, so a later restore answers `BACKUP_MISSING` with nothing written. A backup that cannot be read keeps its
+  journal for a later plan. W3's certificate cleanup ignores the CCS folder.
+- **Errors.** `CCS_DISABLED` `windows.ccs_disabled` (`ALC-WIN-0015`), `CCS_PATH_CHANGED` `windows.ccs_path_changed`
+  (`ALC-WIN-0016`), `CCS_PASSWORD_MISMATCH` `windows.ccs_password_mismatch` (`ALC-WIN-0017`), no password
+  `windows.ccs_password_missing` (`ALC-WIN-0018`, final, before sending), a refused password `windows.ccs_password_invalid`
+  (`ALC-WIN-0019`), `CCS_FILE_NOT_FOUND` `windows.ccs_file_not_found` (`ALC-WIN-0020`), `CCS_PATH_UNSUPPORTED`
+  `windows.location_unsupported`; a password read error before sending is retryable `windows.io_error`, an unusable one
+  final `internal.unexpected`; a helper below 1.1.0 is `windows.helper_outdated` with `required_version 1.1.0` before
+  sending (the backstop `UNKNOWN_SUBCOMMAND` maps to the same).
+- **Engine and notices.** `win_ccs_file` is a non-file kind wherever the engine tests `IsFile()`; `newCertSHA256` uses
+  the leaf; the backup reference is `{operation, previous SHA-256}`; a lost Windows connection covers it; drift is the
+  generic rule (repair `drift_repair`, guarded by the token; a file the password no longer opens is a problem, not
+  drift). The e-mails keep the file texts except `rollback_failed`, `outcome_unknown` and `restored_unverified`, which
+  have `_windows_ccs` texts naming the file, its `.alice-<id>.bak` backup (not after a restore) and IIS Manager, with
+  `previous_certificate` instead of `backup_dir`.
+- **Explicit W5 limits.** No file creation (an IIS CCS binding without a file stays `cert_missing`); no farm layout; no
+  removal of the password; a store whose password is outside the rule cannot be managed; a new host's first file may
+  not be served by IIS for minutes (F17; Alice only replaces existing files, which the refresh serves at once).

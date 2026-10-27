@@ -2288,7 +2288,7 @@ None of these files holds key material.
 
 **Likely cause.** The file was removed or renamed on the server after Alice's last scan.
 
-**What to do.** Put the file back in the folder, or scan the server again if it was removed on purpose. Then deploy again.
+**What to do.** Put the file back in the folder, or scan the server again if it was removed on purpose. Then deploy again. IIS may take several minutes to serve a file for a host it has not served before (see [windows-host-preparation.md](windows-host-preparation.md#centralized-certificate-store)).
 
 ## ALC-CRT-0001: Not a readable certificate
 
