@@ -1345,3 +1345,82 @@ func TestRemovalBookkeepingSurvivesAFailure(t *testing.T) {
 		}
 	})
 }
+
+// TestPruneCCSBackups (W5 Ruling 16): pruning a CCS journal removes its temporary file, then its backup
+// when the backup holds the previous file's bytes, then the journal.
+func TestPruneCCSBackups(t *testing.T) {
+	f := newCleanup(t)
+	f.h.setCCS(ccsFolder, nil)
+	old := []byte("the previous file's bytes")
+	put := func(op, phase string, age time.Duration, bak []byte) journal {
+		j := sampleCCSJournal(op)
+		j.Phase, j.CCS.PreviousFileSHA256 = phase, hexSHA256(old)
+		if phase == winproto.PhaseRestored {
+			j.Steps = append(j.Steps, winproto.Step{Name: winproto.StepRestore, Status: winproto.StepOK})
+		}
+		mustWrite(t, f.h, j)
+		f.h.modTimes[journalName(op)] = testNow.Add(-age)
+		f.h.ccsFiles[j.CCS.Temp] = fakeCCSFile{data: []byte("temporary")}
+		if bak != nil {
+			f.h.ccsFiles[j.CCS.Backup] = fakeCCSFile{data: bak}
+		}
+		return j
+	}
+	committed := put(op1, winproto.PhaseCommitted, 8*day, old)
+	changed := put(op2, winproto.PhaseCommitted, 8*day, []byte("changed"))
+	writing := put(op3, winproto.PhaseWriting, 60*day, old)
+	restored := put(cleanupOp(4), winproto.PhaseRestored, 8*day, nil)
+	unreadable := put(cleanupOp(5), winproto.PhaseCommitted, 8*day, old)
+	young := put(cleanupOp(6), winproto.PhaseCommitted, 6*day, old)
+	f.h.ccsReadFn = func(name string) error {
+		if name == unreadable.CCS.Backup {
+			return errors.New("denied")
+		}
+		return nil
+	}
+	f.reset()
+	if r := f.plan(); r.Pruned != 3 {
+		t.Fatalf("pruned %d", r.Pruned)
+	}
+	w := f.h.writes()
+	i, k, l := slices.Index(w, "ccs-unlink "+committed.CCS.Temp), slices.Index(w, "ccs-unlink "+committed.CCS.Backup),
+		slices.Index(w, "unlink "+journalName(op1))
+	if i < 0 || k < i || l < k {
+		t.Fatalf("order %v", w)
+	}
+	has := func(name string) bool { _, ok := f.h.ccsFiles[name]; return ok }
+	if !has(changed.CCS.Backup) || has(changed.CCS.Temp) || !slices.Contains(w, "unlink "+journalName(op2)) {
+		t.Fatal("a changed backup was removed, or its journal kept")
+	}
+	if !has(writing.CCS.Backup) || !has(writing.CCS.Temp) || slices.Contains(w, "unlink "+journalName(op3)) {
+		t.Fatal("a writing journal's files were touched")
+	}
+	if !slices.Contains(w, "unlink "+journalName(restored.Op)) || slices.Contains(w, "ccs-unlink "+restored.CCS.Backup) {
+		t.Fatalf("restored: %v", w)
+	}
+	if !has(unreadable.CCS.Backup) || !has(unreadable.CCS.Temp) || slices.Contains(w, "unlink "+journalName(unreadable.Op)) {
+		t.Fatal("a journal whose backup could not be read was pruned")
+	}
+	if !has(young.CCS.Backup) || slices.Contains(w, "unlink "+journalName(young.Op)) {
+		t.Fatal("a young journal was pruned")
+	}
+
+	t.Run("a removal that fails", func(t *testing.T) {
+		f := newCleanup(t)
+		f.h.setCCS(ccsFolder, nil)
+		j := sampleCCSJournal(op1)
+		mustWrite(t, f.h, j)
+		f.h.modTimes[journalName(op1)] = testNow.Add(-8 * day)
+		f.h.ccsFiles[j.CCS.Temp] = fakeCCSFile{data: []byte("temporary")}
+		o, out := execute(t, context.Background(), failRemoveCCS{f.h}, bytes.NewReader(planInput()), winproto.SubIISCleanup, winproto.ArgPlan)
+		wantError(t, o.Exit, out, winproto.ExitFailed, winproto.CodeOutcomeUnknown)
+		if _, ok := f.h.state[journalName(op1)]; !ok {
+			t.Fatal("the journal was removed")
+		}
+	})
+}
+
+// failRemoveCCS is a host whose removals in the CCS folder fail.
+type failRemoveCCS struct{ *fakeWriteHost }
+
+func (failRemoveCCS) RemoveCCS(context.Context, string, string) error { return errors.New("denied") }

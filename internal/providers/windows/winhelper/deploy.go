@@ -308,17 +308,9 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 		return nil, err
 	}
 
-	// import_chain: each intermediate into LocalMachine\CA, never replacing one (design §6.3 step 5).
-	for _, c := range in.intermediates {
-		added, err := h.AddIntermediate(t.ctx, c.Raw)
-		if err != nil {
-			return t.failUnbound(winproto.StepImportChain, winproto.ErrStore)
-		}
-		if added {
-			j.Intermediates = append(j.Intermediates, certRef{SHA1: sum1(c.Raw), SHA256: sum256(c.Raw)})
-		}
+	if !t.importChain(in) {
+		return t.failUnbound(winproto.StepImportChain, winproto.ErrStore)
 	}
-	j.Steps = append(j.Steps, stepOK(winproto.StepImportChain))
 	if err := t.write("deploy.import_chain"); err != nil {
 		return nil, err
 	}
@@ -432,6 +424,22 @@ func (t *deployTx) run(in content, sec *secrets) (any, error) {
 	}
 	h.Event(eventDeployed, eventText(*j, j.PreviousSHA256, j.NewSHA256))
 	return t.answer(), nil
+}
+
+// importChain is the step import_chain: each intermediate into LocalMachine\CA, never replacing one
+// (design §6.3 step 5), those added recorded. It reports false when one could not be added.
+func (t *deployTx) importChain(in content) bool {
+	for _, c := range in.intermediates {
+		added, err := t.h.AddIntermediate(t.ctx, c.Raw)
+		if err != nil {
+			return false
+		}
+		if added {
+			t.j.Intermediates = append(t.j.Intermediates, certRef{SHA1: sum1(c.Raw), SHA256: sum256(c.Raw)})
+		}
+	}
+	t.j.Steps = append(t.j.Steps, stepOK(winproto.StepImportChain))
+	return true
 }
 
 // selfRestore records the failed step and puts the previous record back under the guard (Ruling 12).

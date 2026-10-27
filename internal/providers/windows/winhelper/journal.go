@@ -96,12 +96,52 @@ type journal struct {
 	// this operation puts back a certificate they list.
 	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
 	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+
+	// Kind is "" for a binding's journal and winproto.JournalKindCCS for a ccs-deploy (W5 Ruling 2);
+	// only the latter has CCS. A CCS journal's Binding is its file record's key (ccsRecordKey), its
+	// Locator, Previous and Store are empty, and the SHA-1 and SHA-256 fields name the leaves.
+	Kind string      `json:"kind,omitempty"`
+	CCS  *ccsJournal `json:"ccs,omitempty"`
+}
+
+// ccsJournal is what a CCS journal adds (W5 Ruling 14): the folder as the registry named it, the
+// names the helper derived from the host, the hashes of the file's bytes before and after (NewFileSHA256
+// "" until the PFX is built, with the writing journal) and the SPKI SHA-256 of the previous leaf, which
+// the guard checks (the backup's key is never read again).
+type ccsJournal struct {
+	Path               string `json:"path"`
+	File               string `json:"file"`
+	Host               string `json:"host"`
+	Backup             string `json:"backup"`
+	Temp               string `json:"temp"`
+	PreviousFileSHA256 string `json:"previous_file_sha256"`
+	NewFileSHA256      string `json:"new_file_sha256"`
+	PreviousSPKISHA256 string `json:"previous_spki_sha256"`
+}
+
+// ccsRecordKey is the file record's key of a CCS file: a binding record keyed by "ccs/<file>".
+func ccsRecordKey(file string) string { return "ccs/" + file }
+
+// ccsBackupName and ccsTempName are the backup and the temporary file of operation op in the CCS folder
+// (Global Constraints: neither ends in .pfx, so IIS never serves them).
+func ccsBackupName(file, op string) string { return file + ".alice-" + op[:8] + ".bak" }
+func ccsTempName(op string) string         { return ".alice-" + op + ".tmp" }
+
+// valid reports CCS fields the helper may act on for operation op: the folder a supported local path,
+// the file the host's (Ruling 5) and every name the one this operation derives, plain (plainName).
+func (c ccsJournal) valid(op, phase string) bool {
+	file, ok := winproto.CCSFileName(c.Host)
+	return ok && file == c.File && winproto.ValidCCSPath(c.Path) && c.Backup == ccsBackupName(file, op) &&
+		c.Temp == ccsTempName(op) && plainName(c.File) && plainName(c.Backup) && plainName(c.Temp) &&
+		validSHA256(c.PreviousFileSHA256) && validSHA256(c.PreviousSPKISHA256) &&
+		(validSHA256(c.NewFileSHA256) || (c.NewFileSHA256 == "" && phase != winproto.PhaseCommitted))
 }
 
 var journalPhases = []string{winproto.PhasePrepared, winproto.PhaseWriting, winproto.PhaseCommitted, winproto.PhaseUnchanged,
 	winproto.PhaseRestoring, winproto.PhaseRestored, winproto.PhaseRestoreFailed, winproto.PhaseRestoreForbidden}
 
-var stepNames = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal, winproto.StepRestore}
+var stepNames = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal, winproto.StepRestore,
+	winproto.StepWriteFile}
 
 var errorClasses = []string{winproto.ErrKeyUnusable, winproto.ErrReadBack, winproto.ErrStore, winproto.ErrFileChanged,
 	winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO}
@@ -163,13 +203,25 @@ func (j journal) valid(op string) bool {
 	if j.Phase == winproto.PhaseFenced {
 		return reflect.DeepEqual(j, journal{Op: j.Op, Phase: j.Phase, PrevRecord: j.PrevRecord})
 	}
-	canonical, ok := j.Locator.Canonical()
-	if !ok || canonical != j.Binding || !slices.Contains(journalPhases, j.Phase) || len(j.Steps) > maxSteps ||
-		len(j.Intermediates) > winproto.MaxChainCerts {
+	if !slices.Contains(journalPhases, j.Phase) || len(j.Steps) > maxSteps || len(j.Intermediates) > winproto.MaxChainCerts ||
+		!winproto.ValidSHA1(j.NewSHA1) || !validSHA256(j.PreviousSHA256) || !validSHA256(j.NewSHA256) {
 		return false
 	}
-	if !validRecord(j.Previous, j.Binding) || j.Previous.CertSHA1 != j.PreviousSHA1 || !winproto.ValidSHA1(j.NewSHA1) ||
-		!validSHA256(j.PreviousSHA256) || !validSHA256(j.NewSHA256) || !winproto.ValidStore(j.Store) {
+	switch j.Kind {
+	case "":
+		canonical, ok := j.Locator.Canonical()
+		if !ok || canonical != j.Binding || j.CCS != nil || !validRecord(j.Previous, j.Binding) ||
+			j.Previous.CertSHA1 != j.PreviousSHA1 || !winproto.ValidStore(j.Store) {
+			return false
+		}
+	case winproto.JournalKindCCS:
+		// No binding, no store import: the fields of W2 a CCS operation never has stay empty.
+		if j.CCS == nil || !j.CCS.valid(op, j.Phase) || j.Binding != ccsRecordKey(j.CCS.File) || j.Locator != (winproto.Locator{}) ||
+			!reflect.DeepEqual(j.Previous, winproto.SSLBinding{}) || j.Store != "" || j.AliceImported || j.Existed != nil ||
+			!winproto.ValidSHA1(j.PreviousSHA1) {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, c := range j.Intermediates {

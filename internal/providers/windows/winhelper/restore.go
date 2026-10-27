@@ -28,6 +28,9 @@ const (
 // from the store, never from the journal: its DER must be the one the journal names, with a usable
 // key, and the guard (journal lists with the call's) must not list it. Errors are the host's.
 func planRestore(ctx context.Context, h WriteHost, j journal, g guard) (restoreKind, error) {
+	if j.Kind == winproto.JournalKindCCS {
+		return planRestoreCCS(ctx, h, j, g)
+	}
 	cur, found, err := h.Binding(ctx, j.Locator)
 	if err != nil {
 		return 0, err
@@ -57,6 +60,37 @@ func planRestore(ctx context.Context, h WriteHost, j journal, g guard) (restoreK
 	return restoreWrite, nil
 }
 
+// planRestoreCCS is planRestore for a CCS journal (W5 Ruling 15). The file must still be the bytes
+// this operation wrote; when it is the previous bytes nothing is written. An interrupted operation may
+// also have left no file (a ReplaceFileW that failed after moving it aside); a committed one without
+// its file was changed by someone. The backup must hold the previous file's bytes, and the guard is
+// checked on the journal's previous leaf and SPKI hashes, which those bytes stand for (the backup's
+// key is never opened again: a restore has no password).
+func planRestoreCCS(ctx context.Context, h WriteHost, j journal, g guard) (restoreKind, error) {
+	c := j.CCS
+	cur, found, err := ccsFileSum(ctx, h, c.Path, c.File)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case found && cur == c.PreviousFileSHA256:
+		return restoreDone, nil
+	case found && cur != c.NewFileSHA256, !found && j.Phase == winproto.PhaseCommitted:
+		return restoreForeign, nil
+	}
+	bak, found, err := ccsFileSum(ctx, h, c.Path, c.Backup)
+	if err != nil {
+		return 0, err
+	}
+	if !found || bak != c.PreviousFileSHA256 {
+		return restoreNoBackup, nil
+	}
+	if slices.Contains(g.Leaf, j.PreviousSHA256) || slices.Contains(g.SPKI, c.PreviousSPKISHA256) {
+		return restoreForbidden, nil
+	}
+	return restoreWrite, nil
+}
+
 // applyRestore carries out a planned restore after the gate and records its outcome in the journal.
 // The error is errKilled, or a journal that could not say restoring (nothing was written then; the
 // answer is OUTCOME_UNKNOWN and iis-status reads the journal as it was).
@@ -73,6 +107,9 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 		// The cause's class, not a failed earlier restore's (a restore of a committed operation has none).
 		j.Phase, j.FailedStep, j.Error = winproto.PhaseRestored, j.CauseStep, j.CauseError
 		_ = writeJournal(h, j)
+		if j.CCS != nil {
+			_ = h.RemoveCCS(ctx, j.CCS.Path, j.CCS.Temp) // best effort: an interrupted write's temporary file; pruning removes it otherwise
+		}
 		return j, nil
 	}
 	switch kind {
@@ -116,20 +153,33 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 	if err := point(h, "restore.restoring"); err != nil {
 		return j, err
 	}
-	switch err := h.UpdateBinding(ctx, j.Previous); {
-	case errors.Is(err, ErrKeyUnusable):
-		return failRestore(winproto.ErrKeyUnusable)
-	case errors.Is(err, ErrBindingNotFound):
-		return failRestore(winproto.ErrFileChanged)
-	case err != nil:
-		return failRestore(winproto.ErrIO)
-	}
-	if err := point(h, "restore.bound"); err != nil {
-		return j, err
-	}
-	back, found, err := h.Binding(ctx, j.Locator)
-	if err != nil || !found || !sameRecord(back, j.Previous) {
-		return failRestore(winproto.ErrReadBack)
+	if c := j.CCS; c != nil {
+		// The backup goes back over the file (MoveFileEx), then the file must read back as the previous bytes.
+		if err := h.RestoreCCS(ctx, c.Path, c.Backup, c.File); err != nil {
+			return failRestore(winproto.ErrIO)
+		}
+		if err := point(h, "restore.bound"); err != nil {
+			return j, err
+		}
+		if sum, found, err := ccsFileSum(ctx, h, c.Path, c.File); err != nil || !found || sum != c.PreviousFileSHA256 {
+			return failRestore(winproto.ErrReadBack)
+		}
+	} else {
+		switch err := h.UpdateBinding(ctx, j.Previous); {
+		case errors.Is(err, ErrKeyUnusable):
+			return failRestore(winproto.ErrKeyUnusable)
+		case errors.Is(err, ErrBindingNotFound):
+			return failRestore(winproto.ErrFileChanged)
+		case err != nil:
+			return failRestore(winproto.ErrIO)
+		}
+		if err := point(h, "restore.bound"); err != nil {
+			return j, err
+		}
+		back, found, err := h.Binding(ctx, j.Locator)
+		if err != nil || !found || !sameRecord(back, j.Previous) {
+			return failRestore(winproto.ErrReadBack)
+		}
 	}
 	j, _ = restored()
 	if err := point(h, "restore.restored"); err != nil {
@@ -192,6 +242,9 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	case kind == restoreForeign && j.Phase == winproto.PhaseRestoreFailed && j.Error == winproto.ErrFileChanged,
 		kind == restoreForbidden && j.Phase == winproto.PhaseRestoreForbidden:
 		return answer(j, len(j.Steps)), nil // the same outcome again: nothing rewritten
+	case kind == restoreForeign && j.Kind == winproto.JournalKindCCS:
+		// A CCS file this operation did not leave is someone else's (W5 Ruling 15): never overwritten.
+		return nil, precondition(winproto.CodeSuperseded, "the CCS file was changed after this deployment; it is not rolled back")
 	}
 	wctx, err := c.gate.enter()
 	if err != nil {

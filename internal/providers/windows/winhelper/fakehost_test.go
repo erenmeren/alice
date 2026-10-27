@@ -217,7 +217,9 @@ type fakeWriteHost struct {
 	ccsListErr    error
 	ccsLists      int
 	ccsReads      []string
-	ccsReadFn     func(name string) error // decides each ReadCCS before it reads (nil reads)
+	ccsReadFn     func(name string) error               // decides each ReadCCS before it reads (nil reads)
+	ccsReadData   func(name string, data []byte) []byte // what ReadCCS answers instead (a read fault)
+	ccsProblem    string                                // OpenPFX answers this problem when set
 	ccsOpenErr    func(data []byte) error
 	ccsPasswords  [][]byte
 	ccsWriteErr   error
@@ -682,7 +684,11 @@ func (f *fakeWriteHost) ReadCCS(_ context.Context, folder, name string, limit in
 	if !ok {
 		return nil, false, nil
 	}
-	return slices.Clone(file.data[:min(len(file.data), limit+1)]), true, nil
+	data := slices.Clone(file.data[:min(len(file.data), limit+1)])
+	if f.ccsReadData != nil {
+		data = f.ccsReadData(name, data)
+	}
+	return data, true, nil
 }
 
 // OpenPFX reads what BuildPFX writes with the test's own reader (pki.OpenPFX). It keeps the password
@@ -691,12 +697,15 @@ func (f *fakeWriteHost) OpenPFX(data, password []byte) ([]byte, [][]byte, string
 	f.calls.Add(1)
 	f.wmu.Lock()
 	f.ccsPasswords = append(f.ccsPasswords, password)
-	hook := f.ccsOpenErr
+	hook, problem := f.ccsOpenErr, f.ccsProblem
 	f.wmu.Unlock()
 	if hook != nil {
 		if err := hook(data); err != nil {
 			return nil, nil, "", err
 		}
+	}
+	if problem != "" {
+		return nil, nil, problem, nil
 	}
 	leaf, chain, err := pki.OpenPFX(data, password)
 	switch {

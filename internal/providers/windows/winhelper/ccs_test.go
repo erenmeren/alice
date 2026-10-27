@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -269,6 +270,736 @@ func TestCCSDumpClearsThePassword(t *testing.T) {
 	for _, p := range h.ccsPasswords {
 		if len(p) != len(pw) || !bytes.Equal(p, make([]byte, len(p))) {
 			t.Fatalf("the password buffer was not cleared: %d bytes", len(p))
+		}
+	}
+}
+
+// TestCCSDumpHostProblemsAndIgnored: a problem the host answers outside winproto.CCSProblem* is an
+// error for that file (dropped, Truncated), and Ignored counts every host-less name, after the cut too.
+func TestCCSDumpHostProblemsAndIgnored(t *testing.T) {
+	pw := NewPFXPassword()
+	h := newWriteHost()
+	h.setCCS(ccsFolder, map[string][]byte{"a.example.test.pfx": []byte("x")})
+	h.ccsProblem = "the host's own words"
+	if o, r, out := ccsDump(t, h, ccsInput(pw)); o.Exit != 0 || len(r.Files) != 0 || !r.Truncated || bytes.Contains(out, []byte("own words")) {
+		t.Fatalf("%+v %s", o, out)
+	}
+	h.ccsProblem = winproto.CCSProblemNoKey
+	if _, r, out := ccsDump(t, h, ccsInput(pw)); len(r.Files) != 1 || r.Files[0].Problem != winproto.CCSProblemNoKey || r.Truncated {
+		t.Fatalf("%s", out)
+	}
+
+	files := map[string][]byte{"zz bad.pfx": nil, "zz worse.pfx": nil, "_bad.pfx": nil}
+	for i := range winproto.MaxCCSFiles + 1 {
+		files["h"+strconv.Itoa(i)+".example.test.pfx"] = []byte("x")
+	}
+	h = newWriteHost()
+	h.setCCS(ccsFolder, files)
+	if _, r, out := ccsDump(t, h, ccsInput(pw)); len(r.Files) != winproto.MaxCCSFiles || !r.Truncated || r.Ignored != 3 {
+		t.Fatalf("files %d truncated %v ignored %d: %.200s", len(r.Files), r.Truncated, r.Ignored, out)
+	}
+}
+
+const (
+	ccsHost = "www.example.test"
+	ccsName = "www.example.test.pfx"
+	ccsKey  = "ccs/" + ccsName
+)
+
+// ccsFixture is the W2 fixture (its CA, previous and new leaves) with a CCS folder C:\CCS holding
+// www.example.test.pfx: the previous leaf and the CA's intermediate under the password pw.
+type ccsFixture struct {
+	*fixture
+	pw     []byte
+	oldPFX []byte
+}
+
+func newCCSFixture(t *testing.T) *ccsFixture {
+	t.Helper()
+	f := &ccsFixture{fixture: newFixture(t), pw: NewPFXPassword()}
+	f.oldPFX = f.pfx(f.old, f.ca.Intermediate.Raw)
+	f.h.setCCS(ccsFolder, map[string][]byte{ccsName: f.oldPFX})
+	return f
+}
+
+func (f *ccsFixture) pfx(l pki.Leaf, intermediates ...[]byte) []byte {
+	f.t.Helper()
+	b, err := BuildPFX(l.Cert.Raw, pkcs8Of(f.t, l), f.pw, intermediates...)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return b
+}
+
+func (f *ccsFixture) in(edit ...func(*winproto.CCSDeployInput)) []byte {
+	in := winproto.CCSDeployInput{Path: ccsFolder, Host: ccsHost, ExpectSHA256: f.oldSHA256, ChainPEM: string(f.nw.FullchainPEM),
+		KeyPEM: string(f.nw.KeyPEM), Password: string(f.pw), ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}}
+	for _, e := range edit {
+		e(&in)
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return raw
+}
+
+// deployOn runs ccs-deploy on h (f.h or a wrapper of it).
+func (f *ccsFixture) deployOn(h WriteHost, op string, in []byte) (Outcome, winproto.DeployResponse, []byte) {
+	f.t.Helper()
+	o, out := execute(f.t, context.Background(), h, bytes.NewReader(in), winproto.SubCCSDeploy, winproto.ArgOp, op)
+	var r winproto.DeployResponse
+	if o.Exit == 0 {
+		if err := json.Unmarshal(out, &r); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	return o, r, out
+}
+
+func (f *ccsFixture) ccsDeploy(op string, in []byte) (Outcome, winproto.DeployResponse, []byte) {
+	f.t.Helper()
+	return f.deployOn(f.h, op, in)
+}
+
+func (f *ccsFixture) ccsCommitted(op string, in []byte) {
+	f.t.Helper()
+	if o, r, out := f.ccsDeploy(op, in); o.Exit != 0 || r.Phase != winproto.PhaseCommitted {
+		f.t.Fatalf("ccs-deploy %s: %+v %s", op, o, out)
+	}
+}
+
+// file is a file of the fake CCS folder.
+func (f *ccsFixture) file(name string) ([]byte, bool) {
+	f.h.wmu.Lock()
+	defer f.h.wmu.Unlock()
+	c, ok := f.h.ccsFiles[name]
+	return c.data, ok
+}
+
+func (f *ccsFixture) setFile(name string, data []byte) {
+	f.h.wmu.Lock()
+	defer f.h.wmu.Unlock()
+	f.h.ccsFiles[name] = fakeCCSFile{data: data, mod: testNow}
+}
+
+// names are the fake CCS folder's file names, sorted.
+func (f *ccsFixture) names() []string {
+	f.h.wmu.Lock()
+	defer f.h.wmu.Unlock()
+	out := []string{}
+	for n := range f.h.ccsFiles {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func ccsBackup(op string) string { return ccsName + ".alice-" + op[:8] + ".bak" }
+func ccsTemp(op string) string   { return ".alice-" + op + ".tmp" }
+
+// holds reports that the fake's file opens with pw to leaf and exactly the intermediates.
+func (f *ccsFixture) holds(name string, leaf []byte, intermediates ...[]byte) bool {
+	data, ok := f.file(name)
+	if !ok {
+		return false
+	}
+	l, chain, err := pki.OpenPFX(data, f.pw)
+	return err == nil && bytes.Equal(l, leaf) && slices.EqualFunc(chain, intermediates, bytes.Equal)
+}
+
+func TestCCSDeployCommits(t *testing.T) {
+	f := newCCSFixture(t)
+	f.reset()
+	o, r, out := f.ccsDeploy(op1, f.in())
+	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || r.NewSHA256 != f.newSHA256 || r.NewSHA1 != f.newSHA1 ||
+		r.PreviousSHA256 != f.oldSHA256 || r.PreviousSHA1 != f.oldSHA1 || r.Store != "" || r.AliceImported || r.FailedStep != "" ||
+		!reflect.DeepEqual(r.Steps, []winproto.Step{ok(winproto.StepImportChain), ok(winproto.StepWriteFile)}) {
+		t.Fatalf("%+v %s", o, out)
+	}
+	if !f.holds(ccsName, f.nw.Cert.Raw, f.ca.Intermediate.Raw) {
+		t.Fatal("the file does not hold the new leaf and its intermediate")
+	}
+	if bak, _ := f.file(ccsBackup(op1)); !bytes.Equal(bak, f.oldPFX) {
+		t.Fatal("the backup does not hold the old bytes")
+	}
+	if names := f.names(); !slices.Equal(names, []string{ccsName, ccsBackup(op1)}) {
+		t.Fatalf("folder %v", names)
+	}
+	data, _ := f.file(ccsName)
+	j := f.journal(op1)
+	want := ccsJournal{Path: ccsFolder, File: ccsName, Host: ccsHost, Backup: ccsBackup(op1), Temp: ccsTemp(op1),
+		PreviousFileSHA256: hexSHA256(f.oldPFX), NewFileSHA256: hexSHA256(data), PreviousSPKISHA256: f.oldSPKI}
+	if j.Phase != winproto.PhaseCommitted || j.Kind != winproto.JournalKindCCS || j.CCS == nil || *j.CCS != want ||
+		j.Binding != ccsKey || j.Store != "" || len(j.Intermediates) != 1 {
+		t.Fatalf("%+v %+v", j, j.CCS)
+	}
+	if got := f.phases(op1); !slices.Equal(got, []string{winproto.PhasePrepared, winproto.PhaseWriting, winproto.PhaseCommitted}) {
+		t.Fatalf("phases %v", got)
+	}
+	if rec, err := readBindingRecord(f.h, ccsKey); err != nil || rec != op1 {
+		t.Fatalf("file record %q %v", rec, err)
+	}
+	wantText := "ccs file " + ccsName + " sha256 " + f.oldSHA256 + " -> " + f.newSHA256 + " op " + op1
+	if len(f.h.events) != 1 || f.h.events[0].id != 1004 || f.h.events[0].text != wantText {
+		t.Fatalf("%+v", f.h.events)
+	}
+	var machine []string
+	for _, w := range f.h.writes() {
+		if !strings.HasPrefix(w, "state ") {
+			machine = append(machine, w)
+		}
+	}
+	if !slices.Equal(machine, []string{"intermediate " + f.interSHA1, "ccs-write " + ccsTemp(op1), "ccs-replace " + ccsName, "event 1004"}) {
+		t.Fatalf("%v", machine)
+	}
+	// The answer and the event carry no secret.
+	for _, b := range [][]byte{out, []byte(wantText)} {
+		if bytes.Contains(b, f.pw) || bytes.Contains(b, []byte("PRIVATE KEY")) || bytes.Contains(b, []byte("BEGIN")) {
+			t.Fatal("a secret is in the answer or the event")
+		}
+	}
+	// A re-sent operation is refused; another case and a trailing backslash name the same folder.
+	o, _, out = f.ccsDeploy(op1, f.in())
+	wantError(t, o.Exit, out, winproto.ExitPrecondition, winproto.CodeOperationExists)
+	o, r, out = f.ccsDeploy(op2, f.in(func(in *winproto.CCSDeployInput) { in.Path, in.ExpectSHA256 = `c:\ccs\`, f.newSHA256 }))
+	if o.Exit != 0 || r.Phase != winproto.PhaseUnchanged {
+		t.Fatalf("%+v %s", o, out)
+	}
+}
+
+func TestCCSDeployUnchanged(t *testing.T) {
+	f := newCCSFixture(t)
+	f.setFile(ccsName, f.pfx(f.nw, f.ca.Intermediate.Raw))
+	f.reset()
+	o, r, out := f.ccsDeploy(op1, f.in(func(in *winproto.CCSDeployInput) { in.ExpectSHA256 = f.newSHA256 }))
+	if o.Exit != 0 || r.Phase != winproto.PhaseUnchanged || r.NewSHA256 != f.newSHA256 || len(r.Steps) != 0 || len(f.h.writes()) != 0 {
+		t.Fatalf("%+v %s %v", o, out, f.h.writes())
+	}
+	// The same leaf with another chain (the file has no intermediate) is written.
+	f.setFile(ccsName, f.pfx(f.nw))
+	f.ccsCommitted(op2, f.in(func(in *winproto.CCSDeployInput) { in.ExpectSHA256 = f.newSHA256 }))
+	if !f.holds(ccsName, f.nw.Cert.Raw, f.ca.Intermediate.Raw) {
+		t.Fatal("not written")
+	}
+}
+
+// TestCCSDeployRefusesBeforeAnyWrite is Review Focus 1: every refusal leaves the write log empty.
+func TestCCSDeployRefusesBeforeAnyWrite(t *testing.T) {
+	other := NewPFXPassword()
+	for _, c := range []struct {
+		name  string
+		setup func(f *ccsFixture)
+		edit  func(*winproto.CCSDeployInput)
+		raw   string // the input instead of f.in()
+		args  []string
+		exit  int
+		code  string
+	}{
+		{name: "CCS disabled", setup: func(f *ccsFixture) { f.h.ccsEnabled = false }, exit: 3, code: winproto.CodeCCSDisabled},
+		{name: "another folder", edit: func(in *winproto.CCSDeployInput) { in.Path = `C:\Other` }, exit: 3, code: winproto.CodeCCSPathChanged},
+		{name: "a UNC registry path", setup: func(f *ccsFixture) { f.h.ccsPath = `\\fs\certs` }, exit: 3, code: winproto.CodeCCSPathUnsupported},
+		{name: "a relative registry path", setup: func(f *ccsFixture) { f.h.ccsPath = `CCS` }, exit: 3, code: winproto.CodeCCSPathUnsupported},
+		{name: "the folder is a reparse point", setup: func(f *ccsFixture) { f.h.ccsListErr = ErrCCSFolderUnsupported }, exit: 3,
+			code: winproto.CodeCCSPathUnsupported},
+		{name: "the folder cannot be listed", setup: func(f *ccsFixture) { f.h.ccsListErr = errors.New("denied") }, exit: winproto.ExitFailed,
+			code: winproto.CodeIOError},
+		{name: "the registry cannot be read", setup: func(f *ccsFixture) { f.h.ccsConfigErr = errors.New("registry") }, exit: winproto.ExitFailed,
+			code: winproto.CodeIOError},
+		{name: "an absent file", setup: func(f *ccsFixture) { delete(f.h.ccsFiles, ccsName) }, exit: 3, code: winproto.CodeCCSFileNotFound},
+		{name: "an unreadable file", setup: func(f *ccsFixture) { f.h.ccsReadFn = func(string) error { return errors.New("denied") } },
+			exit: winproto.ExitFailed, code: winproto.CodeIOError},
+		{name: "a file past the bound", setup: func(f *ccsFixture) { f.setFile(ccsName, make([]byte, winproto.MaxCCSFile+1)) },
+			exit: 2, code: winproto.CodeInvalidArgument},
+		{name: "the host cannot open the file", setup: func(f *ccsFixture) { f.h.ccsOpenErr = func([]byte) error { return errors.New("crypt32") } },
+			exit: winproto.ExitFailed, code: winproto.CodeIOError},
+		{name: "another password", edit: func(in *winproto.CCSDeployInput) { in.Password = string(other) }, exit: 3,
+			code: winproto.CodeCCSPasswordMismatch},
+		{name: "another leaf", edit: func(in *winproto.CCSDeployInput) { in.ExpectSHA256 = s256a }, exit: 3, code: winproto.CodeHashMismatch},
+		{name: "not a PFX", setup: func(f *ccsFixture) { f.setFile(ccsName, []byte("junk")) }, exit: 3, code: winproto.CodeHashMismatch},
+		{name: "a host problem outside the list", setup: func(f *ccsFixture) { f.h.ccsProblem = "odd" }, exit: winproto.ExitFailed, code: winproto.CodeIOError},
+		{name: `a host a\b`, edit: func(in *winproto.CCSDeployInput) { in.Host = `a\b` }, exit: 2, code: winproto.CodeInvalidArgument},
+		{name: "a host ..", edit: func(in *winproto.CCSDeployInput) { in.Host = ".." }, exit: 2, code: winproto.CodeInvalidArgument},
+		{name: "a host with a colon", edit: func(in *winproto.CCSDeployInput) { in.Host = "www.example.test:x" }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "a host with a percent sign", edit: func(in *winproto.CCSDeployInput) { in.Host = "www%2e.example.test" }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "a host with a NUL", edit: func(in *winproto.CCSDeployInput) { in.Host = "www\x00.example.test" }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "a relative input path", edit: func(in *winproto.CCSDeployInput) { in.Path = `CCS` }, exit: 2, code: winproto.CodeInvalidArgument},
+		{name: "a short password", edit: func(in *winproto.CCSDeployInput) { in.Password = string(other[:11]) }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "the absent marker", edit: func(in *winproto.CCSDeployInput) { in.ExpectSHA256 = "absent" }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "a forbidden list that is not hashes", edit: func(in *winproto.CCSDeployInput) { in.ForbiddenLeaf = []string{"x"} }, exit: 2,
+			code: winproto.CodeInvalidArgument},
+		{name: "not a chain", edit: func(in *winproto.CCSDeployInput) { in.ChainPEM = "x" }, exit: 2, code: winproto.CodeBadContent},
+		{name: "an unknown member", raw: `{"path":"x","extra":1}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "a member twice", raw: `{"path":"x","path":"x"}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "a member missing", raw: `{"path":"C:\\CCS"}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "not an object", raw: `[]`, exit: 2, code: winproto.CodeBadContent},
+		{name: "a list that is not strings", raw: `{"forbidden_leaf_sha256":[1]}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "a string that is not one", raw: `{"host":1}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "trailing data", raw: `{} {}`, exit: 2, code: winproto.CodeBadContent},
+		{name: "a known operation", setup: func(f *ccsFixture) { mustWrite(f.t, f.h, sampleJournal(op1)) }, exit: 3,
+			code: winproto.CodeOperationExists},
+		{name: "a fenced operation", setup: func(f *ccsFixture) { mustWrite(f.t, f.h, journal{Op: op1, Phase: winproto.PhaseFenced}) },
+			exit: 3, code: winproto.CodeFenced},
+		{name: "an unreadable journal", setup: func(f *ccsFixture) { f.h.state[journalName(op1)] = []byte("{") }, exit: winproto.ExitFailed,
+			code: winproto.CodeIOError},
+		{name: "an interrupted operation on the file", setup: func(f *ccsFixture) {
+			j := sampleJournal(op2)
+			j.Phase = winproto.PhaseWriting
+			mustWrite(f.t, f.h, j)
+			if err := writeBindingRecord(f.h, ccsKey, op2); err != nil {
+				f.t.Fatal(err)
+			}
+		}, exit: 3, code: winproto.CodeRecoveryPending},
+		{name: "an unreadable file record", setup: func(f *ccsFixture) { f.h.state[bindingRecordName(ccsKey)] = []byte("{") }, exit: winproto.ExitFailed,
+			code: winproto.CodeIOError},
+		{name: "not elevated", setup: func(f *ccsFixture) { f.h.elevated = false }, exit: 2, code: winproto.CodeNotElevated},
+		{name: "lock held", setup: func(f *ccsFixture) { f.h.lockHeld = true }, exit: winproto.ExitFailed, code: winproto.CodeBusy},
+		{name: "no operation", args: []string{}, exit: 2, code: winproto.CodeUsage},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCCSFixture(t)
+			if c.setup != nil {
+				c.setup(f)
+			}
+			in := f.in()
+			if c.edit != nil {
+				in = f.in(c.edit)
+			}
+			if c.raw != "" {
+				in = []byte(c.raw)
+			}
+			args := []string{winproto.ArgOp, op1}
+			if c.args != nil {
+				args = c.args
+			}
+			f.reset()
+			o, out := execute(t, context.Background(), f.h, bytes.NewReader(in), append([]string{winproto.SubCCSDeploy}, args...)...)
+			wantError(t, o.Exit, out, c.exit, c.code)
+			if w := f.h.writes(); len(w) != 0 {
+				t.Fatalf("writes %v", w)
+			}
+			if bytes.Contains(out, f.pw) || bytes.Contains(out, other) {
+				t.Fatal("a password is in the answer")
+			}
+		})
+	}
+}
+
+// TestCCSPlainName: a derived name with ":" (an NTFS alternate data stream) or a path separator is
+// never joined to the folder.
+func TestCCSPlainName(t *testing.T) {
+	for name, want := range map[string]bool{"a.example.test.pfx": true, "a:b.pfx": false, `a\b.pfx`: false, "a/b.pfx": false, "": false} {
+		if plainName(name) != want {
+			t.Errorf("%q", name)
+		}
+	}
+}
+
+// partialReplace is ReplaceFileW's ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the file went to the backup
+// name, the replacement did not move.
+type partialReplace struct{ *fakeWriteHost }
+
+func (p partialReplace) ReplaceCCS(_ context.Context, _, name, _, backupName string) error {
+	p.wmu.Lock()
+	defer p.wmu.Unlock()
+	p.ccsFiles[backupName] = p.ccsFiles[name]
+	delete(p.ccsFiles, name)
+	p.log = append(p.log, "ccs-replace-partial "+name)
+	return errors.New("unable to move the replacement")
+}
+
+// failMove is a host whose MoveFileEx of the backup fails.
+type failMove struct{ *fakeWriteHost }
+
+func (failMove) RestoreCCS(context.Context, string, string, string) error {
+	return errors.New("denied")
+}
+
+// TestCCSDeployReadBackRestores is Review Focus 3 within the helper.
+func TestCCSDeployReadBackRestores(t *testing.T) {
+	restoredBy := func(t *testing.T, f *ccsFixture, r winproto.DeployResponse, step, class string) {
+		t.Helper()
+		if r.Phase != winproto.PhaseRestored || r.FailedStep != step || r.CauseStep != step || r.Error != class {
+			t.Fatalf("%+v", r)
+		}
+		if data, _ := f.file(ccsName); !bytes.Equal(data, f.oldPFX) {
+			t.Fatal("the file is not the old one")
+		}
+		if names := f.names(); !slices.Equal(names, []string{ccsName}) {
+			t.Fatalf("folder %v", names)
+		}
+		if j := f.journal(op1); j.Phase != winproto.PhaseRestored {
+			t.Fatal(j.Phase)
+		}
+	}
+	t.Run("the file reads back other bytes", func(t *testing.T) {
+		f := newCCSFixture(t)
+		once := false
+		f.h.ccsReadData = func(name string, data []byte) []byte {
+			if name == ccsName && slices.Contains(f.h.log, "ccs-replace "+ccsName) && !once {
+				once = true
+				return []byte("other bytes")
+			}
+			return data
+		}
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrReadBack)
+		want := []winproto.Step{ok(winproto.StepImportChain), bad(winproto.StepWriteFile, winproto.ErrReadBack), ok(winproto.StepRestore)}
+		if !reflect.DeepEqual(r.Steps, want) || !slices.Contains(f.h.writes(), "ccs-restore "+ccsName) || f.h.events[len(f.h.events)-1].id != 1002 {
+			t.Fatalf("%+v %v", r.Steps, f.h.writes())
+		}
+	})
+	t.Run("the file opens to nothing", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.ccsReadData = func(name string, data []byte) []byte {
+			if name == ccsName && slices.Contains(f.h.log, "ccs-replace "+ccsName) {
+				f.h.ccsProblem = winproto.CCSProblemNotPFX // under the fake's lock, before the read back opens it
+			}
+			return data
+		}
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrReadBack)
+	})
+	t.Run("the read back fails", func(t *testing.T) {
+		f := newCCSFixture(t)
+		n := 0
+		f.h.ccsReadFn = func(string) error {
+			if n++; n == 2 {
+				return errors.New("denied")
+			}
+			return nil
+		}
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrReadBack)
+	})
+	t.Run("a replace that fails before swapping", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.ccsReplaceErr = errors.New("sharing violation")
+		f.reset()
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrIO)
+		w := f.h.writes()
+		if !slices.Contains(w, "ccs-unlink "+ccsTemp(op1)) || slices.Contains(w, "ccs-restore "+ccsName) || len(f.h.events) != 0 {
+			t.Fatalf("%v", w)
+		}
+	})
+	t.Run("a replace that moved the file to the backup only", func(t *testing.T) {
+		f := newCCSFixture(t)
+		_, r, _ := f.deployOn(partialReplace{f.h}, op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrIO)
+		if !slices.Contains(f.h.writes(), "ccs-restore "+ccsName) {
+			t.Fatalf("%v", f.h.writes())
+		}
+	})
+	t.Run("a replace that failed and cannot be read", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.ccsReplaceErr = errors.New("sharing violation")
+		n := 0
+		f.h.ccsReadFn = func(string) error {
+			if n++; n >= 2 {
+				return errors.New("denied")
+			}
+			return nil
+		}
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		if r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrIO || r.CauseStep != winproto.StepWriteFile {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("the temporary file cannot be written", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.ccsWriteErr = errors.New("disk full")
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepWriteFile, winproto.ErrIO)
+	})
+	t.Run("an intermediate cannot be added", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.addIntermediateErr = errors.New("store")
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepImportChain, winproto.ErrStore)
+	})
+	t.Run("the committed journal cannot be written", func(t *testing.T) {
+		f := newCCSFixture(t)
+		failPhase(f.fixture, winproto.PhaseCommitted)
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		restoredBy(t, f, r, winproto.StepJournal, winproto.ErrIO)
+	})
+	t.Run("the prepared journal cannot be written", func(t *testing.T) {
+		f := newCCSFixture(t)
+		failPhase(f.fixture, winproto.PhasePrepared)
+		o, _, out := f.ccsDeploy(op1, f.in())
+		wantError(t, o.Exit, out, winproto.ExitFailed, winproto.CodeOutcomeUnknown)
+		if names := f.names(); !slices.Equal(names, []string{ccsName}) {
+			t.Fatalf("folder %v", names)
+		}
+	})
+}
+
+// TestCCSKillAtEveryPoint is Review Focus 4 within the helper: after a kill at any point, iis-status
+// names the phase and what the file holds, and the recovery the phase allows (iis-fence for none or
+// prepared, iis-restore otherwise) leaves exactly the old file.
+func TestCCSKillAtEveryPoint(t *testing.T) {
+	type want struct {
+		phase   string // "" for no journal
+		current string // "old" or "new"
+	}
+	points := map[string]want{
+		"ccs.locked": {"", "old"}, "ccs.prepared": {winproto.PhasePrepared, "old"}, "ccs.import_chain": {winproto.PhasePrepared, "old"},
+		"ccs.writing": {winproto.PhaseWriting, "old"}, "ccs.temp_written": {winproto.PhaseWriting, "old"},
+		"ccs.replaced": {winproto.PhaseWriting, "new"}, "ccs.read_back": {winproto.PhaseWriting, "new"},
+		"ccs.committed":     {winproto.PhaseCommitted, "new"},
+		"restore.restoring": {winproto.PhaseRestoring, "new"}, "restore.bound": {winproto.PhaseRestoring, "old"},
+		"restore.restored": {winproto.PhaseRestored, "old"},
+	}
+	f := newCCSFixture(t)
+	f.ccsCommitted(op1, f.in())
+	if !slices.Equal(f.h.points, []string{"ccs.locked", "ccs.prepared", "ccs.import_chain", "ccs.writing", "ccs.temp_written",
+		"ccs.replaced", "ccs.read_back", "ccs.committed"}) {
+		t.Fatalf("points %v", f.h.points)
+	}
+	for p, w := range points {
+		t.Run(p, func(t *testing.T) {
+			f := newCCSFixture(t)
+			args := []string{winproto.SubCCSDeploy, winproto.ArgOp, op1}
+			in := f.in()
+			if strings.HasPrefix(p, "restore.") {
+				f.ccsCommitted(op1, f.in())
+				args[0], in = winproto.SubIISRestore, restoreInput([]string{}, []string{})
+			}
+			f.h.pointErr = func(name string) error {
+				if name == p {
+					return errors.New("kill")
+				}
+				return nil
+			}
+			var out bytes.Buffer
+			if o := Execute(context.Background(), f.h, args, bytes.NewReader(in), &out); !o.Killed || out.Len() != 0 {
+				t.Fatalf("%+v %s", o, out.Bytes())
+			}
+			f.h.pointErr = nil
+			cur := map[string]string{"old": f.oldSHA256, "new": f.newSHA256}
+			_, st, raw := f.statusCall(winproto.SubIISStatus, op1)
+			if (w.phase == "" && st.Phase != winproto.PhaseNone) || (w.phase != "" && (st.Phase != w.phase || st.CurrentCertSHA256 != cur[w.current])) {
+				t.Fatalf("status %s", raw)
+			}
+			f.reset()
+			fenced := false
+			switch st.Phase {
+			case winproto.PhaseNone, winproto.PhasePrepared:
+				if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseFenced {
+					t.Fatalf("fence: %s", out)
+				}
+				o, _, out := f.ccsDeploy(op1, f.in())
+				wantError(t, o.Exit, out, 3, winproto.CodeFenced)
+				fenced = true
+			default:
+				if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+					t.Fatalf("restore: %s", out)
+				}
+				if w.current == "old" && slices.ContainsFunc(f.h.writes(), func(s string) bool { return strings.HasPrefix(s, "ccs-restore") }) {
+					t.Fatalf("a restore wrote a file it had not changed: %v", f.h.writes())
+				}
+				if names := f.names(); !slices.Equal(names, []string{ccsName}) {
+					t.Fatalf("folder %v", names)
+				}
+			}
+			if data, _ := f.file(ccsName); !bytes.Equal(data, f.oldPFX) {
+				t.Fatal("the file is not the old one")
+			}
+			if _, st, _ := f.statusCall(winproto.SubIISStatus, op1); !fenced && st.CurrentCertSHA256 != f.oldSHA256 {
+				t.Fatalf("status names %s", st.CurrentCertSHA256)
+			}
+			if fenced {
+				if rec, _ := readBindingRecord(f.h, ccsKey); rec != "" {
+					t.Fatalf("the file record still names %s", rec)
+				}
+			}
+		})
+	}
+}
+
+func TestCCSRestoreRules(t *testing.T) {
+	committed := func(t *testing.T) *ccsFixture {
+		f := newCCSFixture(t)
+		f.ccsCommitted(op1, f.in())
+		f.reset()
+		return f
+	}
+	current := func(f *ccsFixture) []byte { d, _ := f.file(ccsName); return d }
+	restoreOn := func(f *ccsFixture, h WriteHost) winproto.RestoreResponse {
+		o, out := execute(f.t, context.Background(), h, bytes.NewReader(restoreInput([]string{}, []string{})), winproto.SubIISRestore,
+			winproto.ArgOp, op1)
+		var r winproto.RestoreResponse
+		if o.Exit != 0 || json.Unmarshal(out, &r) != nil {
+			f.t.Fatalf("%+v %s", o, out)
+		}
+		return r
+	}
+	t.Run("a forbidden previous leaf or SPKI", func(t *testing.T) {
+		for _, bySPKI := range []bool{false, true} {
+			f := committed(t)
+			before := current(f)
+			spki, leaf := []string{}, []string{f.oldSHA256}
+			if bySPKI {
+				spki, leaf = []string{f.oldSPKI}, []string{}
+			}
+			if _, r, out := f.restore(op1, spki, leaf); r.Phase != winproto.PhaseRestoreForbidden || !bytes.Equal(current(f), before) {
+				t.Fatalf("%s", out)
+			}
+			// It stays forbidden for a call with shorter lists.
+			if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestoreForbidden || !bytes.Equal(current(f), before) {
+				t.Fatalf("%s", out)
+			}
+		}
+	})
+	t.Run("a third party replaced or removed the file", func(t *testing.T) {
+		for _, gone := range []bool{false, true} {
+			f := committed(t)
+			if gone {
+				delete(f.h.ccsFiles, ccsName)
+			} else {
+				f.setFile(ccsName, f.pfx(f.ca.Issue(leafOpts, testNow)))
+			}
+			o, _, out := f.restore(op1, []string{}, []string{})
+			wantError(t, o.Exit, out, 3, winproto.CodeSuperseded)
+			if len(f.h.writes()) != 0 {
+				t.Fatalf("%v", f.h.writes())
+			}
+		}
+	})
+	t.Run("a later deployment of the file", func(t *testing.T) {
+		f := committed(t)
+		third := f.ca.Issue(leafOpts, testNow)
+		f.ccsCommitted(op2, f.in(func(in *winproto.CCSDeployInput) {
+			in.ExpectSHA256, in.ChainPEM, in.KeyPEM = f.newSHA256, string(third.FullchainPEM), string(third.KeyPEM)
+		}))
+		o, _, out := f.restore(op1, []string{}, []string{})
+		wantError(t, o.Exit, out, 3, winproto.CodeSuperseded)
+	})
+	t.Run("the backup deleted or changed", func(t *testing.T) {
+		for _, gone := range []bool{false, true} {
+			f := committed(t)
+			if gone {
+				delete(f.h.ccsFiles, ccsBackup(op1))
+			} else {
+				f.setFile(ccsBackup(op1), []byte("changed"))
+			}
+			o, _, out := f.restore(op1, []string{}, []string{})
+			wantError(t, o.Exit, out, 3, winproto.CodeBackupMissing)
+			if len(f.h.writes()) != 0 {
+				t.Fatalf("%v", f.h.writes())
+			}
+		}
+	})
+	t.Run("a second restore writes nothing", func(t *testing.T) {
+		f := committed(t)
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		if !bytes.Equal(current(f), f.oldPFX) || slices.Contains(f.names(), ccsBackup(op1)) || f.h.events[len(f.h.events)-1].id != 1002 {
+			t.Fatal("not restored from the backup")
+		}
+		f.reset()
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored || len(f.h.writes()) != 0 {
+			t.Fatalf("%s %v", out, f.h.writes())
+		}
+	})
+	t.Run("someone put the old file back", func(t *testing.T) {
+		f := committed(t)
+		f.setFile(ccsName, f.oldPFX)
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored ||
+			slices.ContainsFunc(f.h.writes(), func(s string) bool { return strings.HasPrefix(s, "ccs-restore") }) {
+			t.Fatalf("%s %v", out, f.h.writes())
+		}
+	})
+	t.Run("the move fails", func(t *testing.T) {
+		f := committed(t)
+		if r := restoreOn(f, failMove{f.h}); r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrIO {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("the move reads back other bytes", func(t *testing.T) {
+		f := committed(t)
+		n := 0
+		f.h.ccsReadData = func(name string, data []byte) []byte {
+			if name == ccsName {
+				if n++; n == 2 {
+					return []byte("other")
+				}
+			}
+			return data
+		}
+		if r := restoreOn(f, f.h); r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrReadBack {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("the file cannot be read", func(t *testing.T) {
+		f := committed(t)
+		f.h.ccsReadFn = func(string) error { return errors.New("denied") }
+		o, _, out := f.restore(op1, []string{}, []string{})
+		wantError(t, o.Exit, out, winproto.ExitFailed, winproto.CodeIOError)
+		if _, st, _ := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" || st.Phase != winproto.PhaseCommitted {
+			t.Fatalf("%+v", st)
+		}
+	})
+	t.Run("a fence of a committed operation changes nothing", func(t *testing.T) {
+		f := committed(t)
+		if _, r, out := f.statusCall(winproto.SubIISFence, op1); r.Phase != winproto.PhaseCommitted || r.CurrentCertSHA256 != f.newSHA256 ||
+			len(f.h.writes()) != 0 {
+			t.Fatalf("%s", out)
+		}
+	})
+}
+
+// TestCCSJournalHoldsNoPassword is Review Focus 2: no state file holds the password, the key or a PFX,
+// and every buffer that held them is zero after the call, on the commit path and on a failure path.
+func TestCCSJournalHoldsNoPassword(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		f := newCCSFixture(t)
+		var all []*secrets
+		secretsHook = func(s *secrets) { all = append(all, s) }
+		t.Cleanup(func() { secretsHook = nil })
+		if fail {
+			f.h.ccsReplaceErr = errors.New("x")
+		}
+		f.ccsDeploy(op1, f.in())
+		secretsHook = nil
+		written, _ := f.file(ccsName)
+		for _, w := range f.h.stateLog {
+			for _, s := range [][]byte{f.pw, f.nw.KeyPEM, pkcs8Of(t, f.nw), written, f.oldPFX} {
+				if bytes.Contains(w.data, s) {
+					t.Fatalf("%s holds a secret", w.name)
+				}
+			}
+			if bytes.Contains(w.data, []byte("PRIVATE")) {
+				t.Fatalf("%s holds a key", w.name)
+			}
+		}
+		for _, e := range f.h.events {
+			if strings.Contains(e.text, string(f.pw)) {
+				t.Fatal("an event holds the password")
+			}
+		}
+		if len(all) != 1 {
+			t.Fatalf("%d secrets", len(all))
+		}
+		for _, b := range all[0].bufs {
+			if !bytes.Equal(b[:cap(b)], make([]byte, cap(b))) {
+				t.Fatal("a secret buffer was not cleared")
+			}
+		}
+		if len(f.h.ccsPasswords) == 0 {
+			t.Fatal("OpenPFX was not called")
+		}
+		for _, p := range f.h.ccsPasswords {
+			if !bytes.Equal(p, make([]byte, len(p))) {
+				t.Fatal("a password given to OpenPFX was not cleared")
+			}
 		}
 	}
 }

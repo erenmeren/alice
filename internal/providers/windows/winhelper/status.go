@@ -26,11 +26,23 @@ func cmdIISStatus(ctx context.Context, c *call) (any, error) {
 }
 
 // statusOf fills a status answer from a journal; CurrentCertSHA256 is the DER SHA-256 of what the
-// binding names now ("" when it cannot be read or its store lacks it; a tombstone names no binding).
+// binding names now ("" when it cannot be read or its store lacks it; a tombstone names no binding),
+// or of the leaf a CCS file holds.
 func statusOf(ctx context.Context, h WriteHost, j journal, resp winproto.StatusResponse) winproto.StatusResponse {
 	resp.Phase, resp.NewCertSHA256 = j.Phase, j.NewSHA256
 	resp.FailedStep, resp.CauseStep, resp.Error = j.FailedStep, j.CauseStep, j.Error
 	if j.Phase == winproto.PhaseFenced {
+		return resp
+	}
+	if c := j.CCS; c != nil {
+		// A CCS file names its leaf by its bytes (W5 Ruling 15): the new leaf, the previous one, else "".
+		switch sum, found, err := ccsFileSum(ctx, h, c.Path, c.File); {
+		case err != nil || !found:
+		case sum == c.NewFileSHA256:
+			resp.CurrentCertSHA256 = j.NewSHA256
+		case sum == c.PreviousFileSHA256:
+			resp.CurrentCertSHA256 = j.PreviousSHA256
+		}
 		return resp
 	}
 	if cur, found, err := h.Binding(ctx, j.Locator); err == nil && found {

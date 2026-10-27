@@ -614,3 +614,67 @@ func TestImportEntryUnboundSince(t *testing.T) {
 		t.Fatalf("%v %+v", err, f)
 	}
 }
+
+// sampleCCSJournal is a committed ccs-deploy journal of www.example.test.pfx in C:\CCS.
+func sampleCCSJournal(op string) journal {
+	return journal{Op: op, Phase: winproto.PhaseCommitted, Kind: winproto.JournalKindCCS, Binding: "ccs/www.example.test.pfx",
+		PreviousSHA1: h1, PreviousSHA256: s256a, NewSHA1: h2, NewSHA256: s256b, Intermediates: []certRef{{SHA1: h3, SHA256: s256c}},
+		Steps:         []winproto.Step{{Name: winproto.StepImportChain, Status: winproto.StepOK}, {Name: winproto.StepWriteFile, Status: winproto.StepOK}},
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{s256c},
+		CCS: &ccsJournal{Path: `C:\CCS`, File: "www.example.test.pfx", Host: "www.example.test",
+			Backup: "www.example.test.pfx.alice-" + op[:8] + ".bak", Temp: ".alice-" + op + ".tmp",
+			PreviousFileSHA256: s256c, NewFileSHA256: s256a, PreviousSPKISHA256: s256b}}
+}
+
+// TestCCSJournalValidation: a CCS journal round-trips; valid checks the fields of its kind.
+func TestCCSJournalValidation(t *testing.T) {
+	h := newWriteHost()
+	j := sampleCCSJournal(op1)
+	mustWrite(t, h, j)
+	if got, found, err := readJournal(h, op1); err != nil || !found || !reflect.DeepEqual(got, j) {
+		t.Fatalf("%v %v %+v", err, found, got)
+	}
+	if raw := h.state[journalName(op1)]; !strings.Contains(string(raw), `"kind":"ccs_file"`) || !strings.Contains(string(raw), `"ccs":{"path":`) {
+		t.Fatalf("%s", raw)
+	}
+	prepared := sampleCCSJournal(op1)
+	prepared.Phase, prepared.Steps, prepared.CCS.NewFileSHA256 = winproto.PhasePrepared, []winproto.Step{}, ""
+	if !prepared.valid(op1) {
+		t.Fatal("a prepared journal without the new file's hash is refused")
+	}
+	if raw, _ := json.Marshal(sampleJournal(op1)); strings.Contains(string(raw), "kind") || strings.Contains(string(raw), `"ccs"`) {
+		t.Fatalf("a binding journal carries the CCS members: %s", raw)
+	}
+	for name, edit := range map[string]func(*journal){
+		"an unknown kind":             func(j *journal) { j.Kind = "file" },
+		"no CCS fields":               func(j *journal) { j.CCS = nil },
+		"CCS fields on a binding":     func(j *journal) { j.Kind = "" },
+		"a binding locator":           func(j *journal) { j.Locator = loc443() },
+		"a previous record":           func(j *journal) { j.Previous.Port = 443 },
+		"a store":                     func(j *journal) { j.Store = "MY" },
+		"an import":                   func(j *journal) { j.AliceImported = true },
+		"an existed record":           func(j *journal) { j.Existed = boolPtr(false) },
+		"another file record":         func(j *journal) { j.Binding = "ccs/other.pfx" },
+		"a remote folder":             func(j *journal) { j.CCS.Path = `\\fs\certs` },
+		"a file not the host's":       func(j *journal) { j.CCS.File = "other.example.test.pfx" },
+		"an invalid host":             func(j *journal) { j.CCS.Host, j.CCS.File = "a:b", "a:b.pfx" },
+		"another backup name":         func(j *journal) { j.CCS.Backup = "www.example.test.pfx.bak" },
+		"another temporary name":      func(j *journal) { j.CCS.Temp = "x.tmp" },
+		"a previous file hash":        func(j *journal) { j.CCS.PreviousFileSHA256 = "x" },
+		"a new file hash":             func(j *journal) { j.CCS.NewFileSHA256 = "x" },
+		"a committed without new":     func(j *journal) { j.CCS.NewFileSHA256 = "" },
+		"a previous SPKI hash":        func(j *journal) { j.CCS.PreviousSPKISHA256 = "" },
+		"a previous thumbprint":       func(j *journal) { j.PreviousSHA1 = "x" },
+		"a new thumbprint":            func(j *journal) { j.NewSHA1 = "" },
+		"a previous leaf hash":        func(j *journal) { j.PreviousSHA256 = "" },
+		"a new leaf hash":             func(j *journal) { j.NewSHA256 = "" },
+		"an unknown step":             func(j *journal) { j.Steps[0].Name = "bind_file" },
+		"an invalid intermediate ref": func(j *journal) { j.Intermediates[0].SHA1 = "" },
+	} {
+		j := sampleCCSJournal(op1)
+		edit(&j)
+		if j.valid(op1) {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

@@ -339,12 +339,11 @@ func cleanupPlan(ctx context.Context, c *call, watch []winproto.CleanupRef) (any
 			return nil, err
 		}
 	}
-	entered := false
+	var wctx context.Context
 	if changed {
-		if _, err := c.gate.enter(); err != nil {
+		if wctx, err = c.gate.enter(); err != nil {
 			return nil, err
 		}
-		entered = true
 		// An entry whose certificate is gone may be what a kill between a removal's steps left: its
 		// bookkeeping is finished first (the chains, then the entry; both idempotent).
 		for _, sum := range gone {
@@ -356,7 +355,7 @@ func cleanupPlan(ctx context.Context, c *call, watch []winproto.CleanupRef) (any
 			return nil, failed(winproto.CodeIOError, "the import inventory could not be written")
 		}
 	}
-	if resp.Pruned, err = s.prune(c.gate, entered, &resp); err != nil {
+	if resp.Pruned, err = s.prune(wctx, c.gate, &resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -512,10 +511,12 @@ func (s *cleanupState) judgeWatched(ctx context.Context, r winproto.CleanupRef, 
 	return nil
 }
 
-// prunable is a journal pruning removes: its name within journalDir and its file time.
+// prunable is a journal pruning removes: its name within journalDir, its file time and, for a CCS
+// journal, its CCS fields.
 type prunable struct {
 	name string
 	mod  time.Time
+	ccs  *ccsJournal
 }
 
 // prune removes old journals (W3 Ruling 11, mirroring cmd/alice-helper's sweepBackups): final ones,
@@ -523,8 +524,9 @@ type prunable struct {
 // than JournalRetention; never writing or restoring, never one that was not read, never one a binding
 // record still needs; at most MaxPrunePerRun, the oldest first. When the binding records cannot all be
 // read nothing is pruned and the plan warns binding_record_unreadable. The gate is entered before the
-// first removal (unless the caller did).
-func (s *cleanupState) prune(g *gate, entered bool, resp *winproto.CleanupPlanResponse) (int, error) {
+// first removal (unless the caller did: wctx is then the gate's context). A CCS journal goes after its
+// temporary file and its backup (pruneCCS).
+func (s *cleanupState) prune(wctx context.Context, g *gate, resp *winproto.CleanupPlanResponse) (int, error) {
 	needed, ok := s.recordOps()
 	if !ok {
 		resp.Warnings = append(resp.Warnings, winproto.WarnBindingRecordUnreadable)
@@ -543,7 +545,7 @@ func (s *cleanupState) prune(g *gate, entered bool, resp *winproto.CleanupPlanRe
 			continue
 		}
 		if s.now.Sub(f.File.ModTime) > keep {
-			victims = append(victims, prunable{name: f.File.Name, mod: f.File.ModTime})
+			victims = append(victims, prunable{name: f.File.Name, mod: f.File.ModTime, ccs: f.J.CCS})
 		}
 	}
 	slices.SortFunc(victims, func(a, b prunable) int {
@@ -555,19 +557,49 @@ func (s *cleanupState) prune(g *gate, entered bool, resp *winproto.CleanupPlanRe
 	if len(victims) > winproto.MaxPrunePerRun {
 		victims = victims[:winproto.MaxPrunePerRun]
 	}
-	for i, v := range victims {
-		if !entered {
-			if _, err := g.enter(); err != nil {
-				return i, err
+	pruned := 0
+	for _, v := range victims {
+		if wctx == nil {
+			var err error
+			if wctx, err = g.enter(); err != nil {
+				return pruned, err
 			}
-			entered = true
+		}
+		if v.ccs != nil {
+			done, err := s.pruneCCS(wctx, v.ccs)
+			if err != nil {
+				return pruned, err
+			}
+			if !done {
+				continue
+			}
 		}
 		// StateFile.Name is the name within journalDir; RemoveState takes the state name.
 		if err := s.h.RemoveState(journalDir + v.name); err != nil {
-			return i, failed(winproto.CodeIOError, "a journal could not be removed")
+			return pruned, failed(winproto.CodeIOError, "a journal could not be removed")
+		}
+		pruned++
+	}
+	return pruned, nil
+}
+
+// pruneCCS removes what a pruned CCS journal left in the CCS folder (W5 Ruling 16): its temporary file,
+// then its backup when it holds the previous file's bytes (other bytes are someone's and stay). done
+// is false when the backup cannot be read: the journal then stays for a later plan.
+func (s *cleanupState) pruneCCS(ctx context.Context, c *ccsJournal) (done bool, err error) {
+	sum, found, err := ccsFileSum(ctx, s.h, c.Path, c.Backup)
+	if err != nil {
+		return false, nil
+	}
+	if err := s.h.RemoveCCS(ctx, c.Path, c.Temp); err != nil {
+		return false, failed(winproto.CodeIOError, "a temporary file of the CCS folder could not be removed")
+	}
+	if found && sum == c.PreviousFileSHA256 {
+		if err := s.h.RemoveCCS(ctx, c.Path, c.Backup); err != nil {
+			return false, failed(winproto.CodeIOError, "a backup of the CCS folder could not be removed")
 		}
 	}
-	return len(victims), nil
+	return true, nil
 }
 
 // recordFileName reports a name of bindingsDir a binding record may have ("<64 hex>.json"); anything

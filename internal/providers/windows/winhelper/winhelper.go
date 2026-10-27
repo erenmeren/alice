@@ -86,8 +86,10 @@ var commands = map[string]command{
 	// iis-cleanup (W3): --plan and --apply change the machine under the gate.
 	winproto.SubIISCleanup: {write: true, input: winproto.MaxCleanupInput, run: cmdIISCleanup},
 
-	// ccs-dump (W5): an elevated read of the CCS folder under no lock, the password on stdin.
-	winproto.SubCCSDump: {elevated: true, input: winproto.MaxCCSDumpInput, run: cmdCCSDump},
+	// ccs-dump (W5): an elevated read of the CCS folder under no lock, the password on stdin;
+	// ccs-deploy writes one CCS file under the gate.
+	winproto.SubCCSDump:   {elevated: true, input: winproto.MaxCCSDumpInput, run: cmdCCSDump},
+	winproto.SubCCSDeploy: {write: true, input: winproto.MaxCCSDeployInput, run: cmdCCSDeploy},
 }
 
 // RunForced is the "ssh" entry: it splits SSH_ORIGINAL_COMMAND with winproto.SplitCommandLine and runs it.
