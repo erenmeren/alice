@@ -82,7 +82,7 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	left, err := filepath.Glob(`C:\ProgramData\Alice\helper-test-*`)
 	require.NoError(t, err)
 	assert.Empty(t, left, "test data directories are left")
-	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity"} {
+	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity", "alice-w5-ccs-site", "alice-w5-ccs-diag"} {
 		_, err = os.Stat(filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", dir))
 		assert.ErrorIs(t, err, os.ErrNotExist, "the fixture sites' directory %s is left", dir)
 	}

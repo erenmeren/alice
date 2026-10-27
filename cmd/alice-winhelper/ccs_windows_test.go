@@ -46,12 +46,8 @@ import (
 )
 
 const (
-	portCCSReplace  = 45480
-	portCCSNames    = 45481
-	portCCSPassword = 45482
-	portCCSChain    = 45483
-	portCCSReparse  = 45484
-	portCCSFidelity = 45485
+	portCCSShared   = 45480 // the shared site's port (ruling W5-11, run 3)
+	portCCSDiag     = 45486 // DIAG: a site of its own, made after the first CCS serve
 	portCCSSiteHTTP = 45499
 
 	ccsAccount = "alice-w5-ccs"
@@ -136,15 +132,15 @@ func regularFiles(dir string) (map[string]bool, error) {
 	return out, nil
 }
 
-// newCCSReal makes the fixture: hosts are the host headers of the site's https bindings on port.
-func newCCSReal(t *testing.T, port int, hosts ...string) *ccsReal {
+// newCCSReal makes the fixture on the shared CCS folder and the shared site (ccsSiteHosts on
+// portCCSShared).
+func newCCSReal(t *testing.T) *ccsReal {
 	t.Helper()
-	require.True(t, port >= 45480 && port <= 45489, "W5 CCS fixture ports are 45480-45489")
 	tw := newTwin(t)
-	tw.siteID, tw.httpPort = int64(port), portCCSSiteHTTP
 	requireSharedCCS(t)
-	f := &ccsReal{twin: tw, folder: sharedCCS.folder, password: sharedCCS.password, port: port, w: newHost(newTestDataDir(t)),
+	f := &ccsReal{twin: tw, folder: sharedCCS.folder, password: sharedCCS.password, port: portCCSShared, w: newHost(newTestDataDir(t)),
 		start: sharedCCS.start}
+	t.Logf("F15: appcmd's sslFlags=3 bindings created the http.sys ccs:%d record: %v", f.port, sharedCCS.recordByIIS)
 	before, err := regularFiles(f.folder)
 	require.NoError(t, err)
 	if len(before) > 0 {
@@ -176,58 +172,16 @@ func newCCSReal(t *testing.T, port int, hosts ...string) *ccsReal {
 	require.Equal(t, f.folder, path, "the helper reads the shared folder")
 	tw.model.SetCCS(true, f.folder)
 	tw.model.SetCCSPassword(string(f.password))
-
-	bindings := []winproto.SiteBinding{}
-	for _, h := range hosts {
-		bindings = append(bindings, winproto.SiteBinding{Protocol: "https", Information: fmt.Sprintf("*:%d:%s", port, h), SSLFlags: 3})
-	}
-	tw.addSite(fmt.Sprintf("alice-w5-%d", port), bindings...)
-	f.ensureCCSRecord()
 	f.refresh() // the helper's own refresh (ruling W5-10)
 	return f
 }
 
-// refresh is the helper's RefreshCCSRecords, required to update at least the fixture's record.
+// refresh is the helper's RefreshCCSRecords, required to update at least the shared site's record.
 func (f *ccsReal) refresh() {
 	f.t.Helper()
 	n, err := f.w.RefreshCCSRecords(context.Background())
 	require.NoError(f.t, err, "RefreshCCSRecords")
 	require.Positive(f.t, n, "RefreshCCSRecords updated the ccs:%d record", f.port)
-}
-
-// ccsRecord reads the http.sys ccs record of port.
-func ccsRecord(t *testing.T, port int) (winproto.SSLBinding, bool) {
-	t.Helper()
-	list, err := sslBindings()
-	require.NoError(t, err)
-	return findBinding(list, winproto.BindingCCS, port)
-}
-
-// ensureCCSRecord logs whether IIS made the http.sys ccs:<port> record for the sslFlags=3 binding
-// appcmd added (F15's side question), and makes it with netsh when it did not.
-func (f *ccsReal) ensureCCSRecord() {
-	t := f.t
-	t.Helper()
-	found := false
-	for deadline := time.Now().Add(10 * time.Second); !found && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
-		_, found = ccsRecord(t, f.port)
-	}
-	t.Logf("F15: appcmd's sslFlags=3 binding created the http.sys ccs:%d record: %v", f.port, found)
-	key := "ccs=" + strconv.Itoa(f.port)
-	f.later(func() {
-		if _, ok := ccsRecord(t, f.port); !ok {
-			return // the site's removal took it
-		}
-		if out, err := exec.Command("netsh", "http", "delete", "sslcert", key).CombinedOutput(); err != nil {
-			t.Logf("cleanup of %s: %v %s", key, err, out)
-		}
-	})
-	if !found {
-		netsh(t, "add", "sslcert", key, "appid="+winproto.AppIDIIS)
-		_, found = ccsRecord(t, f.port)
-		require.True(t, found, "netsh made the ccs:%d record", f.port)
-	}
-	f.ports[f.port] = true
 }
 
 // path is a file of the fixture's folder.
@@ -310,6 +264,9 @@ func (f *ccsReal) requireServed(sni string, want *x509.Certificate) []string {
 	if first {
 		f.t.Logf("F15: first serve after refresh (ccs:%d, %s): %v, after %v", f.port, sni, ok, d.Round(time.Millisecond))
 	}
+	if !ok {
+		ccsDiag(f.t.Logf, f.port, ccsSiteName)
+	}
 	require.True(f.t, ok, "%s on %d is served %s within %v (last %v, %v)", sni, f.port, want.Subject.CommonName, ccsPickupLimit, last, err)
 	f.t.Logf("%s served %s after %v", sni, want.Subject.CommonName, d.Round(time.Millisecond))
 	return last
@@ -332,7 +289,7 @@ func sddl(t *testing.T, path string) string {
 // keeps its ACL, and a .bak or .tmp file is never served.
 func TestRealCCSReplaceIsPickedUp(t *testing.T) {
 	const host, file = "r.alice-w5.test", "r.alice-w5.test.pfx"
-	f := newCCSReal(t, portCCSReplace, host, "n.alice-w5.test")
+	f := newCCSReal(t)
 	now := time.Now()
 	old := pki.SelfSigned("alice-w5-r-old.test", pki.ECDSA256, now)
 	f.put(file, ccsPFX(t, old, f.password))
@@ -481,7 +438,7 @@ func logKeyProperties(t *testing.T, pfx, password []byte) {
 // with the CCS password and does not serve one written with another; OpenPFX reports the second as a
 // password mismatch and reads the first without leaving a key file.
 func TestRealCCSWrongPasswordIsNotServed(t *testing.T) {
-	f := newCCSReal(t, portCCSPassword, "good.alice-w5.test", "bad.alice-w5.test")
+	f := newCCSReal(t)
 	now := time.Now()
 	good := pki.SelfSigned("alice-w5-good.test", pki.RSA2048, now)
 	bad := pki.SelfSigned("alice-w5-bad.test", pki.ECDSA256, now)
@@ -594,31 +551,58 @@ func servedLeaf(addr, sni string) (string, error) {
 	return got[0], nil
 }
 
-// TestRealCCSNameRules measures F17: the file IIS reads for SNI host h (h.pfx, then the one-label
-// wildcard _.<parent>.pfx, names compared without case), and whether an explicit hostnameport record
-// for h:port or the CCS file wins on the same port.
+// TestRealCCSNameRules measures F17: the file IIS reads for an SNI host (exact, wildcard, case, more
+// than one label below the wildcard) and whether an explicit hostnameport record or the CCS file wins
+// on the same port, all logged only (Ruling 6 follows the measurement); whether IIS keeps a lookup that
+// found no file (negative lookup); and asserts what is Alice's own: the listing, ReadCCS without case,
+// and a deployment to an upper-case file being served.
 func TestRealCCSNameRules(t *testing.T) {
-	f := newCCSReal(t, portCCSNames, "x.alice-w5.test", "exact.alice-w5.test", "up.alice-w5.test", "y.alice-w5.test", "a.b.alice-w5.test")
+	f := newCCSReal(t)
 	now := time.Now()
 	leaf := func(cn string) pki.Leaf { return pki.SelfSigned(cn, pki.ECDSA256, now) }
 	wild, exact, upper, d := leaf("alice-w5-wild.test"), leaf("alice-w5-exact.test"), leaf("alice-w5-upper.test"), leaf("alice-w5-d.test")
+	files := map[string]string{sum256hex(wild.Cert.Raw): "_.alice-w5.test.pfx", sum256hex(exact.Cert.Raw): "exact.alice-w5.test.pfx",
+		sum256hex(upper.Cert.Raw): "UP.Alice-W5.Test.PFX", sum256hex(d.Cert.Raw): "y.alice-w5.test.pfx"}
+	whose := func(h string) string {
+		if n, ok := files[h]; ok {
+			return n
+		}
+		if h == "" {
+			return "nothing"
+		}
+		return "another certificate " + h
+	}
+
+	// Negative lookup: a handshake for a host whose file does not exist yet, then the file and a
+	// refresh, then 30 s of handshakes.
+	neg := leaf("alice-w5-neg.test")
+	first, err := servedLeaf(f.addr(), "neg.alice-w5.test")
+	t.Logf("F17: negative lookup: before the file, neg.alice-w5.test is served %s (%v)", whose(first), err)
+	f.put("neg.alice-w5.test.pfx", ccsPFX(t, neg, f.password))
+	f.refresh()
+	dn, ok, _, err := pickup(f.addr(), "neg.alice-w5.test", sum256hex(neg.Cert.Raw), 30*time.Second)
+	t.Logf("F17: negative lookup: the file placed after a miss, then a refresh, is served: %v after %v (%v)", ok, dn.Round(time.Millisecond), err)
+
 	f.put("_.alice-w5.test.pfx", ccsPFX(t, wild, f.password))
 	f.put("exact.alice-w5.test.pfx", ccsPFX(t, exact, f.password))
 	f.put("UP.Alice-W5.Test.PFX", ccsPFX(t, upper, f.password))
 	f.put("y.alice-w5.test.pfx", ccsPFX(t, d, f.password))
-
-	_, ok, last, err := pickup(f.addr(), "x.alice-w5.test", sum256hex(wild.Cert.Raw), ccsPickupLimit)
-	t.Logf("F17: _.alice-w5.test.pfx serves x.alice-w5.test: %v (last %v, %v)", ok, last, err)
-	assert.True(t, ok, "the wildcard file serves a host one label below")
-	_, ok, last, err = pickup(f.addr(), "exact.alice-w5.test", sum256hex(exact.Cert.Raw), 30*time.Second)
-	t.Logf("F17: the exact file wins over the wildcard: %v (last %v, %v)", ok, last, err)
-	assert.True(t, ok, "exact.alice-w5.test.pfx serves exact.alice-w5.test")
-	_, ok, last, err = pickup(f.addr(), "up.alice-w5.test", sum256hex(upper.Cert.Raw), 30*time.Second)
-	t.Logf("F17: the upper-case file UP.Alice-W5.Test.PFX serves up.alice-w5.test: %v (last %v, %v)", ok, last, err)
-	assert.True(t, ok, "IIS compares file names without case")
-	two, err := servedLeaf(f.addr(), "a.b.alice-w5.test")
-	t.Logf("F17: _.alice-w5.test.pfx serves a.b.alice-w5.test (two labels below): %v (%q, %v)", two == sum256hex(wild.Cert.Raw), two, err)
-	assert.NotEqual(t, sum256hex(wild.Cert.Raw), two, "a wildcard file covers one label only")
+	f.refresh()
+	for _, c := range []struct{ sni, rule string }{
+		{"x.alice-w5.test", "one label below the wildcard file"},
+		{"exact.alice-w5.test", "an exact file beside the wildcard file"},
+		{"up.alice-w5.test", "an upper-case file name UP.Alice-W5.Test.PFX"},
+		{"a.b.alice-w5.test", "two labels below the wildcard file"},
+		{"alice-w5.test", "the wildcard file's own parent"},
+	} {
+		got, err := "", error(nil)
+		for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(ccsPoll) {
+			if got, err = servedLeaf(f.addr(), c.sni); got != "" {
+				break
+			}
+		}
+		t.Logf("F17: %s (%s): served %s (%v)", c.sni, c.rule, whose(got), err)
+	}
 
 	// The helper's own lookups: the folder lists the name as spelled, ReadCCS finds it by the lower-case
 	// name, and the spelling a deployment's ReplaceFileW leaves is recorded (the emulator keeps it).
@@ -629,7 +613,8 @@ func TestRealCCSNameRules(t *testing.T) {
 		names = append(names, e.Name)
 	}
 	slices.Sort(names)
-	assert.Equal(t, []string{"UP.Alice-W5.Test.PFX", "_.alice-w5.test.pfx", "exact.alice-w5.test.pfx", "y.alice-w5.test.pfx"}, names)
+	assert.Equal(t, []string{"UP.Alice-W5.Test.PFX", "_.alice-w5.test.pfx", "exact.alice-w5.test.pfx", "neg.alice-w5.test.pfx",
+		"y.alice-w5.test.pfx"}, names)
 	data, found, err := f.w.ReadCCS(context.Background(), f.folder, "up.alice-w5.test.pfx", winproto.MaxCCSFile)
 	t.Logf("F17: ReadCCS finds UP.Alice-W5.Test.PFX by up.alice-w5.test.pfx (Windows compares names without case): %v", found && err == nil)
 	require.NoError(t, err)
@@ -647,7 +632,8 @@ func TestRealCCSNameRules(t *testing.T) {
 	_, ok, _, _ = pickup(f.addr(), "up.alice-w5.test", sum256hex(upper2.Cert.Raw), ccsPickupLimit)
 	assert.True(t, ok, "the deployment to the upper-case file is served")
 
-	// Precedence on one port: a hostnameport record for y.alice-w5.test:45481 naming C, the CCS file D.
+	// Precedence on one port: a hostnameport record for y.alice-w5.test on the shared port naming C, the CCS
+	// file D.
 	c := leaf("alice-w5-c.test")
 	addSSLCert(t, fmt.Sprintf("hostnameport=y.alice-w5.test:%d", f.port), importLeafWithKey(t, c), winproto.AppIDIIS)
 	winner := "neither"
@@ -671,7 +657,7 @@ func TestRealCCSNameRules(t *testing.T) {
 // TestRealCCSServedChain measures F18: the chain served for a CCS file, with the intermediate in the
 // PFX and not in LocalMachine\CA, then with it in CA.
 func TestRealCCSServedChain(t *testing.T) {
-	f := newCCSReal(t, portCCSChain, "f18a.alice-w5.test", "f18b.alice-w5.test", "f18c.alice-w5.test")
+	f := newCCSReal(t)
 	now := time.Now()
 	ca := pki.NewCA("alice-w5-f18", pki.ECDSA256, now)
 	issue := func(cn string) pki.Leaf { return ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}}, now) }
@@ -702,6 +688,25 @@ func TestRealCCSServedChain(t *testing.T) {
 	report("the intermediate in CA only (after a refresh)", againB)
 	f.put("f18c.alice-w5.test.pfx", ccsPFX(t, c, f.password))
 	report("the intermediate in CA only (a file first served after the import)", f.requireServed("f18c.alice-w5.test", c.Cert))
+
+	// DIAG (run 3, logged only): a site of its own on another port, made after the first CCS serve of
+	// this IIS, as run 1-3's per-test sites were; the same file on the shared port is the control.
+	const diagSite, diagDir = "alice-w5-ccs-diag", "alice-w5-ccs-diag"
+	t.Cleanup(func() { removeCCSSite(t.Logf, diagSite, portCCSDiag, diagDir) })
+	diag := issue("diag.alice-w5.test")
+	f.put("diag.alice-w5.test.pfx", ccsPFX(t, diag, f.password))
+	byIIS, err := createCCSSite(diagSite, portCCSDiag, diagDir, []string{"diag.alice-w5.test"})
+	require.NoError(t, err)
+	f.refresh()
+	diagAddr := "127.0.0.1:" + strconv.Itoa(portCCSDiag)
+	d, ok, last, err := pickup(diagAddr, "diag.alice-w5.test", sum256hex(diag.Cert.Raw), 60*time.Second)
+	t.Logf("DIAG: a second site on its own port %d (ccs record by IIS: %v), made after the first CCS serve, serves its file: %v after %v (last %v, %v)",
+		portCCSDiag, byIIS, ok, d.Round(time.Millisecond), last, err)
+	if !ok {
+		ccsDiag(t.Logf, portCCSDiag, diagSite)
+	}
+	d, ok, _, err = pickup(f.addr(), "diag.alice-w5.test", sum256hex(diag.Cert.Raw), 30*time.Second)
+	t.Logf("DIAG: the same file on the shared port %d is served: %v after %v (%v)", f.port, ok, d.Round(time.Millisecond), err)
 }
 
 // ---- Review Focus 1 ------------------------------------------------------------------------------
@@ -760,7 +765,7 @@ func setCCSRegistry(t *testing.T, enabled bool, path string) {
 // TestRealCCSRefusesReparsePoints (Review Focus 1): a CCS folder that is a junction and a CCS file
 // that is a symbolic link (or a directory) are refused, and nothing is written outside the folder.
 func TestRealCCSRefusesReparsePoints(t *testing.T) {
-	f := newCCSReal(t, portCCSReparse, "j.alice-w5.test", "s.alice-w5.test")
+	f := newCCSReal(t)
 	ctx := context.Background()
 	now := time.Now()
 	outside := t.TempDir()

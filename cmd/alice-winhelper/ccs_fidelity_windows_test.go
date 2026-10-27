@@ -85,7 +85,7 @@ func (f *ccsReal) sameNames() {
 }
 
 func TestFidelityCCS(t *testing.T) {
-	f := newCCSReal(t, portCCSFidelity, "f.alice-w5.test")
+	f := newCCSReal(t)
 	now := time.Now()
 	ca := pki.NewCA("alice-w5-fidelity", pki.ECDSA256, now)
 	issue := func(cn string) pki.Leaf { return ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}}, now) }
