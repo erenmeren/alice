@@ -2,6 +2,7 @@ package wintest
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
@@ -20,6 +21,7 @@ import (
 
 	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 // The write half of the model (W2, R61): the helper's data directory and lock, http.sys's
@@ -95,13 +97,15 @@ func (m *Model) Points() []string {
 
 // Reboot is a restart of the machine: the helper lock is released (also any HoldLock) and schannel's
 // cache and the listeners' stale certificates are gone, so every record is served as built anew from
-// the records at its next handshake. Records, stores, the data directory and the log are kept.
+// the records at its next handshake (a CCS file as it is now). Records, stores, the CCS folders, the
+// data directory and the log are kept.
 func (m *Model) Reboot() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lockOwned, m.lockOutside = false, 0
 	m.lockGen++
 	m.served = map[string]*servedEntry{}
+	clear(m.ccsPinned)
 	m.corruptNext = false
 }
 
@@ -605,32 +609,271 @@ func (h host) Event(id uint32, text string) {
 	h.m.events = append(h.m.events, Event{ID: id, Text: text})
 }
 
-// errCCSNotModelled answers every CCS method until the model's CCS folder is written (W5 Task 4).
-var errCCSNotModelled = errors.New("wintest: the CCS folder is not modelled yet")
+// The CCS half of the model (W5, R68): IIS's Centralized Certificate Store. The registry's Enabled and
+// CertStoreLocation are the IIS facts' CCSEnabled and CCSPath; each folder holds its files by name,
+// compared without case as NTFS does (W5 ruling: a file spelled WWW.Example.COM.PFX is found for host
+// www.example.com, F17). A folder named before a path change keeps its files, so a journal's folder can
+// still be restored and pruned (W5 Ruling 17); a folder that does not exist lists nothing. Not modelled:
+// a folder that is a reparse point (ErrCCSFolderUnsupported) and a file that is one.
 
-func (host) CCSConfig(context.Context) (bool, string, error) { return false, "", errCCSNotModelled }
-
-func (host) ListCCS(context.Context, string) ([]winhelper.CCSEntry, error) {
-	return nil, errCCSNotModelled
+// ccsFile is one file of a modelled folder: its name as written, its bytes and its time.
+type ccsFile struct {
+	name string
+	data []byte
+	mod  time.Time
 }
 
-func (host) ReadCCS(context.Context, string, string, int) ([]byte, bool, error) {
-	return nil, false, errCCSNotModelled
+var (
+	errNoCCSFolder = errors.New("wintest: the CCS folder does not exist")
+	errCCSExists   = errors.New("wintest: the file exists")
+	errCCSNoFile   = errors.New("wintest: the file does not exist")
+	errCCSReplace  = errors.New("wintest: ReplaceFileW failed")
+	errCCSRemove   = errors.New("wintest: not a temporary file or a backup")
+)
+
+// folderKey is a folder as Windows compares it: ASCII case folded, one trailing backslash trimmed.
+func folderKey(folder string) string { return fold(strings.TrimSuffix(folder, `\`)) }
+
+// pinKey names a file of a folder in ccsPinned.
+func pinKey(folder, name string) string { return folderKey(folder) + `\` + fold(name) }
+
+// SetCCS turns the Centralized Certificate Store on or off with its folder (what
+// Enable-WebCentralCertProvider writes to the registry; win-facts and every CCS call read it). The
+// folder exists from then on; a folder named before keeps its files.
+func (m *Model) SetCCS(enabled bool, path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iis.CCSEnabled, m.iis.CCSPath = enabled, path
+	if path != "" {
+		m.ccsDirLocked(path)
+	}
 }
 
-func (host) OpenPFX([]byte, []byte) ([]byte, [][]byte, string, error) {
-	return nil, nil, "", errCCSNotModelled
+func (m *Model) ccsDirLocked(folder string) map[string]*ccsFile {
+	k := folderKey(folder)
+	d, ok := m.ccsDirs[k]
+	if !ok {
+		d = map[string]*ccsFile{}
+		m.ccsDirs[k] = d
+	}
+	return d
 }
 
-func (host) WriteCCSTemp(context.Context, string, string, []byte) error { return errCCSNotModelled }
-
-func (host) ReplaceCCS(context.Context, string, string, string, string) error {
-	return errCCSNotModelled
+// SetCCSPassword sets IIS's private-key password of the store: TLS serves a file only when it opens it
+// (F16 as modelled). Alice never reads it (W5 Ruling 12); the tests and ctl ccs-password do.
+func (m *Model) SetCCSPassword(password string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ccsPassword = password
 }
 
-func (host) RestoreCCS(context.Context, string, string, string) error { return errCCSNotModelled }
+// CCSPassword is IIS's private-key password of the store (SetCCSPassword).
+func (m *Model) CCSPassword() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ccsPassword
+}
 
-func (host) RemoveCCS(context.Context, string, string) error { return errCCSNotModelled }
+// PutCCSFile puts a file into the CCS folder as a third party made it: the leaf, its key and chain in
+// winhelper.BuildPFX's format under password (one that is not the store's makes a file IIS cannot open).
+// It replaces the file of that name, any case. It panics on a key or a password BuildPFX refuses, or
+// without a CCS folder (a test helper).
+func (m *Model) PutCCSFile(name string, leaf *x509.Certificate, chain []*x509.Certificate, key crypto.Signer, password string) {
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		panic("wintest: " + err.Error())
+	}
+	ders := make([][]byte, 0, len(chain))
+	for _, c := range chain {
+		ders = append(ders, c.Raw)
+	}
+	pfx, err := winhelper.BuildPFX(leaf.Raw, pkcs8, []byte(password), ders...)
+	if err != nil {
+		panic("wintest: " + err.Error())
+	}
+	m.PutRawCCSFile(name, pfx)
+}
+
+// PutRawCCSFile puts bytes into the CCS folder under name (any name: a .pfx that is no PFX, a file IIS
+// ignores), replacing the file of that name, any case. It panics without a CCS folder.
+func (m *Model) PutRawCCSFile(name string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.iis.CCSPath == "" {
+		panic("wintest: SetCCS names no folder")
+	}
+	m.ccsDirLocked(m.iis.CCSPath)[fold(name)] = &ccsFile{name: name, data: slices.Clone(data), mod: m.nowLocked()}
+}
+
+// CCSFile reads a file of the CCS folder the registry names now (any case).
+func (m *Model) CCSFile(name string) (data []byte, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f := m.ccsDirs[folderKey(m.iis.CCSPath)][fold(name)]
+	if f == nil {
+		return nil, false
+	}
+	return slices.Clone(f.data), true
+}
+
+// CCSNames lists every name in the CCS folder the registry names now, .bak and .tmp included, sorted.
+func (m *Model) CCSNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := []string{}
+	for _, f := range m.ccsDirs[folderKey(m.iis.CCSPath)] {
+		names = append(names, f.name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// FailReplace(true) makes the next ReplaceCCS fail before it swaps anything (once).
+func (m *Model) FailReplace(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failReplace = on
+}
+
+// ServeStaleCCS(true) is IIS that does not pick a replaced file up (F15 route (b) modelled): from the
+// next replace or restore of a file on, TLS keeps serving the file as it was before it. ServeStaleCCS(false)
+// serves the files again.
+func (m *Model) ServeStaleCCS(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ccsStale = on
+	if !on {
+		clear(m.ccsPinned)
+	}
+}
+
+// pinLocked keeps what TLS serves for folder\name before a change, when stale (the first change's
+// bytes stay until ServeStaleCCS(false), as StaleTLS keeps a record's).
+func (m *Model) pinLocked(folder, name string, served []byte) {
+	if k := pinKey(folder, name); m.ccsStale {
+		if _, ok := m.ccsPinned[k]; !ok {
+			m.ccsPinned[k] = slices.Clone(served)
+		}
+	}
+}
+
+func (h host) CCSConfig(context.Context) (bool, string, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	return h.m.iis.CCSEnabled, h.m.iis.CCSPath, nil
+}
+
+// ListCCS lists the *.pfx files of folder (any case of the extension). A folder that does not exist
+// lists nothing (W5 ruling: so that a journal whose folder was removed after a path change can still be
+// pruned).
+func (h host) ListCCS(_ context.Context, folder string) ([]winhelper.CCSEntry, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	out := []winhelper.CCSEntry{}
+	for k, f := range h.m.ccsDirs[folderKey(folder)] {
+		if strings.HasSuffix(k, ".pfx") {
+			out = append(out, winhelper.CCSEntry{Name: f.name, Size: int64(len(f.data)), ModTime: f.mod})
+		}
+	}
+	return out, nil
+}
+
+// ReadCCS reads at most limit+1 bytes of folder\name (any case); a file or a folder that does not exist
+// is not found.
+func (h host) ReadCCS(_ context.Context, folder, name string, limit int) ([]byte, bool, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	f := h.m.ccsDirs[folderKey(folder)][fold(name)]
+	if f == nil {
+		return nil, false, nil
+	}
+	return slices.Clone(f.data[:min(len(f.data), limit+1)]), true, nil
+}
+
+// OpenPFX reads what BuildPFX writes with the test-only reader (pki.OpenPFX); every failure is a
+// problem of the file, never of the host.
+func (host) OpenPFX(data, password []byte) ([]byte, [][]byte, string, error) {
+	leaf, chain, err := pki.OpenPFX(data, password)
+	switch {
+	case errors.Is(err, pki.ErrPFXPassword):
+		return nil, nil, winproto.CCSProblemPasswordMismatch, nil
+	case errors.Is(err, pki.ErrPFXNoKey):
+		return nil, nil, winproto.CCSProblemNoKey, nil
+	case err != nil:
+		return nil, nil, winproto.CCSProblemNotPFX, nil
+	}
+	return leaf, chain, "", nil
+}
+
+// WriteCCSTemp creates folder\tmpName (CREATE_NEW: an existing file is an error).
+func (h host) WriteCCSTemp(_ context.Context, folder, tmpName string, data []byte) error {
+	m := h.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.ccsDirs[folderKey(folder)]
+	switch {
+	case d == nil:
+		return errNoCCSFolder
+	case d[fold(tmpName)] != nil:
+		return errCCSExists
+	}
+	d[fold(tmpName)] = &ccsFile{name: tmpName, data: slices.Clone(data), mod: m.nowLocked()}
+	return nil
+}
+
+// ReplaceCCS is ReplaceFileW: name's bytes go to backupName (replacing one there), tmpName's to name
+// (which keeps its spelling), tmpName is gone. FailReplace fails it before anything moved.
+func (h host) ReplaceCCS(_ context.Context, folder, name, tmpName, backupName string) error {
+	m := h.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failReplace {
+		m.failReplace = false
+		return errCCSReplace
+	}
+	d := m.ccsDirs[folderKey(folder)]
+	old, tmp := d[fold(name)], d[fold(tmpName)]
+	if old == nil || tmp == nil {
+		return errCCSNoFile
+	}
+	m.pinLocked(folder, name, old.data)
+	d[fold(backupName)] = &ccsFile{name: backupName, data: old.data, mod: old.mod}
+	d[fold(name)] = &ccsFile{name: old.name, data: tmp.data, mod: m.nowLocked()}
+	delete(d, fold(tmpName))
+	return nil
+}
+
+// RestoreCCS is MoveFileEx(backupName, name, MOVEFILE_REPLACE_EXISTING).
+func (h host) RestoreCCS(_ context.Context, folder, backupName, name string) error {
+	m := h.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.ccsDirs[folderKey(folder)]
+	bak := d[fold(backupName)]
+	if bak == nil {
+		return errCCSNoFile
+	}
+	spelled := name
+	if cur := d[fold(name)]; cur != nil {
+		m.pinLocked(folder, name, cur.data)
+		spelled = cur.name
+	}
+	d[fold(name)] = &ccsFile{name: spelled, data: bak.data, mod: bak.mod}
+	delete(d, fold(backupName))
+	return nil
+}
+
+// RemoveCCS removes folder\name, a .tmp or .bak name only; one that is absent, or whose folder does not
+// exist, is nil.
+func (h host) RemoveCCS(_ context.Context, folder, name string) error {
+	if n := fold(name); !strings.HasSuffix(n, ".tmp") && !strings.HasSuffix(n, ".bak") {
+		return errCCSRemove
+	}
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	delete(h.m.ccsDirs[folderKey(folder)], fold(name))
+	return nil
+}
 
 // Point is a crash point: KillAt's point kills the call there, once.
 func (h host) Point(name string) error {

@@ -54,6 +54,22 @@ type (
 // the certificate whose localKeyId the key bag shares and whose public key is the key's; chain is
 // every other certificate, in the file's order. A MAC that does not verify is ErrPFXPassword.
 func OpenPFX(pfx, password []byte) (leaf []byte, chain [][]byte, err error) {
+	return openPFX(pfx, password, new(crypto.PrivateKey))
+}
+
+// OpenPFXKey is OpenPFX that also answers the leaf's key (the emulator serves TLS from a CCS file).
+func OpenPFXKey(pfx, password []byte) (leaf []byte, chain [][]byte, key crypto.PrivateKey, err error) {
+	leaf, chain, err = openPFX(pfx, password, &key)
+	return leaf, chain, key, err
+}
+
+// maxPFXIterations bounds the MAC and PBKDF2 iteration counts the reader computes: the emulator feeds it
+// a third party's bytes (wintest's PutRawCCSFile), and a count of 2^31 would hold a test for hours.
+// BuildPFX writes 10000 and 2048; Windows and OpenSSL write a few thousand.
+const maxPFXIterations = 100_000
+
+// openPFX is OpenPFX; the key goes to *keyOut once the file opened.
+func openPFX(pfx, password []byte, keyOut *crypto.PrivateKey) (leaf []byte, chain [][]byte, err error) {
 	var pdu p12PFX
 	if rest, err := asn1.Unmarshal(pfx, &pdu); err != nil || len(rest) != 0 || !pdu.AuthSafe.ContentType.Equal(oidDataType) {
 		return nil, nil, ErrNotPFX
@@ -62,7 +78,7 @@ func OpenPFX(pfx, password []byte) (leaf []byte, chain [][]byte, err error) {
 	if _, err := asn1.Unmarshal(pdu.AuthSafe.Content.Bytes, &authSafe); err != nil {
 		return nil, nil, ErrNotPFX
 	}
-	if !pdu.MacData.Mac.Algorithm.Algorithm.Equal(oidSHA256) || pdu.MacData.Iterations < 1 {
+	if !pdu.MacData.Mac.Algorithm.Algorithm.Equal(oidSHA256) || pdu.MacData.Iterations < 1 || pdu.MacData.Iterations > maxPFXIterations {
 		return nil, nil, ErrNotPFX
 	}
 	mac := hmac.New(sha256.New, p12KDF(3, pdu.MacData.Salt, bmpPassword(string(password)), pdu.MacData.Iterations, 32))
@@ -138,6 +154,7 @@ func OpenPFX(pfx, password []byte) (leaf []byte, chain [][]byte, err error) {
 	if leaf == nil {
 		return nil, nil, ErrPFXNoKey
 	}
+	*keyOut = key
 	return leaf, chain, nil
 }
 
@@ -154,7 +171,8 @@ func decryptKey(der, password []byte) (crypto.PrivateKey, error) {
 		!params.KDF.Algorithm.Equal(oidPBKDF2) || !params.Scheme.Algorithm.Equal(oidAES256CBC) {
 		return nil, ErrNotPFX
 	}
-	if _, err := asn1.Unmarshal(params.KDF.Parameters.FullBytes, &kdf); err != nil || !kdf.Prf.Algorithm.Equal(oidHMACSHA256) {
+	if _, err := asn1.Unmarshal(params.KDF.Parameters.FullBytes, &kdf); err != nil || !kdf.Prf.Algorithm.Equal(oidHMACSHA256) ||
+		kdf.Iterations < 1 || kdf.Iterations > maxPFXIterations {
 		return nil, ErrNotPFX
 	}
 	if _, err := asn1.Unmarshal(params.Scheme.Parameters.FullBytes, &iv); err != nil || len(iv) != aes.BlockSize {
@@ -168,8 +186,8 @@ func decryptKey(der, password []byte) (crypto.PrivateKey, error) {
 	plain := make([]byte, len(ek.EncryptedData))
 	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plain, ek.EncryptedData)
 	pad := int(plain[len(plain)-1])
-	if pad == 0 || pad > aes.BlockSize {
-		return nil, ErrNotPFX
+	if pad == 0 || pad > aes.BlockSize || !bytes.Equal(plain[len(plain)-pad:], bytes.Repeat([]byte{byte(pad)}, pad)) {
+		return nil, ErrNotPFX // PKCS #7: every pad byte holds the pad length
 	}
 	key, err := x509.ParsePKCS8PrivateKey(plain[:len(plain)-pad])
 	if err != nil {

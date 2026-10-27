@@ -1,6 +1,8 @@
 package wintest
 
 import (
+	"crypto/rand"
+	"crypto/x509"
 	"fmt"
 	"time"
 
@@ -8,11 +10,17 @@ import (
 	"alice/internal/testutil/pki"
 )
 
+// demoCCSPath is the demo host's CCS folder.
+const demoCCSPath = `C:\CCS`
+
 // Demo builds the fixed host of the e2e journey (Task 15): Windows Server 2022 Datacenter
-// 10.0.20348.2700 with IIS 10.0; the sites "Default Web Site" (https *:443:www.win.example.test, SNI) and
-// "Intranet" (https *:8443:); the http.sys entries hostnameport www.win.example.test:443 (IIS, My),
-// ipport 0.0.0.0:8443 (IIS, WebHosting), ipport 0.0.0.0:5986 (WinRM: a foreign application) and ccs 443.
-// The certificates come from a test CA generated now (leaf and intermediate); CARootPEM is its root.
+// 10.0.20348.2700 with IIS 10.0; the sites "Default Web Site" (https *:443:www.win.example.test, SNI),
+// "Intranet" (https *:8443:) and "CCS Site" (https *:443:ccs.example.test, sslFlags 3: SNI and CCS); the
+// http.sys entries hostnameport www.win.example.test:443 (IIS, My), ipport 0.0.0.0:8443 (IIS, WebHosting),
+// ipport 0.0.0.0:5986 (WinRM: a foreign application) and ccs 443. The Centralized Certificate Store is on
+// at demoCCSPath with ccs.example.test.pfx (linked by the CCS Site binding) and _.unlinked.test.pfx (no
+// binding), under a password generated now (CCSPassword; W5 Ruling 25). The certificates come from a
+// test CA generated now (leaf and intermediate); CARootPEM is its root.
 func Demo(now time.Time) (m *Model, err error) {
 	defer func() {
 		if r := recover(); r != nil { // pki panics on a crypto failure
@@ -47,5 +55,16 @@ func Demo(now time.Time) (m *Model, err error) {
 		{Protocol: "https", Information: "*:443:www.win.example.test", SSLFlags: 1}}})
 	m.AddSite(winproto.Site{Name: "Intranet", ID: 2, State: "Started", Bindings: []winproto.SiteBinding{
 		{Protocol: "https", Information: "*:8443:", SSLFlags: 0}}})
+	m.AddSite(winproto.Site{Name: "CCS Site", ID: 3, State: "Started", Bindings: []winproto.SiteBinding{
+		{Protocol: "https", Information: "*:443:ccs.example.test", SSLFlags: 3}}})
+
+	password := "ccs-" + rand.Text() // 30 printable ASCII characters, made at start, never stored
+	m.SetCCS(true, demoCCSPath)
+	m.SetCCSPassword(password)
+	for _, host := range []string{"ccs.example.test", "*.unlinked.test"} {
+		l := ca.Issue(pki.Opts{CommonName: host, SANs: []string{host}}, now)
+		name, _ := winproto.CCSFileName(host)
+		m.PutCCSFile(name, l.Cert, []*x509.Certificate{ca.Intermediate}, l.Key, password)
+	}
 	return m, nil
 }

@@ -1,7 +1,7 @@
 // Package wintest is the emulated Windows host of the tests of the Windows provider and of the e2e
 // fake (design 2026-10-21 §13, R60, R61): a modelled machine (elevation, operating system, IIS, the
-// certificate stores, the http.sys binding table, the IIS sites, the helper's data directory and lock,
-// the Application log) that implements winhelper.WriteHost, so the helper's own code
+// certificate stores, the http.sys binding table, the IIS sites, the CCS folders, the helper's data
+// directory and lock, the Application log) that implements winhelper.WriteHost, so the helper's own code
 // (winhelper.ExecuteForced) answers and changes it behind the linuxsshtest SSH server, plus real TLS
 // listeners that serve what http.sys and schannel would. It is never linked into the alice binary.
 package wintest
@@ -109,6 +109,14 @@ type Model struct {
 	winrm        []string
 	failProtect  bool
 	failAfterKey bool
+
+	// The CCS half (W5 Task 4, write.go). IIS's Enabled and CertStoreLocation are iis.CCSEnabled and
+	// iis.CCSPath.
+	ccsDirs     map[string]map[string]*ccsFile // the folders by folderKey, their files by folded name
+	ccsPassword string                         // IIS's private-key password (SetCCSPassword)
+	failReplace bool
+	ccsStale    bool
+	ccsPinned   map[string][]byte // ServeStaleCCS: the bytes a stale listener keeps serving, by pinKey
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -127,6 +135,8 @@ func NewModel() *Model {
 		intents:    map[string]string{},
 		served:     map[string]*servedEntry{},
 		state:      map[string][]byte{},
+		ccsDirs:    map[string]map[string]*ccsFile{},
+		ccsPinned:  map[string][]byte{},
 		stateTimes: map[string]time.Time{},
 		keys:       map[string]bool{},
 		lockWait:   winproto.LockWait,

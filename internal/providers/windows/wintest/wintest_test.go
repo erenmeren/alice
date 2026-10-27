@@ -570,7 +570,7 @@ func TestDemoHost(t *testing.T) {
 			t.Fatalf("binding %d: %+v want %+v", i, got[i], wantB[i])
 		}
 	}
-	if len(d.Sites) != 2 || d.Sites[0].Name != "Default Web Site" || d.Sites[0].Bindings[0].Information != "*:443:www.win.example.test" ||
+	if len(d.Sites) != 3 || d.Sites[0].Name != "Default Web Site" || d.Sites[0].Bindings[0].Information != "*:443:www.win.example.test" ||
 		d.Sites[0].Bindings[0].SSLFlags != 1 || d.Sites[1].Name != "Intranet" || d.Sites[1].Bindings[0].Information != "*:8443:" ||
 		d.Sites[1].Bindings[0].SSLFlags != 0 {
 		t.Fatalf("sites %+v", d.Sites)

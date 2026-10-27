@@ -2,12 +2,12 @@
 // internal backend network) for the Windows journey (web/e2e/windows.spec.ts, R60). It is a test tool: it is built
 // into the e2e fake Windows image only and never ships (internal/archtest lists it in testOnlyDirs). It wraps
 // internal/providers/windows/wintest: the fixed demo host of wintest.Demo (Windows Server 2022 Datacenter with IIS
-// 10.0, two IIS sites, four http.sys entries), whose helper answers run the helper's own code (winhelper), behind an
-// SSH server that behaves like Windows OpenSSH (every session after the first on one connection sees the first
-// session's command, design 2026-10-21 §8).
+// 10.0, three IIS sites, four http.sys entries, a CCS folder), whose helper answers run the helper's own code
+// (winhelper), behind an SSH server that behaves like Windows OpenSSH (every session after the first on one
+// connection sees the first session's command, design 2026-10-21 §8).
 //
 //	alice-fakewindows serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
-//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off
+//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off | ccs-password
 //
 // serve generates a fresh Ed25519 host key and the demo host's test CA and certificates when it starts (nothing is
 // stored in the repository or the image), listens for SSH on --listen and serves the demo's TLS bindings on --tls-bind
@@ -17,7 +17,9 @@
 // The helper's write subcommands (iis-deploy, iis-restore, iis-status, iis-fence; R61) run on the model too, its state
 // files (journal, binding records, imports) in memory: a restart is a fresh demo host. "ctl stale-tls-on" makes every
 // listener keep serving what it served before the next bind (a website that did not take the change, W2 Ruling 23)
-// until "ctl stale-tls-off", so a deployment's verification fails and is rolled back.
+// until "ctl stale-tls-off", so a deployment's verification fails and is rolled back; the demo's CCS files (W5) go
+// stale with them. The demo's Centralized Certificate Store (C:\CCS, two files) is encrypted with a password made at
+// start, which "ctl ccs-password" prints on its standard output (never logged).
 // The control API has no authentication beyond its address: it listens on loopback only (serve refuses any other
 // address), ctl talks to loopback only, and it runs inside the container ("docker compose exec -T fakewindows
 // /alice-fakewindows ctl prepare < script").
@@ -83,7 +85,8 @@ Commands:
         Drive a running server (answer on stdout, errors on stderr, exit 1 on failure):
         ping | hostkey (the SHA256 fingerprint of the host key) | endpoints (the TLS listeners) |
         prepare (stdin: Alice's Windows setup script; authorizes the key of its $AuthorizedKey line) |
-        stale-tls-on (the listeners keep serving what they served before the next bind) | stale-tls-off
+        stale-tls-on (the listeners keep serving what they served before the next bind or CCS file write) |
+        stale-tls-off | ccs-password (the demo's CCS private-key password)
 `
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -250,13 +253,22 @@ func (c *control) handler() http.Handler {
 	})
 	// A website that does not take a change (Ruling 23): while on, every listener keeps serving what it served before
 	// the next bind, so a deployment's verification fails and the provider's iis-restore rolls it back.
+	// The CCS files go stale with them (F15 route (b) modelled), so a CCS deployment is rolled back to its backup.
 	mux.HandleFunc("POST /stale-tls-on", func(w http.ResponseWriter, _ *http.Request) {
 		c.model.StaleTLS(true)
+		c.model.ServeStaleCCS(true)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /stale-tls-off", func(w http.ResponseWriter, _ *http.Request) {
 		c.model.StaleTLS(false)
+		c.model.ServeStaleCCS(false)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	// The demo's CCS password (W5 Ruling 25), made at start: the answer only, never logged.
+	mux.HandleFunc("GET /ccs-password", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, c.model.CCSPassword()+"\n")
 	})
 	return mux
 }
@@ -351,6 +363,8 @@ var ctlCommands = map[string][2]string{
 	// stale-tls-on / stale-tls-off: the listeners keep serving what they served before the next bind (Ruling 23).
 	"stale-tls-on":  {http.MethodPost, "/stale-tls-on"},
 	"stale-tls-off": {http.MethodPost, "/stale-tls-off"},
+	// ccs-password: the demo's CCS private-key password, on stdout only.
+	"ccs-password": {http.MethodGet, "/ccs-password"},
 }
 
 func runCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {

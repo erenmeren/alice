@@ -2,6 +2,7 @@ package wintest
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -1027,5 +1028,365 @@ func TestDemoHostDumpShowsAliceImported(t *testing.T) {
 	}
 	if seen != 1 {
 		t.Fatalf("%d", seen)
+	}
+}
+
+// The CCS half (W5 Task 4): the folder IIS's Centralized Certificate Store reads, ccs-dump and ccs-deploy
+// against it, and TLS served by SNI from its files.
+
+// ccsFolder is the CCS folder of the CCS tests.
+const ccsFolder = `C:\CCS`
+
+// cfix is a model with CCS on at ccsFolder, a ccs http.sys record on 443 and one file for
+// ccs.example.test that a third party made with the store's password (built at run time).
+type cfix struct {
+	m        *Model
+	ca       *pki.CA
+	inter    *x509.Certificate
+	password string
+	old      pki.Leaf
+}
+
+func newCCSFixture(t *testing.T) *cfix {
+	t.Helper()
+	f := &cfix{m: NewModel(), ca: pki.NewCA("CCS", pki.ECDSA256, now), password: "ccs-" + rand.Text()}
+	f.inter = f.ca.Intermediate
+	f.m.AddBinding(winproto.SSLBinding{Type: winproto.BindingCCS, IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS})
+	f.m.SetCCS(true, ccsFolder)
+	f.m.SetCCSPassword(f.password)
+	f.old = f.issue("ccs.example.test")
+	f.put("ccs.example.test.pfx", f.old)
+	return f
+}
+
+func (f *cfix) issue(cn string) pki.Leaf {
+	return f.ca.Issue(pki.Opts{CommonName: cn, SANs: []string{cn}}, now)
+}
+
+func (f *cfix) put(name string, l pki.Leaf) {
+	f.m.PutCCSFile(name, l.Cert, []*x509.Certificate{f.inter}, l.Key, f.password)
+}
+
+func (f *cfix) serve(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := f.m.Serve(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); f.m.serving.Wait() })
+}
+
+func (f *cfix) dump(t *testing.T) winproto.CCSDumpResponse {
+	t.Helper()
+	in, _ := json.Marshal(winproto.CCSDumpInput{Password: f.password})
+	var d winproto.CCSDumpResponse
+	if r := run(t, f.m, winproto.SubCCSDump, in, &d); r.Exit != 0 || !d.OK {
+		t.Fatalf("ccs-dump: %d %s", r.Exit, r.Stdout)
+	}
+	return d
+}
+
+func (f *cfix) deploy(t *testing.T, op, host, expect string, l pki.Leaf) (linuxsshtest.Response, winproto.DeployResponse) {
+	t.Helper()
+	in, err := json.Marshal(winproto.CCSDeployInput{Path: ccsFolder, Host: host, ExpectSHA256: expect, ChainPEM: string(l.FullchainPEM),
+		KeyPEM: string(l.KeyPEM), Password: f.password, ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d winproto.DeployResponse
+	r := run(t, f.m, winproto.SubCCSDeploy+" --op "+op, in, &d)
+	return r, d
+}
+
+// servedCCS is the leaf a fresh handshake with sni on the 443 listener presents ("" when it fails).
+func (f *cfix) servedCCS(t *testing.T, sni string) string {
+	t.Helper()
+	cs, err := tlsDial(t, f.m.Endpoint(443), sni)
+	if err != nil {
+		return ""
+	}
+	return sum256(cs.PeerCertificates[0].Raw)
+}
+
+func TestModelCCSDeployAndServe(t *testing.T) {
+	f := newCCSFixture(t)
+	f.serve(t)
+	d := f.dump(t)
+	if !d.Enabled || !d.Local || d.Path != ccsFolder || len(d.Files) != 1 || d.Files[0].Host != "ccs.example.test" || d.Files[0].Problem != "" {
+		t.Fatalf("%+v", d)
+	}
+	leaf, _ := base64.StdEncoding.DecodeString(d.Files[0].LeafDER)
+	if sum256(leaf) != sum256(f.old.Cert.Raw) || len(d.Files[0].Chain) != 1 {
+		t.Fatalf("the dump reads another leaf: %+v", d.Files[0])
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatalf("before: %s", got)
+	}
+
+	nl := f.issue("ccs.example.test")
+	r, dr := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), nl)
+	if r.Exit != 0 || dr.Phase != winproto.PhaseCommitted || dr.NewSHA256 != sum256(nl.Cert.Raw) {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(nl.Cert.Raw) {
+		t.Fatalf("a fresh handshake serves %s, not the new file", got)
+	}
+	bak := "ccs.example.test.pfx.alice-" + opID(1)[len(opID(1))-8:] + ".bak"
+	if names := f.m.CCSNames(); !slices.Equal(names, []string{"ccs.example.test.pfx", bak}) {
+		t.Fatalf("names %v", names)
+	}
+	if ev := f.m.Events(); len(ev) != 1 || ev[0].ID != 1004 || strings.Contains(ev[0].Text, f.password) {
+		t.Fatalf("events %+v", ev)
+	}
+
+	var rs winproto.RestoreResponse
+	if r := run(t, f.m, "iis-restore --op "+opID(1), restoreInput(), &rs); r.Exit != 0 || rs.Phase != winproto.PhaseRestored {
+		t.Fatalf("restore: %d %s", r.Exit, r.Stdout)
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatalf("after the restore: %s", got)
+	}
+	if names := f.m.CCSNames(); !slices.Equal(names, []string{"ccs.example.test.pfx"}) {
+		t.Fatalf("the restore consumes the backup: %v", names)
+	}
+	if s := status(t, f.m, opID(1)); s.CurrentCertSHA256 != sum256(f.old.Cert.Raw) {
+		t.Fatalf("status %+v", s)
+	}
+}
+
+func TestModelCCSWildcard(t *testing.T) {
+	f := newCCSFixture(t)
+	wild, exact := f.issue("*.example.test"), f.issue("x.example.test")
+	f.put("_.example.test.pfx", wild)
+	f.serve(t)
+	if got := f.servedCCS(t, "x.example.test"); got != sum256(wild.Cert.Raw) {
+		t.Fatalf("the wildcard file serves %s", got)
+	}
+	if got := f.servedCCS(t, "a.b.example.test"); got != "" {
+		t.Fatal("the wildcard file covers one label only")
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatal("the exact file comes before the wildcard")
+	}
+	// NTFS compares names without case: a file spelled in capitals is found for the host.
+	f.put("X.Example.TEST.PFX", exact)
+	if got := f.servedCCS(t, "x.example.test"); got != sum256(exact.Cert.Raw) {
+		t.Fatalf("the exact file serves %s", got)
+	}
+	if _, ok := f.m.CCSFile("x.example.test.pfx"); !ok {
+		t.Fatal("CCSFile finds a name without case")
+	}
+	// Without SNI, with CCS off, or with the store's password not opening the file, nothing is served.
+	if got := f.servedCCS(t, ""); got != "" {
+		t.Fatal("no SNI, no file")
+	}
+	f.m.PutCCSFile("y.example.test.pfx", exact.Cert, nil, exact.Key, "other-"+rand.Text())
+	if got := f.servedCCS(t, "y.example.test"); got != "" {
+		t.Fatal("a file the store's password does not open is not served (F16)")
+	}
+	f.m.SetCCS(false, ccsFolder)
+	if got := f.servedCCS(t, "x.example.test"); got != "" {
+		t.Fatal("CCS off serves nothing")
+	}
+}
+
+func TestModelCCSFailReplace(t *testing.T) {
+	f := newCCSFixture(t)
+	before := mustCCS(t, f.m, "ccs.example.test.pfx")
+	f.m.FailReplace(true)
+	r, d := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test"))
+	if r.Exit != 0 || d.Phase != winproto.PhaseRestored || d.FailedStep != winproto.StepWriteFile {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if names := f.m.CCSNames(); !slices.Equal(names, []string{"ccs.example.test.pfx"}) {
+		t.Fatalf("names %v", names)
+	}
+	if after := mustCCS(t, f.m, "ccs.example.test.pfx"); !slices.Equal(after, before) {
+		t.Fatal("the file changed")
+	}
+	// FailReplace fails the next replace only.
+	if r, d := f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit != 0 || d.Phase != winproto.PhaseCommitted {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+}
+
+func TestModelServeStaleCCS(t *testing.T) {
+	f := newCCSFixture(t)
+	f.serve(t)
+	f.m.ServeStaleCCS(true)
+	nl := f.issue("ccs.example.test")
+	if r, d := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), nl); r.Exit != 0 || d.Phase != winproto.PhaseCommitted {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatal("a stale listener keeps the file as it was before the replace")
+	}
+	// The rollback puts that file back: it is served, stale or not.
+	if r := run(t, f.m, "iis-restore --op "+opID(1), restoreInput(), nil); r.Exit != 0 {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatal("after the restore")
+	}
+	if r, _ := f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), nl); r.Exit != 0 {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	f.m.Reboot()
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(nl.Cert.Raw) {
+		t.Fatal("a reboot serves the file as it is")
+	}
+	third := f.issue("ccs.example.test")
+	if r, _ := f.deploy(t, opID(3), "ccs.example.test", sum256(nl.Cert.Raw), third); r.Exit != 0 {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(nl.Cert.Raw) {
+		t.Fatal("still stale after the reboot")
+	}
+	f.m.ServeStaleCCS(false)
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(third.Cert.Raw) {
+		t.Fatal("with stale off the file is served again")
+	}
+	if leaf, n, ok := f.m.Served("0.0.0.0", 443, "ccs.example.test"); !ok || leaf != sum256(third.Cert.Raw) || n != 2 {
+		t.Fatalf("Served %s %d %v", leaf, n, ok)
+	}
+}
+
+func TestModelCCSFolderAndFiles(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.m.Host()
+	ctx := context.Background()
+	if en, p, err := h.CCSConfig(ctx); err != nil || !en || p != ccsFolder {
+		t.Fatalf("%v %q %v", en, p, err)
+	}
+	_, v := call(t, f.m, "win-facts")
+	if iis := v["iis"].(map[string]any); iis["ccs_enabled"] != true || iis["ccs_path"] != ccsFolder {
+		t.Fatalf("win-facts %v", iis)
+	}
+	// A folder that does not exist lists nothing (a journal's folder after a path change); the trailing
+	// backslash and the case of the folder do not matter.
+	if l, err := h.ListCCS(ctx, `D:\gone`); err != nil || len(l) != 0 {
+		t.Fatalf("%v %v", l, err)
+	}
+	if l, err := h.ListCCS(ctx, `c:\ccs\`); err != nil || len(l) != 1 || l[0].Name != "ccs.example.test.pfx" || l[0].Size == 0 {
+		t.Fatalf("%+v %v", l, err)
+	}
+	if _, found, err := h.ReadCCS(ctx, `D:\gone`, "a.pfx", 10); found || err != nil {
+		t.Fatal("a file of a folder that does not exist")
+	}
+	if data, found, err := h.ReadCCS(ctx, ccsFolder, "CCS.example.test.pfx", 10); !found || err != nil || len(data) != 11 {
+		t.Fatalf("ReadCCS reads at most limit+1 bytes: %d %v %v", len(data), found, err)
+	}
+	if err := h.WriteCCSTemp(ctx, `D:\gone`, ".alice-x.tmp", []byte("x")); err == nil {
+		t.Fatal("a temporary file in a folder that does not exist")
+	}
+	if err := h.WriteCCSTemp(ctx, ccsFolder, ".alice-x.tmp", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.WriteCCSTemp(ctx, ccsFolder, ".alice-x.tmp", []byte("x")); err == nil {
+		t.Fatal("CREATE_NEW over an existing file")
+	}
+	if err := h.RemoveCCS(ctx, ccsFolder, "ccs.example.test.pfx"); err == nil {
+		t.Fatal("RemoveCCS removes a .tmp or .bak only")
+	}
+	for _, folder := range []string{ccsFolder, `D:\gone`} {
+		if err := h.RemoveCCS(ctx, folder, ".alice-x.tmp"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.ReplaceCCS(ctx, ccsFolder, "ccs.example.test.pfx", ".alice-none.tmp", "b.bak"); err == nil {
+		t.Fatal("a replace without its temporary file")
+	}
+	if err := h.RestoreCCS(ctx, ccsFolder, "none.bak", "ccs.example.test.pfx"); err == nil {
+		t.Fatal("a restore without its backup")
+	}
+	if _, ok := f.m.CCSFile("none.pfx"); ok {
+		t.Fatal("CCSFile of no file")
+	}
+
+	// A third party's bytes: not a PFX, and a PFX the password does not open.
+	f.m.PutRawCCSFile("raw.example.test.pfx", []byte("not a pfx"))
+	f.m.PutCCSFile("other.example.test.pfx", f.old.Cert, nil, f.old.Key, "other-"+rand.Text())
+	f.m.PutRawCCSFile("readme.txt", []byte("x"))
+	d := f.dump(t)
+	problems := map[string]string{}
+	for _, file := range d.Files {
+		problems[file.Name] = file.Problem
+	}
+	if len(d.Files) != 3 || problems["raw.example.test.pfx"] != winproto.CCSProblemNotPFX ||
+		problems["other.example.test.pfx"] != winproto.CCSProblemPasswordMismatch || problems["ccs.example.test.pfx"] != "" {
+		t.Fatalf("%+v", d)
+	}
+	if !slices.Contains(f.m.CCSNames(), "readme.txt") {
+		t.Fatal("CCSNames lists every name")
+	}
+	if leaf, chain, problem, err := h.OpenPFX(mustCCS(t, f.m, "ccs.example.test.pfx"), []byte(f.password)); err != nil || problem != "" ||
+		sum256(leaf) != sum256(f.old.Cert.Raw) || len(chain) != 1 {
+		t.Fatalf("OpenPFX %q %v", problem, err)
+	}
+}
+
+func mustCCS(t *testing.T, m *Model, name string) []byte {
+	t.Helper()
+	b, ok := m.CCSFile(name)
+	if !ok {
+		t.Fatalf("no %s", name)
+	}
+	return b
+}
+
+func TestModelCCSPathChangeKeepsTheOldFolder(t *testing.T) {
+	f := newCCSFixture(t)
+	if r, d := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit != 0 || d.Phase != winproto.PhaseCommitted {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	f.m.SetCCS(true, `D:\Certs`)
+	if names := f.m.CCSNames(); len(names) != 0 {
+		t.Fatalf("the new folder is empty: %v", names)
+	}
+	if r, _ := f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit != 3 {
+		t.Fatalf("a deployment to the old folder: %d %s", r.Exit, r.Stdout)
+	}
+	// The rollback restores into the folder its journal names (W5 Ruling 17).
+	var rs winproto.RestoreResponse
+	if r := run(t, f.m, "iis-restore --op "+opID(1), restoreInput(), &rs); r.Exit != 0 || rs.Phase != winproto.PhaseRestored {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	f.m.SetCCS(true, ccsFolder)
+	if got, _, err := pki.OpenPFX(mustCCS(t, f.m, "ccs.example.test.pfx"), []byte(f.password)); err != nil || sum256(got) != sum256(f.old.Cert.Raw) {
+		t.Fatalf("the old folder's file holds the old leaf again: %v", err)
+	}
+}
+
+func TestDemoHostHasCCS(t *testing.T) {
+	m, err := Demo(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pw := m.CCSPassword()
+	if !winproto.ValidCCSPassword([]byte(pw)) {
+		t.Fatalf("the demo's password is not one Alice manages (%d bytes)", len(pw))
+	}
+	in, _ := json.Marshal(winproto.CCSDumpInput{Password: pw})
+	var d winproto.CCSDumpResponse
+	if r := run(t, m, winproto.SubCCSDump, in, &d); r.Exit != 0 || !d.Enabled || !d.Local || d.Path != `C:\CCS` || len(d.Files) != 2 ||
+		d.Files[0].Name != "_.unlinked.test.pfx" || d.Files[1].Name != "ccs.example.test.pfx" || d.Files[0].Problem != "" || d.Files[1].Problem != "" {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	var id winproto.IISDumpResponse
+	if r := run(t, m, winproto.SubIISDump, nil, &id); r.Exit != 0 {
+		t.Fatal(r.Exit)
+	}
+	linked := false
+	for _, s := range id.Sites {
+		for _, b := range s.Bindings {
+			linked = linked || (b.Information == "*:443:ccs.example.test" && b.SSLFlags == 3)
+		}
+	}
+	if !linked {
+		t.Fatalf("no CCS site binding: %+v", id.Sites)
+	}
+	leaf, _ := base64.StdEncoding.DecodeString(d.Files[1].LeafDER)
+	if got, n, ok := m.Served("0.0.0.0", 443, "ccs.example.test"); !ok || got != sum256(leaf) || n != 2 {
+		t.Fatalf("served %s %d %v", got, n, ok)
 	}
 }

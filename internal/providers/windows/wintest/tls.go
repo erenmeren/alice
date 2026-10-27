@@ -12,9 +12,11 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 var errNoCertificate = errors.New("wintest: http.sys has no usable certificate for this connection")
@@ -23,8 +25,9 @@ var errNoCertificate = errors.New("wintest: http.sys has no usable certificate f
 const handshakeTimeout = 10 * time.Second
 
 // selectLocked is http.sys's choice for a connection to ip:port with the given SNI (""): a hostnameport
-// entry for (SNI, port), else an ipport entry for (ip, port), else the wildcard 0.0.0.0:port (and
-// [::]:port); a ccs entry alone serves nothing.
+// entry for (SNI, port), else the ccs entry of the port when CCS is on and there is an SNI (an explicit
+// hostnameport entry comes first, F17), else an ipport entry for (ip, port), else the wildcard
+// 0.0.0.0:port (and [::]:port). Without CCS or an SNI a ccs entry serves nothing.
 func (m *Model) selectLocked(ip string, port int, sni string) (*winproto.SSLBinding, error) {
 	addr, _ := netip.ParseAddr(ip)
 	addr = addr.Unmap()
@@ -48,6 +51,7 @@ func (m *Model) selectLocked(ip string, port int, sni string) (*winproto.SSLBind
 	case sni != "" && find(func(b *winproto.SSLBinding) bool {
 		return b.Type == winproto.BindingHostnamePort && fold(b.Host) == fold(sni)
 	}):
+	case sni != "" && m.iis.CCSEnabled && find(func(b *winproto.SSLBinding) bool { return b.Type == winproto.BindingCCS }):
 	case addr.IsValid() && find(ipport(addr)):
 	case find(ipport(netip.IPv4Unspecified())):
 	case find(ipport(netip.IPv6Unspecified())):
@@ -101,16 +105,55 @@ func (m *Model) presentedLocked(b *winproto.SSLBinding) (*tls.Certificate, error
 	return c, nil
 }
 
+// certificateLocked is what a handshake to ip:port with the given SNI presents: the record http.sys
+// selects, and for a ccs record the file of the CCS folder (ccsPresentedLocked).
+func (m *Model) certificateLocked(ip string, port int, sni string) (*tls.Certificate, error) {
+	b, err := m.selectLocked(ip, port, sni)
+	if err != nil {
+		return nil, err
+	}
+	if b.Type == winproto.BindingCCS {
+		return m.ccsPresentedLocked(sni)
+	}
+	return m.presentedLocked(b)
+}
+
+// ccsPresentedLocked is IIS's CCS lookup for an SNI host (F17 as modelled): <host>.pfx, else
+// _.<parent>.pfx of the one-label parent, compared without case, in the folder the registry names now,
+// at every handshake (F15: a fresh handshake sees a replaced file). The file is opened with the store's
+// password; one it does not open serves nothing (F16). The chain is the file's intermediates (F18 as
+// modelled). ServeStaleCCS's listener serves the bytes it kept.
+func (m *Model) ccsPresentedLocked(sni string) (*tls.Certificate, error) {
+	host := fold(sni)
+	names := []string{host + ".pfx"}
+	if _, parent, ok := strings.Cut(host, "."); ok && parent != "" {
+		names = append(names, "_."+parent+".pfx")
+	}
+	d := m.ccsDirs[folderKey(m.iis.CCSPath)]
+	for _, n := range names {
+		f := d[n]
+		if f == nil {
+			continue
+		}
+		data := f.data
+		if p, ok := m.ccsPinned[pinKey(m.iis.CCSPath, n)]; ok {
+			data = p
+		}
+		leaf, chain, key, err := pki.OpenPFXKey(data, []byte(m.ccsPassword))
+		if err != nil {
+			return nil, errNoCertificate
+		}
+		return &tls.Certificate{Certificate: append([][]byte{leaf}, chain...), PrivateKey: key}, nil
+	}
+	return nil, errNoCertificate
+}
+
 // Served is what a TLS handshake to ip:port with the given SNI shows: the SHA-256 of the leaf (lower
 // case hex) and the number of certificates presented. ok is false when the handshake fails.
 func (m *Model) Served(ip string, port int, sni string) (leafSHA256 string, chainLength int, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	b, err := m.selectLocked(ip, port, sni)
-	if err != nil {
-		return "", 0, false
-	}
-	c, err := m.presentedLocked(b)
+	c, err := m.certificateLocked(ip, port, sni)
 	if err != nil {
 		return "", 0, false
 	}
@@ -193,11 +236,7 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int) {
 			if meant, ok := m.intents[hi.Conn.RemoteAddr().String()]; ok {
 				ip = meant
 			}
-			b, err := m.selectLocked(ip, port, hi.ServerName)
-			if err != nil {
-				return nil, err
-			}
-			return m.presentedLocked(b)
+			return m.certificateLocked(ip, port, hi.ServerName)
 		},
 	}
 	for {

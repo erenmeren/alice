@@ -521,3 +521,51 @@ func TestCtlStaleTLSKeepsTheListenerOnTheOldCertificate(t *testing.T) {
 		assert.Equal(t, http.StatusMethodNotAllowed, r.StatusCode, path)
 	}
 }
+
+// The demo host's CCS (W5 Ruling 25): ctl ccs-password prints the store's password on stdout, and that
+// password opens both files of C:\CCS over SSH; the linked one is served by SNI on the 443 listener.
+func TestCtlCCSPasswordOpensTheDemoFiles(t *testing.T) {
+	st := startStack(t)
+	key := clientKey(t)
+	code, _, errOut := st.ctlRun(t, setupScriptFor(t, key), "prepare")
+	require.Equal(t, 0, code, errOut)
+	code, out, errOut := st.ctlRun(t, "", "ccs-password")
+	require.Equal(t, 0, code, errOut)
+	pw := strings.TrimSuffix(out, "\n")
+	require.True(t, winproto.ValidCCSPassword([]byte(pw)), "a password Alice manages")
+	assert.NotContains(t, st.logs.String(), pw, "the password is never logged")
+
+	in, err := json.Marshal(winproto.CCSDumpInput{Password: pw})
+	require.NoError(t, err)
+	c, err := dial(st.ssh, key, ssh.FingerprintSHA256(st.hostKey))
+	require.NoError(t, err)
+	defer func() { _ = c.Close() }()
+	s, err := c.NewSession()
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	s.Stdin = bytes.NewReader(in)
+	raw, err := s.Output(winproto.SubCCSDump)
+	require.NoError(t, err, string(raw))
+	var d winproto.CCSDumpResponse
+	require.NoError(t, json.Unmarshal(raw, &d), string(raw))
+	require.Len(t, d.Files, 2, string(raw))
+	for _, f := range d.Files {
+		assert.Empty(t, f.Problem, f.Name)
+		assert.NotEmpty(t, f.LeafDER, f.Name)
+	}
+
+	code, out, errOut = st.ctlRun(t, "", "endpoints")
+	require.Equal(t, 0, code, errOut)
+	var eps map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &eps))
+	conn, err := tls.Dial("tcp", eps["443"], &tls.Config{ServerName: "ccs.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
+	require.NoError(t, err)
+	assert.Equal(t, "ccs.example.test", conn.ConnectionState().PeerCertificates[0].Subject.CommonName)
+	_ = conn.Close()
+
+	// ctl stale-tls-on makes the CCS files stale too (the CCS journal's rollback step, Ruling 25).
+	code, _, errOut = st.ctlRun(t, "", "stale-tls-on")
+	require.Equal(t, 0, code, errOut)
+	code, _, errOut = st.ctlRun(t, "", "stale-tls-off")
+	require.Equal(t, 0, code, errOut)
+}
