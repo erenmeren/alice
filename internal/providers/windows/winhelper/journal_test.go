@@ -622,7 +622,7 @@ func sampleCCSJournal(op string) journal {
 		Steps:         []winproto.Step{{Name: winproto.StepImportChain, Status: winproto.StepOK}, {Name: winproto.StepWriteFile, Status: winproto.StepOK}},
 		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{s256c},
 		CCS: &ccsJournal{Path: `C:\CCS`, File: "www.example.test.pfx", Host: "www.example.test",
-			Backup: "www.example.test.pfx.alice-" + op[:8] + ".bak", Temp: ".alice-" + op + ".tmp",
+			Backup: "www.example.test.pfx.alice-" + op[len(op)-8:] + ".bak", Temp: ".alice-" + op + ".tmp",
 			PreviousFileSHA256: s256c, NewFileSHA256: s256a, PreviousSPKISHA256: s256b}}
 }
 
@@ -676,5 +676,22 @@ func TestCCSJournalValidation(t *testing.T) {
 		if j.valid(op1) {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// TestCCSBackupNameIsTheOperationsLastDigits (controller ruling W5-2): deployment ids are UUIDv7, whose
+// first 8 hex digits are the time; the backup name takes the last 8, which are random.
+func TestCCSBackupNameIsTheOperationsLastDigits(t *testing.T) {
+	const a, b = "0190aaaa-bbbb-7ccc-8ddd-eeee1234abcd", "0190aaaa-bbbb-7ccc-8ddd-eeee5678ef01"
+	if got := ccsBackupName("a.pfx", a); got != "a.pfx.alice-1234abcd.bak" || got == ccsBackupName("a.pfx", b) {
+		t.Fatal(got)
+	}
+	j := sampleCCSJournal(a)
+	if !j.valid(a) {
+		t.Fatal("refused")
+	}
+	j.CCS.Backup = "www.example.test.pfx.alice-0190aaaa.bak"
+	if j.valid(a) {
+		t.Fatal("a backup named by the first digits is accepted")
 	}
 }

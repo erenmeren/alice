@@ -124,7 +124,8 @@ func ccsRecordKey(file string) string { return "ccs/" + file }
 
 // ccsBackupName and ccsTempName are the backup and the temporary file of operation op in the CCS folder
 // (Global Constraints: neither ends in .pfx, so IIS never serves them).
-func ccsBackupName(file, op string) string { return file + ".alice-" + op[:8] + ".bak" }
+// The backup takes the operation's last 8 hex digits: a UUIDv7's first 8 are its time (ruling W5-2).
+func ccsBackupName(file, op string) string { return file + ".alice-" + op[len(op)-8:] + ".bak" }
 func ccsTempName(op string) string         { return ".alice-" + op + ".tmp" }
 
 // valid reports CCS fields the helper may act on for operation op: the folder a supported local path,

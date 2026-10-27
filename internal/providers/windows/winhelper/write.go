@@ -71,7 +71,9 @@ type WriteHost interface {
 	ProtectedThumbprints(ctx context.Context) (Protected, error)
 
 	// The Centralized Certificate Store (W5, R68). Every folder argument is the folder the helper
-	// itself read from CCSConfig, never input; every name is one the helper derived or listed.
+	// itself read from CCSConfig, or the folder of a valid journal (a ValidCCSPath CCSConfig named when
+	// the journal was written, W5 Ruling 17), never input; every name is one the helper derived or
+	// listed.
 	//
 	// CCSConfig reads IIS's CentralCertProvider registry key (Enabled, CertStoreLocation) at every call.
 	CCSConfig(ctx context.Context) (enabled bool, path string, err error)

@@ -395,7 +395,7 @@ func (f *ccsFixture) names() []string {
 	return out
 }
 
-func ccsBackup(op string) string { return ccsName + ".alice-" + op[:8] + ".bak" }
+func ccsBackup(op string) string { return ccsName + ".alice-" + op[len(op)-8:] + ".bak" }
 func ccsTemp(op string) string   { return ".alice-" + op + ".tmp" }
 
 // holds reports that the fake's file opens with pw to leaf and exactly the intermediates.
@@ -652,6 +652,20 @@ func TestCCSDeployReadBackRestores(t *testing.T) {
 		want := []winproto.Step{ok(winproto.StepImportChain), bad(winproto.StepWriteFile, winproto.ErrReadBack), ok(winproto.StepRestore)}
 		if !reflect.DeepEqual(r.Steps, want) || !slices.Contains(f.h.writes(), "ccs-restore "+ccsName) || f.h.events[len(f.h.events)-1].id != 1002 {
 			t.Fatalf("%+v %v", r.Steps, f.h.writes())
+		}
+	})
+	t.Run("the file reads back neither the previous nor the new bytes, lastingly", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.h.ccsReadData = func(name string, data []byte) []byte {
+			if name == ccsName && slices.Contains(f.h.log, "ccs-replace "+ccsName) {
+				return []byte("other bytes")
+			}
+			return data
+		}
+		_, r, _ := f.ccsDeploy(op1, f.in())
+		if r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrFileChanged || r.CauseStep != winproto.StepWriteFile ||
+			slices.Contains(f.h.writes(), "ccs-restore "+ccsName) {
+			t.Fatalf("%+v %v", r, f.h.writes())
 		}
 	})
 	t.Run("the file opens to nothing", func(t *testing.T) {
@@ -1002,4 +1016,95 @@ func TestCCSJournalHoldsNoPassword(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestCCSInterruptedThenChangedByAThirdParty: an interrupted operation whose file someone else wrote
+// ends restore_failed file_changed with the file left as it is, so the next ccs-deploy is not held up.
+func TestCCSInterruptedThenChangedByAThirdParty(t *testing.T) {
+	for _, p := range []string{"ccs.temp_written", "ccs.replaced"} {
+		t.Run(p, func(t *testing.T) {
+			f := newCCSFixture(t)
+			f.h.pointErr = func(name string) error {
+				if name == p {
+					return errors.New("kill")
+				}
+				return nil
+			}
+			f.killedDeploy(op1, f.in())
+			f.h.pointErr = nil
+			third := f.ca.Issue(leafOpts, testNow)
+			theirs := f.pfx(third)
+			f.setFile(ccsName, theirs)
+			f.reset()
+			if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestoreFailed || r.Error != winproto.ErrFileChanged {
+				t.Fatalf("%s", out)
+			}
+			if data, _ := f.file(ccsName); !bytes.Equal(data, theirs) {
+				t.Fatal("the third party's file was overwritten")
+			}
+			f.ccsCommitted(op2, f.in(func(in *winproto.CCSDeployInput) { in.ExpectSHA256 = hexSHA256(third.Cert.Raw) }))
+		})
+	}
+}
+
+// killedDeploy runs a ccs-deploy that a point kills: no answer.
+func (f *ccsFixture) killedDeploy(op string, in []byte) {
+	f.t.Helper()
+	var out bytes.Buffer
+	if o := Execute(context.Background(), f.h, []string{winproto.SubCCSDeploy, winproto.ArgOp, op}, bytes.NewReader(in), &out); !o.Killed {
+		f.t.Fatalf("not killed: %+v %s", o, out.Bytes())
+	}
+}
+
+func (f *ccsFixture) plan() (Outcome, []byte) {
+	f.t.Helper()
+	return execute(f.t, context.Background(), f.h, bytes.NewReader(planInput()), winproto.SubIISCleanup, winproto.ArgPlan)
+}
+
+// TestCCSAfterThePathChanged (W5 Ruling 17): a committed operation is still rolled back, and its backup
+// still pruned, in the folder its journal names after the registry names another; a journal folder
+// that became a reparse point is refused with nothing written.
+func TestCCSAfterThePathChanged(t *testing.T) {
+	t.Run("restore", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.ccsCommitted(op1, f.in())
+		f.h.moveCCS(`C:\New`)
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		if data, _ := f.file(ccsName); !bytes.Equal(data, f.oldPFX) {
+			t.Fatal("not restored")
+		}
+	})
+	t.Run("prune", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.ccsCommitted(op1, f.in())
+		f.h.moveCCS(`C:\New`)
+		if o, out := f.plan(); o.Exit != 0 {
+			t.Fatalf("%s", out)
+		}
+		if _, ok := f.file(ccsBackup(op1)); ok {
+			t.Fatal("the backup stays")
+		}
+	})
+	t.Run("the journal's folder became a reparse point", func(t *testing.T) {
+		f := newCCSFixture(t)
+		f.ccsCommitted(op1, f.in())
+		f.h.ccsListErr = ErrCCSFolderUnsupported
+		f.reset()
+		o, _, out := f.restore(op1, []string{}, []string{})
+		wantError(t, o.Exit, out, winproto.ExitPrecondition, winproto.CodeCCSPathUnsupported)
+		if len(f.h.writes()) != 0 {
+			t.Fatalf("%v", f.h.writes())
+		}
+		if o, out := f.plan(); o.Exit != 0 {
+			t.Fatalf("%s", out)
+		}
+		if _, ok := f.file(ccsBackup(op1)); !ok || slices.ContainsFunc(f.h.writes(), func(s string) bool { return strings.HasPrefix(s, "ccs-unlink") }) {
+			t.Fatalf("%v", f.h.writes())
+		}
+		if _, ok := f.h.state[journalName(op1)]; !ok {
+			t.Fatal("the journal was removed")
+		}
+	})
 }

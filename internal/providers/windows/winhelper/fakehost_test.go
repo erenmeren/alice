@@ -212,6 +212,7 @@ type fakeWriteHost struct {
 	// every ReadCCS; ccsPasswords are the slices OpenPFX was given (a test checks they were cleared).
 	ccsEnabled    bool
 	ccsPath       string
+	ccsOld        map[string]bool // folders CCSConfig named before (moveCCS): their files are ccsFiles
 	ccsConfigErr  error
 	ccsFiles      map[string]fakeCCSFile
 	ccsListErr    error
@@ -636,9 +637,21 @@ func (f *fakeWriteHost) CCSConfig(context.Context) (bool, string, error) {
 	return f.ccsEnabled, f.ccsPath, f.ccsConfigErr
 }
 
-// inCCS reports whether folder is the fake's CCS folder (every path argument is one the helper read).
+// moveCCS points the registry at another folder; the files stay in the old one, which the helper may
+// still name from a journal (W5 Ruling 17).
+func (f *fakeWriteHost) moveCCS(path string) {
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.ccsOld == nil {
+		f.ccsOld = map[string]bool{}
+	}
+	f.ccsOld[f.ccsPath], f.ccsPath = true, path
+}
+
+// inCCS reports whether folder is the fake's CCS folder or one CCSConfig named before (every path
+// argument is one the helper read, from CCSConfig or from a journal).
 func (f *fakeWriteHost) inCCS(folder string) error {
-	if folder != f.ccsPath {
+	if folder != f.ccsPath && !f.ccsOld[folder] {
 		return errors.New("not the CCS folder")
 	}
 	return nil

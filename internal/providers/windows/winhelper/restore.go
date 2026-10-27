@@ -68,6 +68,11 @@ func planRestore(ctx context.Context, h WriteHost, j journal, g guard) (restoreK
 // key is never opened again: a restore has no password).
 func planRestoreCCS(ctx context.Context, h WriteHost, j journal, g guard) (restoreKind, error) {
 	c := j.CCS
+	// The journal's folder is checked again: one that became a reparse point is never written to (W5
+	// Ruling 3); ListCCS answers ErrCCSFolderUnsupported for it.
+	if _, err := h.ListCCS(ctx, c.Path); err != nil {
+		return 0, err
+	}
 	cur, found, err := ccsFileSum(ctx, h, c.Path, c.File)
 	if err != nil {
 		return 0, err
@@ -233,6 +238,8 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	g := guard{SPKI: j.ForbiddenSPKI, Leaf: j.ForbiddenLeaf}.with(extra)
 	kind, err := planRestore(ctx, h, j, g)
 	switch {
+	case errors.Is(err, ErrCCSFolderUnsupported):
+		return nil, precondition(winproto.CodeCCSPathUnsupported, "the CCS folder is not a local folder Alice manages")
 	case errors.Is(err, ErrStore):
 		return nil, failed(winproto.CodeStoreError, "a certificate store could not be opened")
 	case err != nil:
@@ -242,8 +249,10 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	case kind == restoreForeign && j.Phase == winproto.PhaseRestoreFailed && j.Error == winproto.ErrFileChanged,
 		kind == restoreForbidden && j.Phase == winproto.PhaseRestoreForbidden:
 		return answer(j, len(j.Steps)), nil // the same outcome again: nothing rewritten
-	case kind == restoreForeign && j.Kind == winproto.JournalKindCCS:
+	case kind == restoreForeign && j.Kind == winproto.JournalKindCCS && j.Phase == winproto.PhaseCommitted:
 		// A CCS file this operation did not leave is someone else's (W5 Ruling 15): never overwritten.
+		// An interrupted operation ends restore_failed file_changed instead (applyRestore), as in W2, so
+		// it no longer holds up the next deployment.
 		return nil, precondition(winproto.CodeSuperseded, "the CCS file was changed after this deployment; it is not rolled back")
 	}
 	wctx, err := c.gate.enter()

@@ -818,20 +818,22 @@ func ValidCCSPassword(pw []byte) bool {
 }
 
 // ValidCCSPath reports whether p is an absolute local path X:\... of at most MaxCCSPath bytes with a
-// drive letter, no \\ prefix (UNC, \\?\, \\.\), no ".." segment, no control character and none of
-// "*?<>| (W5 Ruling 4). One trailing backslash is allowed.
+// drive letter, no \\ prefix (UNC, \\?\, \\.\), no "." or ".." segment, no control character and
+// none of "*?<>|:/ after the drive (W5 Ruling 4). One trailing backslash is allowed.
 func ValidCCSPath(p string) bool {
-	if len(p) < 3 || len(p) > MaxCCSPath || p[1] != ':' || p[2] != '\\' ||
-		!('A' <= p[0] && p[0] <= 'Z' || 'a' <= p[0] && p[0] <= 'z') {
+	if len(p) < 3 || len(p) > MaxCCSPath || p[1] != ':' || p[2] != '\\' {
 		return false
 	}
-	for _, c := range []byte(p) {
-		if c < 0x20 || c == 0x7f || strings.IndexByte(`"*?<>|`, c) >= 0 {
+	if drive := p[0] | 0x20; drive < 'a' || drive > 'z' { // ASCII letters only: 0x20 folds case
+		return false
+	}
+	for _, c := range []byte(p[3:]) {
+		if c < 0x20 || c == 0x7f || strings.IndexByte(`"*?<>|:/`, c) >= 0 {
 			return false
 		}
 	}
 	for _, seg := range strings.Split(p[3:], `\`) {
-		if seg == ".." {
+		if seg == "." || seg == ".." {
 			return false
 		}
 	}

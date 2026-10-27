@@ -1481,3 +1481,34 @@ func TestPruneCCSBackups(t *testing.T) {
 type failRemoveCCS struct{ *fakeWriteHost }
 
 func (failRemoveCCS) RemoveCCS(context.Context, string, string) error { return errors.New("denied") }
+
+// TestPruneEntersTheGateOnlyToRemove: a needed CCS journal with nothing left in the folder makes the
+// plan read, never enter the gate; with something to remove it enters it.
+func TestPruneEntersTheGateOnlyToRemove(t *testing.T) {
+	f := newCleanup(t)
+	f.h.setCCS(ccsFolder, nil)
+	j := sampleCCSJournal(op1)
+	mustWrite(t, f.h, j)
+	if err := writeBindingRecord(f.h, j.Binding, op1); err != nil {
+		t.Fatal(err)
+	}
+	f.h.modTimes[journalName(op1)] = testNow.Add(-8 * day)
+	closed, cancel := context.WithCancel(context.Background())
+	cancel()
+	prune := func() error {
+		s, err := readCleanupState(context.Background(), f.h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var resp winproto.CleanupPlanResponse
+		_, err = s.prune(context.Background(), nil, newGate(closed), &resp)
+		return err
+	}
+	if err := prune(); err != nil {
+		t.Fatalf("nothing to remove, yet: %v", err)
+	}
+	f.h.ccsFiles[j.CCS.Temp] = fakeCCSFile{data: []byte("temporary")}
+	if err := prune(); err == nil {
+		t.Fatal("a removal without the gate")
+	}
+}
