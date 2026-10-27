@@ -449,6 +449,46 @@ func TestWindowsCCSUnlinkedIsReadBackOnly(t *testing.T) {
 	assert.Equal(t, pki.Fingerprint(e.nw.Cert), pki.Fingerprint(c), "the file holds the new certificate")
 }
 
+// Final review I1 (Review Focus 3, WN-21): a file whose only IIS binding discovery cannot read is not proven unlinked:
+// its location is cut (list_truncated, no win_ccs_unlinked), and a deployment to it is never verified as skipped.
+// With no endpoint known the verification is unreachable, so the file keeps or gets back the old certificate.
+func TestWindowsCCSCutBindingIsNeverSkipped(t *testing.T) {
+	e := newEnv(t)
+	s := e.addCCSServer("iis-01")
+	const name = "_.cut.test.pfx"
+	s.model.PutCCSFile(name, e.old.Cert, []*x509.Certificate{e.ca.Intermediate}, e.old.Key, s.pw)
+	s.model.AddSite(winproto.Site{Name: "Cut", ID: 4, State: "Started", Bindings: []winproto.SiteBinding{
+		{Protocol: "https", Information: "*:x:a.cut.test", SSLFlags: 3}}})
+	_, err := e.inv.RequestDiscovery(e.ctx, e.admin, s.target)
+	require.NoError(t, err)
+	e.drain()
+	list, err := e.inv.ListLocations(e.ctx, s.target, false)
+	require.NoError(t, err)
+	var loc uuid.UUID
+	for _, l := range list.Items {
+		if l.CertPath == ccsFolder+`\`+name {
+			assert.Contains(t, l.Warnings, providers.WarnListTruncated)
+			assert.NotContains(t, l.Warnings, "win_ccs_unlinked")
+			loc = l.ID
+		}
+	}
+	require.NotEqual(t, uuid.Nil, loc)
+	id := e.request(loc)[0]
+	e.drain()
+	d := e.deployment(id)
+	assert.NotEqual(t, inventory.DeployStatusSucceeded, d.Status, "never a skipped success")
+	assert.NotEqual(t, "skipped", d.Verified)
+	for _, st := range d.Steps {
+		assert.Empty(t, st.Params["ccs_unlinked"], st.Name)
+	}
+	data, _ := s.model.CCSFile(name)
+	leaf, _, _, err := pki.OpenPFXKey(data, []byte(s.pw))
+	require.NoError(t, err)
+	c, err := x509.ParseCertificate(leaf)
+	require.NoError(t, err)
+	assert.Equal(t, pki.Fingerprint(e.old.Cert), pki.Fingerprint(c), "the file holds the old certificate")
+}
+
 // W5 Ruling 17: CCS turned off after the location was discovered: the queued deployment is refused by the helper
 // with nothing changed (windows.ccs_disabled, ALC-WIN-0015).
 func TestWindowsCCSDisabledRefuses(t *testing.T) {

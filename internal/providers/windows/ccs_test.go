@@ -787,7 +787,6 @@ func TestConvertCCS(t *testing.T) {
 		ccsSite("Apex", "*:443:example.test", 3),     // but never its own parent
 		ccsSite("Plain", "*:443:plain.example.test", 1),
 		ccsSite("NoHost", "*:443:", 2),
-		ccsSite("Bad", "*:x:www.example.test", 3),
 	}
 	bad := ccsFileOf("not-a-cert.example.test.pfx", www)
 	bad.LeafDER = "!!"
@@ -895,6 +894,34 @@ func TestConvertCCS(t *testing.T) {
 	certs, warns = convertCCS(winproto.IISDumpResponse{}, many)
 	assert.Len(t, certs, winproto.MaxCCSFiles)
 	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
+}
+
+// Final review I1 (Review Focus 3, WN-21): an https binding convertCCS cannot read may be a CCS binding of any file, so
+// a file whose only binding is unreadable is not proven unlinked: every file location is cut (list_truncated, never
+// win_ccs_unlinked) and the server warnings say locations_dropped; a binding read without a file stays cert_missing (the
+// file list is whole). The verification of such a location probes (no endpoint known: unreachable, the house rule)
+// instead of answering skipped.
+func TestConvertCCSUnreadableBindingIsNotUnlinked(t *testing.T) {
+	f := newDump(t)
+	www := f.ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, f.now)
+	f.d.Sites = []winproto.Site{ccsSite("Bad", "*:x:www.example.test", 3), ccsSite("Gone", "*:443:gone.example.test", 3)}
+	certs, warns := convertCCS(f.d, ccsDump(ccsFileOf("www.example.test.pfx", www)))
+	got := byPath(certs)
+	require.Len(t, certs, 2)
+	assert.Equal(t, ProblemCertMissing, got[`C:\CCS\gone.example.test.pfx`].Location.Problem, "the file list is whole: missing is proven")
+	loc := got[`C:\CCS\www.example.test.pfx`].Location
+	assert.Empty(t, loc.Servers)
+	assert.Equal(t, []string{providers.WarnListTruncated}, loc.Warnings, "cut, not win_ccs_unlinked")
+	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
+	assert.False(t, unlinkedCCS(loc), "a cut location is never read-back only")
+
+	c := newCEnv(t)
+	c.cloc.Servers, c.cloc.Warnings = []providers.CertServer{}, []string{providers.WarnListTruncated}
+	vr, err := c.csession(t).VerifyDeployment(context.Background(), providers.VerifyRequest{Location: c.cloc, Fingerprint: derSHA256(c.old.Cert.Raw)})
+	require.NoError(t, err)
+	assert.False(t, vr.OK, "no skip: the probe has no endpoint")
+	assert.Equal(t, reasonVerifyUnreachable, vr.Reason)
+	assert.Empty(t, vr.Params[ccsUnlinkedParam])
 }
 
 // F17 (Ruling 6 as amended by ruling W5-13): the file IIS serves a host from: the exact file, then the nearest

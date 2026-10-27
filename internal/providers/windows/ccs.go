@@ -158,7 +158,9 @@ type ccsFile struct {
 // cert_missing location per such binding whose host maps to no file. Each location's token is its leaf DER's SHA-256
 // and its chain the leaf and the file's intermediates, parsed again (certificateChain's rule). A folder Alice does not
 // manage gives its server warning and no location; a folder the helper cut (truncated) or files Alice left out give
-// list_truncated and locations_dropped, and then no cert_missing location (a missing file is not proven).
+// list_truncated and locations_dropped, and then no cert_missing location (a missing file is not proven). An https
+// binding it cannot read (or one past maxMembershipsPerDump) gives them too and cuts every file location
+// (list_truncated, never win_ccs_unlinked): any file may lose a binding there.
 func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
 	warns := []providers.Warning{}
 	switch {
@@ -185,7 +187,7 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 	}
 
 	missing := map[string]*location{}
-	memberships := 0
+	memberships, sitesCut := 0, false
 	for _, site := range d.Sites {
 		name := cleanValue(site.Name, maxNameLength)
 		for _, sb := range site.Bindings {
@@ -193,8 +195,13 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 				continue
 			}
 			k, ok := parseSiteBinding(sb.Information, sb.SSLFlags)
-			if !ok || !k.ccs || !winproto.ValidHost(k.host) || memberships >= maxMembershipsPerDump {
-				continue // convert counts what it could not read; a CCS binding without a host header names no file
+			if !ok || memberships >= maxMembershipsPerDump {
+				// Any file may lose a binding here: none is proven unlinked (final review I1, Review Focus 3).
+				sitesCut = true
+				continue
+			}
+			if !k.ccs || !winproto.ValidHost(k.host) {
+				continue // a CCS binding without a host header names no file
 			}
 			memberships++
 			srv := server{cs: providers.CertServer{Names: []string{k.host}, Listens: []providers.CertListen{{Addr: k.ip, Port: k.port}},
@@ -213,6 +220,7 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 	certs := make([]providers.DiscoveredCertificate, 0, len(files)+len(missing))
 	mismatch := 0
 	for host, cf := range files {
+		cf.loc.cut = cf.loc.cut || sitesCut
 		dc := finishCCS(folder, host, cf)
 		if dc.Location.Problem == winproto.CCSProblemPasswordMismatch {
 			mismatch++
@@ -239,7 +247,7 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 		w.Params["count"] = strconv.Itoa(ignored)
 		warns = append(warns, w)
 	}
-	if dropped {
+	if dropped || sitesCut {
 		warns = append(warns, warning(providers.WarnListTruncated), warning(providers.WarnLocationsDropped))
 	}
 	return certs, warns
@@ -307,7 +315,7 @@ func finishCCS(folder, host string, cf *ccsFile) providers.DiscoveredCertificate
 	loc.Details["file_sha256"] = sum
 	loc.Details["file_size"] = max(f.Size, 0)
 	loc.Details["modified_at"] = modified
-	if len(loc.Servers) == 0 {
+	if len(loc.Servers) == 0 && !cf.loc.cut {
 		loc.Warnings = append([]string{WarnCCSUnlinked}, loc.Warnings...)
 	}
 	dc := providers.DiscoveredCertificate{}
@@ -495,9 +503,10 @@ func ccsEndpoints(loc providers.CertLocation, v providers.VerifyOptions, sans []
 	return out
 }
 
-// unlinkedCCS reports a CCS file no IIS binding uses (W5 Ruling 8): its verification is the helper's read-back only.
+// unlinkedCCS reports a CCS file no IIS binding uses (W5 Ruling 8): its verification is the helper's read-back only. A
+// location whose bindings were cut (list_truncated) is never unlinked: a binding may serve it (final review I1).
 func unlinkedCCS(loc providers.CertLocation) bool {
-	return loc.Kind == providers.LocationWinCCSFile && len(loc.Servers) == 0
+	return loc.Kind == providers.LocationWinCCSFile && len(loc.Servers) == 0 && !slices.Contains(loc.Warnings, providers.WarnListTruncated)
 }
 
 // comparedChain is the chain length a deployment's served chain is compared with, and the verify step's extra params

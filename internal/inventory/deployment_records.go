@@ -317,6 +317,7 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 		oldKey                       string
 		kind                         providers.LocationKind
 		locator, details             []byte
+		warnings                     []string
 	)
 	err = s.pool.QueryRow(ctx, `SELECT l.servers, l.supported AND l.missing_since IS NULL, l.resolved_cert_path, l.inherited, l.symlinked,
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
@@ -325,7 +326,7 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
     c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL, coalesce(oc.public_key_sha256, ''),
     (SELECT p.ca_bundle_pem FROM acme_orders o JOIN acme_certificates ac ON ac.id = o.acme_certificate_id
      JOIN acme_providers p ON p.id = ac.provider_id WHERE o.certificate_id = c.id ORDER BY o.finished_at DESC NULLS LAST LIMIT 1),
-    l.kind, l.locator, l.details, coalesce(l.verify_address, '')
+    l.kind, l.locator, l.details, coalesce(l.verify_address, ''), l.warnings
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -334,7 +335,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
 		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised, &oldKey,
-		&bundle, &kind, &locator, &details, &m.Verify.Address)
+		&bundle, &kind, &locator, &details, &m.Verify.Address, &warnings)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -348,6 +349,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		// R59 G1: a location that is not a file carries its kind, locator and details to the provider; a file's request
 		// is unchanged (no kind, no locator).
 		m.Location.Kind = kind
+		m.Location.Warnings = warnings // a cut CCS file (list_truncated) is never verified as unlinked (W5 final review I1)
 		if m.Location.Locator, m.Location.Details, err = decodeKind(locator, details); err != nil {
 			return Material{}, err
 		}
