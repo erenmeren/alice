@@ -88,6 +88,8 @@ export const DEPLOYMENT_STEP_NAMES: readonly string[] = [
   'sync',
   'save',
   'write_secret',
+  // R68: a Windows server's CCS file is written in place, with a backup next to it.
+  'write_file',
 ];
 
 // UNSUPPORTED_REASONS: CertificateLocation.unsupported_reason (providers.Unsupported*).
@@ -130,6 +132,8 @@ export const FILE_PROBLEMS: readonly string[] = [
   'cert_missing',
   'key_missing',
   'key_inaccessible',
+  // R68: a file of the Centralized Certificate Store that the server's CCS password does not open.
+  'ccs_password_mismatch',
   'unknown',
 ];
 

@@ -744,6 +744,50 @@ export function windowsDeploymentFixture(o: Partial<DeploymentDetail> = {}): Dep
   });
 }
 
+// windowsCCSTargetFixture is a Windows server whose IIS uses the Centralized Certificate Store (the scan's
+// win_ccs_enabled warning) and that has no CCS password yet (R68).
+export const windowsCCSTargetFixture: Target = {
+  ...windowsTargetFixture,
+  ccs_password_set_at: null,
+  facts: { ...windowsTargetFixture.facts, warnings: [{ code: 'win_ccs_enabled', params: {} }] },
+};
+
+// windowsCCSFileFixture is a file of a Windows server's Centralized Certificate Store, linked to the IIS binding of
+// "CCS Site" that IIS serves from it (R68).
+export function windowsCCSFileFixture(o: Partial<CertificateLocation> = {}): CertificateLocation {
+  return windowsBindingFixture({
+    id: '0192c000-0000-7000-8000-0000000000f1',
+    cert_path: 'C:\\CCS\\ccs.example.test.pfx',
+    servers: [{ names: ['ccs.example.test'], section: 'CCS Site', listens: [{ addr: '*', port: 443, default_server: false }], file: '', line: 0 }],
+    kind: 'win_ccs_file',
+    locator: { type: 'ccs_file', path: 'C:\\CCS', host: 'ccs.example.test' },
+    details: { ccs_path: 'C:\\CCS', file_name: 'ccs.example.test.pfx', file_sha256: 'cd'.repeat(32), file_size: 4096, modified_at: '2026-10-01T08:00:00Z' },
+    ...o,
+  });
+}
+
+// ccsDeploymentFixture is a deployment to a CCS file of windowsTargetFixture (R68): the chain into the CA store, the
+// file written with a backup next to it, then the verification through the linked binding.
+export function ccsDeploymentFixture(o: Partial<DeploymentDetail> = {}): DeploymentDetail {
+  return deploymentDetailFixture({
+    location_id: windowsCCSFileFixture().id,
+    target_id: windowsTargetFixture.id,
+    target_name: windowsTargetFixture.name,
+    cert_path: 'C:\\CCS\\ccs.example.test.pfx',
+    key_path: '',
+    backup_dir: '',
+    location_kind: 'win_ccs_file',
+    steps: [
+      stepFixture(1, 'verify_current'),
+      stepFixture(2, 'import_chain'),
+      stepFixture(3, 'write_file'),
+      stepFixture(4, 'journal'),
+      stepFixture(5, 'verify', 'ok', { mode: 'remote' }),
+    ],
+    ...o,
+  });
+}
+
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
   return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };
 }

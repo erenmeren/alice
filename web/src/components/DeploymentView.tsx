@@ -4,6 +4,7 @@ import {
   deploymentStatusText,
   deploymentView,
   isCancelled,
+  isCCSDeployment,
   isWindowsDeployment,
   PENDING_CHANGE_RESTORED,
   rollbackForbidden,
@@ -117,7 +118,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         const checked = d.verified === 'remote' || d.verified === 'local';
         const trust = d.verification?.trust;
         color = checked ? 'green' : 'yellow';
-        headline = t(checked ? 'deploy.succeeded' : windows ? 'deploy.succeededUnverifiedWindows' : 'deploy.succeededUnverified');
+        headline = t(checked ? 'deploy.succeeded' : windows ? 'deploy.succeededUnverifiedWindows' : isCCSDeployment(d) ? 'deploy.succeededUnverifiedCCS' : 'deploy.succeededUnverified');
         extra = d.verified === 'local' ? t('deploy.verifiedLocally') : d.verified === 'skipped' ? t('deploy.verifySkipped') : '';
         if (checked && untrustedSuccess(d) && trust) {
           // R51: served, but the chain is not trusted: a warning that names the fault, never "verified".

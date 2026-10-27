@@ -971,6 +971,10 @@ describe('what each website should have, what Alice last deployed and what is ob
     expect(await header([file('f1'), file('f22')])).toBe('Certificate file');
     expect(await header([binding('b1'), binding('b22')])).toBe('Binding');
     expect(await header([file('f1'), binding('b1')])).toBe('Certificate file or binding');
+    // R68: a file of a Windows server's Centralized Certificate Store is a file.
+    const ccs = (id: string) => acmeBindingFixture({ location_id: id, location_kind: 'win_ccs_file', cert_path: `C:\\CCS\\${id}.example.test.pfx` });
+    expect(await header([ccs('c1'), ccs('c22')])).toBe('Certificate file');
+    expect(await header([ccs('c1'), binding('b1')])).toBe('Certificate file or binding');
   });
 
   it('says in the add dialog that Windows (IIS) websites are listed too', async () => {

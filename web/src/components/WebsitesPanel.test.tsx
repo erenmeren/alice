@@ -16,6 +16,7 @@ import {
   sessionFor,
   sessionHandlers,
   windowsBindingFixture,
+  windowsCCSFileFixture,
   windowsTargetFixture,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
@@ -529,5 +530,79 @@ describe('WebsitesPanel imported by Alice', () => {
     await renderRoute(path);
     await screen.findAllByTestId('location-row');
     expect(screen.queryByText('Imported by Alice')).not.toBeInTheDocument();
+  });
+});
+
+// R68: the files of a Windows server's Centralized Certificate Store, beside its http.sys bindings.
+describe('WebsitesPanel CCS files', () => {
+  const winPath = `/servers/${windowsTargetFixture.id}`;
+  const binding = windowsBindingFixture({ id: 'w-host', certificate: CERT, servers: [{ names: ['www.example.test'], section: 'Default Web Site', listens: [{ addr: 'www.example.test', port: 443, default_server: false }], file: '', line: 0 }] });
+  const linked = windowsCCSFileFixture({ id: 'c-linked', certificate: { ...CERT, id: 'c-ccs', subject_cn: 'ccs.example.test' } });
+  const unlinked = windowsCCSFileFixture({
+    id: 'c-unlinked',
+    cert_path: 'C:\\CCS\\_.unlinked.test.pfx',
+    servers: [],
+    warnings: ['win_ccs_unlinked'],
+    locator: { type: 'ccs_file', path: 'C:\\CCS', host: '*.unlinked.test' },
+  });
+  const mismatch = windowsCCSFileFixture({
+    id: 'c-mismatch',
+    cert_path: 'C:\\CCS\\old.example.test.pfx',
+    servers: [{ names: ['old.example.test'], section: 'Old Site', listens: [{ addr: '*', port: 443, default_server: false }], file: '', line: 0 }],
+    supported: false,
+    unsupported_reason: 'file_problem',
+    problem: 'ccs_password_mismatch',
+  });
+  const rows = async () => {
+    const all = await screen.findAllByTestId('location-row');
+    return (id: string) => all.find((r) => r.getAttribute('data-location') === id)!;
+  };
+
+  it.each([
+    ['en', 'No IIS site uses this file', 'The CCS password does not open this file', 'Binding or file'],
+    ['tr', 'Bu dosyayı hiçbir IIS sitesi kullanmıyor', 'CCS parolası bu dosyayı açmıyor', 'Bağlama veya dosya'],
+  ])('shows a linked file with its path and site, an unlinked one with its warning, a mismatch with its problem (%s)', async (lang, unlinkedText, mismatchText, column) => {
+    onNginx('operator', [binding, linked, unlinked, mismatch], windowsTargetFixture, false, lang);
+    await renderRoute(winPath, { languages: [lang] });
+    const row = await rows();
+    expect(within(row('c-linked')).getByText('C:\\CCS\\ccs.example.test.pfx')).toBeInTheDocument();
+    expect(within(row('c-linked')).getByText('CCS Site')).toBeInTheDocument();
+    expect(within(row('c-linked')).getByText('ccs.example.test', { selector: 'code' })).toBeInTheDocument();
+    expect(within(row('c-linked')).getByText('*:443')).toBeInTheDocument();
+    expect(row('c-linked')).not.toHaveTextContent(unlinkedText);
+    expect(within(row('c-unlinked')).getByText('C:\\CCS\\_.unlinked.test.pfx')).toBeInTheDocument();
+    expect(row('c-unlinked')).toHaveTextContent(unlinkedText);
+    expect(row('c-mismatch')).toHaveTextContent(mismatchText);
+    expect(screen.getByRole('columnheader', { name: column })).toBeInTheDocument();
+    expectNoRawKeys(row('c-mismatch').closest('table')!);
+  });
+
+  it('keeps the binding rows as they were', async () => {
+    onNginx('operator', [binding, linked], windowsTargetFixture);
+    await renderRoute(winPath);
+    const row = await rows();
+    expect(within(row('w-host')).getByText('http.sys/hostnameport/www.example.test:443')).toBeInTheDocument();
+    expect(within(row('w-host')).getByText('Default Web Site')).toBeInTheDocument();
+    expect(within(row('w-host')).getByText('Ready')).toBeInTheDocument();
+    expect(within(row('c-linked')).getByText('Ready')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Deploy certificate:/ })).toHaveLength(2);
+  });
+
+  it('words a missing CCS file and a file without its key as files, not as a store', async () => {
+    const missingFile = windowsCCSFileFixture({ id: 'c-missing', cert_path: 'C:\\CCS\\new.example.test.pfx', supported: false, unsupported_reason: 'file_problem', problem: 'cert_missing' });
+    const noKey = windowsCCSFileFixture({ id: 'c-nokey', cert_path: 'C:\\CCS\\nokey.example.test.pfx', supported: false, unsupported_reason: 'file_problem', key_problem: 'key_missing' });
+    onNginx('operator', [missingFile, noKey], windowsTargetFixture);
+    await renderRoute(winPath);
+    const row = await rows();
+    expect(row('c-missing')).toHaveTextContent('Place the first file in the folder');
+    expect(row('c-missing')).toHaveTextContent('Alice cannot use this file of the Centralized Certificate Store.');
+    expect(row('c-nokey')).toHaveTextContent('The file holds the certificate without its private key.');
+    for (const id of ['c-missing', 'c-nokey']) expect(row(id)).not.toHaveTextContent(/The store (does not hold|holds)/);
+  });
+
+  it('names the column Binding while no CCS file is listed', async () => {
+    onNginx('operator', [binding], windowsTargetFixture);
+    await renderRoute(winPath);
+    expect(await screen.findByRole('columnheader', { name: 'Binding' })).toBeInTheDocument();
   });
 });

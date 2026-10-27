@@ -28,7 +28,7 @@ const STATE_TONE: Record<string, Tone> = { current: 'success', pending: 'info', 
 const STATE_ICON = { current: 'CircleCheck', pending: 'Clock3', attention: 'CircleAlert', drifted: 'CircleX' } as const;
 
 // placeColumnKey names the place column by the kinds it lists (R66): Binding when every row is a Windows binding,
-// Certificate file when none is, both when they are mixed. Any other kind counts as a file.
+// Certificate file when none is, both when they are mixed. Any other kind counts as a file, a Windows server's CCS file too (R68).
 function placeColumnKey(items: Pick<ACMEBinding, 'location_kind'>[]): string {
   const bindings = items.filter((b) => b.location_kind === 'win_sslbinding').length;
   if (bindings === 0) return 'acme.issued.bindings.columns.file';

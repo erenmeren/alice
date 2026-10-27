@@ -452,6 +452,9 @@ export interface Target {
   // certificate_cleanup (R62): the switch "remove certificates Alice imported once nothing uses them"; present only on a
   // server whose capabilities include cleanup_certificates. Changed with PATCH /targets/{id}.
   certificate_cleanup?: boolean;
+  // ccs_password_set_at (R68): only on a Windows server, when an Administrator last set the password of its Centralized
+  // Certificate Store (PUT /targets/{id}/ccs-password); null when none was set. The password itself is never answered.
+  ccs_password_set_at?: string | null;
   // vault is present on a Key Vault (type azure_key_vault) and never holds a secret.
   vault?: Vault;
   version: number;
@@ -755,7 +758,7 @@ export interface CertificateLocation {
   verify_address?: string;
 }
 
-export type LocationKind = 'server_file' | 'win_sslbinding' | 'f5_clientssl' | 'k8s_tls_secret';
+export type LocationKind = 'server_file' | 'win_sslbinding' | 'f5_clientssl' | 'k8s_tls_secret' | 'win_ccs_file';
 
 export interface CertificateLocationList {
   items: CertificateLocation[];

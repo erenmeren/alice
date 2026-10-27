@@ -2,7 +2,7 @@ import { Anchor, Code, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { deploymentView, isWindowsDeployment, rollbackForbidden, windowsPrevious } from '../api/deployments';
+import { deploymentView, isCCSDeployment, isWindowsDeployment, rollbackForbidden, windowsPrevious } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
 import {
   deploymentStateKey,
@@ -109,6 +109,8 @@ export function DeploymentDetailPage() {
   // R61: a deployment to an http.sys binding has no files: the binding, its own steps, the previous certificate by
   // store and thumbprint instead of a backup folder, and the chain note.
   const windows = isWindowsDeployment(d);
+  // R68: a CCS file is one file that holds the key too, so there is no key file to name.
+  const ccs = isCCSDeployment(d);
   const previous = windows ? windowsPrevious(d) : null;
   const chain = windows ? chainDiffers(d) : null;
   const time = (v: string | null) => (v ? formatDateTime(v, i18n.language) : '');
@@ -155,7 +157,7 @@ export function DeploymentDetailPage() {
       ? [{ key: 'binding', label: t('deployments.bindingLabel'), value: code(d.cert_path) }]
       : [
           { key: 'file', label: t('deployments.fileLabel'), value: code(d.cert_path) },
-          { key: 'keyFile', label: t('deployments.keyFileLabel'), value: code(d.key_path) },
+          ...(ccs ? [] : [{ key: 'keyFile', label: t('deployments.keyFileLabel'), value: code(d.key_path) }]),
         ]),
     {
       key: 'requested',
@@ -210,7 +212,7 @@ export function DeploymentDetailPage() {
       <div className={classes.detailGrid}>
         <div className={classes.stack}>
           <Panel title={t('deployments.page.sequence')} description={t('deployments.page.sequenceSub')} padded={false}>
-            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} windows={windows} />
+            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} windows={windows} ccs={ccs} />
           </Panel>
           {(recoveringNow || recoveredEarlier) && (
             <Panel title={t('deployments.recovery.title')} testId="recovery">

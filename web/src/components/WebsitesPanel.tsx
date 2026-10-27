@@ -83,6 +83,8 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const asOf = websitesAsOf(items);
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
   const windows = isWindows(target.type);
+  // R68: a Windows server lists the files of its Centralized Certificate Store beside its bindings.
+  const placeColumn = !windows ? 'locations.columns.file' : items.some(isCCSFile) ? 'locations.columns.bindingOrFile' : 'locations.columns.binding';
   const row = (l: CertificateLocation) => (
     <LocationRow
       key={l.id}
@@ -157,7 +159,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               <Table.Tr>
                 <Table.Th>{siteColumnLabel(t, target.type)}</Table.Th>
                 <Table.Th>{t('locations.columns.port')}</Table.Th>
-                <Table.Th>{t(windows ? 'locations.columns.binding' : 'locations.columns.file')}</Table.Th>
+                <Table.Th>{t(placeColumn)}</Table.Th>
                 <Table.Th>{t('locations.columns.certificate')}</Table.Th>
                 <Table.Th>{t('locations.columns.expires')}</Table.Th>
                 <Table.Th>{t('locations.columns.state')}</Table.Th>
@@ -203,6 +205,9 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   );
 }
 
+// isCCSFile: a file of a Windows server's Centralized Certificate Store (R68); it is spoken of as a file, not a binding.
+const isCCSFile = (l: CertificateLocation) => l.kind === 'win_ccs_file';
+
 // APPLICATION_NAMES are the proper names of the applications the helper's table knows (details.application); they
 // are names, not words, so they are the same in every language.
 const APPLICATION_NAMES: Record<string, string> = { iis: 'IIS', iisexpress: 'IIS Express', winrm: 'WinRM', sstp: 'SSTP' };
@@ -220,6 +225,7 @@ function unsupportedText(t: TFunction, target: Target, l: CertificateLocation): 
       ? t('locations.unsupported.win_foreign_app', { application: APPLICATION_NAMES[application] ?? application })
       : t('locations.unsupported.win_foreign_app_unknown', { app_id: appId });
   }
+  if (l.unsupported_reason === 'file_problem' && isCCSFile(l)) return t('locations.unsupported.file_problem_ccs');
   if (l.unsupported_reason === 'file_problem' && isWindows(target.type)) return t('locations.unsupported.file_problem_windows');
   return t(capabilityText(target, unsupportedReasonKey(l.unsupported_reason)));
 }
@@ -254,14 +260,18 @@ function LocationRow({
   const first = l.servers[0];
   const cert = l.certificate;
   const windows = isWindows(target.type);
-  // The certificate's and the key's problem, each worded for what it is (a Windows binding has a store, not files).
+  const ccs = isCCSFile(l);
+  // The certificate's and the key's problem, each worded for what it is (a Windows binding has a store, not files; a CCS
+  // file is one file that holds the key too).
   const problems =
     l.unsupported_reason === 'file_problem'
       ? [
-          { p: l.problem, key: windows ? 'locations.problemCertificateWin' : 'locations.problemCertificate' },
+          { p: l.problem, key: windows && !ccs ? 'locations.problemCertificateWin' : 'locations.problemCertificate' },
           { p: l.key_problem, key: windows ? 'locations.problemKeyWin' : 'locations.problemKey' },
         ].filter((x) => x.p !== '')
       : [];
+  // A CCS file's own wording of a problem the store's texts describe otherwise (cert_missing, key_missing).
+  const problemText = (p: string) => t(ccs && i18n.exists(`locations.problemsCCS.${p}`) ? `locations.problemsCCS.${p}` : fileProblemKey(p));
   return (
     <Table.Tr data-testid="location-row" data-location={l.id}>
       <Table.Td style={WRAP}>
@@ -360,7 +370,7 @@ function LocationRow({
           {!l.supported && <Text size="xs">{unsupportedText(t, target, l)}</Text>}
           {problems.map(({ p, key }, i) => (
             <Text size="xs" key={`${p}-${i}`}>
-              {t(key, { problem: t(fileProblemKey(p)) })}
+              {t(key, { problem: problemText(p) })}
             </Text>
           ))}
           {l.changed_outside_at && (

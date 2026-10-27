@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { certificateBlock, deployCandidates, listAllCertificates, MAX_CERTIFICATES, MAX_DEPLOY_LOCATIONS } from '../api/deployable';
-import { deploymentView, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
+import { deploymentView, isCCSDeployment, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
 import { deployCertificate, getCertificate } from '../api/endpoints';
 import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/enums';
 import { isApiError } from '../api/client';
@@ -263,7 +263,8 @@ function DeployForm({
                 <DeploymentSteps
                   steps={dep?.steps ?? []}
                   status={dep?.status ?? 'pending'}
-                  windows={(loc !== undefined && isWindows(loc.target_type)) || (dep !== null && isWindowsDeployment(dep))}
+                  windows={(loc !== undefined && isWindows(loc.target_type) && loc.kind !== 'win_ccs_file') || (dep !== null && isWindowsDeployment(dep))}
+                  ccs={loc?.kind === 'win_ccs_file' || (dep !== null && isCCSDeployment(dep))}
                 />
                 {step && dep && !isSettled(dep) && (
                   <Text size="xs" c="dimmed" aria-live="polite">

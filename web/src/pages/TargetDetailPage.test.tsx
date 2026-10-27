@@ -15,6 +15,7 @@ import {
   apacheTargetFixture,
   haproxyTargetFixture,
   windowsBindingFixture,
+  windowsCCSTargetFixture,
   windowsFacts,
   windowsTargetFixture,
   nginxTargetFixture,
@@ -628,7 +629,7 @@ describe('TargetDetailPage', () => {
         expect(screen.getByText('This binding belongs to another application (WinRM). Alice does not change it.')).toBeInTheDocument();
         expect(screen.getByText('This binding belongs to another application with the id {11111111-2222-3333-4444-555555555555}. Alice does not change it.')).toBeInTheDocument();
         expect(screen.getByText('http.sys/ccs/443')).toBeInTheDocument();
-        expect(screen.getByText('This is a Centralized Certificate Store binding. Alice does not support these yet.')).toBeInTheDocument();
+        expect(screen.getByText("This http.sys entry sends IIS to the Centralized Certificate Store. Alice deploys to the store's files, listed on this page, not to this entry.")).toBeInTheDocument();
         expect(screen.getByText('Private key: SYSTEM, the account http.sys runs as, cannot use the key.')).toBeInTheDocument();
         expect(screen.getByText('This binding also uses a trusted-issuers list or client certificates. Alice does not model those.')).toBeInTheDocument();
         const deploy = screen.getAllByRole('button', { name: /^Deploy certificate:/ });
@@ -947,6 +948,43 @@ describe('TargetDetailPage in the design', () => {
     const table = await screen.findByTestId('target-keys');
     const row = within(table).getByText('root@bastion').closest('tr')!;
     expect(within(row).getAllByRole('cell')[0]).toHaveTextContent(/^root$/);
+  });
+});
+
+// R68: the CCS password panel, on a Windows server whose scan says IIS uses the Centralized Certificate Store.
+describe('TargetDetailPage CCS password panel', () => {
+  const heading = () => screen.queryByRole('heading', { name: 'CCS password', level: 2 });
+  async function open(role: 'admin' | 'operator', target: Target) {
+    onServer(role, target, []);
+    server.use(
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
+      http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+    );
+    await renderRoute(`/servers/${target.id}`);
+    await screen.findByRole('heading', { name: target.name, level: 1 });
+  }
+
+  it('shows the panel with its field to an Administrator of a Windows server with CCS on', async () => {
+    await open('admin', windowsCCSTargetFixture);
+    expect(heading()).toBeInTheDocument();
+    expect(screen.getByLabelText(/^CCS password/)).toBeInTheDocument();
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+  });
+
+  it('shows the state without the field to an Operator', async () => {
+    await open('operator', windowsCCSTargetFixture);
+    expect(heading()).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^CCS password/)).not.toBeInTheDocument();
+  });
+
+  it('is absent on a Windows server without CCS and on another server type', async () => {
+    await open('admin', windowsTargetFixture);
+    expect(heading()).not.toBeInTheDocument();
+  });
+
+  it('is absent on an Nginx server even with the warning', async () => {
+    await open('admin', { ...nginxTargetFixture, facts: { ...nginxTargetFixture.facts, warnings: [{ code: 'win_ccs_enabled', params: {} }] } });
+    expect(heading()).not.toBeInTheDocument();
   });
 });
 

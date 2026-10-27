@@ -801,7 +801,8 @@
       "deployment_rollout_failed": "Kanarya dağıtımı başarısız oldu",
       "deployment_rollout_stopped": "Kanarya dağıtımı lisans nedeniyle durdu",
       "deployment_rollout_preempted": "Kanarya dağıtımı bir olayla sona erdi",
-      "deployment_rollout_completed": "Kanarya dağıtımı tamamlandı"
+      "deployment_rollout_completed": "Kanarya dağıtımı tamamlandı",
+      "target_ccs_password_set": "Bir Windows sunucusunun CCS parolası ayarlandı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1105,8 +1106,14 @@
     "web_server_helper_too_old": "Bu sunucudaki alice-helper, {{software}} bilgilerini okumak için çok eski. Yardımcıyı güncelleyin; SSH anahtarları okunmaya devam ediyor.",
     "win_shared_config": "Bu sunucudaki IIS paylaşılan yapılandırma kullanıyor. Siteleri paylaşılan konumdan gelir.",
     "win_autocertrebind": "http.sys içinde yenilenen sertifikaların otomatik yeniden bağlanması açık. Alice’in dağıttığı bir sertifikayı değiştirebilir.",
-    "win_ccs_enabled": "Bu sunucudaki IIS için Merkezi Sertifika Deposu açık. Bağlamaları listelenir ama henüz desteklenmez.",
-    "win_expired_in_store": "Bu sunucunun sertifika deposunda süresi dolmuş sertifikalar duruyor: {{count}}."
+    "win_ccs_enabled": "Bu sunucudaki IIS Merkezi Sertifika Deposu kullanıyor. Bir Yönetici bu sayfada CCS parolasını ayarladığında Alice deponun dosyalarını listeler ve onlara dağıtım yapar.",
+    "win_expired_in_store": "Bu sunucunun sertifika deposunda süresi dolmuş sertifikalar duruyor: {{count}}.",
+    "win_ccs_remote": "Bu sunucunun Merkezi Sertifika Deposu başka bir bilgisayarın paylaşılan klasöründe. Alice yalnızca sunucunun yerel klasöründeki bir depoyu yönetir, bu yüzden dosyaları listelenmez.",
+    "win_ccs_path_unsupported": "Bu sunucunun Merkezi Sertifika Deposu klasörü düz bir yerel klasör değil (örneğin bir bağlantı veya aygıt yolu), bu yüzden Alice dosyalarını listelemez.",
+    "win_ccs_files_ignored": "Adından bir ana bilgisayar adı çıkmayan Merkezi Sertifika Deposu dosyaları yok sayıldı: {{count}}.",
+    "win_ccs_password_missing": "Alice'te bu sunucunun CCS parolası yok, bu yüzden Merkezi Sertifika Deposu dosyaları listelenmez. Bir Yönetici parolayı bu sayfada ayarlar.",
+    "win_ccs_helper_outdated": "Bu sunucudaki yardımcı araç Merkezi Sertifika Deposu'nu okumak için çok eski. Kurulum betiğiyle güncelleyin, ardından Keşfet'i seçin.",
+    "win_ccs_password_mismatch": "Alice'teki CCS parolasının açmadığı Merkezi Sertifika Deposu dosyaları: {{count}}. IIS Yöneticisi'nde ayarlı parolayı denetleyin."
   },
   "targets": {
     "title": "Sunucular",
@@ -1863,7 +1870,8 @@
       "expires": "Bitiş",
       "state": "Durum",
       "actions": "İşlemler",
-      "binding": "Bağlama"
+      "binding": "Bağlama",
+      "bindingOrFile": "Bağlama veya dosya"
     },
     "defaultServer": "(varsayılan sunucu)",
     "noWebsite": "(sunucu adı yok)",
@@ -1948,7 +1956,8 @@
       "mail_tls": "Bir mail bloğundaki TLS listeleniyor, ancak bu sürümde desteklenmiyor.",
       "unknown": "Alice bu web sitesi hakkında bu sürümün açıklayamadığı bir not bildirdi.",
       "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde belirleyemedi; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor.",
-      "win_ctl": "Bu bağlama ayrıca güvenilen veren listesi veya istemci sertifikaları kullanıyor. Alice bunları modellemiyor."
+      "win_ctl": "Bu bağlama ayrıca güvenilen veren listesi veya istemci sertifikaları kullanıyor. Alice bunları modellemiyor.",
+      "win_ccs_unlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor. Alice dosyaya dağıtım yapabilir ve dosyayı geri okuyarak denetler; hiçbir web sitesi yoklanamaz."
     },
     "unsupported": {
       "variable": "Yol bir değişken kullanıyor, bu yüzden Alice hangi dosyanın kullanıldığını bilemez.",
@@ -1969,9 +1978,10 @@
       "win_foreign_app": "Bu bağlama başka bir uygulamaya ait ({{application}}). Alice onu değiştirmez.",
       "win_foreign_app_unknown": "Bu bağlama {{app_id}} kimlikli başka bir uygulamaya ait. Alice onu değiştirmez.",
       "win_foreign_app_iis_unused": "Bu bağlamayı hiçbir IIS sitesi kullanmıyor.",
-      "win_ccs": "Bu bir Merkezi Sertifika Deposu (CCS) bağlamasıdır. Alice bunları henüz desteklemiyor.",
+      "win_ccs": "Bu http.sys kaydı IIS'i Merkezi Sertifika Deposu'na yönlendirir. Alice bu kayda değil, bu sayfada listelenen depo dosyalarına dağıtım yapar.",
       "win_store_unsupported": "Sertifika My veya WebHosting dışında bir depoda. Alice bu depoyu desteklemiyor.",
-      "file_problem_windows": "Alice bu bağlamanın sertifikasını veya anahtarını kullanamıyor."
+      "file_problem_windows": "Alice bu bağlamanın sertifikasını veya anahtarını kullanamıyor.",
+      "file_problem_ccs": "Alice, Merkezi Sertifika Deposu'nun bu dosyasını kullanamıyor."
     },
     "problems": {
       "missing": "Dosya yok.",
@@ -1988,7 +1998,8 @@
       "name_not_allowed": "Dosyanın gerçek konumu (bağlantılar izlendikten sonra) Alice'in yardımcı programa iletemediği bir karakter içeriyor (boşluk, *, ~, virgül veya ASCII dışı bir harf); örneğin *.example.com gibi bir acme.sh klasörü.",
       "cert_missing": "Depo, bu bağlamanın adını verdiği sertifikayı içermiyor.",
       "key_missing": "Depo sertifikayı özel anahtarı olmadan içeriyor.",
-      "key_inaccessible": "http.sys’in çalıştığı hesap olan SYSTEM anahtarı kullanamıyor."
+      "key_inaccessible": "http.sys’in çalıştığı hesap olan SYSTEM anahtarı kullanamıyor.",
+      "ccs_password_mismatch": "CCS parolası bu dosyayı açmıyor."
     },
     "problemCertificate": "Sertifika dosyası: {{problem}}",
     "problemKey": "Anahtar dosyası: {{problem}}",
@@ -2027,6 +2038,10 @@
       "noCertificate": "Sertifika yok",
       "count_one": "{{count}} bağlama",
       "count_other": "{{count}} bağlama"
+    },
+    "problemsCCS": {
+      "cert_missing": "Bu adı bir IIS sitesi kullanıyor, ancak deponun klasöründe bunun için bir dosya yok. İlk dosyayı klasöre koyun; Alice onu bundan sonra yönetir.",
+      "key_missing": "Dosya, sertifikayı özel anahtarı olmadan içeriyor."
     }
   },
   "deploy": {
@@ -2087,7 +2102,8 @@
     "rollbackFailedRestoredWindows": "Bağlama yeniden önceki sertifikayı gösteriyor, ancak Alice web sitesinin onu sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
     "serverOperationPendingWindows": "Yeni sertifika dağıtılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu bağlamayı engelliyor; aşağıya bakın.",
     "pendingChangeRestoredWindows": "Yeni sertifika dağıtılmadı. Alice bağlamayı tamamlanmamış önceki bir değişiklikten önceki sertifikaya geri yöneltti; web sitesi şimdi o sertifikayı sunuyor. Bu, Dağıt'ı seçtiğinizde sunduğu sertifika olmayabilir.",
-    "chosenNoLongerFits": "Seçilen sertifika işaretli her bağlamaya uymuyor (başka bir anahtar türü). Başka bir sertifika seçin ya da o bağlamanın işaretini kaldırın."
+    "chosenNoLongerFits": "Seçilen sertifika işaretli her bağlamaya uymuyor (başka bir anahtar türü). Başka bir sertifika seçin ya da o bağlamanın işaretini kaldırın.",
+    "succeededUnverifiedCCS": "Yeni sertifika dosyaya yazıldı ve geri okundu."
   },
   "deployments": {
     "page": {
@@ -2222,7 +2238,8 @@
       "commit": "Profilleri değiştirme",
       "sync": "Cihaz grubunu eşitleme",
       "save": "Yapılandırmayı kaydetme",
-      "write_secret": "Secret'ı yazma"
+      "write_secret": "Secret'ı yazma",
+      "write_file": "Dosyayı yazma"
     },
     "stepStatus": {
       "started": "Çalışıyor",
@@ -2245,7 +2262,8 @@
         "ok": "Alice tamamlanmamış önceki değişiklikten önceki dosyaları geri koydu.",
         "skipped": "Geri konacak bir şey yoktu.",
         "failed": "Tamamlanmamış önceki değişiklik bu dosyaları hâlâ engelliyor."
-      }
+      },
+      "ccsUnlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor; Alice bir web sitesini denetlemek yerine dosyayı geri okudu."
     },
     "currentStep": "Geçerli adım: {{step}}",
     "operation": "Sunucudaki tamamlanmamış önceki değişiklik (işlem kimliği): {{id}}",
@@ -5155,5 +5173,16 @@
     "override": "Hepsine aynı anda dağıt",
     "overrideHelp": "Bu dağıtım için kanaryayı atlar; kimliğinizi yeniden doğrulamanızı ister.",
     "started": "Kanarya dağıtımı başladı: ilk dalga gözlemi geçince {{count}} web sitesi izleyecek."
+  },
+  "ccs": {
+    "title": "CCS parolası",
+    "help": "Bu sunucudaki IIS, sertifikalarını bir Merkezi Sertifika Deposu (CCS) klasöründeki PFX dosyalarından okur; dosyaların hepsi tek bir özel anahtar parolasıyla korunur. Alice dosyaları okumak ve yenilenen sertifikaları bunlara yazmak için bu parolaya ihtiyaç duyar. Parola Alice sunucusunda mühürlü saklanır, yalnızca bir dosya okunurken veya yazılırken sunucudaki yardımcı araca gönderilir ve bir daha gösterilmez.",
+    "state": "Parola",
+    "notSet": "Ayarlanmadı",
+    "field": "CCS parolası",
+    "fieldHelp": "IIS Yöneticisi'nde (Merkezi Sertifikalar) depo için ayarlanan özel anahtar parolası: boşluksuz, 12 ile 128 karakter.",
+    "set": "Parolayı ayarla",
+    "replace": "Parolayı değiştir",
+    "saved": "Kaydedildi. Sunucunun Merkezi Sertifika Deposu dosyalarını listelemek için Keşfet'i seçin."
   }
 }

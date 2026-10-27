@@ -810,7 +810,10 @@ describe('Windows deployment texts', () => {
     return catalogue(lang)[ns]?.[name];
   };
   // The reasons a Windows deployment can end with that have texts (an audit event such as deployment.started has none).
-  const reasons = [...new Set([...sources.flatMap(quoted), ...recordSources.flatMap(quoted).filter((r) => r.startsWith('deployment.'))])].filter((r) => !(r in LINUX_ONLY) && shared('en', r) !== undefined).sort();
+  // R68: the windows.ccs_* reasons end only a deployment to a CCS file, which is a file, so their texts speak of files.
+  const reasons = [...new Set([...sources.flatMap(quoted), ...recordSources.flatMap(quoted).filter((r) => r.startsWith('deployment.'))])]
+    .filter((r) => !(r in LINUX_ONLY) && !r.startsWith('windows.ccs_') && shared('en', r) !== undefined)
+    .sort();
   const own = (lang: 'en' | 'tr', reason: string) => {
     const [ns, name] = reason.split('.');
     const w = ((lang === 'en' ? enWeb : trWeb).deployments as unknown as { windowsErrors: Record<string, Record<string, Record<string, string>>> }).windowsErrors;

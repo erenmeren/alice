@@ -1,5 +1,6 @@
 import { screen, within } from '@testing-library/react';
-import { stepFixture } from '../test/fixtures';
+import { isCCSDeployment, isWindowsDeployment } from '../api/deployments';
+import { ccsDeploymentFixture, stepFixture } from '../test/fixtures';
 import { renderApp } from '../test/render';
 import { DeploymentSteps, currentStep } from './DeploymentSteps';
 
@@ -79,6 +80,26 @@ describe('DeploymentSteps', () => {
     });
     // A running step shows a loader as its marker.
     expect(row('Check').querySelector('[data-state="running"] .mantine-Loader-root')).not.toBeNull();
+  });
+
+  it('shows the steps of a CCS file (R68): import the chain, write the file, verify', async () => {
+    const d = ccsDeploymentFixture({ status: 'succeeded' });
+    await renderApp(<DeploymentSteps status={d.status} steps={d.steps} ccs={isCCSDeployment(d)} windows={isWindowsDeployment(d)} />);
+    const items = within(screen.getByRole('list', { name: 'Steps' })).getAllByRole('listitem');
+    expect(items.map((li) => [li.getAttribute('data-step'), li.getAttribute('data-status')])).toEqual([
+      ['import_chain', 'ok'],
+      ['write_file', 'ok'],
+      ['verify', 'ok'],
+      ['journal', 'ok'],
+    ]);
+    expect(row('Write the file')).toHaveTextContent('Done');
+    expect(screen.queryByText('Bind')).not.toBeInTheDocument();
+    expect(screen.queryByText('Backup')).not.toBeInTheDocument();
+  });
+
+  it('says in detail that a file no IIS site uses was read back instead of probed', async () => {
+    await renderApp(<DeploymentSteps status="succeeded" detailed ccs steps={[stepFixture(1, 'write_file'), stepFixture(2, 'verify', 'skipped', { ccs_unlinked: 'true' })]} />);
+    expect(row('Verify')).toHaveTextContent('No IIS site uses this file');
   });
 
   it('never draws a check mark for a step that was not run', async () => {

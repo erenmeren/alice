@@ -61,6 +61,13 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   win_autocertrebind: [],
   win_ccs_enabled: [],
   win_expired_in_store: ['count'],
+  // R68: the server's Centralized Certificate Store (internal/providers/windows/winproto and ccs.go).
+  win_ccs_remote: [],
+  win_ccs_path_unsupported: [],
+  win_ccs_files_ignored: ['count'],
+  win_ccs_password_missing: [],
+  win_ccs_helper_outdated: [],
+  win_ccs_password_mismatch: ['count'],
 };
 
 export function warningKey(w: Warning): string {
@@ -91,6 +98,8 @@ export const LOCATION_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   mail_tls: [],
   chain_unresolved: [],
   win_ctl: [],
+  // R68: a CCS file no IIS binding uses (internal/providers/windows/ccs.go).
+  win_ccs_unlinked: [],
 };
 
 // locationWarningKey is the text key of a location warning; a code from a newer server gets the

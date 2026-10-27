@@ -801,7 +801,8 @@
       "deployment_rollout_failed": "Canary deployment failed",
       "deployment_rollout_stopped": "Canary deployment stopped by the licence",
       "deployment_rollout_preempted": "Canary deployment ended by an incident",
-      "deployment_rollout_completed": "Canary deployment completed"
+      "deployment_rollout_completed": "Canary deployment completed",
+      "target_ccs_password_set": "CCS password of a Windows server set"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1105,8 +1106,14 @@
     "web_server_helper_too_old": "The alice-helper on this server is too old to read {{software}}. Update the helper; SSH keys are still read.",
     "win_shared_config": "IIS on this server uses a shared configuration. Its sites come from the shared location.",
     "win_autocertrebind": "Automatic rebinding of renewed certificates is turned on in http.sys. It can replace a certificate Alice deploys.",
-    "win_ccs_enabled": "The Centralized Certificate Store is turned on for IIS on this server. Its bindings are listed but not supported yet.",
-    "win_expired_in_store": "The certificate store of this server still holds expired certificates: {{count}}."
+    "win_ccs_enabled": "IIS on this server uses the Centralized Certificate Store. Alice lists its files and deploys to them once an Administrator sets the CCS password on this page.",
+    "win_expired_in_store": "The certificate store of this server still holds expired certificates: {{count}}.",
+    "win_ccs_remote": "The Centralized Certificate Store of this server is in a shared folder of another computer. Alice manages a store only in a local folder of the server, so its files are not listed.",
+    "win_ccs_path_unsupported": "The folder of this server's Centralized Certificate Store is not a plain local folder (for example a link or a device path), so Alice does not list its files.",
+    "win_ccs_files_ignored": "Files of the Centralized Certificate Store whose names give no host name were ignored: {{count}}.",
+    "win_ccs_password_missing": "Alice has no CCS password for this server, so the files of its Centralized Certificate Store are not listed. An Administrator sets it on this page.",
+    "win_ccs_helper_outdated": "The helper on this server is too old to read the Centralized Certificate Store. Update it with the setup script, then choose Discover.",
+    "win_ccs_password_mismatch": "Files of the Centralized Certificate Store that the CCS password in Alice does not open: {{count}}. Check the password set in IIS Manager."
   },
   "targets": {
     "title": "Servers",
@@ -1863,7 +1870,8 @@
       "expires": "Expires",
       "state": "State",
       "actions": "Actions",
-      "binding": "Binding"
+      "binding": "Binding",
+      "bindingOrFile": "Binding or file"
     },
     "defaultServer": "(default server)",
     "noWebsite": "(no server name)",
@@ -1948,7 +1956,8 @@
       "mail_tls": "TLS in a mail block is listed, but not supported in this version.",
       "unknown": "Alice reported a note about this website that this version cannot describe.",
       "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete.",
-      "win_ctl": "This binding also uses a trusted-issuers list or client certificates. Alice does not model those."
+      "win_ctl": "This binding also uses a trusted-issuers list or client certificates. Alice does not model those.",
+      "win_ccs_unlinked": "No IIS site uses this file. Alice can deploy to it and checks the file by reading it back; no website can be probed."
     },
     "unsupported": {
       "variable": "The path uses a variable, so Alice cannot know which file is used.",
@@ -1969,9 +1978,10 @@
       "win_foreign_app": "This binding belongs to another application ({{application}}). Alice does not change it.",
       "win_foreign_app_unknown": "This binding belongs to another application with the id {{app_id}}. Alice does not change it.",
       "win_foreign_app_iis_unused": "No IIS site uses this binding.",
-      "win_ccs": "This is a Centralized Certificate Store binding. Alice does not support these yet.",
+      "win_ccs": "This http.sys entry sends IIS to the Centralized Certificate Store. Alice deploys to the store's files, listed on this page, not to this entry.",
       "win_store_unsupported": "The certificate is in a store other than My or WebHosting. Alice does not support that store.",
-      "file_problem_windows": "Alice cannot use the certificate or key of this binding."
+      "file_problem_windows": "Alice cannot use the certificate or key of this binding.",
+      "file_problem_ccs": "Alice cannot use this file of the Centralized Certificate Store."
     },
     "problems": {
       "missing": "The file does not exist.",
@@ -1988,7 +1998,8 @@
       "name_not_allowed": "The file's real location (after links) has a character Alice cannot pass to the helper (a space, *, ~, comma or a non-ASCII letter), for example an acme.sh folder like *.example.com.",
       "cert_missing": "The store does not hold the certificate this binding names.",
       "key_missing": "The store holds the certificate without its private key.",
-      "key_inaccessible": "SYSTEM, the account http.sys runs as, cannot use the key."
+      "key_inaccessible": "SYSTEM, the account http.sys runs as, cannot use the key.",
+      "ccs_password_mismatch": "The CCS password does not open this file."
     },
     "problemCertificate": "Certificate file: {{problem}}",
     "problemKey": "Key file: {{problem}}",
@@ -2027,6 +2038,10 @@
       "noCertificate": "No certificate",
       "count_one": "{{count}} binding",
       "count_other": "{{count}} bindings"
+    },
+    "problemsCCS": {
+      "cert_missing": "An IIS site uses this name, but the store's folder has no file for it. Place the first file in the folder; Alice manages it from then on.",
+      "key_missing": "The file holds the certificate without its private key."
     }
   },
   "deploy": {
@@ -2087,7 +2102,8 @@
     "rollbackFailedRestoredWindows": "The binding names the previous certificate again, but Alice could not confirm that the website serves it. Check the website now.",
     "serverOperationPendingWindows": "The new certificate was not deployed. An unfinished earlier change on the server blocks this binding; see below.",
     "pendingChangeRestoredWindows": "The new certificate was not deployed. Alice pointed the binding back to the certificate from before an unfinished earlier change, so the website now serves that certificate. That may not be the certificate it served when you chose Deploy.",
-    "chosenNoLongerFits": "The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding."
+    "chosenNoLongerFits": "The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding.",
+    "succeededUnverifiedCCS": "The new certificate was written into the file and read back."
   },
   "deployments": {
     "page": {
@@ -2222,7 +2238,8 @@
       "commit": "Switch the profiles",
       "sync": "Synchronise the device group",
       "save": "Save the configuration",
-      "write_secret": "Write the Secret"
+      "write_secret": "Write the Secret",
+      "write_file": "Write the file"
     },
     "stepStatus": {
       "started": "Running",
@@ -2245,7 +2262,8 @@
         "ok": "Alice put back the files from before the unfinished earlier change.",
         "skipped": "There was nothing to put back.",
         "failed": "The unfinished earlier change still blocks these files."
-      }
+      },
+      "ccsUnlinked": "No IIS site uses this file, so Alice read the file back instead of checking a website."
     },
     "currentStep": "Current step: {{step}}",
     "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
@@ -5155,5 +5173,16 @@
     "override": "Deploy to all at once",
     "overrideHelp": "Skips the canary for this deployment; asks you to confirm your identity again.",
     "started": "Canary deployment started: {{count}} website(s) follow once the first wave passed its observation."
+  },
+  "ccs": {
+    "title": "CCS password",
+    "help": "IIS on this server reads its certificates from the PFX files of a Centralized Certificate Store (CCS) folder, all protected by one private-key password. Alice needs that password to read the files and to write renewed certificates into them. It stays sealed on the Alice server, goes to the server's helper only while a file is read or written, and is never shown again.",
+    "state": "Password",
+    "notSet": "Not set",
+    "field": "CCS password",
+    "fieldHelp": "The private-key password set for the store in IIS Manager (Centralized Certificates): 12 to 128 characters, no spaces.",
+    "set": "Set password",
+    "replace": "Replace password",
+    "saved": "Saved. Choose Discover to list the files of the server's Centralized Certificate Store."
   }
 }

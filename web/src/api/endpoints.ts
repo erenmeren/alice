@@ -170,6 +170,12 @@ export const getTarget = (id: string) => apiFetch<Target>(`${v1}/targets/${enc(i
 export const setCertificateCleanup = (id: string, certificateCleanup: boolean, version: number) =>
   apiFetch<Target>(`${v1}/targets/${enc(id)}`, { method: 'PATCH', body: { certificate_cleanup: certificateCleanup }, headers: ifMatchVersion(version) });
 
+// setCCSPassword sets the private-key password of a Windows server's Centralized Certificate Store (R68): an
+// Administrator's, with a fresh step-up; version is the server's current version (If-Match). The answer is the server
+// with its new ccs_password_set_at, never the password.
+export const setCCSPassword = (id: string, version: number, password: string) =>
+  apiFetch<Target>(`${v1}/targets/${enc(id)}/ccs-password`, { method: 'PUT', body: { password }, headers: ifMatchVersion(version) });
+
 export const createTarget = (req: TargetCreateRequest) =>
   apiFetch<TargetCreated>(`${v1}/targets`, { method: 'POST', body: req });
 

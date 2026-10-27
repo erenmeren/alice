@@ -19,6 +19,7 @@ import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { HostKeyConfirm } from '../components/HostKeyConfirm';
+import { CCSPasswordPanel, ccsEnabled } from '../components/CCSPasswordPanel';
 import { BlockedJobAlert, JobErrorAlert, reasonTitle, StillWorkingAlert, StoppedJobAlert } from '../components/JobErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
@@ -64,6 +65,7 @@ export function TargetDetailPage() {
   const canAssign = canOn(session, target.data, 'services.assign');
   const canConfirm = canOn(session, target.data, 'hostkeys.confirm');
   const canRepin = canOn(session, target.data, 'hostkeys.repin');
+  const canCredentials = canOn(session, target.data, 'credentials.manage');
   // The status is part of the key so the host keys are read again when a polled server moves on
   // (for example from checking to pending_host_key and its confirmation card).
   const hostKeys = useQuery({ queryKey: [...targetKey(id), 'host-keys', target.data?.status ?? null], queryFn: () => listHostKeys(id), placeholderData: keepPreviousData });
@@ -294,6 +296,7 @@ export function TargetDetailPage() {
               )}
             </Group>
           </Panel>
+          {ccsEnabled(tg) && <CCSPasswordPanel target={tg} canSet={canCredentials} />}
           {can(tg, 'cleanup_certificates') && (
             <Panel title={t('targets.page.cleanup.title')}>
               <Stack gap="xs">

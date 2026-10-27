@@ -27,11 +27,19 @@ const WINDOWS_GROUPS: { id: string; members: string[] }[] = [
   { id: 'bind', members: ['bind'] },
   { id: 'verify', members: ['verify'] },
 ];
+// A deployment to a file of a Windows server's Centralized Certificate Store (R68): the intermediates go into the CA store,
+// the file is written in place (its backup kept next to it), then Alice verifies through the IIS sites that use it.
+const CCS_GROUPS: { id: string; members: string[] }[] = [
+  { id: 'import_chain', members: ['import_chain'] },
+  { id: 'write_file', members: ['write_file'] },
+  { id: 'verify', members: ['verify'] },
+];
 // kv_secret is the first step of a Key Vault deployment (the certificate is read from the vault before
 // anything reaches the server); it has a row only when the deployment came from a vault.
 const grouped = (groups: { members: string[] }[]) => new Set(['verify_current', 'kv_secret', ...groups.flatMap((g) => g.members)]);
 const GROUPED = grouped(GROUPS);
 const WINDOWS_GROUPED = grouped(WINDOWS_GROUPS);
+const CCS_GROUPED = grouped(CCS_GROUPS);
 
 type Shown = 'started' | 'ok' | 'failed' | 'skipped' | 'waiting' | 'notRun' | 'unknown';
 
@@ -86,6 +94,8 @@ function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: bo
   if (p.mode) lines.push(<Text key="mode" size="xs">{t('deployments.stepDetail.mode', { mode: t(`deployments.verified.${['remote', 'local', 'skipped'].includes(p.mode) ? p.mode : 'none'}`) })}</Text>);
   // R51: the served chain's trust and, when it did not verify, the precise fault.
   if (p.trust) lines.push(<Text key="trust" size="xs">{t('deployments.stepDetail.trust', { trust: t(trustStatusKey(p.trust)) })}</Text>);
+  // R68: a CCS file no IIS site uses was read back by the helper; no website could be probed.
+  if (p.ccs_unlinked) lines.push(<Text key="ccsUnlinked" size="xs">{t('deployments.stepDetail.ccsUnlinked')}</Text>);
   if (p.trust_error) lines.push(<Text key="trustError" size="xs">{t('deployments.stepDetail.trustError', { reason: t(trustErrorKey(p.trust_error)) })}</Text>);
   if (step.name === 'recover_pending' && (step.status === 'ok' || step.status === 'skipped' || step.status === 'failed')) {
     lines.push(
@@ -124,24 +134,27 @@ interface Row {
 
 // DeploymentSteps lists the steps of one deployment with a status each, as the design's operation
 // timeline; markers never carry the meaning alone, every row says it in words. The list is not a live
-// region itself: the screen that owns it announces the overall state. windows: the steps of an http.sys binding.
+// region itself: the screen that owns it announces the overall state. windows: the steps of an http.sys binding; ccs: the
+// steps of a CCS file (R68).
 export function DeploymentSteps({
   steps,
   status,
   detailed = false,
   vault = false,
   windows = false,
+  ccs = false,
 }: {
   steps: DeploymentStep[];
   status: DeploymentStatus | '';
   detailed?: boolean;
   vault?: boolean;
   windows?: boolean;
+  ccs?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const ended = FINAL_STATUSES.has(status);
-  const groups = windows ? WINDOWS_GROUPS : GROUPS;
-  const groupedNames = windows ? WINDOWS_GROUPED : GROUPED;
+  const groups = ccs ? CCS_GROUPS : windows ? WINDOWS_GROUPS : GROUPS;
+  const groupedNames = ccs ? CCS_GROUPED : windows ? WINDOWS_GROUPED : GROUPED;
   const rows: Row[] = [];
   if (detailed) rows.push({ id: 'verify_current', label: t('deployments.steps.verify_current'), status: singleStatus(steps, 'verify_current', ended), detail: lastOf(steps, 'verify_current') });
   if (vault || steps.some((s) => s.name === 'kv_secret')) rows.push({ id: 'kv_secret', label: t('deployments.steps.kv_secret'), status: singleStatus(steps, 'kv_secret', ended), detail: lastOf(steps, 'kv_secret') });

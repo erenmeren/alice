@@ -60,6 +60,12 @@ export function isWindowsDeployment(d: Pick<Deployment, 'location_kind'>): boole
   return d.location_kind === 'win_sslbinding';
 }
 
+// isCCSDeployment: a deployment to a file of a Windows server's Centralized Certificate Store (R68), by the kind the
+// API names. It is a file, not a binding: isWindowsDeployment is false for it.
+export function isCCSDeployment(d: Pick<Deployment, 'location_kind'>): boolean {
+  return d.location_kind === 'win_ccs_file';
+}
+
 // windowsPrevious is the previous certificate of a Windows deployment (store and SHA-1 thumbprint): the deployment's
 // own, else the params of its error (a failed rollback names them); null when neither names both.
 export function windowsPrevious(d: Pick<Deployment, 'error'> & { backup_store?: string; backup_sha1?: string }): { store: string; sha1: string } | null {
