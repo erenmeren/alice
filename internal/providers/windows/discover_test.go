@@ -39,7 +39,7 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
 	require.NotNil(t, res.WebServer)
 	assert.Equal(t, providers.WebServerFacts{Software: "iis", Version: "10.0", Found: true, ConfigValid: true}, *res.WebServer)
-	assert.Empty(t, res.Warnings)
+	assert.Equal(t, []string{winproto.WarnCCSEnabled}, codes(res.Warnings), "the demo host has CCS on (W5 Ruling 25)")
 	assert.Empty(t, res.SSHKeys, "no SSH half")
 	assert.Empty(t, res.HostKeys)
 
@@ -55,7 +55,8 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 	ccs := got["http.sys/ccs/443"]
 	assert.Equal(t, UnsupportedCCS, ccs.Location.Unsupported)
 	assert.Equal(t, providers.Locator{"type": "ccs", "port": 443, "app_id": winproto.AppIDIIS}, ccs.Location.Locator)
-	assert.Empty(t, ccs.Location.Servers)
+	assert.Equal(t, []providers.CertServer{{Names: []string{"ccs.example.test"}, Listens: []providers.CertListen{{Addr: "*", Port: 443}},
+		Section: "CCS Site"}}, ccs.Location.Servers, "the CCS Site binding uses the ccs record")
 	assert.Nil(t, ccs.PEMChain)
 
 	web := got["http.sys/hostnameport/www.win.example.test:443"]
