@@ -245,40 +245,42 @@ func keyOf(typ, ip, host string, port int) (key, error) {
 	return key{}, errBadValue // ccs records are not read or written by key (not deployable); refreshCCSRecords only
 }
 
-// refreshCCSRecords sends every http.sys ccs record back as the listing read it: one base update
+// refreshCCSRecords sends every http.sys ccs record back as http.sys holds it: one base update
 // (HttpUpdateServiceConfiguration of HTTP_SERVICE_CONFIG_SSL_CCS_SET) each, which keeps the record's
-// extended parameters (F9) and makes IIS read its CCS files again (F15 route (a), ruling W5-10). This
-// same-record write is the only one a ccs record ever gets: keyOf still refuses the type, so Binding
-// and UpdateBinding never reach one. n counts the records updated; err is the first failure, the
-// others are still sent.
+// extended parameters (F9) and makes IIS read its CCS files again (F15 route (a), ruling W5-10). The
+// key is the record's own SOCKADDR_STORAGE, never one rebuilt from its decoded address, so a record is
+// only ever written over itself. This same-record write is the only one a ccs record ever gets: keyOf
+// still refuses the type, so Binding and UpdateBinding never reach one. n counts the records updated;
+// err is the first failure (a record that does not decode is one), the others are still sent.
 func refreshCCSRecords() (int, error) {
-	list, err := sslBindings()
-	if err != nil {
-		return 0, err
-	}
 	if procHttpUpdateServiceConfiguration.Find() != nil {
 		return 0, errHTTPAPIMissing
 	}
 	n := 0
 	var first error
-	err = withHTTP(func() error {
-		for _, b := range list {
-			if b.Type != winproto.BindingCCS {
-				continue
+	err := withHTTP(func() error {
+		for token := uint32(0); token <= winproto.MaxBindings; token++ {
+			rec, err := queryRecord(configSSLCcsCertInfo, token)
+			if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+				return nil
 			}
-			ip, err := netip.ParseAddr(b.IP)
-			if err != nil || b.Port < 1 || b.Port > 65535 {
+			if err != nil {
+				return err
+			}
+			b := decodeRecord(configSSLCcsCertInfo, rec)
+			if b.Type != winproto.BindingCCS {
 				first = cmp.Or(first, errBadValue)
 				continue
 			}
-			k := key{typ: winproto.BindingCCS, addr: putSockaddr(ip.Unmap(), b.Port)}
+			// unsafe: decodeRecord read the whole structure from rec (8-byte aligned, no Go pointers).
+			k := key{typ: winproto.BindingCCS, addr: (*sslCcsSet)(unsafe.Pointer(&rec[0])).LocalAddress}
 			if err := updateBase(k, b); err != nil {
 				first = cmp.Or(first, err)
 				continue
 			}
 			n++
 		}
-		return nil
+		return errBadValue // more records than MaxBindings
 	})
 	return n, cmp.Or(err, first)
 }

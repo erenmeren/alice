@@ -302,6 +302,7 @@ func TestRealCCSReplaceIsPickedUp(t *testing.T) {
 	acl := sddl(t, f.path(file))
 	require.Contains(t, acl, "(A;", "positive control: a DACL is read")
 	f.requireServed(host, old.Cert)
+	f.requireRefreshNoOp()
 	t.Logf("F15: the first file of a new CCS folder was served %v after Enable-WebCentralCertProvider", time.Since(f.start).Round(time.Millisecond))
 
 	// Files named as the helper's backup and temporary files, for a host that has no .pfx of its own.
@@ -873,4 +874,68 @@ func TestRealCCSRefusesReparsePoints(t *testing.T) {
 	assert.Equal(t, before, dirState(t, outside), "nothing outside the folder changed")
 	start["s.alice-w5.test.pfx"], start["d.alice-w5.test.pfx"], start["s.alice-w5.test.pfx.alice-11111111.bak"] = "link", "dir", "link"
 	assert.Equal(t, start, dirState(t, f.folder), "nothing written in the folder")
+}
+
+// configSSLCcsCertInfoEx is HttpServiceConfigSslCcsCertInfoEx: a ccs record's extended parameters,
+// queried with HTTP_SERVICE_CONFIG_SSL_CCS_QUERY_EX (the layout of sslQueryEx: the key is a
+// SOCKADDR_STORAGE by value) and answered as HTTP_SERVICE_CONFIG_SSL_CCS_SET_EX (the layout of
+// sslSetEx).
+const configSSLCcsCertInfoEx = 10
+
+// ccsRecordsState is every http.sys ccs record as the refresh's no-op check compares it: by address,
+// the base record (struct equality, as the listing decodes it) and, per extended parameter type the W2
+// code knows, "set <portable form>", "not_set" or the query's answer.
+func ccsRecordsState(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	require.NoError(t, withHTTP(func() error {
+		for token := uint32(0); token <= winproto.MaxBindings; token++ {
+			rec, err := queryRecord(configSSLCcsCertInfo, token)
+			if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			b := decodeRecord(configSSLCcsCertInfo, rec)
+			require.Equal(t, winproto.BindingCCS, b.Type, "a ccs record decodes")
+			addr := (*sslCcsSet)(unsafe.Pointer(&rec[0])).LocalAddress
+			state := fmt.Sprintf("%+v", b)
+			for typ := uint32(0); typ < exTypeCount; typ++ {
+				q := &sslQueryEx{QueryDesc: queryExact, IPPort: addr, ParamType: typ}
+				raw, err := queryConfig(configSSLCcsCertInfoEx, unsafe.Pointer(q), unsafe.Sizeof(*q))
+				switch {
+				case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_NOT_FOUND):
+					state += fmt.Sprintf(" ex%d=not_set", typ)
+				case err != nil:
+					state += fmt.Sprintf(" ex%d=query:%v", typ, err)
+				default:
+					data, err := flattenEx(raw, uint64(recordBase(raw)), int(unsafe.Offsetof(sslSetEx{}.Param)))
+					if err != nil {
+						state += fmt.Sprintf(" ex%d=undecodable:%v", typ, err)
+					} else {
+						state += fmt.Sprintf(" ex%d=set:%x", typ, data)
+					}
+				}
+			}
+			out[fmt.Sprintf("%s:%d", b.IP, b.Port)] = state
+		}
+		return nil
+	}))
+	return out
+}
+
+// requireRefreshNoOp is the gate re-review's check of RefreshCCSRecords: every ccs record of the
+// machine (other applications' too) reads the same, base and extended parameters, after a refresh.
+func (f *ccsReal) requireRefreshNoOp() {
+	f.t.Helper()
+	before := ccsRecordsState(f.t)
+	f.refresh()
+	after := ccsRecordsState(f.t)
+	for k, v := range before {
+		f.t.Logf("F15: refresh no-op: ccs %s: %s", k, v)
+	}
+	if assert.Equal(f.t, before, after, "F15: a refresh changes no ccs record") {
+		f.t.Logf("F15: refresh no-op: %d ccs records read the same, base and extended parameters, after RefreshCCSRecords", len(before))
+	}
 }
