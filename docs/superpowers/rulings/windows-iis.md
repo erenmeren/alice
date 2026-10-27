@@ -1845,7 +1845,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F15 route (a), F16 and F18, and ruled F17 as above (change Ruling 6 to the measured rule,
 exact first; keep at least one runner run for the final code head).
 
-### Runner runs used (6 of 8)
+### Runner runs used (8 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -1855,8 +1855,8 @@ exact first; keep at least one runner run for the final code head).
 | 4 | <https://github.com/erenmeren/alice/actions/runs/40491733346> | `30294923` | fail / fail | Only `TestRealCCSNameRules` and `TestRealCCSServedChain` failed; F16 fully measured; F18 measured; DIAG named `PollingInterval` |
 | 5 | <https://github.com/erenmeren/alice/actions/runs/40494994143> | `632c6ef5` | **pass / pass** | F17 and F18 final (pre-placed files, `PollingInterval` 10 s) |
 | 6 | <https://github.com/erenmeren/alice/actions/runs/40499784360> | `e0752599` | **pass / pass** | `windows-required` green; the refresh no-op proven (`F15: refresh no-op: 1 ccs records read the same, base and extended parameters, after RefreshCCSRecords`); W5-13 in the emulator, the step params and W5-15 green |
-| 7 | reserved | | | The final code head after the final review's fixes (Ruling P8) |
-| 8 | reserved (spare) | | | |
+| 7 | <https://github.com/erenmeren/alice/actions/runs/40505803226> | `cc4247af` | **pass / pass** | `windows-required` green; the final review's fixes (Ruling P8) |
+| 8 | <https://github.com/erenmeren/alice/actions/runs/40509514838> | `c879b032` | **pass / pass** | `windows-required` green; the final code head |
 
 The `ci.yml` runs of the same pushes:
 
@@ -1868,6 +1868,8 @@ The `ci.yml` runs of the same pushes:
 | 4 | 40491733481 | pass | fail: the `internal/inventory` floor | fail (Task 8 in progress) |
 | 5 | 40494994086 | pass | fail: the `internal/inventory` floor | fail (until Task 8) |
 | 6 | 40499784357 | pass | fail: `internal/inventory` 89.0 % shown, below its floor of 89 (closed by the inventory coverage test `76a62ecc`) | pass (`stack` cancelled by a newer push) |
+| 7 | 40505803113 | pass | cancelled by the next push | pass (ssh-matrix, secrets and licensectl pass; `stack` cancelled by the next push) |
+| 8 | 40509514817 | pass | pass | pass (every job: go, web, coverage, ssh-matrix, secrets, licensectl, stack) |
 
 ## Rulings made during execution (W5)
 
@@ -2207,17 +2209,39 @@ per finding: the finding, what was done, why.
 Found, not fixed:
 
 - The CCS folder's parent folders are not checked for a reparse point (M2 above; Ruling 3 as built).
+- Tooling, outside W5: `make ci`'s own gitleaks step scans 0 commits inside a git worktree (the mounted `.git` file
+  points outside the container), so it proves nothing for a worktree branch. The W5 range was scanned separately (see
+  [Acceptance (design §13 W5)](#acceptance-design-13-w5)).
 
 ## Acceptance (design §13 W5)
 
-Status: **pending** until the final gates (Task 10). Each line is completed by the controller.
+Status: **met** at the final code head `c879b032`.
 
-- A CCS location belongs to the Windows server that hosts the folder (Tasks 6-7): pending.
-- Kind `win_ccs_file`, named `<host>.pfx` or `_.<domain>.pfx` (Task 1): pending.
-- Written with the CCS password entered by an Administrator (Task 6): pending.
-- Atomically, with a backup kept for rollback (Tasks 3, 5): pending.
-- The IIS servers' `ccs` bindings linked for verification (Task 7): pending.
-- No double hop (Ruling 3): pending.
+- A CCS location belongs to the Windows server that hosts the folder (Tasks 6-7): **met**. One `win_ccs_file` location
+  per file of that server's own folder (`TestDiscoverCCSLinks`, `TestWindowsCCSLocationTargetContract`); the password
+  is the server's own credential (`TestCCSPasswordForeign`).
+- Kind `win_ccs_file`, named `<host>.pfx` or `_.<domain>.pfx` (Task 1): **met**. `TestCCSFileNameRule`, migration
+  `00036` (`TestMigration00036WindowsCCS`).
+- Written with the CCS password an Administrator enters with step-up (Task 6): **met**. `TestSetCCSPassword`,
+  `TestCCSPasswordNeverEchoed`, `TestCCSPasswordIsNeverOutsideStdin`; the e2e journey asks for step-up.
+- Atomically, with a backup kept for rollback (Tasks 3, 5; F15 route (a)): **met**. `TestCCSDeployCommits`,
+  `TestCCSKillAtEveryPoint`, `TestCCSFailedVerificationRestoresBackup`; `TestRealCCSReplaceIsPickedUp` on both images.
+- The IIS servers' `ccs` bindings linked for verification (Task 7, W5-13): **met**. `TestCCSFileFor`, `TestCCSEndpoints`,
+  F17 measured on both images.
+- No double hop (Ruling 3): **met**. The helper writes a local path only; a UNC folder lists no files
+  (`TestDiscoverCCSFolderNotManaged`, `TestCCSDeployRefusesBeforeAnyWrite`).
+
+Final gates:
+
+- **Local `make ci`** on `c879b032` (`E2E_PROJECT=alice-e2e-w5 ALICE_E2E_PORT=9982`): exit 0. e2e 167 passed, 4 skipped,
+  0 failed (52.9 min). Coverage floors met, none lowered: `winproto` 100.0, `winhelper` 97.4, `windows` 99.0, `wintest`
+  97.5, `cmd/alice-fakewindows` 93.1, `winjobs` 100.0, `inventory` 89.3 (floor 89).
+- **gitleaks over the whole range**: the `e15fad4b..HEAD` patch log exported (1.14 MB) and scanned with gitleaks v8.30.1
+  in `dir` mode with `.gitleaks.toml`: no leaks found. `ci.yml`'s secrets job also passed on every push. `make ci`'s own
+  gitleaks step scans no commits in a worktree ("Found, not fixed" above).
+- **Real Windows**: run 8 (<https://github.com/erenmeren/alice/actions/runs/40509514838>) green on windows-2022 and
+  windows-2025, with `windows-required` green at the final code head `c879b032`. All 8 budgeted runs used.
+- **`ci.yml`**: run 40509514817 green at `c879b032`, every job.
 
 ## Owner items (W5)
 
@@ -2259,7 +2283,8 @@ Added during execution:
 - **The refresh touches every http.sys `ccs` record of the server** (W5-10), not only the linked ports, with each
   record's own values. The runner proved the update changes no record and no extended parameter in run 6
   (<https://github.com/erenmeren/alice/actions/runs/40499784360>, both images: `F15: refresh no-op: 1 ccs records read
-  the same, base and extended parameters, after RefreshCCSRecords`); a failure of another application's record
+  the same, base and extended parameters, after RefreshCCSRecords`), and again at the final head in run 8
+  (<https://github.com/erenmeren/alice/actions/runs/40509514838>); a failure of another application's record
   reports `ccs_refresh_failed` on the deployment.
 - **The CCS folder's parents are not checked for a reparse point** (final review M2, Ruling 3 as built): only the
   folder itself is. The registry value that names it is Administrator-owned. Confirm, or ask for the parent check.
