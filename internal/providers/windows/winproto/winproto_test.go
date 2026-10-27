@@ -292,7 +292,7 @@ func TestWriteSubcommandsAndCodes(t *testing.T) {
 			t.Errorf("%q != %q", c[0], c[1])
 		}
 	}
-	if winproto.Version != "1.0.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
+	if winproto.Version != "1.1.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
@@ -586,7 +586,7 @@ func TestValidCleanupItem(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
-	if winproto.Version != "1.0.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
+	if winproto.Version != "1.1.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.CleanupMinVersion) {
@@ -612,11 +612,24 @@ func TestCleanupBoundsAreConsistent(t *testing.T) {
 	}
 }
 
-// TestReleasedHelperVersion: 1.0.0 is the first released helper (R63); the minimums stay, so a W3
-// 0.3.0 helper still cleans, and versions compare numerically, not as text.
+// TestReleasedHelperVersion: 1.1.0 adds the CCS subcommands (R68) to the first released helper 1.0.0
+// (R63); the minimums stay, so a W3 0.3.0 helper still cleans, and versions compare numerically, not
+// as text.
 func TestReleasedHelperVersion(t *testing.T) {
-	if winproto.Version != "1.0.0" {
-		t.Fatalf("Version = %q", winproto.Version)
+	if winproto.Version != "1.1.0" || winproto.CCSMinVersion != "1.1.0" {
+		t.Fatalf("Version = %q, CCSMinVersion = %q", winproto.Version, winproto.CCSMinVersion)
+	}
+	if !winproto.VersionAtLeast(winproto.Version, winproto.CCSMinVersion) {
+		t.Error("Version below CCSMinVersion")
+	}
+	if winproto.VersionAtLeast("1.0.0", winproto.CCSMinVersion) {
+		t.Error("a 1.0.0 helper has no CCS subcommands")
+	}
+	if !winproto.VersionAtLeast("1.0.0", winproto.CleanupMinVersion) {
+		t.Error("a 1.0.0 helper still cleans")
+	}
+	if !winproto.VersionAtLeast("1.10.0", "1.9.0") || winproto.VersionAtLeast("1.9.0", "1.10.0") {
+		t.Error("1.10.0 must compare above 1.9.0 numerically")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
 		t.Error("Version below WriteMinVersion")
@@ -639,5 +652,114 @@ func TestReleasedHelperVersion(t *testing.T) {
 	}
 	if winproto.VersionAtLeast("0.9.0", "0.10.0") {
 		t.Error("0.9.0 must compare below 0.10.0 numerically")
+	}
+}
+
+func TestCCSFileNameRule(t *testing.T) {
+	for host, file := range map[string]string{"www.example.com": "www.example.com.pfx", "*.example.com": "_.example.com.pfx"} {
+		got, ok := winproto.CCSFileName(host)
+		if !ok || got != file {
+			t.Errorf("CCSFileName(%q) = %q, %v", host, got, ok)
+		}
+		back, ok := winproto.CCSHost(file)
+		if !ok || back != host {
+			t.Errorf("CCSHost(%q) = %q, %v", file, back, ok)
+		}
+	}
+	for _, h := range []string{"WWW.example.com", "a..b", `a\b`, "a:b", "..", "*.", "*.*.example.com", strings.Repeat("a", 254), "bücher.example", ""} {
+		if f, ok := winproto.CCSFileName(h); ok {
+			t.Errorf("CCSFileName(%q) = %q", h, f)
+		}
+	}
+	if h, ok := winproto.CCSHost("WWW.Example.COM.PFX"); !ok || h != "www.example.com" {
+		t.Errorf("folded: %q %v", h, ok)
+	}
+	// The Kelvin sign folds to k under Unicode lower-casing; only ASCII folds.
+	for _, n := range []string{"x.pfx.bak", ".alice-" + strings.Repeat("0", 8) + ".tmp", "_..pfx", ".pfx", "pfx", "a.pf\u212a", "www.\u212a.pfx", "bücher.pfx"} {
+		if h, ok := winproto.CCSHost(n); ok {
+			t.Errorf("CCSHost(%q) = %q", n, h)
+		}
+	}
+}
+
+func TestValidCCSPassword(t *testing.T) {
+	for n, want := range map[int]bool{11: false, 12: true, 128: true, 129: false} {
+		if got := winproto.ValidCCSPassword([]byte(strings.Repeat("a", n))); got != want {
+			t.Errorf("length %d = %v", n, got)
+		}
+	}
+	for _, bad := range []string{"abcdefgh ijkl", "abcdefgh\tijkl", "abcdefghijk\u00e9", "abcdefghijk\x00"} {
+		if winproto.ValidCCSPassword([]byte(bad)) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestValidCCSPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		`C:\CCS`: true, `D:\Certs\IIS`: true, `C:\CCS\`: true, `c:\ccs`: true,
+		`\\srv\certs`: false, `\\?\C:\CCS`: false, `\\.\C:\CCS`: false, `C:CCS`: false, `C:\a\..\b`: false,
+		`C:\a*`: false, `C:\a?`: false, `C:\a"b`: false, `C:\a<b`: false, `C:\a>b`: false, `C:\a|b`: false,
+		"C:\\a\x01": false, `1:\CCS`: false, `C:/CCS`: false, ``: false, `C:`: false,
+		`C:\` + strings.Repeat("a", 237): true, `C:\` + strings.Repeat("a", 238): false,
+	} {
+		if got := winproto.ValidCCSPath(p); got != want {
+			t.Errorf("ValidCCSPath(%q) = %v", p, got)
+		}
+	}
+}
+
+func TestCCSInputsRedact(t *testing.T) {
+	const pw, key = "PASSWORDSECRET1", "KEYSECRETMATERIAL"
+	dump := winproto.CCSDumpInput{Password: pw}
+	deploy := winproto.CCSDeployInput{Path: `C:\CCS`, Host: "a.example.com", ChainPEM: "x", KeyPEM: key, Password: pw}
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, v := range []any{dump, &dump, deploy, &deploy, []winproto.CCSDeployInput{deploy}, struct{ In winproto.CCSDumpInput }{dump}} {
+			if out := fmt.Sprintf(f, v); strings.Contains(out, pw) || strings.Contains(out, key) {
+				t.Errorf("%s printed a secret: %s", f, out)
+			}
+		}
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "d", dump, "p", &dump, "e", deploy, "q", &deploy)
+	if strings.Contains(buf.String(), pw) || strings.Contains(buf.String(), key) {
+		t.Errorf("slog printed a secret: %s", buf.String())
+	}
+	if b, err := json.Marshal(deploy); err != nil || !strings.Contains(string(b), pw) {
+		t.Errorf("wire form: %s %v", b, err)
+	}
+}
+
+func TestCCSShapesJSON(t *testing.T) {
+	want := func(s string) []string { f := strings.Fields(s); sort.Strings(f); return f }
+	check := func(name string, got, exp []string) {
+		if !reflect.DeepEqual(got, exp) {
+			t.Errorf("%s keys: %v, want %v", name, got, exp)
+		}
+	}
+	check("dump input", keys(t, winproto.CCSDumpInput{}), want("password"))
+	check("file", keys(t, winproto.CCSFile{}), want("name host file_sha256 modified_at leaf_der problem size chain"))
+	check("dump", keys(t, winproto.CCSDumpResponse{}), want("ok enabled local path files ignored truncated"))
+	check("deploy input", keys(t, winproto.CCSDeployInput{}), want("path host expect_sha256 chain_pem key_pem password forbidden_spki_sha256 forbidden_leaf_sha256"))
+}
+
+func TestCCSConstants(t *testing.T) {
+	if winproto.SubCCSDump != "ccs-dump" || winproto.SubCCSDeploy != "ccs-deploy" || winproto.StepWriteFile != "write_file" ||
+		winproto.JournalKindCCS != "ccs_file" || winproto.LocatorCCSFile != "ccs_file" || winproto.CCSPickupWait != 0 ||
+		winproto.MaxCCSFiles != 500 || winproto.MaxCCSFile != 256<<10 || winproto.MaxCCSDumpInput != 4<<10 ||
+		winproto.MaxCCSDeployInput != 256<<10 || winproto.MinCCSPassword != 12 || winproto.MaxCCSPassword != 128 || winproto.MaxCCSPath != 240 {
+		t.Error("CCS constants")
+	}
+	for got, want := range map[string]string{
+		winproto.CodeCCSDisabled: "CCS_DISABLED", winproto.CodeCCSPathChanged: "CCS_PATH_CHANGED",
+		winproto.CodeCCSPathUnsupported: "CCS_PATH_UNSUPPORTED", winproto.CodeCCSPasswordMismatch: "CCS_PASSWORD_MISMATCH",
+		winproto.CodeCCSFileNotFound: "CCS_FILE_NOT_FOUND", winproto.CCSProblemPasswordMismatch: "ccs_password_mismatch",
+		winproto.CCSProblemNotPFX: "not_a_pfx", winproto.CCSProblemNoKey: "key_missing", winproto.CCSProblemTooLarge: "too_large",
+		winproto.WarnCCSRemote: "win_ccs_remote", winproto.WarnCCSPathUnsupported: "win_ccs_path_unsupported",
+		winproto.WarnCCSFilesIgnored: "win_ccs_files_ignored",
+	} {
+		if got != want {
+			t.Errorf("%q, want %q", got, want)
+		}
 	}
 }

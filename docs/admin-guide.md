@@ -1529,7 +1529,7 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   `C:\Program Files\Alice\alice-helper.exe` and refuses any other file (see
   [windows-host-preparation.md](windows-host-preparation.md)). The helper is not signed with Authenticode, so an
   application control policy (WDAC or AppLocker) must allow it by its hash, not by a publisher.
-- **Helper versions.** 1.0.0 is the first released helper. Alice deploys with a helper of 0.2.0 or later and cleans up
+- **Helper versions.** 1.0.0 is the first released helper and 1.1.0 adds the Centralized Certificate Store. Alice manages CCS files with a helper of 1.1.0 or later, deploys with a helper of 0.2.0 or later and cleans up
   with 0.3.0 or later, so a server with an older helper keeps working with what it supports. When you update Alice,
   check the new package's signature and the helper's checksum, copy the helper to the Windows servers, then update
   Alice, as the operator guide's [Updates](operator-guide.md#updates) describes.

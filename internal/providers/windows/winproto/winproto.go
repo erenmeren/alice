@@ -19,15 +19,17 @@ import (
 // Protocol and locations. Protocol 1 spans every helper version (W1 Ruling 2: nothing was released
 // before W4): W2 added iis-deploy, iis-restore, iis-status and iis-fence to it, W3 iis-cleanup. Version
 // is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 W2's (W2 Ruling 2), 0.3.0
-// W3's, and 1.0.0 the first released helper (W4, R63), protocol 1 throughout. WriteMinVersion is the
-// oldest helper Alice sends a write subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends
-// iis-cleanup to.
+// W3's, 1.0.0 the first released helper (W4, R63) and 1.1.0 adds the CCS subcommands ccs-dump and
+// ccs-deploy (W5, R68), protocol 1 throughout. WriteMinVersion is the oldest helper Alice sends a write
+// subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends iis-cleanup to; CCSMinVersion the
+// oldest it sends a CCS subcommand to.
 const (
 	Protocol          = 1
 	MinProtocol       = 1
-	Version           = "1.0.0"
+	Version           = "1.1.0"
 	WriteMinVersion   = "0.2.0"
 	CleanupMinVersion = "0.3.0"
+	CCSMinVersion     = "1.1.0"
 
 	HelperPath   = `C:\Program Files\Alice\alice-helper.exe`
 	DataDir      = `C:\ProgramData\Alice\helper`
@@ -56,6 +58,11 @@ const (
 	SubIISCleanup = "iis-cleanup"
 	ArgPlan       = "--plan"
 	ArgApply      = "--apply"
+
+	// The Centralized Certificate Store subcommands (W5, R68): ccs-dump reads a CCSDumpInput and
+	// ccs-deploy a CCSDeployInput from stdin; their command line is the subcommand and ArgOp only.
+	SubCCSDump   = "ccs-dump"
+	SubCCSDeploy = "ccs-deploy"
 )
 
 // Exit codes equal helperproto's.
@@ -94,6 +101,13 @@ const (
 	CodeBackupMissing   = "BACKUP_MISSING"    // the previous certificate is not in its store with a usable key
 	CodeKeyUnusable     = "KEY_UNUSABLE"      // the certificate is in the store without a usable key
 	CodeJournalFailed   = "JOURNAL_FAILED"    // the journal directory cannot be trusted or written
+
+	// The CCS codes (W5, R68), all exit 3 with nothing changed.
+	CodeCCSDisabled         = "CCS_DISABLED"          // IIS has Centralized Certificate Store off
+	CodeCCSPathChanged      = "CCS_PATH_CHANGED"      // the registry's folder is not the one Alice sent
+	CodeCCSPathUnsupported  = "CCS_PATH_UNSUPPORTED"  // the folder is remote or not a supported local path
+	CodeCCSPasswordMismatch = "CCS_PASSWORD_MISMATCH" // the private key password opens none of the files
+	CodeCCSFileNotFound     = "CCS_FILE_NOT_FOUND"    // ccs-deploy of a file the folder does not hold
 )
 
 // Binding types of SSLBinding.Type.
@@ -167,6 +181,14 @@ const (
 	StepBind              = "bind"
 	StepJournal           = "journal"
 	StepRestore           = "restore"
+	StepWriteFile         = "write_file" // ccs-deploy (W5)
+)
+
+// JournalKindCCS is the journal kind of a CCS file operation; LocatorCCSFile the locator type of a CCS
+// file location (W5, R68).
+const (
+	JournalKindCCS = "ccs_file"
+	LocatorCCSFile = "ccs_file"
 )
 
 // Step.Status values, the words helperproto.NginxStep uses.
@@ -723,3 +745,157 @@ type CleanupApplyResponse struct {
 	OK      bool            `json:"ok"`
 	Results []CleanupResult `json:"results"`
 }
+
+// Bounds of the CCS subcommands (W5, R68). CCSPickupWait is how long ccs-deploy waits for IIS to pick
+// the new file up; zero until a live run shows it is needed (F15).
+const (
+	MaxCCSFiles       = 500
+	MaxCCSFile        = 256 << 10
+	MaxCCSDumpInput   = 4 << 10
+	MaxCCSDeployInput = 256 << 10
+	MinCCSPassword    = 12
+	MaxCCSPassword    = 128
+	MaxCCSPath        = 240
+
+	CCSPickupWait time.Duration = 0
+)
+
+// CCSFile.Problem values.
+const (
+	CCSProblemPasswordMismatch = "ccs_password_mismatch"
+	CCSProblemNotPFX           = "not_a_pfx"
+	CCSProblemNoKey            = "key_missing"
+	CCSProblemTooLarge         = "too_large"
+)
+
+// CCS warnings: server level.
+const (
+	WarnCCSRemote          = "win_ccs_remote"
+	WarnCCSPathUnsupported = "win_ccs_path_unsupported"
+	WarnCCSFilesIgnored    = "win_ccs_files_ignored"
+)
+
+// CCSFileName is the file IIS reads for host: host.pfx, with a wildcard's "*" written "_" (W5 Ruling 5).
+// The host must be a ValidHost.
+func CCSFileName(host string) (string, bool) {
+	if !ValidHost(host) {
+		return "", false
+	}
+	return strings.Replace(host, "*.", "_.", 1) + ".pfx", true
+}
+
+// CCSHost is the inverse for a folder entry: ASCII case folded, ".pfx" stripped, a leading "_." read as
+// "*.". It reports false when the name gives no ValidHost.
+func CCSHost(fileName string) (string, bool) {
+	b := []byte(fileName)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	host, ok := strings.CutSuffix(string(b), ".pfx")
+	if !ok {
+		return "", false
+	}
+	if rest, wild := strings.CutPrefix(host, "_."); wild {
+		host = "*." + rest
+	}
+	return host, ValidHost(host)
+}
+
+// ValidCCSPassword reports whether pw is a password Alice manages a CCS with: MinCCSPassword to
+// MaxCCSPassword bytes of printable ASCII 0x21-0x7E (W5 Ruling 10).
+func ValidCCSPassword(pw []byte) bool {
+	if len(pw) < MinCCSPassword || len(pw) > MaxCCSPassword {
+		return false
+	}
+	for _, c := range pw {
+		if c < 0x21 || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidCCSPath reports whether p is an absolute local path X:\... of at most MaxCCSPath bytes with a
+// drive letter, no \\ prefix (UNC, \\?\, \\.\), no ".." segment, no control character and none of
+// "*?<>| (W5 Ruling 4). One trailing backslash is allowed.
+func ValidCCSPath(p string) bool {
+	if len(p) < 3 || len(p) > MaxCCSPath || p[1] != ':' || p[2] != '\\' ||
+		!('A' <= p[0] && p[0] <= 'Z' || 'a' <= p[0] && p[0] <= 'z') {
+		return false
+	}
+	for _, c := range []byte(p) {
+		if c < 0x20 || c == 0x7f || strings.IndexByte(`"*?<>|`, c) >= 0 {
+			return false
+		}
+	}
+	for _, seg := range strings.Split(p[3:], `\`) {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// CCSDumpInput is the JSON on ccs-dump's stdin, at most MaxCCSDumpInput bytes: the PFX password.
+type CCSDumpInput struct {
+	Password string `json:"password"`
+}
+
+// String redacts the password so %v and %+v never print it.
+func (CCSDumpInput) String() string { return "winproto.CCSDumpInput{redacted}" }
+
+// GoString redacts the password so %#v never prints it.
+func (CCSDumpInput) GoString() string { return "winproto.CCSDumpInput{redacted}" }
+
+// LogValue redacts the password for log/slog handlers.
+func (CCSDumpInput) LogValue() slog.Value { return slog.StringValue("redacted") }
+
+// CCSFile is one .pfx of the CCS folder. DERs are standard base64; Chain follows the leaf, root
+// excluded. Problem is "" or a CCSProblem*; LeafDER and Chain are empty with a Problem.
+type CCSFile struct {
+	Name       string   `json:"name"`
+	Host       string   `json:"host"`
+	FileSHA256 string   `json:"file_sha256"`
+	ModifiedAt string   `json:"modified_at"`
+	LeafDER    string   `json:"leaf_der"`
+	Problem    string   `json:"problem"`
+	Size       int64    `json:"size"`
+	Chain      []string `json:"chain"`
+}
+
+// CCSDumpResponse answers ccs-dump. Path is the folder as the registry holds it; Local is false for a
+// remote or unsupported folder (no Files); Ignored counts .pfx entries whose name gives no host.
+type CCSDumpResponse struct {
+	OK        bool      `json:"ok"`
+	Enabled   bool      `json:"enabled"`
+	Local     bool      `json:"local"`
+	Path      string    `json:"path"`
+	Files     []CCSFile `json:"files"`
+	Ignored   int       `json:"ignored"`
+	Truncated bool      `json:"truncated"`
+}
+
+// CCSDeployInput is the JSON on ccs-deploy's stdin, at most MaxCCSDeployInput bytes. Path is the folder
+// Alice discovered, a compare-and-swap value only (W5 Ruling 4); ExpectSHA256 names the file's current
+// bytes (helperproto.AbsentSHA256 for none).
+type CCSDeployInput struct {
+	Path          string   `json:"path"`
+	Host          string   `json:"host"`
+	ExpectSHA256  string   `json:"expect_sha256"`
+	ChainPEM      string   `json:"chain_pem"`
+	KeyPEM        string   `json:"key_pem"`
+	Password      string   `json:"password"`
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+}
+
+// String redacts the key material and password so %v and %+v never print them.
+func (CCSDeployInput) String() string { return "winproto.CCSDeployInput{redacted}" }
+
+// GoString redacts the key material and password so %#v never prints them.
+func (CCSDeployInput) GoString() string { return "winproto.CCSDeployInput{redacted}" }
+
+// LogValue redacts the key material and password for log/slog handlers.
+func (CCSDeployInput) LogValue() slog.Value { return slog.StringValue("redacted") }
