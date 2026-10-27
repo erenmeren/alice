@@ -573,6 +573,10 @@ func TestCCSDeployOutcomeTable(t *testing.T) {
 		{"verification failed: the backup is restored", func(_ *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) { c.model.ServeStaleCCS(true) },
 			want{result: providers.DeployRolledBack, phase: "restored", failed: "verify", cause: "verify", verified: "remote",
 				steps: append(written, "verify:failed", "restore:ok", "verify_old:ok"), reason: "deployment.verify_failed", file: "old", restores: 1}},
+		{"the ccs record refresh failed: IIS keeps the old file, the probe fails, the backup is restored", func(_ *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) {
+			c.model.FailCCSRefresh(true)
+		}, want{result: providers.DeployRolledBack, phase: "restored", failed: "verify", cause: "verify", verified: "remote",
+			steps: append(written, "verify:failed", "restore:ok", "verify_old:ok"), reason: "deployment.verify_failed", file: "old", restores: 1}},
 		{"verification failed, the backup gone: rollback_failed, nothing written", func(t *testing.T, c *cenv, _ pki.Leaf, _ *providers.DeployRequest) {
 			c.model.ServeStaleCCS(true)
 			inner := c.model.Handler()
@@ -645,6 +649,60 @@ func TestCCSDeployOutcomeTable(t *testing.T) {
 			assert.Zero(t, c.countSent(winproto.SubIISDeploy), "a CCS file is never sent iis-deploy")
 		})
 	}
+}
+
+// recLog keeps the params of each step's final status, by step name.
+type recLog struct{ params map[string]map[string]string }
+
+func (r *recLog) Step(name string, status providers.StepStatus, params map[string]string) {
+	if status != providers.StepStarted {
+		r.params[name] = params
+	}
+}
+
+// F15 route (a): a failed refresh of the http.sys ccs records after the replace or the restore is the param
+// ccs_refresh_failed on the write_file or the restore step; it decides nothing by itself (the verification does).
+func TestCCSRefreshFailedIsReported(t *testing.T) {
+	t.Run("deploy and inline rollback", func(t *testing.T) {
+		c := newCEnv(t)
+		c.model.FailCCSRefresh(true)
+		log := &recLog{params: map[string]map[string]string{}}
+		out, err := c.csession(t).DeployCertificate(context.Background(), c.ccsReq(c.issue()), log)
+		providertest.CheckDeployOutcome(t, out, err)
+		require.NoError(t, err)
+		assert.Equal(t, providers.DeployRolledBack, out.Result)
+		assert.Equal(t, "true", log.params["write_file"][ccsRefreshFailedParam])
+		assert.Equal(t, "true", log.params["restore"][ccsRefreshFailedParam])
+		assert.Empty(t, log.params["import_chain"][ccsRefreshFailedParam])
+	})
+	t.Run("a committed file, then a rollback", func(t *testing.T) {
+		c := newCEnv(t)
+		s := c.csession(t)
+		req := c.ccsReq(c.issue())
+		req.Verify.Skip = true
+		c.model.FailCCSRefresh(true)
+		log := &recLog{params: map[string]map[string]string{}}
+		out, err := s.DeployCertificate(context.Background(), req, log)
+		providertest.CheckDeployOutcome(t, out, err)
+		require.NoError(t, err)
+		assert.Equal(t, providers.DeployCommitted, out.Result, "a failed refresh never rolls back by itself")
+		assert.Equal(t, "true", log.params["write_file"][ccsRefreshFailedParam])
+		log = &recLog{params: map[string]map[string]string{}}
+		rb, err := s.RollbackDeployment(context.Background(), providers.RollbackRequest{OperationID: req.OperationID, Location: c.cloc,
+			Verify: providers.VerifyOptions{Skip: true}, Backup: out.Backup}, log)
+		providertest.CheckRollbackOutcome(t, rb, err)
+		require.NoError(t, err)
+		assert.Equal(t, providers.DeployRolledBack, rb.Result)
+		assert.Equal(t, "true", log.params["restore"][ccsRefreshFailedParam])
+	})
+	t.Run("a refresh that worked carries nothing", func(t *testing.T) {
+		c := newCEnv(t)
+		log := &recLog{params: map[string]map[string]string{}}
+		out, err := c.csession(t).DeployCertificate(context.Background(), c.ccsReq(c.issue()), log)
+		require.NoError(t, err)
+		assert.Equal(t, providers.DeployCommitted, out.Result)
+		assert.Empty(t, log.params["write_file"][ccsRefreshFailedParam])
+	})
 }
 
 // A CCS rollback goes through iis-restore on the CCS journal (W5 Ruling 15): restored to the backup's bytes, and

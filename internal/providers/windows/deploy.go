@@ -127,15 +127,34 @@ func step(log providers.StepLogger, name string, status providers.StepStatus, pa
 }
 
 // logSteps reports the steps of a helper answer, each once with its final status (param error = its
-// class when it has one).
-func logSteps(log providers.StepLogger, steps []providers.DeployStep) {
+// class when it has one). refreshed names the step that carries ccs_refresh_failed ("" none): the helper's
+// resend of the http.sys ccs records after a CCS file's replace or restore failed (F15 route (a)); it decides
+// nothing, the verification judges what IIS serves.
+func logSteps(log providers.StepLogger, steps []providers.DeployStep, refreshed string) {
 	for _, st := range steps {
 		var params map[string]string
 		if st.Error != "" {
 			params = map[string]string{"error": st.Error}
 		}
+		if refreshed != "" && st.Name == refreshed {
+			if params == nil {
+				params = map[string]string{}
+			}
+			params[ccsRefreshFailedParam] = "true"
+		}
 		step(log, st.Name, st.Status, params)
 	}
+}
+
+// ccsRefreshFailedParam is the step param of a failed ccs record refresh.
+const ccsRefreshFailedParam = "ccs_refresh_failed"
+
+// refreshedStep is the step a CCS answer's ccs_refresh_failed is reported on: name when set, else "".
+func refreshedStep(failed bool, name string) string {
+	if failed {
+		return name
+	}
+	return ""
 }
 
 // validGuard: the lists are what the helper accepts (winproto.ValidForbidden).
