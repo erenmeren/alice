@@ -1867,7 +1867,7 @@ The `ci.yml` runs of the same pushes:
 | 3 | 40488480505 | pass | fail: the `internal/inventory` floor | fail (Task 8 in progress) |
 | 4 | 40491733481 | pass | fail: the `internal/inventory` floor | fail (Task 8 in progress) |
 | 5 | 40494994086 | pass | fail: the `internal/inventory` floor | fail (until Task 8) |
-| 6 | 40499784357 | pass | pending when this was written | pass |
+| 6 | 40499784357 | pass | fail: `internal/inventory` 89.0 % shown, below its floor of 89 (closed by the inventory coverage test `76a62ecc`) | pass (`stack` cancelled by a newer push) |
 
 ## Rulings made during execution (W5)
 
@@ -1913,9 +1913,9 @@ One line each: the ruling, then why (and the cost if wrong where it is not obvio
 - W5-8: the location warning code is `win_ccs_unlinked`, not `win.ccs_unlinked` — inventory's `codeRE`
   `^[a-z][a-z_]{0,39}$` (`locations.go:49`, the column CHECK) drops dotted codes.
 - W5-9: a cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning beside `locations_dropped` —
-  accepted: a warning only, corrected by the next full scan. **Superseded (final review I1):** a cut site list now
-  cuts every CCS file location (`list_truncated`, never `win_ccs_unlinked`), because an unlinked file's verification
-  is skipped.
+  accepted: a warning only, corrected by the next full scan. **Superseded (final review I1):** a cut site list (the
+  helper's cut of the `iis-dump`, or a site binding Alice cannot read) now cuts every CCS file location
+  (`list_truncated`, never `win_ccs_unlinked`), because an unlinked file's verification is skipped.
 - W5-10: F15 route (a): after every CCS replace and every CCS restore the helper makes a same-record update of every
   http.sys `ccs:<port>` record (the helper does not know the links; the update is idempotent); `CCSPickupWait` stays 0
   — measured on both images; cost: an extra http.sys write per deployment.
@@ -2168,14 +2168,21 @@ The coordinator's independent final review of `e15fad4b..e0752599` (verdict: fix
 per finding: the finding, what was done, why.
 
 - **I1 (Important, Review Focus 3, WN-21):** `convertCCS` skipped an https binding it could not read (or one past
-  `maxMembershipsPerDump`) silently, so a file whose only binding was skipped became `win_ccs_unlinked` and its
-  deployment skipped the probe. Fixed: such a skip sets `list_truncated` and `locations_dropped` and cuts every file
-  location (`list_truncated`, no `win_ccs_unlinked`); `unlinkedCCS` never answers true for a location with
+  `maxMembershipsPerDump`) silently, and ignored the helper's own cut of the `iis-dump` (`truncated` or
+  `list_truncated`: sites past `MaxSites`, bindings past `MaxSiteBindings`, a binding with bad `sslFlags`), so a file
+  whose only binding was skipped or cut became `win_ccs_unlinked` and its deployment skipped the probe. Fixed (`b7d0f286`,
+  round 2 `a0db6b3f`): such a skip, and the helper's cut (`dumpCut`, the same expression the binding conversion uses),
+  set `list_truncated` and `locations_dropped` and cut every file location (`list_truncated`, no `win_ccs_unlinked`);
+  the helper's cut also leaves out the `cert_missing` locations (a shadowing `hostnameport` record may be the entry
+  cut); `unlinkedCCS` never answers true for a location with
   `list_truncated`, so its verification probes (no endpoint known: `verify_unreachable`, the house rule, and the
   backup is restored); the deployment material now carries the stored location warnings of a location that is not a
   file, so the provider sees the cut at deploy time and W5-15's inventory exception (`servers = '[]'`) is never
   reached for such a location (`TestConvertCCSUnreadableBindingIsNotUnlinked`,
-  `TestWindowsCCSCutBindingIsNeverSkipped`). Why: a write IIS cannot open must never stay unverified.
+  `TestWindowsCCSCutBindingIsNeverSkipped`). Why: a write IIS cannot open must never stay unverified. Trade-off: a cut
+  CCS file with no binding read has no endpoint, so its deployment ends `verify_unreachable` and the backup is
+  restored (the house rule for a location without endpoints); the next full scan, without a cut, makes the file
+  deployable again (linked, or `win_ccs_unlinked`).
 - **I2 (Important):** the Task 9 rulings were written before run 6 finished. Fixed: run 6's row, the F15 no-op verdict,
   the owner item and the `ci.yml` results are filled in. Why: the as-built record must hold the measured verdicts.
 - **M1 (Minor, F17):** the measured `hostnameport` precedence was recorded only. Fixed: a CCS binding whose host and
