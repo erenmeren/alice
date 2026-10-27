@@ -2,17 +2,27 @@ package inventory
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/acme"
+	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/secrets"
 )
@@ -168,4 +178,74 @@ func TestClosedListsOfIncidentsAndACMEMails(t *testing.T) {
 		assert.NotContains(t, Templates(), m, "the ACME mails have their own params")
 	}
 	assert.Equal(t, acme.ReplacesOutcomes(), ACMEReplacesOutcomes())
+}
+
+// The pure helpers of held backups, imports, deployments and revocation checks on the inputs the integration tests do
+// not reach: every key format a held backup's key may come in, and inputs that must be refused rather than guessed.
+func TestPureHelpersOnUnusualInputs(t *testing.T) {
+	ec, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	rk, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	_, ed, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	pkcs8 := func(k any) []byte {
+		der, err := x509.MarshalPKCS8PrivateKey(k)
+		require.NoError(t, err)
+		return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	}
+	ecDER, err := x509.MarshalECPrivateKey(ec)
+	require.NoError(t, err)
+	for name, tc := range map[string]struct {
+		pem  []byte
+		want any
+	}{
+		"PKCS #8 ECDSA":   {pkcs8(ec), &ec.PublicKey},
+		"PKCS #8 Ed25519": {pkcs8(ed), ed.Public()},
+		"PKCS #1 RSA":     {pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rk)}), &rk.PublicKey},
+		"SEC 1 ECDSA":     {pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecDER}), &ec.PublicKey},
+	} {
+		pub, ok := heldKeyPublic(tc.pem)
+		require.True(t, ok, name)
+		assert.True(t, pub.Equal(tc.want), name)
+	}
+	for name, bad := range map[string][]byte{
+		"not PEM":      []byte("nothing"),
+		"another type": pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{1}}),
+		"broken DER":   pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte{1, 2}}),
+	} {
+		_, ok := heldKeyPublic(bad)
+		assert.False(t, ok, name)
+	}
+
+	vault := uuid.New()
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	id := uuid.New()
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	gotAt, gotID, ok := decodeImportCursor(enc(vault.String()+"|"+at.Format(time.RFC3339Nano)+"|"+id.String()), vault)
+	require.True(t, ok)
+	assert.Equal(t, at, gotAt.UTC())
+	assert.Equal(t, id, gotID)
+	for name, c := range map[string]string{
+		"not base64":    "***",
+		"another vault": enc(uuid.NewString() + "|" + at.Format(time.RFC3339Nano) + "|" + id.String()),
+		"two parts":     enc(vault.String() + "|x"),
+		"not a time":    enc(vault.String() + "|yesterday|" + id.String()),
+		"not a uuid":    enc(vault.String() + "|" + at.Format(time.RFC3339Nano) + "|x"),
+	} {
+		_, _, ok := decodeImportCursor(c, vault)
+		assert.False(t, ok, name)
+	}
+
+	assert.Equal(t, validate.OutOfRange, certificateCode(ErrCertificateNotYetValid))
+	assert.Equal(t, validate.Pattern, certificateCode(errors.New("other")))
+	assert.Equal(t, "unspecified", revocationReasonOf(""))
+	assert.Equal(t, "unspecified", revocationReasonOf("certificateHold"))
+	assert.Equal(t, "keyCompromise", revocationReasonOf("keyCompromise"))
+	assert.Equal(t, time.Hour, revocationBackoff(0))
+	assert.Equal(t, []uuid.UUID{}, serviceIDsOrEmpty(nil))
+
+	assert.Nil(t, pemChain(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{1}})), "an unreadable certificate")
+	assert.Empty(t, pemChain(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte{1}})), "no certificate block")
+	assert.Nil(t, Material{CertificatePEM: []byte("not PEM")}.TrustPolicy(), "no trust store: not checked")
 }

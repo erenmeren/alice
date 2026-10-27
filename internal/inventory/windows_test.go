@@ -11,12 +11,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
+	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/providers"
 	"alice/internal/providers/fake"
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/testutil/pki"
+	"alice/locales"
 )
 
 // The inventory may not import the Windows provider (archtest), so it mirrors windows.ValidUser (R60 Ruling 1); the
@@ -208,5 +210,29 @@ func TestCCSPasswordRuleEqualsTheHelpers(t *testing.T) {
 		"!\"#$%&'()*+,-./0123456789:;<=>?@AZ[\\]^_`az{|}~", "Ccs-0123456789"}
 	for _, s := range cases {
 		assert.Equal(t, winproto.ValidCCSPassword([]byte(s)), inventory.ValidCCSPassword([]byte(s)), "%q", s)
+	}
+}
+
+// Every e-mail template the inventory lists, the Windows and CCS texts of R61, R62 and W5 among them, has an English and a
+// Turkish subject and body in the catalogue, and no list names a template twice.
+func TestListedTemplatesHaveTexts(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	if !assert.NoError(t, err) {
+		return
+	}
+	seen := map[string]bool{}
+	for _, list := range [][]string{inventory.Templates(), inventory.WindowsDeploymentTemplates(), inventory.WindowsCCSDeploymentTemplates(),
+		inventory.IncidentTemplates(), inventory.RevocationTemplates(), inventory.DriftTemplates(), inventory.WindowsDriftTemplates()} {
+		assert.NotEmpty(t, list)
+		for _, tpl := range list {
+			assert.False(t, seen[tpl], "%s is listed twice", tpl)
+			seen[tpl] = true
+			for _, lang := range []string{"en", "tr"} {
+				for _, part := range []string{"subject", "body"} {
+					key := "email." + tpl + "." + part
+					assert.NotEqual(t, key, cat.T(lang, key, nil), "%s %s", lang, key)
+				}
+			}
+		}
 	}
 }

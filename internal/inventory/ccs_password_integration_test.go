@@ -4,6 +4,7 @@ package inventory_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/inventory"
+	"alice/internal/license"
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -237,4 +239,110 @@ func TestCCSDeploymentEmails(t *testing.T) {
 	require.NoError(t, h.svc.FinishDeployment(h.ctx, r2.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
 		ErrorCode: "windows.ccs_disabled"}))
 	assert.Equal(t, []queuedMail{{inventory.TemplateDeploymentFailed, base(r2.ID)}}, f.deploymentMails(r2.ID), "the file text")
+}
+
+// The refusals of SetCCSPassword and CCSPassword that store or open nothing: a licence lock, a stale If-Match, a row this
+// master key cannot open (ErrCCSPasswordUnusable, never the missing password), a database that cannot be read.
+func TestCCSPasswordRefusals(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	win := winTarget(t, h, admin, "iis-01")
+	src := ccsSource(t, h)
+
+	_, err := setCCS(t, h, admin, inventory.Target{ID: win.ID, Version: win.Version + 1}, ccsPassword())
+	require.ErrorIs(t, err, inventory.ErrVersionMismatch)
+	updated, err := setCCS(t, h, admin, win, ccsPassword())
+	require.NoError(t, err)
+
+	// A row whose envelope this master key cannot open is unusable: discovery must not take it for a missing password.
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE credentials SET ciphertext = '\\x00' WHERE target_id = $1", win.ID)
+	require.NoError(t, err)
+	pt, release, err := src.CCSPassword(h.ctx, win.ID)
+	require.ErrorIs(t, err, providers.ErrCCSPasswordUnusable)
+	assert.NotErrorIs(t, err, providers.ErrNoCCSPassword)
+	assert.Nil(t, release)
+	assert.Empty(t, pt.Bytes())
+
+	_, _, err = src.CCSPassword(h.ctx, uuid.New())
+	require.ErrorIs(t, err, providers.ErrNoCCSPassword, "no password is the provider's sentinel too")
+
+	cancelled, cancel := context.WithCancel(h.ctx)
+	cancel()
+	_, _, err = src.CCSPassword(cancelled, win.ID)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, inventory.ErrNotFound, "a read that failed is no missing password")
+	_, err = h.svc.SetCCSPassword(cancelled, admin, win.ID, updated.Version, secrets.NewPlaintext(ccsPassword()))
+	require.Error(t, err)
+
+	h.clock.Advance(31 * 24 * time.Hour)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	_, err = setCCS(t, h, admin, updated, ccsPassword())
+	require.ErrorIs(t, err, license.ErrLocked)
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", win.ID), "nothing stored after the first")
+}
+
+// A platform key this master key cannot open is refused, never used.
+func TestUnreadablePlatformKeyIsRefused(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	_, err := h.svc.EnsurePlatformKey(h.ctx)
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE credentials SET ciphertext = '\\x00' WHERE purpose = 'platform_ssh'")
+	require.NoError(t, err)
+	signer, release, err := h.svc.Credentials().SSHSigner(h.ctx)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, inventory.ErrNoPlatformKey)
+	assert.Nil(t, signer)
+	assert.Nil(t, release)
+}
+
+// The paths a Windows server's page, its CCS password, its cleanup and its deployments' records take report a database
+// that cannot be reached as an error of their own (TestServicePathsReportADatabaseFailure's rule): never as not found, no
+// password, no key or success.
+func TestWindowsServerPathsReportADatabaseFailure(t *testing.T) {
+	h := newHarness(t, withClosedPool())
+	h.installLicense("LIC-DEAD-DB-W5", 5, 365)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	a := h.user("ada", rbac.Admin, "")
+	id := uuid.New()
+	ctx, svc := h.ctx, h.svc
+	name := "iis-02"
+	for what, call := range map[string]func() error{
+		"SetCCSPassword": func() error {
+			_, err := svc.SetCCSPassword(ctx, a, id, 1, secrets.NewPlaintext(ccsPassword()))
+			return err
+		},
+		"CCSPassword": func() error {
+			_, _, err := svc.Credentials().(providers.CCSPasswordSource).CCSPassword(ctx, id)
+			return err
+		},
+		"SSHSigner":         func() error { _, _, err := svc.Credentials().SSHSigner(ctx); return err },
+		"PlatformKey":       func() error { _, err := svc.PlatformKey(ctx); return err },
+		"EnsurePlatformKey": func() error { _, err := svc.EnsurePlatformKey(ctx); return err },
+		"SetupGuide":        func() error { _, err := svc.SetupGuide(ctx, ""); return err },
+		"CreateTarget": func() error {
+			_, _, err := svc.CreateTarget(ctx, a, inventory.NewTarget{Name: name, Type: "linux", Host: name + ".corp.example"})
+			return err
+		},
+		"UpdateTarget": func() error {
+			_, err := svc.UpdateTarget(ctx, a, id, 1, inventory.TargetPatch{Name: &name})
+			return err
+		},
+		"RecordConnectionOK":     func() error { return svc.RecordConnectionOK(ctx, id, providers.ConnectionReport{}) },
+		"CleanupWatch":           func() error { _, err := svc.CleanupWatch(ctx, id); return err },
+		"JudgeCleanup":           func() error { _, err := svc.JudgeCleanup(ctx, id, providers.CleanupPlan{}); return err },
+		"ScheduleWindowsCleanup": func() error { _, err := svc.ScheduleWindowsCleanup(ctx); return err },
+		"RecordDeploymentStep": func() error {
+			return svc.RecordDeploymentStep(ctx, id, providers.StepNameWriteFile, providers.StepOK, nil)
+		},
+		"Rollout":          func() error { _, err := svc.Rollout(ctx, id); return err },
+		"RolloutDetail":    func() error { _, err := svc.RolloutDetail(ctx, id); return err },
+		"PurgeHeldBackups": func() error { _, err := svc.PurgeHeldBackups(ctx); return err },
+		"AdvanceRollouts":  func() error { _, err := svc.AdvanceRollouts(ctx); return err },
+	} {
+		err := call()
+		require.Error(t, err, what)
+		for _, refusal := range []error{inventory.ErrNotFound, providers.ErrNoCCSPassword, inventory.ErrNoPlatformKey} {
+			assert.NotErrorIs(t, err, refusal, what)
+		}
+	}
 }
