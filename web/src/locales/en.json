@@ -5185,7 +5185,7 @@
     "state": "Password",
     "notSet": "Not set",
     "field": "CCS password",
-    "fieldHelp": "The private-key password set for the store in IIS Manager (Centralized Certificates): 12 to 128 characters, no spaces.",
+    "fieldHelp": "The private-key password set for the store in IIS Manager (Centralized Certificates): 12 to 128 characters of printable ASCII, no spaces.",
     "set": "Set password",
     "replace": "Replace password",
     "saved": "Saved. Choose Discover to list the files of the server's Centralized Certificate Store."

@@ -5185,7 +5185,7 @@
     "state": "Parola",
     "notSet": "Ayarlanmadı",
     "field": "CCS parolası",
-    "fieldHelp": "IIS Yöneticisi'nde (Merkezi Sertifikalar) depo için ayarlanan özel anahtar parolası: boşluksuz, 12 ile 128 karakter.",
+    "fieldHelp": "IIS Yöneticisi'nde (Merkezi Sertifikalar) depo için ayarlanan özel anahtar parolası: boşluksuz, yazdırılabilir ASCII karakterlerden oluşan 12 ile 128 karakter.",
     "set": "Parolayı ayarla",
     "replace": "Parolayı değiştir",
     "saved": "Kaydedildi. Sunucunun Merkezi Sertifika Deposu dosyalarını listelemek için Keşfet'i seçin."
