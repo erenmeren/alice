@@ -283,6 +283,7 @@ jobs:
             'TestRealCCSServedChain',
             'TestRealCCSRefusesReparsePoints',
             'TestFidelityCCS',
+            'TestRealCCSSharedFolderRemoved',
             'TestRealRunnerIsClean'
           )
           $text = Get-Content -LiteralPath $log -Raw

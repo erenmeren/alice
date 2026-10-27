@@ -105,6 +105,7 @@ func TestFidelityCCS(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(link) }) // the link only, before the folder
 	mklink(t, link, filepath.Join(outside, "s.pfx"))
 	f.model.SetCCSReparse(link, true)
+	t.Cleanup(func() { _ = os.Remove(f.path("sub.alice-w5.test.pfx")) }) // the shared folder outlives the test
 	require.NoError(t, os.Mkdir(f.path("sub.alice-w5.test.pfx"), 0o700))
 	f.model.SetCCSReparse(f.path("sub.alice-w5.test.pfx"), true) // not a regular file: refused alike
 

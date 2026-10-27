@@ -109,7 +109,10 @@ func ccsDir(folder string) (string, error) {
 // segment) to a CCS folder.
 func ccsFilePath(folder, name string) (string, error) {
 	dir, err := ccsDir(folder)
-	if err != nil || name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
+	if err != nil {
+		return "", err // ErrCCSFolderUnsupported for a reparse-point folder (run 2: it was masked)
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return "", errBadValue
 	}
 	if strings.HasSuffix(dir, `\`) {
@@ -209,9 +212,12 @@ func (host) ReadCCS(ctx context.Context, folder, name string, limit int) ([]byte
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	path, err := ccsFilePath(folder, name)
-	if err != nil || limit < 0 {
+	if limit < 0 {
 		return nil, false, errBadValue
+	}
+	path, err := ccsFilePath(folder, name)
+	if err != nil {
+		return nil, false, err
 	}
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {

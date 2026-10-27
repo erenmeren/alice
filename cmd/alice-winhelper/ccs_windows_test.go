@@ -8,19 +8,19 @@ package main
 // job log.
 //
 // Fixtures (W5 Global Constraints, Ruling 26): ports 45480-45489 (an sslFlags=3 https binding of an
-// alice-w5- site; 45499 is the sites' plain http binding), a CCS folder C:\alice-w5-ccs-<random>, the
-// local account alice-w5-ccs as CCS's access account with a run-time password, the private-key
-// password made at run time. Every cleanup is registered before its fixture is made and runs in
-// reverse order: the http.sys ccs record, the site, the CCS configuration (disabled, the registry key
-// restored as found), the account, the folder. The Web-CertProvider feature stays installed (removing
-// it needs a restart). zz_runner_clean_windows_test.go checks that nothing is left.
+// alice-w5- site; 45499 is the sites' plain http binding) and one CCS folder C:\alice-w5-ccs-<random>
+// shared by the binary (ruling W5-11, ccs_zz_shared_windows_test.go: IIS keeps the first folder it
+// served), with the local account alice-w5-ccs as CCS's access account and run-time passwords. Every
+// cleanup is registered before its fixture is made and runs in reverse order: the http.sys ccs record,
+// the site, the registry back at the shared folder, the files the test added. The shared folder, the
+// account and the registry key as found go with TestRealCCSSharedFolderRemoved; the Web-CertProvider
+// feature stays installed (removing it needs a restart). zz_runner_clean_windows_test.go checks that
+// nothing is left.
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,9 +107,10 @@ func TestPFXChainOrder(t *testing.T) {
 
 // ---- the fixture ---------------------------------------------------------------------------------------
 
-// ccsReal is a CCS fixture on the real machine (and on the twin's model, for TestFidelityCCS): IIS's
-// CCS enabled at a fresh folder with the alice-w5-ccs account and a private-key password, an alice-w5-
-// site whose https bindings on port carry sslFlags=3, and the write host on a private data directory.
+// ccsReal is a CCS fixture on the real machine (and on the twin's model, for TestFidelityCCS): the
+// shared CCS folder (ccs_zz_shared_windows_test.go, ruling W5-11), an alice-w5- site whose https
+// bindings on port carry sslFlags=3 with its http.sys ccs record, and the write host on a private data
+// directory. The files a test adds to the folder are removed when it ends.
 type ccsReal struct {
 	*twin
 	folder   string
@@ -120,57 +121,19 @@ type ccsReal struct {
 	served   bool      // requireServed ran once
 }
 
-// randomHex is n random bytes in hex.
-func randomHex(t *testing.T, n int) string {
-	t.Helper()
-	b := make([]byte, n)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	return hex.EncodeToString(b)
-}
-
-// requireCertProvider installs the Web-CertProvider feature once (it stays: removing it needs a
-// restart). A runner without the feature or the cmdlets fails here with PowerShell's message, never
-// skips.
-func requireCertProvider(t *testing.T) {
-	t.Helper()
-	out, err := runPowershell(nil, `Import-Module ServerManager
-$f = Get-WindowsFeature -Name Web-CertProvider
-if (-not $f) { throw 'this image does not know the Web-CertProvider feature' }
-if (-not $f.Installed) {
-    $r = Install-WindowsFeature -Name Web-CertProvider
-    if (-not $r.Success) { throw "Install-WindowsFeature Web-CertProvider failed (exit code $($r.ExitCode))" }
-    'installed'
-} else { 'present' }
-Import-Module WebAdministration
-if (-not (Get-Command Enable-WebCentralCertProvider -ErrorAction SilentlyContinue)) { throw 'WebAdministration has no Enable-WebCentralCertProvider' }`)
-	require.NoError(t, err, "the CCS feature (Install-WindowsFeature Web-CertProvider, WebAdministration): %s", out)
-	t.Logf("Web-CertProvider: %s", strings.TrimSpace(string(out)))
-}
-
-// regKeyExists reports whether the CentralCertProvider key exists.
-func regKeyExists(t *testing.T) bool {
-	t.Helper()
-	k, err := openKey(keyCentralCert)
-	if err == nil {
-		_ = k.Close()
-		return true
+// regularFiles lists the regular files of a folder.
+func regularFiles(dir string) (map[string]bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	require.ErrorIs(t, err, registry.ErrNotExist)
-	return false
-}
-
-// removeFolder removes a fixture folder, retrying while IIS still holds it (its change notification).
-func removeFolder(t *testing.T, dir string) {
-	t.Helper()
-	var err error
-	for range 20 {
-		if err = os.RemoveAll(dir); err == nil {
-			return
+	out := map[string]bool{}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			out[e.Name()] = true
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
-	t.Logf("cleanup of %s: %v", dir, err)
+	return out, nil
 }
 
 // newCCSReal makes the fixture: hosts are the host headers of the site's https bindings on port.
@@ -179,51 +142,38 @@ func newCCSReal(t *testing.T, port int, hosts ...string) *ccsReal {
 	require.True(t, port >= 45480 && port <= 45489, "W5 CCS fixture ports are 45480-45489")
 	tw := newTwin(t)
 	tw.siteID, tw.httpPort = int64(port), portCCSSiteHTTP
-	f := &ccsReal{twin: tw, port: port, password: winhelper.NewPFXPassword(), w: newHost(newTestDataDir(t))}
-	requireCertProvider(t)
-
-	f.folder = `C:\alice-w5-ccs-` + randomHex(t, 8)
-	dir := f.folder
-	tw.later(func() { removeFolder(t, dir) })
-	require.NoError(t, os.Mkdir(f.folder, 0o700))
-
-	accountPW := randomHex(t, 16) + "Aa1!" // the local password policy wants upper, lower, digit and symbol
+	requireSharedCCS(t)
+	f := &ccsReal{twin: tw, folder: sharedCCS.folder, password: sharedCCS.password, port: port, w: newHost(newTestDataDir(t)),
+		start: sharedCCS.start}
+	before, err := regularFiles(f.folder)
+	require.NoError(t, err)
+	if len(before) > 0 {
+		t.Logf("the shared CCS folder holds files of an earlier test: %v", before)
+	}
 	tw.later(func() {
-		if _, err := runPowershell(map[string]string{"ALICE_W5_ACCOUNT": ccsAccount}, `$u = Get-LocalUser -Name $env:ALICE_W5_ACCOUNT -ErrorAction SilentlyContinue
-if ($u) {
-    Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.SID -eq $u.SID.Value } | Remove-CimInstance
-    Remove-LocalUser -Name $env:ALICE_W5_ACCOUNT
-}`); err != nil {
-			t.Logf("cleanup of the account %s: %v", ccsAccount, err)
+		now, err := regularFiles(f.folder)
+		if err != nil {
+			t.Logf("cleanup of the CCS files: %v", err)
+			return
+		}
+		for n := range now {
+			if !before[n] {
+				if err := os.Remove(f.path(n)); err != nil {
+					t.Logf("cleanup of %s: %v", n, err)
+				}
+			}
 		}
 	})
-	powershellEnv(t, map[string]string{"ALICE_W5_ACCOUNT": ccsAccount, "ALICE_W5_PW": accountPW},
-		`$pw = ConvertTo-SecureString -String $env:ALICE_W5_PW -AsPlainText -Force
-New-LocalUser -Name $env:ALICE_W5_ACCOUNT -Password $pw -PasswordNeverExpires -AccountNeverExpires -Description 'alice-w5 CCS fixture' | Out-Null
-Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $env:ALICE_W5_ACCOUNT`) // BUILTIN\Users, as net user /add makes it
-	out, err := exec.Command("icacls", f.folder, "/grant", ccsAccount+":(OI)(CI)R").CombinedOutput()
-	require.NoError(t, err, "icacls: %s", out)
-
-	// The registry key as found (after the feature's install, which stays), restored at the end.
-	existed := regKeyExists(t)
-	saved := ""
-	if existed {
-		tmp, err := os.CreateTemp("", "alice-w5-ccs-*.reg") // not t.TempDir: that one is gone before the twin's cleanups
-		require.NoError(t, err)
-		saved = tmp.Name()
-		require.NoError(t, tmp.Close())
-		out, err := exec.Command("reg", "export", ccsRegKey, saved, "/y").CombinedOutput()
-		require.NoError(t, err, "reg export: %s", out)
-	}
-	tw.later(func() { restoreCCSRegistry(t, existed, saved) })
-	powershellEnv(t, map[string]string{"ALICE_W5_FOLDER": f.folder, "ALICE_W5_ACCOUNT": ccsAccount, "ALICE_W5_PW": accountPW,
-		"ALICE_W5_PK": string(f.password)}, `Import-Module WebAdministration
-Enable-WebCentralCertProvider -CertStoreLocation $env:ALICE_W5_FOLDER -UserName "$env:COMPUTERNAME\$env:ALICE_W5_ACCOUNT" -Password $env:ALICE_W5_PW -PrivateKeyPassword $env:ALICE_W5_PK`)
-	f.start = time.Now()
+	tw.later(func() {
+		// A row that changed the registry (another path, CCS off) puts it back itself; this is the net.
+		if err := writeCCSRegistry(true, f.folder); err != nil {
+			t.Logf("cleanup of the CCS registry: %v", err)
+		}
+	})
 	enabled, path, err := f.w.CCSConfig(context.Background())
 	require.NoError(t, err)
 	require.True(t, enabled, "the helper reads CCS enabled")
-	require.Equal(t, f.folder, path, "the helper reads the folder Enable-WebCentralCertProvider wrote")
+	require.Equal(t, f.folder, path, "the helper reads the shared folder")
 	tw.model.SetCCS(true, f.folder)
 	tw.model.SetCCSPassword(string(f.password))
 
@@ -233,9 +183,7 @@ Enable-WebCentralCertProvider -CertStoreLocation $env:ALICE_W5_FOLDER -UserName 
 	}
 	tw.addSite(fmt.Sprintf("alice-w5-%d", port), bindings...)
 	f.ensureCCSRecord()
-	// IIS keeps reading the folder it read before until the ccs records are refreshed (run 1: a new
-	// folder was never served without one): the helper's own refresh (ruling W5-10).
-	f.refresh()
+	f.refresh() // the helper's own refresh (ruling W5-10)
 	return f
 }
 
@@ -245,23 +193,6 @@ func (f *ccsReal) refresh() {
 	n, err := f.w.RefreshCCSRecords(context.Background())
 	require.NoError(f.t, err, "RefreshCCSRecords")
 	require.Positive(f.t, n, "RefreshCCSRecords updated the ccs:%d record", f.port)
-}
-
-// restoreCCSRegistry disables CCS and puts the key back as it was found (deleted when there was none).
-func restoreCCSRegistry(t *testing.T, existed bool, saved string) {
-	t.Helper()
-	if _, err := runPowershell(nil, `Import-Module WebAdministration; Disable-WebCentralCertProvider`); err != nil {
-		t.Logf("Disable-WebCentralCertProvider: %v (the key is restored below)", err)
-	}
-	if out, err := exec.Command("reg", "delete", ccsRegKey, "/f").CombinedOutput(); err != nil && regKeyExists(t) {
-		t.Logf("reg delete %s: %v %s", ccsRegKey, err, out)
-	}
-	if existed {
-		if out, err := exec.Command("reg", "import", saved).CombinedOutput(); err != nil {
-			t.Logf("reg import %s: %v %s", saved, err, out)
-		}
-		_ = os.Remove(saved)
-	}
 }
 
 // ccsRecord reads the http.sys ccs record of port.
@@ -471,6 +402,28 @@ func TestRealCCSReplaceIsPickedUp(t *testing.T) {
 	servedHidden := err == nil && len(got) > 0 && got[0] == sum256hex(hidden.Cert.Raw)
 	t.Logf("F15: a .bak or .tmp file is served for its host: %v (answer %v, %v)", servedHidden, got, err)
 	assert.False(t, servedHidden, "IIS never serves a .bak or .tmp file")
+
+	// Run 2: IIS kept the first CCS folder of its lifetime. Measured once here, logged only: a second
+	// folder enabled with Enable-WebCentralCertProvider, the ccs records refreshed, 30 s of handshakes.
+	second := f.folder + "-new"
+	t.Cleanup(func() { removeFolderLog(t.Logf, second) })
+	require.NoError(t, os.Mkdir(second, 0o700))
+	out, err = exec.Command("icacls", second, "/grant", ccsAccount+":(OI)(CI)R").CombinedOutput()
+	require.NoError(t, err, "icacls: %s", out)
+	nf := pki.SelfSigned("alice-w5-nf.test", pki.ECDSA256, time.Now())
+	require.NoError(t, os.WriteFile(filepath.Join(second, "nf.alice-w5.test.pfx"), ccsPFX(t, nf, f.password), 0o600))
+	t.Cleanup(func() { // before the second folder goes: back to the shared one
+		if err := enableCCSAt(f.folder); err != nil {
+			t.Logf("cleanup of the CCS path: %v", err)
+		}
+	})
+	require.NoError(t, enableCCSAt(second))
+	f.refresh()
+	d, ok, last, err := pickup(f.addr(), "nf.alice-w5.test", sum256hex(nf.Cert.Raw), 30*time.Second)
+	t.Logf("F15: new folder: IIS serves a file of a second CCS folder after Enable-WebCentralCertProvider with its path and a ccs refresh: %v after %v (last %v, %v)",
+		ok, d.Round(time.Millisecond), last, err)
+	require.NoError(t, enableCCSAt(f.folder))
+	f.refresh()
 }
 
 // ---- F16 ---------------------------------------------------------------------------------------------
@@ -570,6 +523,10 @@ func TestRealCCSWrongPasswordIsNotServed(t *testing.T) {
 	verified, err = importCode(corrupt)
 	_, _, problem, oerr := f.w.OpenPFX(corrupt, f.password)
 	t.Logf("F16: a corrupt PFX: PFXVerifyPassword %v; PFXImportCertStore code %s; OpenPFX problem %q (%v)", verified, code(err), problem, oerr)
+	// Ruling W5-12 (run 2): Windows answers a corrupt PFX with 86 as it answers another password, so
+	// it is a password mismatch (the server warning counts it), as the emulator answers.
+	require.NoError(t, oerr)
+	assert.Equal(t, winproto.CCSProblemPasswordMismatch, problem, "a corrupt PFX")
 	certsOnly := pki.CertificatesOnlyPFX(string(f.password), good.Cert)
 	_, _, problem, oerr = f.w.OpenPFX(certsOnly, f.password)
 	t.Logf("F16: a certificates-only PFX (an encrypted safe, no key): OpenPFX problem %q (%v)", problem, oerr)
@@ -777,19 +734,27 @@ func mklink(t *testing.T, args ...string) {
 	require.NoError(t, err, "mklink %v: %s", args, out)
 }
 
-// setCCSRegistry writes CCS's Enabled and CertStoreLocation directly (the fixture's cleanup restores
-// the whole key).
-func setCCSRegistry(t *testing.T, enabled bool, path string) {
-	t.Helper()
+// writeCCSRegistry writes CCS's Enabled and CertStoreLocation directly (the shared fixture's teardown
+// restores the whole key).
+func writeCCSRegistry(enabled bool, path string) error {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, keyCentralCert, registry.SET_VALUE|registry.WOW64_64KEY)
-	require.NoError(t, err)
+	if err != nil {
+		return err
+	}
 	defer func() { _ = k.Close() }()
 	v := uint32(0)
 	if enabled {
 		v = 1
 	}
-	require.NoError(t, k.SetDWordValue("Enabled", v))
-	require.NoError(t, k.SetStringValue("CertStoreLocation", path))
+	if err := k.SetDWordValue("Enabled", v); err != nil {
+		return err
+	}
+	return k.SetStringValue("CertStoreLocation", path)
+}
+
+func setCCSRegistry(t *testing.T, enabled bool, path string) {
+	t.Helper()
+	require.NoError(t, writeCCSRegistry(enabled, path))
 }
 
 // TestRealCCSRefusesReparsePoints (Review Focus 1): a CCS folder that is a junction and a CCS file
@@ -849,6 +814,7 @@ func TestRealCCSRefusesReparsePoints(t *testing.T) {
 	link := f.path("s.alice-w5.test.pfx")
 	t.Cleanup(func() { _ = os.Remove(link) }) // the link only, before the folder
 	mklink(t, link, filepath.Join(outside, "s-target.pfx"))
+	t.Cleanup(func() { _ = os.Remove(f.path("d.alice-w5.test.pfx")) }) // the shared folder outlives the test
 	require.NoError(t, os.Mkdir(f.path("d.alice-w5.test.pfx"), 0o700))
 	entries, err := f.w.ListCCS(ctx, f.folder)
 	require.NoError(t, err)

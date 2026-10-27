@@ -1524,3 +1524,37 @@ func TestModelCCSServedAfterRefresh(t *testing.T) {
 		t.Fatalf("%v", names)
 	}
 }
+
+// W5-12 (F16, run 2): Windows answers a corrupt PFX as it answers another password
+// (PFXImportCertStore 86, ERROR_INVALID_PASSWORD), so OpenPFX reports a password mismatch for it, as
+// the emulator does: its MAC no longer verifies. Every byte is tried: none is a host error, and most
+// (those of the authenticated content) read as a mismatch.
+func TestModelCCSCorruptPFXIsAPasswordMismatch(t *testing.T) {
+	f := newCCSFixture(t)
+	pfx, ok := f.m.CCSFile("ccs.example.test.pfx")
+	if !ok {
+		t.Fatal("no file")
+	}
+	h := f.m.Host()
+	mismatch := 0
+	for i := range pfx {
+		corrupt := slices.Clone(pfx)
+		corrupt[i] ^= 0xff
+		_, _, problem, err := h.OpenPFX(corrupt, []byte(f.password))
+		// A byte outside what the MAC covers and the reader checks (a version, a tag's class) may still open.
+		if err != nil || problem != "" && problem != winproto.CCSProblemPasswordMismatch && problem != winproto.CCSProblemNotPFX {
+			t.Fatalf("byte %d: %q %v", i, problem, err)
+		}
+		if problem == winproto.CCSProblemPasswordMismatch {
+			mismatch++
+		}
+	}
+	corrupt := slices.Clone(pfx)
+	corrupt[len(corrupt)/2] ^= 0xff // F16's corrupt file
+	if _, _, problem, _ := h.OpenPFX(corrupt, []byte(f.password)); problem != winproto.CCSProblemPasswordMismatch {
+		t.Fatalf("the middle byte: %q", problem)
+	}
+	if mismatch < len(pfx)/2 {
+		t.Fatalf("only %d of %d corruptions read as a mismatch", mismatch, len(pfx))
+	}
+}
