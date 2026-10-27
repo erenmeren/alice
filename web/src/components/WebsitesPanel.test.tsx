@@ -600,6 +600,19 @@ describe('WebsitesPanel CCS files', () => {
     for (const id of ['c-missing', 'c-nokey']) expect(row(id)).not.toHaveTextContent(/The store (does not hold|holds)/);
   });
 
+  it.each([
+    ['en', '1 binding or file', '1 binding'],
+    ['tr', '1 bağlama veya dosya', '1 bağlama'],
+  ])('counts a group holding a CCS file as bindings or files, a group of bindings as bindings (%s)', async (lang, places, bindingsOnly) => {
+    onNginx('operator', [binding, linked], windowsTargetFixture, false, lang);
+    await renderRoute(winPath, { languages: [lang] });
+    const groups = await screen.findAllByTestId('certificate-group');
+    const head = (id: string) => within(groups.find((g) => within(g).queryAllByTestId('location-row').some((r) => r.getAttribute('data-location') === id))!).getByTestId('certificate-group-row');
+    expect(head('c-linked')).toHaveTextContent(places);
+    expect(head('w-host')).toHaveTextContent(bindingsOnly);
+    expect(head('w-host')).not.toHaveTextContent(places);
+  });
+
   it('names the column Binding while no CCS file is listed', async () => {
     onNginx('operator', [binding], windowsTargetFixture);
     await renderRoute(winPath);

@@ -824,6 +824,24 @@ describe('Windows deployment texts', () => {
   const WRONG_TR = /nginx|dosyalar|sertifika dosya|anahtar dosya|\/var\/lib|\/usr\/local|systemctl|yeniden yükle|root olarak/i;
   const wrong = (lang: 'en' | 'tr', text: string) => (lang === 'en' ? WRONG_EN.test(text) || /\bfiles\b/.test(text) : WRONG_TR.test(text));
 
+  // R68: the reasons a CCS file deployment ends with speak of its file and of the Centralized Certificate Store (in
+  // capitals), never of a binding, netsh or the Windows certificate stores (in lower case).
+  const ccsReasons = [...new Set(sources.flatMap(quoted))].filter((r) => r.startsWith('windows.ccs_') && shared('en', r) !== undefined).sort();
+  const WRONG_CCS_EN = /netsh|binding|certificate store|WebHosting/;
+  const WRONG_CCS_TR = /netsh|bağlama|sertifika deposu|WebHosting/;
+
+  it.each(['en', 'tr'] as const)('words every CCS reason for a file, not for a binding or a store (%s)', (lang) => {
+    expect(ccsReasons).toEqual(expect.arrayContaining(['windows.ccs_disabled', 'windows.ccs_path_changed', 'windows.ccs_password_mismatch', 'windows.ccs_password_missing', 'windows.ccs_file_not_found']));
+    const bad: string[] = [];
+    for (const r of ccsReasons) {
+      for (const part of ['title', 'cause', 'action']) {
+        const text = shared(lang, r)?.[part] ?? '';
+        if ((lang === 'en' ? WRONG_CCS_EN : WRONG_CCS_TR).test(text)) bad.push(`${r}.${part}: ${text}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it('finds the reasons of the Windows provider and the engine', () => {
     expect(reasons).toEqual(expect.arrayContaining(['deployment.verify_failed', 'deployment.interrupted', 'deployment.verify_chain', 'deployment.recovery_exhausted', 'deployment.outcome_unknown', 'windows.key_unusable']));
   });

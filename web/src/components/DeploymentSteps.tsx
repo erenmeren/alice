@@ -96,6 +96,8 @@ function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: bo
   if (p.trust) lines.push(<Text key="trust" size="xs">{t('deployments.stepDetail.trust', { trust: t(trustStatusKey(p.trust)) })}</Text>);
   // R68: a CCS file no IIS site uses was read back by the helper; no website could be probed.
   if (p.ccs_unlinked) lines.push(<Text key="ccsUnlinked" size="xs">{t('deployments.stepDetail.ccsUnlinked')}</Text>);
+  // R68 (F15 route a): the helper could not tell IIS to read the replaced CCS file again; the verification decides.
+  if (p.ccs_refresh_failed) lines.push(<Text key="ccsRefreshFailed" size="xs">{t('deployments.stepDetail.ccsRefreshFailed')}</Text>);
   if (p.trust_error) lines.push(<Text key="trustError" size="xs">{t('deployments.stepDetail.trustError', { reason: t(trustErrorKey(p.trust_error)) })}</Text>);
   if (step.name === 'recover_pending' && (step.status === 'ok' || step.status === 'skipped' || step.status === 'failed')) {
     lines.push(

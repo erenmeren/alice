@@ -102,6 +102,12 @@ describe('DeploymentSteps', () => {
     expect(row('Verify')).toHaveTextContent('No IIS site uses this file');
   });
 
+  it('says in detail that IIS could not be told to read the new file again', async () => {
+    await renderApp(<DeploymentSteps status="succeeded" detailed ccs steps={[stepFixture(1, 'write_file', 'ok', { ccs_refresh_failed: 'true' }), stepFixture(2, 'verify')]} />);
+    expect(row('Write the file')).toHaveTextContent('Alice could not tell IIS to read the new file again; the verification shows whether the sites serve it.');
+    expect(row('Verify')).not.toHaveTextContent('could not tell IIS');
+  });
+
   it('never draws a check mark for a step that was not run', async () => {
     await renderApp(<DeploymentSteps status="failed" steps={[stepFixture(1, 'backup'), stepFixture(2, 'config_test', 'failed')]} />);
     const reload = row('Reload');

@@ -184,7 +184,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
                         )}
                         {g.cert && <Expiry notAfter={g.cert.not_after} />}
                         <Text size="sm" c="dimmed">
-                          {t('locations.group.count', { count: g.items.length })}
+                          {t(g.items.some(isCCSFile) ? 'locations.group.countPlaces' : 'locations.group.count', { count: g.items.length })}
                         </Text>
                       </Group>
                     </Table.Th>

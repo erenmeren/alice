@@ -15,7 +15,9 @@ import {
   sessionHandlers,
   stepFixture,
   windowsBindingFixture,
+  windowsCCSFileFixture,
   windowsDeploymentFixture,
+  ccsDeploymentFixture,
 } from '../test/fixtures';
 import { renderWithAuth } from '../test/render';
 import { server } from '../test/server';
@@ -842,6 +844,34 @@ describe('DeployDialog on a Windows server', () => {
     expect(lists).toHaveLength(2);
     for (const name of ['Import the chain', 'Import the certificate', 'Bind', 'Verify']) expect(within(lists[0]).getByText(name)).toBeInTheDocument();
     expect(within(lists[0]).queryByText('Backup')).not.toBeInTheDocument();
+  });
+
+  it('describes a CCS file deployment as a file written with a backup, not as a binding change (R68)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const file = windowsCCSFileFixture({ id: 'c1', certificate: OTHER });
+    server.use(
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted([D1, 'c1']), { status: 202 })),
+      http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(ccsDeploymentFixture({ id: String(params.id), location_id: 'c1' }))),
+    );
+    await showDialog({ location: file, siblings: [W1, file] });
+    expect(await screen.findByText(/keeping a backup of the previous file beside it in the Centralized Certificate Store folder/)).toBeInTheDocument();
+    expect(screen.queryByText(/points the binding/)).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Bindings and files' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /C:\\CCS\\ccs\.example\.test\.pfx/ })).toBeChecked();
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    const list = await screen.findByRole('list', { name: 'Steps' });
+    for (const name of ['Import the chain', 'Write the file', 'Verify']) expect(within(list).getByText(name)).toBeInTheDocument();
+    expect(within(list).queryByText('Bind')).not.toBeInTheDocument();
+  });
+
+  it('keeps the binding wording when no CCS file is among the siblings', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    await showDialog({ location: W1, siblings });
+    expect(await screen.findByText(/points the binding to the new certificate/)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Bindings' })).toBeInTheDocument();
   });
 
   it('cannot deploy when every binding is unticked', async () => {

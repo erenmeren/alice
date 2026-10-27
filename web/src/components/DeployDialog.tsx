@@ -115,6 +115,8 @@ function DeployForm({
         : [location, ...siblings]
       : null;
   const windows = location !== undefined && isWindows(location.target_type);
+  // R68: a file of the server's Centralized Certificate Store is written in place, not bound.
+  const ccs = location?.kind === 'win_ccs_file';
   const [chosenId, setChosenId] = useState('');
   const [picked, setPicked] = useState<string[]>(bindings && location ? [location.id] : []);
   const [confirmChain, setConfirmChain] = useState(false);
@@ -318,7 +320,7 @@ function DeployForm({
       }}
     >
       <Stack gap="md">
-        <Text size="sm">{t(windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
+        <Text size="sm">{t(ccs ? 'deploy.summaryCCS' : windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
 
         {certificate === undefined && (
           <>
@@ -363,7 +365,7 @@ function DeployForm({
         )}
 
         {bindings && (
-          <Checkbox.Group value={picked} onChange={setPicked} label={t('deploy.bindings')}>
+          <Checkbox.Group value={picked} onChange={setPicked} label={t(bindings.some((l) => l.kind === 'win_ccs_file') ? 'deploy.bindingsOrFiles' : 'deploy.bindings')}>
             <Stack gap="sm" mt="xs">
               {groups.map((g) => {
                 const name = g.cert ? certificateSubject(g.cert) : '';

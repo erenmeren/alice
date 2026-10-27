@@ -2037,7 +2037,9 @@
     "group": {
       "noCertificate": "No certificate",
       "count_one": "{{count}} binding",
-      "count_other": "{{count}} bindings"
+      "count_other": "{{count}} bindings",
+      "countPlaces_one": "{{count}} binding or file",
+      "countPlaces_other": "{{count}} bindings or files"
     },
     "problemsCCS": {
       "cert_missing": "An IIS site uses this name, but the store's folder has no file for it. Place the first file in the folder; Alice manages it from then on.",
@@ -2103,7 +2105,9 @@
     "serverOperationPendingWindows": "The new certificate was not deployed. An unfinished earlier change on the server blocks this binding; see below.",
     "pendingChangeRestoredWindows": "The new certificate was not deployed. Alice pointed the binding back to the certificate from before an unfinished earlier change, so the website now serves that certificate. That may not be the certificate it served when you chose Deploy.",
     "chosenNoLongerFits": "The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding.",
-    "succeededUnverifiedCCS": "The new certificate was written into the file and read back."
+    "succeededUnverifiedCCS": "The new certificate was written into the file and read back.",
+    "summaryCCS": "Alice imports the intermediate certificates into the server's CA store, writes the new certificate into the file in place, keeping a backup of the previous file beside it in the Centralized Certificate Store folder, and checks the IIS sites that use the file. If any step fails, Alice restores the file from the backup.",
+    "bindingsOrFiles": "Bindings and files"
   },
   "deployments": {
     "page": {
@@ -2263,7 +2267,8 @@
         "skipped": "There was nothing to put back.",
         "failed": "The unfinished earlier change still blocks these files."
       },
-      "ccsUnlinked": "No IIS site uses this file, so Alice read the file back instead of checking a website."
+      "ccsUnlinked": "No IIS site uses this file, so Alice read the file back instead of checking a website.",
+      "ccsRefreshFailed": "Alice could not tell IIS to read the new file again; the verification shows whether the sites serve it."
     },
     "currentStep": "Current step: {{step}}",
     "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
