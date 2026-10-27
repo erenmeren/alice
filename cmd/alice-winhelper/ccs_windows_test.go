@@ -699,7 +699,7 @@ func TestRealCCSServedChain(t *testing.T) {
 	require.NoError(t, err)
 	f.refresh()
 	diagAddr := "127.0.0.1:" + strconv.Itoa(portCCSDiag)
-	d, ok, last, err := pickup(diagAddr, "diag.alice-w5.test", sum256hex(diag.Cert.Raw), 60*time.Second)
+	d, ok, last, err := pickup(diagAddr, "diag.alice-w5.test", sum256hex(diag.Cert.Raw), 4*time.Minute) // run 3: a later port served after about 150 s (F17 on 45481)
 	t.Logf("DIAG: a second site on its own port %d (ccs record by IIS: %v), made after the first CCS serve, serves its file: %v after %v (last %v, %v)",
 		portCCSDiag, byIIS, ok, d.Round(time.Millisecond), last, err)
 	if !ok {
