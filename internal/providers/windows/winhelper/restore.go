@@ -252,6 +252,8 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 		return nil, failed(winproto.CodeStoreError, "a certificate store could not be opened")
 	case err != nil:
 		return nil, failed(winproto.CodeIOError, "the binding or the previous certificate could not be read")
+	case kind == restoreNoBackup && j.Kind == winproto.JournalKindCCS:
+		return nil, precondition(winproto.CodeBackupMissing, "the CCS file's backup is missing or was changed")
 	case kind == restoreNoBackup:
 		return nil, precondition(winproto.CodeBackupMissing, "the previous certificate is not in its store with a usable key")
 	case kind == restoreForeign && j.Phase == winproto.PhaseRestoreFailed && j.Error == winproto.ErrFileChanged,

@@ -1000,6 +1000,11 @@ func TestCCSRestoreRules(t *testing.T) {
 			}
 			o, _, out := f.restore(op1, []string{}, []string{})
 			wantError(t, o.Exit, out, 3, winproto.CodeBackupMissing)
+			// Final review M4: the CCS file's own text, fixed (no path, no password), not the store's.
+			var e winproto.ErrorResponse
+			if err := json.Unmarshal(out, &e); err != nil || e.Message != "the CCS file's backup is missing or was changed" {
+				t.Fatalf("message %q %v", e.Message, err)
+			}
 			if len(f.h.writes()) != 0 {
 				t.Fatalf("%v", f.h.writes())
 			}
