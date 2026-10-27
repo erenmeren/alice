@@ -114,13 +114,16 @@ func cmdCCSDump(ctx context.Context, c *call) (any, error) {
 }
 
 // readCCSFile reads and opens one file. ok is false when it cannot be read or opened, or its
-// certificates are past the bounds; a file that vanished since the list is the zero CCSFile.
+// certificates are past the bounds; a file that vanished since the list, or that ReadCCS refuses as a
+// reparse point or not a regular file, is the zero CCSFile (not listed).
 func readCCSFile(ctx context.Context, h WriteHost, folder string, e CCSEntry, host string, pw []byte) (winproto.CCSFile, bool) {
 	data, found, err := h.ReadCCS(ctx, folder, e.Name, winproto.MaxCCSFile)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrCCSFileUnsupported):
+		return winproto.CCSFile{}, true // a reparse point or not a regular file: not listed (W5 Ruling 4)
+	case err != nil:
 		return winproto.CCSFile{}, false
-	}
-	if !found {
+	case !found:
 		return winproto.CCSFile{}, true
 	}
 	f := winproto.CCSFile{Name: e.Name, Host: host, Size: e.Size, ModifiedAt: e.ModTime.UTC().Format(time.RFC3339), Chain: []string{}}
@@ -324,6 +327,8 @@ func cmdCCSDeploy(ctx context.Context, c *call) (any, error) {
 	}
 	data, found, err := h.ReadCCS(ctx, folder, file, winproto.MaxCCSFile)
 	switch {
+	case errors.Is(err, ErrCCSFileUnsupported):
+		return nil, refused(winproto.CodeInvalidArgument, "the CCS file is a reparse point or not a regular file")
 	case err != nil:
 		return nil, failed(winproto.CodeIOError, "the CCS file could not be read")
 	case !found:

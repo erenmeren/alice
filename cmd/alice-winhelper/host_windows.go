@@ -27,8 +27,9 @@ import (
 
 // host is the real Windows machine behind winhelper.WriteHost. Every reading is a fixed registry value,
 // file, API call or program (design 2026-10-21 §7); every change is an http.sys update, a certificate
-// store add, a state file under dataDir, the helper lock or an Application event (W2). Errors carry no
-// OS text into the answer: winhelper replaces them with fixed messages.
+// store add, a state file under dataDir, the helper lock or an Application event (W2), or a file of the
+// CCS folder (W5, ccs_windows.go). Errors carry no OS text into the answer: winhelper replaces them with
+// fixed messages.
 type host struct {
 	now     func() time.Time
 	dataDir string // winproto.DataDir; tests use a private one
@@ -391,28 +392,3 @@ func (host) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
 	return d.DialContext(ctx, network, addr)
 }
-
-// errCCSNotBuilt answers every CCS method until the real CCS host is written (W5 Task 5).
-var errCCSNotBuilt = errors.New("alice-winhelper: the CCS host is not built yet")
-
-func (host) CCSConfig(context.Context) (bool, string, error) { return false, "", errCCSNotBuilt }
-
-func (host) ListCCS(context.Context, string) ([]winhelper.CCSEntry, error) {
-	return nil, errCCSNotBuilt
-}
-
-func (host) ReadCCS(context.Context, string, string, int) ([]byte, bool, error) {
-	return nil, false, errCCSNotBuilt
-}
-
-func (host) OpenPFX([]byte, []byte) ([]byte, [][]byte, string, error) {
-	return nil, nil, "", errCCSNotBuilt
-}
-
-func (host) WriteCCSTemp(context.Context, string, string, []byte) error { return errCCSNotBuilt }
-
-func (host) ReplaceCCS(context.Context, string, string, string, string) error { return errCCSNotBuilt }
-
-func (host) RestoreCCS(context.Context, string, string, string) error { return errCCSNotBuilt }
-
-func (host) RemoveCCS(context.Context, string, string) error { return errCCSNotBuilt }

@@ -629,7 +629,6 @@ var (
 	errCCSNoFile   = errors.New("wintest: the file does not exist")
 	errCCSReplace  = errors.New("wintest: ReplaceFileW failed")
 	errCCSRemove   = errors.New("wintest: not a temporary file or a backup")
-	errCCSReparse  = errors.New("wintest: the file is a reparse point")
 )
 
 // folderKey is a folder as Windows compares it: ASCII case folded, one trailing backslash trimmed. A
@@ -797,13 +796,13 @@ func (h host) ListCCS(_ context.Context, folder string) ([]winhelper.CCSEntry, e
 }
 
 // ReadCCS reads at most limit+1 bytes of folder\name (any case); a file or a folder that does not exist
-// is not found; a reparse-point file is an error.
+// is not found; a reparse-point file is winhelper.ErrCCSFileUnsupported.
 func (h host) ReadCCS(_ context.Context, folder, name string, limit int) ([]byte, bool, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
 	f := h.m.ccsDirs[folderKey(folder)][fold(name)]
 	if h.m.ccsReparse[folderKey(folder)+`\`+fold(name)] {
-		return nil, false, errCCSReparse
+		return nil, false, winhelper.ErrCCSFileUnsupported
 	}
 	if f == nil {
 		return nil, false, nil

@@ -1415,11 +1415,12 @@ func TestModelCCSReparsePoints(t *testing.T) {
 	if d := f.dump(t); !d.Local || len(d.Files) != 0 {
 		t.Fatalf("a reparse-point file is not listed: %+v", d)
 	}
-	if _, _, err := f.m.Host().ReadCCS(context.Background(), ccsFolder, "ccs.example.test.pfx", 10); err == nil {
-		t.Fatal("ReadCCS opens a reparse-point file")
+	if _, _, err := f.m.Host().ReadCCS(context.Background(), ccsFolder, "ccs.example.test.pfx", 10); !errors.Is(err, winhelper.ErrCCSFileUnsupported) {
+		t.Fatalf("ReadCCS of a reparse-point file: %v", err)
 	}
-	if r, _ := f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit == 0 {
-		t.Fatalf("a deployment over a reparse-point file: %s", r.Stdout)
+	r, _ = f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test"))
+	if err := json.Unmarshal(r.Stdout, &e); err != nil || r.Exit != 2 || e.Code != winproto.CodeInvalidArgument {
+		t.Fatalf("a deployment over a reparse-point file: %d %s", r.Exit, r.Stdout)
 	}
 	if _, ok := f.m.Journal(opID(2)); ok || !slices.Equal(mustCCS(t, f.m, "ccs.example.test.pfx"), before) {
 		t.Fatal("something was written")

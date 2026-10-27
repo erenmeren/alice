@@ -411,8 +411,8 @@ func appcmdPath() string {
 func (tw *twin) addSite(name string, bindings ...winproto.SiteBinding) {
 	tw.t.Helper()
 	prefix := name[:min(len(name), len("alice-w1-"))]
-	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-" || prefix == "alice-w3-",
-		"fixture site names start alice-w1-, alice-w2- or alice-w3-")
+	require.True(tw.t, prefix == "alice-w1-" || prefix == "alice-w2-" || prefix == "alice-w3-" || prefix == "alice-w5-",
+		"fixture site names start alice-w1-, alice-w2-, alice-w3- or alice-w5-")
 	if tw.webDir == "" {
 		tw.webDir = filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", prefix+"fidelity")
 		dir := tw.webDir

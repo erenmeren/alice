@@ -82,8 +82,8 @@ type WriteHost interface {
 	// ErrCCSFolderUnsupported.
 	ListCCS(ctx context.Context, folder string) ([]CCSEntry, error)
 	// ReadCCS reads at most limit+1 bytes of folder\name (the caller refuses more), opening it with
-	// FILE_FLAG_OPEN_REPARSE_POINT: a file that is a reparse point or not a regular file is an error.
-	// found is false when there is none.
+	// FILE_FLAG_OPEN_REPARSE_POINT: a file that is a reparse point or not a regular file is
+	// ErrCCSFileUnsupported. found is false when there is none.
 	ReadCCS(ctx context.Context, folder, name string, limit int) (data []byte, found bool, err error)
 	// OpenPFX reads a PFX's certificates under password without keeping its key: the leaf (the
 	// certificate that has the key) and the other certificates in the file's order. problem is a
@@ -133,6 +133,8 @@ var (
 	ErrStore           = errors.New("winhelper: a certificate store could not be opened")
 	// ErrCCSFolderUnsupported is a CCS folder that is a reparse point (W5 Ruling 3).
 	ErrCCSFolderUnsupported = errors.New("winhelper: the CCS folder is a reparse point")
+	// ErrCCSFileUnsupported is a CCS file that is a reparse point or not a regular file (W5 Ruling 4).
+	ErrCCSFileUnsupported = errors.New("winhelper: the CCS file is a reparse point or not a regular file")
 )
 
 // writeGrace is how long a write handler that entered its gate may still run after the budget ended

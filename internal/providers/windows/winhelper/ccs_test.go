@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -289,6 +290,20 @@ func TestCCSDumpHostProblemsAndIgnored(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 
+	// A file ReadCCS refuses as a reparse point or not a regular file is not listed, and the list is
+	// whole (W5 ruling W5-7).
+	h = newWriteHost()
+	h.setCCS(ccsFolder, map[string][]byte{"a.example.test.pfx": []byte("x"), "b.example.test.pfx": []byte("x")})
+	h.ccsReadFn = func(name string) error {
+		if name == "a.example.test.pfx" {
+			return fmt.Errorf("wrapped: %w", ErrCCSFileUnsupported)
+		}
+		return nil
+	}
+	if _, r, out := ccsDump(t, h, ccsInput(pw)); len(r.Files) != 1 || r.Files[0].Name != "b.example.test.pfx" || r.Truncated {
+		t.Fatalf("%s", out)
+	}
+
 	files := map[string][]byte{"zz bad.pfx": nil, "zz worse.pfx": nil, "_bad.pfx": nil}
 	for i := range winproto.MaxCCSFiles + 1 {
 		files["h"+strconv.Itoa(i)+".example.test.pfx"] = []byte("x")
@@ -509,6 +524,8 @@ func TestCCSDeployRefusesBeforeAnyWrite(t *testing.T) {
 		{name: "an absent file", setup: func(f *ccsFixture) { delete(f.h.ccsFiles, ccsName) }, exit: 3, code: winproto.CodeCCSFileNotFound},
 		{name: "an unreadable file", setup: func(f *ccsFixture) { f.h.ccsReadFn = func(string) error { return errors.New("denied") } },
 			exit: winproto.ExitFailed, code: winproto.CodeIOError},
+		{name: "the file is a reparse point", setup: func(f *ccsFixture) { f.h.ccsReadFn = func(string) error { return ErrCCSFileUnsupported } },
+			exit: 2, code: winproto.CodeInvalidArgument},
 		{name: "a file past the bound", setup: func(f *ccsFixture) { f.setFile(ccsName, make([]byte, winproto.MaxCCSFile+1)) },
 			exit: 2, code: winproto.CodeInvalidArgument},
 		{name: "the host cannot open the file", setup: func(f *ccsFixture) { f.h.ccsOpenErr = func([]byte) error { return errors.New("crypt32") } },

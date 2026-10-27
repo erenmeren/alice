@@ -126,7 +126,7 @@ func (h host) WriteState(name string, data []byte) error {
 	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errState
 	}
-	if err := writeFlushed(tmp, data); err != nil {
+	if err := writeFlushed(tmp, data, windows.FILE_ATTRIBUTE_NORMAL); err != nil {
 		_ = os.Remove(tmp)
 		return errState
 	}
@@ -168,13 +168,14 @@ func replaceFile(from, to *uint16) error {
 	return err
 }
 
-// writeFlushed creates path (it must not exist) and writes data with FlushFileBuffers before closing.
-func writeFlushed(path string, data []byte) error {
+// writeFlushed creates path (it must not exist) with CreateFile's flags and attributes and writes data
+// with FlushFileBuffers before closing.
+func writeFlushed(path string, data []byte, flags uint32) error {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return err
 	}
-	fh, err := windows.CreateFile(p, windows.GENERIC_WRITE, 0, nil, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	fh, err := windows.CreateFile(p, windows.GENERIC_WRITE, 0, nil, windows.CREATE_NEW, flags, 0)
 	if err != nil {
 		return err
 	}
