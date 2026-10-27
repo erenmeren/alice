@@ -391,3 +391,28 @@ func (host) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
 	return d.DialContext(ctx, network, addr)
 }
+
+// errCCSNotBuilt answers every CCS method until the real CCS host is written (W5 Task 5).
+var errCCSNotBuilt = errors.New("alice-winhelper: the CCS host is not built yet")
+
+func (host) CCSConfig(context.Context) (bool, string, error) { return false, "", errCCSNotBuilt }
+
+func (host) ListCCS(context.Context, string) ([]winhelper.CCSEntry, error) {
+	return nil, errCCSNotBuilt
+}
+
+func (host) ReadCCS(context.Context, string, string, int) ([]byte, bool, error) {
+	return nil, false, errCCSNotBuilt
+}
+
+func (host) OpenPFX([]byte, []byte) ([]byte, [][]byte, string, error) {
+	return nil, nil, "", errCCSNotBuilt
+}
+
+func (host) WriteCCSTemp(context.Context, string, string, []byte) error { return errCCSNotBuilt }
+
+func (host) ReplaceCCS(context.Context, string, string, string, string) error { return errCCSNotBuilt }
+
+func (host) RestoreCCS(context.Context, string, string, string) error { return errCCSNotBuilt }
+
+func (host) RemoveCCS(context.Context, string, string) error { return errCCSNotBuilt }

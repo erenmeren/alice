@@ -22,6 +22,7 @@ import (
 	"software.sslmate.com/src/go-pkcs12"
 
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 // fakeHost is a Host with settable readings and error injection; calls counts every reading.
@@ -205,6 +206,28 @@ type fakeWriteHost struct {
 	bindingBlockFn func()
 	protected      Protected
 	protectedErr   error
+
+	// W5: the Centralized Certificate Store. ccsFiles is the folder's content by name (ListCCS lists
+	// the *.pfx names only, as the real host's filter); ccsLists counts ListCCS calls, ccsReads names
+	// every ReadCCS; ccsPasswords are the slices OpenPFX was given (a test checks they were cleared).
+	ccsEnabled    bool
+	ccsPath       string
+	ccsConfigErr  error
+	ccsFiles      map[string]fakeCCSFile
+	ccsListErr    error
+	ccsLists      int
+	ccsReads      []string
+	ccsReadFn     func(name string) error // decides each ReadCCS before it reads (nil reads)
+	ccsOpenErr    func(data []byte) error
+	ccsPasswords  [][]byte
+	ccsWriteErr   error
+	ccsReplaceErr error
+}
+
+// fakeCCSFile is one file of the fake CCS folder.
+type fakeCCSFile struct {
+	data []byte
+	mod  time.Time
 }
 
 func newWriteHost() *fakeWriteHost {
@@ -590,6 +613,175 @@ func (f *fakeWriteHost) Point(name string) error {
 	f.wmu.Unlock()
 	if hook != nil {
 		return hook(name)
+	}
+	return nil
+}
+
+// setCCS turns the fake CCS on at path with files (test set-up, not logged).
+func (f *fakeWriteHost) setCCS(path string, files map[string][]byte) {
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	f.ccsEnabled, f.ccsPath, f.ccsFiles = true, path, map[string]fakeCCSFile{}
+	for name, data := range files {
+		f.ccsFiles[name] = fakeCCSFile{data: slices.Clone(data), mod: testNow}
+	}
+}
+
+func (f *fakeWriteHost) CCSConfig(context.Context) (bool, string, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	return f.ccsEnabled, f.ccsPath, f.ccsConfigErr
+}
+
+// inCCS reports whether folder is the fake's CCS folder (every path argument is one the helper read).
+func (f *fakeWriteHost) inCCS(folder string) error {
+	if folder != f.ccsPath {
+		return errors.New("not the CCS folder")
+	}
+	return nil
+}
+
+func (f *fakeWriteHost) ListCCS(_ context.Context, folder string) ([]CCSEntry, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	f.ccsLists++
+	if f.ccsListErr != nil {
+		return nil, f.ccsListErr
+	}
+	if err := f.inCCS(folder); err != nil {
+		return nil, err
+	}
+	out := []CCSEntry{}
+	for name, file := range f.ccsFiles {
+		if len(name) > 4 && strings.EqualFold(name[len(name)-4:], ".pfx") {
+			out = append(out, CCSEntry{Name: name, Size: int64(len(file.data)), ModTime: file.mod})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeWriteHost) ReadCCS(_ context.Context, folder, name string, limit int) ([]byte, bool, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	f.ccsReads = append(f.ccsReads, name)
+	hook := f.ccsReadFn
+	f.wmu.Unlock()
+	if hook != nil {
+		if err := hook(name); err != nil {
+			return nil, false, err
+		}
+	}
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if err := f.inCCS(folder); err != nil {
+		return nil, false, err
+	}
+	file, ok := f.ccsFiles[name]
+	if !ok {
+		return nil, false, nil
+	}
+	return slices.Clone(file.data[:min(len(file.data), limit+1)]), true, nil
+}
+
+// OpenPFX reads what BuildPFX writes with the test's own reader (pki.OpenPFX). It keeps the password
+// slice it was given.
+func (f *fakeWriteHost) OpenPFX(data, password []byte) ([]byte, [][]byte, string, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	f.ccsPasswords = append(f.ccsPasswords, password)
+	hook := f.ccsOpenErr
+	f.wmu.Unlock()
+	if hook != nil {
+		if err := hook(data); err != nil {
+			return nil, nil, "", err
+		}
+	}
+	leaf, chain, err := pki.OpenPFX(data, password)
+	switch {
+	case errors.Is(err, pki.ErrPFXPassword):
+		return nil, nil, winproto.CCSProblemPasswordMismatch, nil
+	case errors.Is(err, pki.ErrPFXNoKey):
+		return nil, nil, winproto.CCSProblemNoKey, nil
+	case err != nil:
+		return nil, nil, winproto.CCSProblemNotPFX, nil
+	}
+	return leaf, chain, "", nil
+}
+
+func (f *fakeWriteHost) WriteCCSTemp(_ context.Context, folder, tmpName string, data []byte) error {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if err := f.inCCS(folder); err != nil {
+		return err
+	}
+	if f.ccsWriteErr != nil {
+		return f.ccsWriteErr
+	}
+	if _, ok := f.ccsFiles[tmpName]; ok {
+		return errors.New("exists") // CREATE_NEW
+	}
+	f.ccsFiles[tmpName] = fakeCCSFile{data: slices.Clone(data), mod: testNow}
+	f.log = append(f.log, "ccs-write "+tmpName)
+	return nil
+}
+
+// ReplaceCCS is ReplaceFileW: name's bytes go to backupName, tmpName's to name, tmpName is gone.
+func (f *fakeWriteHost) ReplaceCCS(_ context.Context, folder, name, tmpName, backupName string) error {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if err := f.inCCS(folder); err != nil {
+		return err
+	}
+	if f.ccsReplaceErr != nil {
+		return f.ccsReplaceErr
+	}
+	old, ok := f.ccsFiles[name]
+	tmp, tok := f.ccsFiles[tmpName]
+	if !ok || !tok {
+		return errors.New("no such file")
+	}
+	f.ccsFiles[backupName], f.ccsFiles[name] = old, tmp
+	delete(f.ccsFiles, tmpName)
+	f.log = append(f.log, "ccs-replace "+name)
+	return nil
+}
+
+// RestoreCCS is MoveFileEx(backupName, name, REPLACE_EXISTING).
+func (f *fakeWriteHost) RestoreCCS(_ context.Context, folder, backupName, name string) error {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if err := f.inCCS(folder); err != nil {
+		return err
+	}
+	b, ok := f.ccsFiles[backupName]
+	if !ok {
+		return errors.New("no backup")
+	}
+	f.ccsFiles[name] = b
+	delete(f.ccsFiles, backupName)
+	f.log = append(f.log, "ccs-restore "+name)
+	return nil
+}
+
+// RemoveCCS removes a .tmp or .bak only; one that is absent is nil.
+func (f *fakeWriteHost) RemoveCCS(_ context.Context, folder, name string) error {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if err := f.inCCS(folder); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(name, ".tmp") && !strings.HasSuffix(name, ".bak") {
+		return errors.New("not a temporary file or a backup")
+	}
+	if _, ok := f.ccsFiles[name]; ok {
+		delete(f.ccsFiles, name)
+		f.log = append(f.log, "ccs-unlink "+name)
 	}
 	return nil
 }

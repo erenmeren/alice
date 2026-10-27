@@ -7,7 +7,9 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -139,5 +141,82 @@ func TestPBKDF2MatchesTheStandardLibrary(t *testing.T) {
 func TestBMPString(t *testing.T) {
 	if got := bmpString([]byte("ab")); !bytes.Equal(got, []byte{0, 'a', 0, 'b', 0, 0}) {
 		t.Fatalf("%v", got)
+	}
+}
+
+// pfxBags is the bags of BuildPFX's one data ContentInfo, in order.
+func pfxBags(t *testing.T, pfx []byte) []safeBag {
+	t.Helper()
+	var pdu pfxPdu
+	var authSafe, contents []byte
+	var infos []contentInfo
+	var bags []safeBag
+	if _, err := asn1.Unmarshal(pfx, &pdu); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asn1.Unmarshal(pdu.AuthSafe.Content.Bytes, &authSafe); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asn1.Unmarshal(authSafe, &infos); err != nil || len(infos) != 1 {
+		t.Fatal(err, len(infos))
+	}
+	if _, err := asn1.Unmarshal(infos[0].Content.Bytes, &contents); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asn1.Unmarshal(contents, &bags); err != nil {
+		t.Fatal(err)
+	}
+	return bags
+}
+
+func TestBuildPFXWithIntermediates(t *testing.T) {
+	ca := pki.NewCA("PFX Chain", pki.ECDSA256, testNow)
+	other := pki.NewCA("PFX Chain Other", pki.RSA2048, testNow)
+	l := ca.Issue(leafOpts, testNow)
+	key := pkcs8Of(t, l)
+	pw := NewPFXPassword()
+	inter := [][]byte{ca.Intermediate.Raw, other.Intermediate.Raw}
+	pfx, err := BuildPFX(l.Cert.Raw, key, pw, inter...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The test's own reader: the leaf is the bag that shares the key's localKeyId, the chain follows in order.
+	leaf, chain, err := pki.OpenPFX(pfx, pw)
+	if err != nil || !bytes.Equal(leaf, l.Cert.Raw) || !reflect.DeepEqual(chain, inter) {
+		t.Fatalf("%v leaf=%v chain=%d", err, bytes.Equal(leaf, l.Cert.Raw), len(chain))
+	}
+	if _, _, err := pki.OpenPFX(pfx, NewPFXPassword()); !errors.Is(err, pki.ErrPFXPassword) {
+		t.Fatalf("another password: %v", err)
+	}
+	// go-pkcs12 reads the same chain.
+	_, gl, cas, err := pkcs12.DecodeChain(pfx, string(pw))
+	if err != nil || !bytes.Equal(gl.Raw, l.Cert.Raw) || len(cas) != 2 || !bytes.Equal(cas[0].Raw, inter[0]) || !bytes.Equal(cas[1].Raw, inter[1]) {
+		t.Fatalf("go-pkcs12: %v", err)
+	}
+	// W2's two bags first, then one certBag per intermediate without any attribute.
+	bags := pfxBags(t, pfx)
+	if len(bags) != 4 || !bags[0].ID.Equal(oidCertBag) || !bags[1].ID.Equal(oidPKCS8ShroudedKeyBag) ||
+		len(bags[0].Attributes) != 1 || len(bags[1].Attributes) != 1 {
+		t.Fatalf("bags: %d", len(bags))
+	}
+	for _, b := range bags[2:] {
+		if !b.ID.Equal(oidCertBag) || len(b.Attributes) != 0 {
+			t.Fatalf("intermediate bag %v with %d attributes", b.ID, len(b.Attributes))
+		}
+	}
+	// No intermediate: W2's structure, the leaf and its key.
+	plain, err := BuildPFX(l.Cert.Raw, key, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bags := pfxBags(t, plain); len(bags) != 2 {
+		t.Fatalf("%d bags", len(bags))
+	}
+	if leaf, chain, err := pki.OpenPFX(plain, pw); err != nil || !bytes.Equal(leaf, l.Cert.Raw) || len(chain) != 0 {
+		t.Fatalf("%v %d", err, len(chain))
+	}
+	// An empty intermediate is refused.
+	if out, err := BuildPFX(l.Cert.Raw, key, pw, nil); err == nil || out != nil {
+		t.Fatal("an empty intermediate was written")
 	}
 }

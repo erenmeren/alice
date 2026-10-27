@@ -69,6 +69,42 @@ type WriteHost interface {
 	// ProtectedThumbprints reads the certificates the RDP listener and the WinRM HTTPS listeners name
 	// (F12). A value that is absent is no thumbprint; one that cannot be read is an error.
 	ProtectedThumbprints(ctx context.Context) (Protected, error)
+
+	// The Centralized Certificate Store (W5, R68). Every folder argument is the folder the helper
+	// itself read from CCSConfig, never input; every name is one the helper derived or listed.
+	//
+	// CCSConfig reads IIS's CentralCertProvider registry key (Enabled, CertStoreLocation) at every call.
+	CCSConfig(ctx context.Context) (enabled bool, path string, err error)
+	// ListCCS lists the *.pfx regular files of folder (a reparse point, a directory or anything else
+	// is left out, never followed), in no particular order. A folder that is itself a reparse point is
+	// ErrCCSFolderUnsupported.
+	ListCCS(ctx context.Context, folder string) ([]CCSEntry, error)
+	// ReadCCS reads at most limit+1 bytes of folder\name (the caller refuses more), opening it with
+	// FILE_FLAG_OPEN_REPARSE_POINT: a file that is a reparse point or not a regular file is an error.
+	// found is false when there is none.
+	ReadCCS(ctx context.Context, folder, name string, limit int) (data []byte, found bool, err error)
+	// OpenPFX reads a PFX's certificates under password without keeping its key: the leaf (the
+	// certificate that has the key) and the other certificates in the file's order. problem is a
+	// winproto.CCSProblem* ("" when it opened); err is a failure of the host itself. The caller
+	// clears password.
+	OpenPFX(data, password []byte) (leafDER []byte, chain [][]byte, problem string, err error)
+	// WriteCCSTemp creates folder\tmpName (CREATE_NEW, write-through) with data, flushed.
+	WriteCCSTemp(ctx context.Context, folder, tmpName string, data []byte) error
+	// ReplaceCCS replaces folder\name with folder\tmpName, keeping the old bytes as
+	// folder\backupName (ReplaceFileW, REPLACEFILE_WRITE_THROUGH, F15).
+	ReplaceCCS(ctx context.Context, folder, name, tmpName, backupName string) error
+	// RestoreCCS moves folder\backupName over folder\name (MoveFileEx MOVEFILE_REPLACE_EXISTING |
+	// MOVEFILE_WRITE_THROUGH).
+	RestoreCCS(ctx context.Context, folder, backupName, name string) error
+	// RemoveCCS removes folder\name, a .tmp or .bak name only; one that is absent is nil.
+	RemoveCCS(ctx context.Context, folder, name string) error
+}
+
+// CCSEntry is one file ListCCS found.
+type CCSEntry struct {
+	Name    string
+	Size    int64
+	ModTime time.Time
 }
 
 // StateFile is one file ListState found: its name within the directory listed and its modification
@@ -93,6 +129,8 @@ var (
 	ErrKeyUnusable     = errors.New("winhelper: the certificate has no usable key")
 	ErrBindingNotFound = errors.New("winhelper: http.sys holds no such record")
 	ErrStore           = errors.New("winhelper: a certificate store could not be opened")
+	// ErrCCSFolderUnsupported is a CCS folder that is a reparse point (W5 Ruling 3).
+	ErrCCSFolderUnsupported = errors.New("winhelper: the CCS folder is a reparse point")
 )
 
 // writeGrace is how long a write handler that entered its gate may still run after the budget ended

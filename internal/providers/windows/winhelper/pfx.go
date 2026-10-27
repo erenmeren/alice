@@ -17,6 +17,7 @@ import (
 	"encoding/asn1"
 	"encoding/binary"
 	"errors"
+	"slices"
 )
 
 var (
@@ -245,9 +246,11 @@ func shroud(w *asn1Writer, pkcs8, password []byte) []byte {
 }
 
 // BuildPFX writes a PFX holding the leaf certificate (DER) and its PKCS #8 private key under password
-// (printable ASCII, NewPFXPassword). Only the leaf goes in: intermediates go to LocalMachine\CA as
-// public certificates (W2 Ruling 9). BuildPFX clears every buffer of its own that held the key or the
-// password in clear; it does not clear its inputs (the caller does, and the returned PFX after the
+// (printable ASCII, NewPFXPassword), and after them one certBag per intermediate (DER), in order and
+// without a localKeyId, so the leaf is the one certificate that shares the key's. The store route
+// (iis-deploy) passes none: its intermediates go to LocalMachine\CA as public certificates (W2 Ruling
+// 9); a CCS file carries them (W5, R68). BuildPFX clears every buffer of its own that held the key or
+// the password in clear; it does not clear its inputs (the caller does, and the returned PFX after the
 // import). Its error is one fixed text.
 //
 // It must never write a friendlyName or a key container (Microsoft CSP/KSP name) attribute on the key
@@ -255,18 +258,23 @@ func shroud(w *asn1Writer, pkcs8, password []byte) []byte {
 // real helper's ImportPFX deletes that container again when the store already held the certificate
 // (cmd/alice-winhelper import_windows.go), which is safe only because the container is never one that
 // existed before the import.
-func BuildPFX(leafDER, keyPKCS8, password []byte) ([]byte, error) {
-	if len(leafDER) == 0 || len(keyPKCS8) == 0 || !validPassword(password) {
+func BuildPFX(leafDER, keyPKCS8, password []byte, intermediates ...[]byte) ([]byte, error) {
+	if len(leafDER) == 0 || len(keyPKCS8) == 0 || !validPassword(password) ||
+		slices.ContainsFunc(intermediates, func(der []byte) bool { return len(der) == 0 }) {
 		return nil, errPFX
 	}
 	var w asn1Writer
 	attrs := []pkcs12Attribute{{ID: oidLocalKeyID, Value: asn1.RawValue{Class: asn1.ClassUniversal,
 		Tag: asn1.TagSet, IsCompound: true, Bytes: w.marshal([]byte{1})}}}
 	cb := w.marshal(certBag{ID: oidX509Certificate, Data: explicit0(w.marshal(leafDER))})
-	safeContents := w.marshal([]safeBag{
+	bags := []safeBag{
 		{ID: oidCertBag, Value: explicit0(cb), Attributes: attrs},
 		{ID: oidPKCS8ShroudedKeyBag, Value: explicit0(shroud(&w, keyPKCS8, password)), Attributes: attrs},
-	})
+	}
+	for _, der := range intermediates {
+		bags = append(bags, safeBag{ID: oidCertBag, Value: explicit0(w.marshal(certBag{ID: oidX509Certificate, Data: explicit0(w.marshal(der))}))})
+	}
+	safeContents := w.marshal(bags)
 	authSafe := w.marshal([]contentInfo{{ContentType: oidData, Content: explicit0(w.marshal(safeContents))}})
 	salt := random(16)
 	bmp := bmpString(password)

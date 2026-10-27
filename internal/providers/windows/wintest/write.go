@@ -605,6 +605,33 @@ func (h host) Event(id uint32, text string) {
 	h.m.events = append(h.m.events, Event{ID: id, Text: text})
 }
 
+// errCCSNotModelled answers every CCS method until the model's CCS folder is written (W5 Task 4).
+var errCCSNotModelled = errors.New("wintest: the CCS folder is not modelled yet")
+
+func (host) CCSConfig(context.Context) (bool, string, error) { return false, "", errCCSNotModelled }
+
+func (host) ListCCS(context.Context, string) ([]winhelper.CCSEntry, error) {
+	return nil, errCCSNotModelled
+}
+
+func (host) ReadCCS(context.Context, string, string, int) ([]byte, bool, error) {
+	return nil, false, errCCSNotModelled
+}
+
+func (host) OpenPFX([]byte, []byte) ([]byte, [][]byte, string, error) {
+	return nil, nil, "", errCCSNotModelled
+}
+
+func (host) WriteCCSTemp(context.Context, string, string, []byte) error { return errCCSNotModelled }
+
+func (host) ReplaceCCS(context.Context, string, string, string, string) error {
+	return errCCSNotModelled
+}
+
+func (host) RestoreCCS(context.Context, string, string, string) error { return errCCSNotModelled }
+
+func (host) RemoveCCS(context.Context, string, string) error { return errCCSNotModelled }
+
 // Point is a crash point: KillAt's point kills the call there, once.
 func (h host) Point(name string) error {
 	h.m.mu.Lock()
