@@ -613,8 +613,8 @@ func (h host) Event(id uint32, text string) {
 // CertStoreLocation are the IIS facts' CCSEnabled and CCSPath; each folder holds its files by name,
 // compared without case as NTFS does (W5 ruling: a file spelled WWW.Example.COM.PFX is found for host
 // www.example.com, F17). A folder named before a path change keeps its files, so a journal's folder can
-// still be restored and pruned (W5 Ruling 17); a folder that does not exist lists nothing. Not modelled:
-// a folder that is a reparse point (ErrCCSFolderUnsupported) and a file that is one.
+// still be restored and pruned (W5 Ruling 17); a folder that does not exist lists nothing. SetCCSReparse
+// marks a folder or a file as a reparse point (junction, symbolic link).
 
 // ccsFile is one file of a modelled folder: its name as written, its bytes and its time.
 type ccsFile struct {
@@ -629,13 +629,25 @@ var (
 	errCCSNoFile   = errors.New("wintest: the file does not exist")
 	errCCSReplace  = errors.New("wintest: ReplaceFileW failed")
 	errCCSRemove   = errors.New("wintest: not a temporary file or a backup")
+	errCCSReparse  = errors.New("wintest: the file is a reparse point")
 )
 
-// folderKey is a folder as Windows compares it: ASCII case folded, one trailing backslash trimmed.
+// folderKey is a folder as Windows compares it: ASCII case folded, one trailing backslash trimmed. A
+// file's full path folder\name has the key folderKey(folder)+`\`+fold(name).
 func folderKey(folder string) string { return fold(strings.TrimSuffix(folder, `\`)) }
 
-// pinKey names a file of a folder in ccsPinned.
-func pinKey(folder, name string) string { return folderKey(folder) + `\` + fold(name) }
+// SetCCSReparse marks path, a folder or a folder\file, as a reparse point (on) or a plain one (off). A
+// marked folder is ErrCCSFolderUnsupported to ListCCS (W5 Ruling 3); a marked file is not listed and
+// ReadCCS refuses it, as FILE_FLAG_OPEN_REPARSE_POINT's check does.
+func (m *Model) SetCCSReparse(path string, on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if on {
+		m.ccsReparse[folderKey(path)] = true
+	} else {
+		delete(m.ccsReparse, folderKey(path))
+	}
+}
 
 // SetCCS turns the Centralized Certificate Store on or off with its folder (what
 // Enable-WebCentralCertProvider writes to the registry; win-facts and every CCS call read it). The
@@ -747,10 +759,12 @@ func (m *Model) ServeStaleCCS(on bool) {
 	}
 }
 
-// pinLocked keeps what TLS serves for folder\name before a change, when stale (the first change's
-// bytes stay until ServeStaleCCS(false), as StaleTLS keeps a record's).
-func (m *Model) pinLocked(folder, name string, served []byte) {
-	if k := pinKey(folder, name); m.ccsStale {
+// pinLocked keeps what TLS serves for a file name before a change, when stale (the first change's
+// bytes stay until ServeStaleCCS(false), as StaleTLS keeps a record's). The pin is keyed by the name
+// only: IIS caches what it serves by host, so it still applies to the folder the registry names after a
+// path change.
+func (m *Model) pinLocked(name string, served []byte) {
+	if k := fold(name); m.ccsStale {
 		if _, ok := m.ccsPinned[k]; !ok {
 			m.ccsPinned[k] = slices.Clone(served)
 		}
@@ -763,15 +777,19 @@ func (h host) CCSConfig(context.Context) (bool, string, error) {
 	return h.m.iis.CCSEnabled, h.m.iis.CCSPath, nil
 }
 
-// ListCCS lists the *.pfx files of folder (any case of the extension). A folder that does not exist
-// lists nothing (W5 ruling: so that a journal whose folder was removed after a path change can still be
-// pruned).
+// ListCCS lists the *.pfx files of folder (any case of the extension), a reparse-point file left out. A
+// folder that does not exist lists nothing (W5 ruling: so that a journal whose folder was removed after a
+// path change can still be pruned); a reparse-point folder is ErrCCSFolderUnsupported.
 func (h host) ListCCS(_ context.Context, folder string) ([]winhelper.CCSEntry, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
+	fk := folderKey(folder)
+	if h.m.ccsReparse[fk] {
+		return nil, winhelper.ErrCCSFolderUnsupported
+	}
 	out := []winhelper.CCSEntry{}
-	for k, f := range h.m.ccsDirs[folderKey(folder)] {
-		if strings.HasSuffix(k, ".pfx") {
+	for k, f := range h.m.ccsDirs[fk] {
+		if strings.HasSuffix(k, ".pfx") && !h.m.ccsReparse[fk+`\`+k] {
 			out = append(out, winhelper.CCSEntry{Name: f.name, Size: int64(len(f.data)), ModTime: f.mod})
 		}
 	}
@@ -779,11 +797,14 @@ func (h host) ListCCS(_ context.Context, folder string) ([]winhelper.CCSEntry, e
 }
 
 // ReadCCS reads at most limit+1 bytes of folder\name (any case); a file or a folder that does not exist
-// is not found.
+// is not found; a reparse-point file is an error.
 func (h host) ReadCCS(_ context.Context, folder, name string, limit int) ([]byte, bool, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
 	f := h.m.ccsDirs[folderKey(folder)][fold(name)]
+	if h.m.ccsReparse[folderKey(folder)+`\`+fold(name)] {
+		return nil, false, errCCSReparse
+	}
 	if f == nil {
 		return nil, false, nil
 	}
@@ -836,7 +857,7 @@ func (h host) ReplaceCCS(_ context.Context, folder, name, tmpName, backupName st
 	if old == nil || tmp == nil {
 		return errCCSNoFile
 	}
-	m.pinLocked(folder, name, old.data)
+	m.pinLocked(name, old.data)
 	d[fold(backupName)] = &ccsFile{name: backupName, data: old.data, mod: old.mod}
 	d[fold(name)] = &ccsFile{name: old.name, data: tmp.data, mod: m.nowLocked()}
 	delete(d, fold(tmpName))
@@ -855,7 +876,7 @@ func (h host) RestoreCCS(_ context.Context, folder, backupName, name string) err
 	}
 	spelled := name
 	if cur := d[fold(name)]; cur != nil {
-		m.pinLocked(folder, name, cur.data)
+		m.pinLocked(name, cur.data)
 		spelled = cur.name
 	}
 	d[fold(name)] = &ccsFile{name: spelled, data: bak.data, mod: bak.mod}

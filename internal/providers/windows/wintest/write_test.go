@@ -1390,3 +1390,58 @@ func TestDemoHostHasCCS(t *testing.T) {
 		t.Fatalf("served %s %d %v", got, n, ok)
 	}
 }
+
+// A folder or a file that is a reparse point (W5 Ruling 3, Review Focus 1): the dump reports the folder
+// not local, a deployment is refused before any write, and a marked file is neither listed nor read.
+func TestModelCCSReparsePoints(t *testing.T) {
+	f := newCCSFixture(t)
+	before := mustCCS(t, f.m, "ccs.example.test.pfx")
+	f.m.SetCCSReparse(`c:\ccs\`, true)
+	if d := f.dump(t); d.Local || len(d.Files) != 0 || d.Path != ccsFolder {
+		t.Fatalf("a reparse-point folder: %+v", d)
+	}
+	r, _ := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test"))
+	var e winproto.ErrorResponse
+	if err := json.Unmarshal(r.Stdout, &e); err != nil || r.Exit != 3 || e.Code != winproto.CodeCCSPathUnsupported {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if _, ok := f.m.Journal(opID(1)); ok || !slices.Equal(f.m.CCSNames(), []string{"ccs.example.test.pfx"}) ||
+		!slices.Equal(mustCCS(t, f.m, "ccs.example.test.pfx"), before) {
+		t.Fatal("something was written")
+	}
+
+	f.m.SetCCSReparse(ccsFolder, false)
+	f.m.SetCCSReparse(ccsFolder+`\CCS.example.test.pfx`, true)
+	if d := f.dump(t); !d.Local || len(d.Files) != 0 {
+		t.Fatalf("a reparse-point file is not listed: %+v", d)
+	}
+	if _, _, err := f.m.Host().ReadCCS(context.Background(), ccsFolder, "ccs.example.test.pfx", 10); err == nil {
+		t.Fatal("ReadCCS opens a reparse-point file")
+	}
+	if r, _ := f.deploy(t, opID(2), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit == 0 {
+		t.Fatalf("a deployment over a reparse-point file: %s", r.Stdout)
+	}
+	if _, ok := f.m.Journal(opID(2)); ok || !slices.Equal(mustCCS(t, f.m, "ccs.example.test.pfx"), before) {
+		t.Fatal("something was written")
+	}
+	f.m.SetCCSReparse(ccsFolder+`\ccs.example.test.pfx`, false)
+	if d := f.dump(t); len(d.Files) != 1 {
+		t.Fatalf("unmarked: %+v", d)
+	}
+}
+
+// IIS caches a served certificate by host, not by folder: a stale listener keeps it across a path
+// change to a folder holding the same file name.
+func TestModelServeStaleCCSAcrossAPathChange(t *testing.T) {
+	f := newCCSFixture(t)
+	f.serve(t)
+	f.m.ServeStaleCCS(true)
+	if r, _ := f.deploy(t, opID(1), "ccs.example.test", sum256(f.old.Cert.Raw), f.issue("ccs.example.test")); r.Exit != 0 {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	f.m.SetCCS(true, `D:\Certs`)
+	f.put("ccs.example.test.pfx", f.issue("ccs.example.test"))
+	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
+		t.Fatal("the stale certificate follows the host")
+	}
+}

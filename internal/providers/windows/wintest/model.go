@@ -116,7 +116,8 @@ type Model struct {
 	ccsPassword string                         // IIS's private-key password (SetCCSPassword)
 	failReplace bool
 	ccsStale    bool
-	ccsPinned   map[string][]byte // ServeStaleCCS: the bytes a stale listener keeps serving, by pinKey
+	ccsPinned   map[string][]byte // ServeStaleCCS: the bytes a stale listener keeps serving, by folded file name
+	ccsReparse  map[string]bool   // SetCCSReparse: the folders and files that are reparse points, by folderKey
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -137,6 +138,7 @@ func NewModel() *Model {
 		state:      map[string][]byte{},
 		ccsDirs:    map[string]map[string]*ccsFile{},
 		ccsPinned:  map[string][]byte{},
+		ccsReparse: map[string]bool{},
 		stateTimes: map[string]time.Time{},
 		keys:       map[string]bool{},
 		lockWait:   winproto.LockWait,

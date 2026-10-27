@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -558,14 +559,42 @@ func TestCtlCCSPasswordOpensTheDemoFiles(t *testing.T) {
 	require.Equal(t, 0, code, errOut)
 	var eps map[string]string
 	require.NoError(t, json.Unmarshal([]byte(out), &eps))
-	conn, err := tls.Dial("tcp", eps["443"], &tls.Config{ServerName: "ccs.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
+	served := func() string {
+		t.Helper()
+		conn, err := tls.Dial("tcp", eps["443"], &tls.Config{ServerName: "ccs.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+		return sha256Hex(conn.ConnectionState().PeerCertificates[0].Raw)
+	}
+	require.Equal(t, "ccs.example.test.pfx", d.Files[1].Name)
+	der, err := base64.StdEncoding.DecodeString(d.Files[1].LeafDER)
 	require.NoError(t, err)
-	assert.Equal(t, "ccs.example.test", conn.ConnectionState().PeerCertificates[0].Subject.CommonName)
-	_ = conn.Close()
+	oldSHA := sha256Hex(der)
+	assert.Equal(t, oldSHA, served(), "443 with SNI ccs.example.test serves the file")
 
-	// ctl stale-tls-on makes the CCS files stale too (the CCS journal's rollback step, Ruling 25).
+	// ctl stale-tls-on makes the CCS files stale too (Ruling 25 step 5): a replaced file keeps serving the old
+	// certificate until stale-tls-off.
 	code, _, errOut = st.ctlRun(t, "", "stale-tls-on")
 	require.Equal(t, 0, code, errOut)
+	now := time.Now()
+	leaf := pki.NewCA("Fake Windows CCS CA", pki.ECDSA256, now).Issue(pki.Opts{CommonName: "ccs.example.test", SANs: []string{"ccs.example.test"}}, now)
+	in, err = json.Marshal(winproto.CCSDeployInput{Path: `C:\CCS`, Host: "ccs.example.test", ExpectSHA256: oldSHA,
+		ChainPEM: string(leaf.FullchainPEM), KeyPEM: string(leaf.KeyPEM), Password: pw, ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
+	require.NoError(t, err)
+	c2, err := dial(st.ssh, key, ssh.FingerprintSHA256(st.hostKey))
+	require.NoError(t, err)
+	defer func() { _ = c2.Close() }()
+	s2, err := c2.NewSession()
+	require.NoError(t, err)
+	defer func() { _ = s2.Close() }()
+	s2.Stdin = bytes.NewReader(in)
+	raw, err = s2.Output(winproto.SubCCSDeploy + " --op 6f1c3a52-7f3b-4c55-9a51-0d6c2b1e8f03")
+	require.NoError(t, err, string(raw))
+	var resp winproto.DeployResponse
+	require.NoError(t, json.Unmarshal(raw, &resp), string(raw))
+	require.Equal(t, winproto.PhaseCommitted, resp.Phase, string(raw))
+	assert.Equal(t, oldSHA, served(), "while stale TLS is on the old certificate is served")
 	code, _, errOut = st.ctlRun(t, "", "stale-tls-off")
 	require.Equal(t, 0, code, errOut)
+	assert.Equal(t, sha256Hex(leaf.Cert.Raw), served(), "with stale TLS off the new file is served")
 }

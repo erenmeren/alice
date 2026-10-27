@@ -136,7 +136,7 @@ func (m *Model) ccsPresentedLocked(sni string) (*tls.Certificate, error) {
 			continue
 		}
 		data := f.data
-		if p, ok := m.ccsPinned[pinKey(m.iis.CCSPath, n)]; ok {
+		if p, ok := m.ccsPinned[n]; ok {
 			data = p
 		}
 		leaf, chain, key, err := pki.OpenPFXKey(data, []byte(m.ccsPassword))
