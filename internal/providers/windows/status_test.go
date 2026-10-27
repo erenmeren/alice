@@ -262,6 +262,8 @@ func TestWriteCommandsAreForcedLines(t *testing.T) {
 		{winproto.SubIISRestore, budget{linuxssh.LongCommandTimeout, 64 << 10}},
 		{winproto.SubIISStatus, budget{linuxssh.DefaultCommandTimeout, 64 << 10}},
 		{winproto.SubIISFence, budget{linuxssh.DefaultCommandTimeout, 64 << 10}},
+		{winproto.SubCCSDeploy, budget{linuxssh.LongCommandTimeout, 64 << 10}},
+		{winproto.SubCCSDump, budget{linuxssh.LongCommandTimeout, winproto.DumpOutput}},
 	} {
 		assert.Equal(t, tc.want, budgets[tc.sub], tc.sub)
 		c, err := cmd(tc.sub, []byte(`{"x":1}`), winproto.ArgOp, op)
@@ -283,8 +285,13 @@ func TestWriteCommandsAreForcedLines(t *testing.T) {
 	assert.Equal(t, input, inputRefusals)
 	assert.Equal(t, withCodes(input, 3, winproto.CodeHashMismatch, winproto.CodeFenced, winproto.CodeOperationExists,
 		winproto.CodeRecoveryPending, winproto.CodeBindingNotFound, winproto.CodeKeyUnusable), deployRefusals)
-	assert.Equal(t, withCodes(input, 3, winproto.CodeUnknownOp, winproto.CodeSuperseded, winproto.CodeBackupMissing), restoreRefusals)
-	for _, table := range []map[string]int{deployRefusals, restoreRefusals} {
+	// W5: a restore refuses a CCS journal's folder that became a reparse point (CCS_PATH_UNSUPPORTED, nothing written);
+	// ccs-deploy adds the CCS preconditions to iis-deploy's table.
+	assert.Equal(t, withCodes(input, 3, winproto.CodeUnknownOp, winproto.CodeSuperseded, winproto.CodeBackupMissing,
+		winproto.CodeCCSPathUnsupported), restoreRefusals)
+	assert.Equal(t, withCodes(deployRefusals, 3, winproto.CodeCCSDisabled, winproto.CodeCCSPathChanged, winproto.CodeCCSPathUnsupported,
+		winproto.CodeCCSPasswordMismatch, winproto.CodeCCSFileNotFound), ccsDeployRefusals)
+	for _, table := range []map[string]int{deployRefusals, restoreRefusals, ccsDeployRefusals} {
 		assert.NotContains(t, table, winproto.CodeOutcomeUnknown)
 	}
 	assert.Less(t, winproto.LockWait, linuxssh.DefaultCommandTimeout, "a fence waits for the lock inside its budget")

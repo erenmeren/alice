@@ -12,6 +12,7 @@ import (
 
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/providertest"
 	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/wintest"
@@ -196,5 +197,91 @@ func TestLocatorOfTheStoredLocator(t *testing.T) {
 		bad := providers.Locator{"type": "hostnameport", "host": "www.example.test", "port": json.Number(n), "app_id": winproto.AppIDIIS}
 		_, ok := locatorOf(providers.CertLocation{Kind: providers.LocationWinSSLBinding, Locator: bad})
 		assert.False(t, ok, n)
+	}
+}
+
+func ccsLoc(servers ...providers.CertServer) providers.CertLocation {
+	return providers.CertLocation{Kind: providers.LocationWinCCSFile, Supported: true, CertPath: `C:\CCS\www.example.test.pfx`,
+		Locator: providers.Locator{"type": winproto.LocatorCCSFile, "path": `C:\CCS`, "host": "www.example.test"}, Servers: servers}
+}
+
+func ccsBinding(host, ip string, port int) providers.CertServer {
+	return providers.CertServer{Names: []string{host}, Listens: []providers.CertListen{{Addr: ip, Port: port}}, Section: "Web"}
+}
+
+// W5 Ruling 20: a CCS file's endpoints are its linked IIS bindings, each with its port and its host header as SNI
+// (a "*." host becomes alice-check.); the Administrator's port, SNI and probe address apply.
+func TestCCSEndpoints(t *testing.T) {
+	sans := []string{"www.example.test"}
+	two := ccsLoc(ccsBinding("www.example.test", "*", 443), ccsBinding("shop.example.test", "*", 8443), ccsBinding("www.example.test", "*", 443))
+	for _, tc := range []struct {
+		name string
+		loc  providers.CertLocation
+		v    providers.VerifyOptions
+		want []tlsverify.Endpoint
+	}{
+		{"two linked bindings: two SNI endpoints", two, providers.VerifyOptions{},
+			[]tlsverify.Endpoint{{Port: 443, SNI: "www.example.test", Addr: "127.0.0.1"}, {Port: 8443, SNI: "shop.example.test", Addr: "127.0.0.1"}}},
+		{"a wildcard host header", ccsLoc(ccsBinding("*.example.test", "*", 443)), providers.VerifyOptions{},
+			[]tlsverify.Endpoint{{Port: 443, SNI: "alice-check.example.test", Addr: "127.0.0.1"}}},
+		{"a binding on one address listens there only", ccsLoc(ccsBinding("www.example.test", "10.0.0.5", 443)), providers.VerifyOptions{},
+			[]tlsverify.Endpoint{{Port: 443, SNI: "www.example.test", Addr: "10.0.0.5", Listen: "10.0.0.5"}}},
+		{"a binding on [::]: the helper probes ::1", ccsLoc(ccsBinding("www.example.test", "::", 443)), providers.VerifyOptions{},
+			[]tlsverify.Endpoint{{Port: 443, SNI: "www.example.test", Addr: "::1"}}},
+		{"an address Alice cannot read has none", ccsLoc(ccsBinding("www.example.test", "not-an-ip", 443)), providers.VerifyOptions{}, nil},
+		{"the Administrator's port and SNI", two, providers.VerifyOptions{Port: 9443, SNI: "override.example.test"},
+			[]tlsverify.Endpoint{{Port: 9443, SNI: "override.example.test", Addr: "127.0.0.1"}}},
+		{"the Administrator's probe address stands for a specific listen", ccsLoc(ccsBinding("www.example.test", "10.0.0.5", 443)),
+			providers.VerifyOptions{Address: "lb.example.test"}, []tlsverify.Endpoint{{Port: 443, SNI: "www.example.test", Addr: "10.0.0.5"}}},
+		{"unlinked: none", ccsLoc(), providers.VerifyOptions{}, nil},
+		{"a locator Alice does not deploy to has none", providers.CertLocation{Kind: providers.LocationWinCCSFile,
+			Locator: providers.Locator{"type": winproto.LocatorCCSFile, "path": `\\files\ccs`, "host": "www.example.test"},
+			Servers: []providers.CertServer{ccsBinding("www.example.test", "*", 443)}}, providers.VerifyOptions{}, nil},
+	} {
+		assert.Equal(t, tc.want, Endpoints(tc.loc, tc.v, sans), tc.name)
+	}
+	var servers []providers.CertServer
+	for i := range maxEndpoints + 3 {
+		servers = append(servers, ccsBinding(string(rune('a'+i))+".example.test", "*", 443))
+	}
+	assert.Len(t, Endpoints(ccsLoc(servers...), providers.VerifyOptions{}, sans), maxEndpoints)
+}
+
+// Review Focus 3, W5 Ruling 8: a file no IIS binding uses is verified by the helper's read-back only: the
+// verification is skipped (level 1) with the param ccs_unlinked on the verify step, and nothing is probed.
+func TestCCSUnlinkedIsReadBackOnly(t *testing.T) {
+	c := newCEnv(t)
+	c.cloc.Servers = nil
+	s := c.csession(t)
+	vr, err := s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: c.cloc, Fingerprint: derSHA256(c.old.Cert.Raw)})
+	require.NoError(t, err)
+	assert.Equal(t, providers.VerifyResult{OK: true, Mode: "skipped", Level: providers.LevelInstalled, Params: map[string]string{"ccs_unlinked": "true"}}, vr)
+
+	nl := c.issue()
+	req := c.ccsReq(nl)
+	log := &paramsLog{stepLog: &stepLog{}, name: providers.StepNameVerify}
+	out, err := s.DeployCertificate(context.Background(), req, log)
+	providertest.CheckDeployOutcome(t, out, err)
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployCommitted, out.Result)
+	assert.Equal(t, "skipped", out.Verified)
+	assert.Equal(t, []string{"import_chain:ok", "write_file:ok", "verify:skipped"}, stepWords(out.Steps))
+	assert.Equal(t, "true", log.params["ccs_unlinked"])
+	assert.Empty(t, c.probe.seen(), "nothing is probed")
+	assert.Zero(t, c.countSent(winproto.SubTLSProbe))
+	assert.Equal(t, derSHA256(nl.Cert.Raw), c.file(t), "the helper read the file back")
+}
+
+// paramsLog records into its stepLog and keeps the params of the named step's final status.
+type paramsLog struct {
+	*stepLog
+	name   string
+	params map[string]string
+}
+
+func (p *paramsLog) Step(name string, status providers.StepStatus, params map[string]string) {
+	p.stepLog.Step(name, status, params)
+	if name == p.name && status != providers.StepStarted {
+		p.params = params
 	}
 }

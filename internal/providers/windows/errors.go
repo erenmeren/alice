@@ -31,6 +31,14 @@ const (
 	// ReasonCleanupOutcomeUnknown (W3, ALC-WIN-0014): iis-cleanup answered OUTCOME_UNKNOWN (its budget
 	// ended after its first durable write); retryable, the next plan settles it (R62 Ruling 12).
 	ReasonCleanupOutcomeUnknown = "windows.cleanup_outcome_unknown"
+
+	// The Centralized Certificate Store's reasons (W5, R68: ALC-WIN-0015..0018 and 0020). CCS_PATH_UNSUPPORTED
+	// is windows.location_unsupported: the folder is not one Alice deploys to.
+	ReasonCCSDisabled         = "windows.ccs_disabled"          // CCS_DISABLED: IIS has CCS off now
+	ReasonCCSPathChanged      = "windows.ccs_path_changed"      // CCS_PATH_CHANGED: the registry names another folder (rediscover)
+	ReasonCCSPasswordMismatch = "windows.ccs_password_mismatch" // CCS_PASSWORD_MISMATCH: Alice's password does not open the file
+	ReasonCCSPasswordMissing  = "windows.ccs_password_missing"  // Alice holds no CCS password of the server (refused before sending)
+	ReasonCCSFileNotFound     = "windows.ccs_file_not_found"    // CCS_FILE_NOT_FOUND: the folder holds no file for the host
 )
 
 // The engine's own reasons the helper's codes map to (Ruling 6), so its recovery paths work unchanged.
@@ -61,6 +69,12 @@ var helperReasons = map[string]struct {
 	winproto.CodeFenced:            {reasonInterrupted, false},
 	winproto.CodeSuperseded:        {reasonSuperseded, false},
 	winproto.CodeUnknownOp:         {reasonUnknownOperation, false},
+
+	winproto.CodeCCSDisabled:         {ReasonCCSDisabled, false},
+	winproto.CodeCCSPathChanged:      {ReasonCCSPathChanged, false},
+	winproto.CodeCCSPathUnsupported:  {ReasonLocationUnsupported, false},
+	winproto.CodeCCSPasswordMismatch: {ReasonCCSPasswordMismatch, false},
+	winproto.CodeCCSFileNotFound:     {ReasonCCSFileNotFound, false},
 }
 
 // mapHelper names the Windows conditions in an error of the shared SSH layer: an exit that is no
@@ -133,6 +147,10 @@ var budgets = map[string]budget{
 	winproto.SubIISRestore: {linuxssh.LongCommandTimeout, 64 << 10},
 	winproto.SubIISStatus:  {linuxssh.DefaultCommandTimeout, 64 << 10},
 	winproto.SubIISFence:   {linuxssh.DefaultCommandTimeout, 64 << 10},
+	// ccs-dump runs under winproto.HelperBudget like iis-dump; its answer (at most MaxCCSFiles files with their
+	// chains) has no bound of its own, so it shares iis-dump's: a longer answer is a failed ccs-dump (Ruling 18).
+	winproto.SubCCSDump:   {linuxssh.LongCommandTimeout, winproto.DumpOutput},
+	winproto.SubCCSDeploy: {linuxssh.LongCommandTimeout, 64 << 10},
 }
 
 // cmd builds the forced command line of a subcommand with its standard input (nil for none): the

@@ -120,7 +120,7 @@ func (f *dumpFixture) convert() ([]providers.DiscoveredCertificate, []providers.
 func checkStorable(t *testing.T, c providers.DiscoveredCertificate) {
 	t.Helper()
 	l := c.Location
-	assert.Equal(t, providers.LocationWinSSLBinding, l.Kind, l.CertPath)
+	assert.Contains(t, []providers.LocationKind{providers.LocationWinSSLBinding, providers.LocationWinCCSFile}, l.Kind, l.CertPath)
 	_, err := l.Locator.Canonical()
 	require.NoError(t, err, l.CertPath)
 	_, err = providers.CanonicalDetails(l.Details)

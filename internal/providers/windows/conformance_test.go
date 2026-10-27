@@ -83,3 +83,25 @@ func TestWindowsLocationTargetContract(t *testing.T) {
 		t.Errorf("traits %+v", got)
 	}
 }
+
+// W5: the same contract for a CCS file (the helper's backup in the folder, restored through iis-restore under the
+// guard), each case on a fresh emulated host whose CCS file holds the current certificate.
+func TestWindowsCCSLocationTargetContract(t *testing.T) {
+	now := time.Now()
+	ca := pki.NewCA("CCS contract", pki.ECDSA256, now)
+	cur := ca.Issue(pki.Opts{CommonName: ccsHost, SANs: []string{ccsHost}}, now)
+	next := ca.Issue(pki.Opts{CommonName: ccsHost, SANs: []string{ccsHost}}, now)
+	var c *cenv
+	fresh := func(ctx context.Context) (providers.Session, error) {
+		c = newCEnvOf(t, &cur)
+		return c.prov.Open(ctx, c.ref, c.ccs, providers.Env{})
+	}
+	if _, err := fresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	providertest.CheckLocationTarget(t, providertest.LocationTargetHarness{
+		Traits: providers.TraitsOf(c.prov), Fresh: fresh, Location: c.cloc, ExpectCertSHA256: derSHA256(c.old.Cert.Raw),
+		Current: providertest.Chain{CertificatePEM: c.old.FullchainPEM, PrivateKeyPEM: c.old.KeyPEM},
+		Next:    providertest.Chain{CertificatePEM: next.FullchainPEM, PrivateKeyPEM: next.KeyPEM},
+	})
+}

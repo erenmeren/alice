@@ -66,20 +66,36 @@ var deployedClasses = map[string]string{
 // Backup is BackupRef{OperationID, Store, PreviousSHA1, PreviousSHA256} (W2 Ruling 17): from the
 // location's details and the request's token before an answer, from the helper's answer after one.
 //
+// A win_ccs_file location (W5, R68) takes the same table through ccs-deploy (deployCCS): its steps are
+// import_chain and write_file, its refusals add the CCS codes (windows.ccs_*, a folder Alice does not
+// manage windows.location_unsupported), the CCS password goes on standard input with the key, and its
+// Backup stays BackupRef{OperationID, PreviousSHA256} (W5 Ruling 21).
+//
 // The private key goes from req.PrivateKeyPEM into the input JSON (built by hand, without a string copy
 // of the key) and from there only onto the command's standard input: the command line is exactly
 // "iis-deploy --op <id>" (W2 Ruling 4). Both buffers are cleared after the send; a command is never kept
 // or re-sent.
 func (s *session) DeployCertificate(ctx context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
-	d := deployment{s: s, req: req, log: log, out: providers.DeployOutcome{Backup: requestBackup(req)}}
+	d := deployment{s: s, req: req, log: log, sub: winproto.SubIISDeploy, out: providers.DeployOutcome{Backup: requestBackup(req)}}
 	if !s.caps.Has(providers.CapDeployCertificate) {
 		return providers.DeployOutcome{}, providers.ErrUnsupported
 	}
 	if err := s.open(); err != nil {
 		return d.refuse(asProviderError(err))
 	}
-	loc, ok := locatorOf(req.Location)
-	if !req.Location.Supported || req.Location.Kind != providers.LocationWinSSLBinding || !ok {
+	var (
+		loc winproto.Locator
+		cl  ccsLocator
+		ok  bool
+	)
+	switch req.Location.Kind {
+	case providers.LocationWinSSLBinding:
+		loc, ok = locatorOf(req.Location)
+	case providers.LocationWinCCSFile:
+		cl, ok = ccsLocatorOf(req.Location)
+		d.sub = winproto.SubCCSDeploy
+	}
+	if !req.Location.Supported || !ok {
 		return d.refuse(providers.NewError(ReasonLocationUnsupported, false, nil, nil))
 	}
 	leaf, ok := leafFingerprint(req.CertificatePEM)
@@ -99,6 +115,9 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	if err := s.writeReady(); err != nil {
 		return d.refuse(asProviderError(err))
 	}
+	if d.sub == winproto.SubCCSDeploy {
+		return d.deployCCS(ctx, cl)
+	}
 	input, ok := deployInput(loc, req.ExpectCertSHA256, req.CertificatePEM, req.PrivateKeyPEM.Bytes(), req.Guard)
 	defer clear(input)
 	if inputHook != nil {
@@ -109,6 +128,11 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	}
 	c := runWrite[winproto.DeployResponse](ctx, s, winproto.SubIISDeploy, input, deployRefusals, winproto.ArgOp, req.OperationID.String())
 	clear(input)
+	return d.sent(ctx, c)
+}
+
+// sent maps a sent iis-deploy or ccs-deploy: uncertain, OPERATION_EXISTS (uncertain), another refusal, or the answer.
+func (d *deployment) sent(ctx context.Context, c writeCall[winproto.DeployResponse]) (providers.DeployOutcome, error) {
 	switch {
 	case c.uncertain != nil:
 		return d.uncertain(c.uncertain)
@@ -264,6 +288,7 @@ type deployment struct {
 	s           *session
 	req         providers.DeployRequest
 	fingerprint string // the leaf of req.CertificatePEM (hex SHA-256)
+	sub         string // iis-deploy, or ccs-deploy for a CCS file
 	log         providers.StepLogger
 	out         providers.DeployOutcome
 }
@@ -300,19 +325,28 @@ func (d *deployment) backupParams() map[string]string {
 // identity checks the answer's names of the new and the previous certificate against the request (the
 // new leaf, the token) and the protocol (thumbprints, store, the built chain's bound) and takes them
 // into the backup.
+//
+// A CCS file's answer names no store and no import (W5 Ruling 14), and its backup stays BackupRef{OperationID,
+// PreviousSHA256} (Ruling 21: the helper's journal names the backup file).
 func (d *deployment) identity(a winproto.DeployResponse) bool {
+	ccs := d.sub == winproto.SubCCSDeploy
+	store := winproto.ValidStore(a.Store)
+	if ccs {
+		store = a.Store == "" && !a.AliceImported
+	}
 	if a.NewSHA256 != d.fingerprint || a.PreviousSHA256 != d.req.ExpectCertSHA256 || !winproto.ValidSHA1(a.NewSHA1) ||
-		!winproto.ValidSHA1(a.PreviousSHA1) || !winproto.ValidStore(a.Store) || a.BuiltChainLength < 0 ||
-		a.BuiltChainLength > winproto.MaxChainCerts+1 {
+		!winproto.ValidSHA1(a.PreviousSHA1) || !store || a.BuiltChainLength < 0 || a.BuiltChainLength > winproto.MaxChainCerts+1 {
 		return false
 	}
-	d.out.Backup.Store, d.out.Backup.PreviousSHA1, d.out.Backup.PreviousSHA256 = a.Store, a.PreviousSHA1, a.PreviousSHA256
+	if !ccs {
+		d.out.Backup.Store, d.out.Backup.PreviousSHA1, d.out.Backup.PreviousSHA256 = a.Store, a.PreviousSHA1, a.PreviousSHA256
+	}
 	return true
 }
 
-// answer maps a completed iis-deploy (exit 0) by its phase (the table of DeployCertificate).
+// answer maps a completed iis-deploy or ccs-deploy (exit 0) by its phase (the table of DeployCertificate).
 func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (providers.DeployOutcome, error) {
-	const sub = winproto.SubIISDeploy
+	sub := d.sub
 	steps, ok := toSteps(a.Steps)
 	switch {
 	case !ok:
@@ -362,25 +396,23 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 }
 
 // verifyNew verifies the new certificate after a committed or unchanged answer. The served chain is
-// compared with the chain Windows built after the imports (built, W2 Ruling 16; the deployed chain
-// when the helper could not read it); when the two differ, the verify step's params carry
-// chain_differs true, deployed_chain and built_chain, and the trust check (R51) decides as usual.
+// compared with comparedChain's length: for a binding the chain Windows built after the imports (built,
+// W2 Ruling 16; the deployed chain when the helper could not read it), and when the two differ the verify
+// step's params carry chain_differs true, deployed_chain and built_chain; for a CCS file the PFX's own
+// chain (F18). The trust check (R51) decides as usual.
 func (d *deployment) verifyNew(ctx context.Context, phase string, built int) (providers.DeployOutcome, error) {
 	req := d.req
 	deployed := req.ChainLength
 	if deployed <= 0 {
 		deployed = chainLength(req.CertificatePEM)
 	}
-	compare, extra := deployed, map[string]string(nil)
-	if built > 0 {
-		compare = built
-		if built != deployed {
-			extra = map[string]string{"chain_differs": "true", "deployed_chain": strconv.Itoa(deployed), "built_chain": strconv.Itoa(built)}
-		}
-	}
+	compare, extra := comparedChain(req.Location.Kind, deployed, built)
 	params := func(vr providers.VerifyResult) map[string]string {
 		p := vr.StepParams()
 		maps.Copy(p, extra)
+		if vr.OK && vr.Params[ccsUnlinkedParam] != "" {
+			p[ccsUnlinkedParam] = vr.Params[ccsUnlinkedParam] // W5 Ruling 8: verified by the helper's read-back only
+		}
 		return p
 	}
 	step(d.log, providers.StepNameVerify, providers.StepStarted, nil)

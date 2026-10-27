@@ -39,7 +39,8 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
 	require.NotNil(t, res.WebServer)
 	assert.Equal(t, providers.WebServerFacts{Software: "iis", Version: "10.0", Found: true, ConfigValid: true}, *res.WebServer)
-	assert.Equal(t, []string{winproto.WarnCCSEnabled}, codes(res.Warnings), "the demo host has CCS on (W5 Ruling 25)")
+	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSPasswordMissing}, codes(res.Warnings),
+		"the demo host has CCS on (W5 Ruling 25); this server has no CCS password in Alice")
 	assert.Empty(t, res.SSHKeys, "no SSH half")
 	assert.Empty(t, res.HostKeys)
 

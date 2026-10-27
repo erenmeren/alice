@@ -2,13 +2,15 @@ package windows
 
 import (
 	"context"
+	"slices"
 
 	"alice/internal/providers"
 	"alice/internal/providers/windows/winproto"
 )
 
 // Discover reads the certificate half: iis-dump on a connection of its own, converted into one
-// location per http.sys SSL binding (convert). A Windows server has no SSH key inventory (§2
+// location per http.sys SSL binding (convert), then the CCS files of ccs-dump on another (discoverCCS,
+// W5 Ruling 18), sorted together by cert path. A Windows server has no SSH key inventory (§2
 // non-goal), so the SSH half sends nothing: a request for it alone is an empty result (the discovery
 // job always asks for it), a request for neither half is not supported.
 func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
@@ -26,5 +28,18 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		return providers.DiscoveryResult{}, err
 	}
 	certs, warns, facts := convert(d)
+	more, moreWarns, err := s.discoverCCS(ctx, d)
+	if err != nil {
+		return providers.DiscoveryResult{}, err
+	}
+	if len(more) > 0 {
+		certs = append(certs, more...)
+		sortByPath(certs)
+	}
+	for _, w := range moreWarns {
+		if !slices.ContainsFunc(warns, func(o providers.Warning) bool { return o.Code == w.Code }) {
+			warns = append(warns, w)
+		}
+	}
 	return providers.DiscoveryResult{Certificates: certs, Warnings: warns, WebServer: &facts}, nil
 }

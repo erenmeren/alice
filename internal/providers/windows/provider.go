@@ -206,11 +206,18 @@ func (s *session) open() error {
 // release(false): the connection is closed, never kept idle) and decodes the answer. It returns the
 // host key the connection was opened with. Errors pass through mapHelper.
 func call[T any](ctx context.Context, s *session, sub string, args ...string) (T, providers.HostKey, error) {
+	return callIn[T](ctx, s, sub, nil, args...)
+}
+
+// callIn is call with stdin (ccs-dump's password, W5 Ruling 11): the command's copy is wiped after the call; the
+// caller clears its own buffer.
+func callIn[T any](ctx context.Context, s *session, sub string, stdin []byte, args ...string) (T, providers.HostKey, error) {
 	var zero T
-	c, err := cmd(sub, nil, args...)
+	c, err := cmd(sub, stdin, args...)
 	if err != nil {
 		return zero, providers.HostKey{}, providers.NewError("internal.unexpected", false, err, map[string]string{"subcommand": sub})
 	}
+	defer c.WipeInput()
 	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg, s.cred)
 	if err != nil {
 		return zero, providers.HostKey{}, err

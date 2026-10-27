@@ -61,8 +61,12 @@ func locatorOf(loc providers.CertLocation) (winproto.Locator, bool) {
 //
 // The Administrator's options apply: v.Port replaces the port, v.SNI every name, and v.Address (the
 // probe address) makes Alice's own probe, which then connects there, stand for every endpoint. A locator
-// Alice does not deploy to has no endpoints (the verification is then unreachable).
+// Alice does not deploy to has no endpoints (the verification is then unreachable). A CCS file's endpoints
+// are its linked IIS bindings (ccsEndpoints, W5 Ruling 20).
 func Endpoints(loc providers.CertLocation, v providers.VerifyOptions, sans []string) []tlsverify.Endpoint {
+	if loc.Kind == providers.LocationWinCCSFile {
+		return ccsEndpoints(loc, v, sans)
+	}
 	l, ok := locatorOf(loc)
 	if !ok {
 		return nil
@@ -130,12 +134,17 @@ func (s *session) VerifyDeployment(ctx context.Context, req providers.VerifyRequ
 	if err := s.open(); err != nil {
 		return providers.VerifyResult{}, err
 	}
+	if unlinkedCCS(req.Location) && !req.Verify.Skip && ctx.Err() == nil {
+		// W5 Ruling 8: no IIS binding serves the file; ccs-deploy's read-back is its only check (R51 level 1).
+		return providers.VerifyResult{OK: true, Mode: "skipped", Level: providers.LevelInstalled, Params: map[string]string{ccsUnlinkedParam: "true"}}, nil
+	}
 	host := s.cfg.Host
 	if req.Verify.Address != "" {
 		host = req.Verify.Address
 	}
+	// A CCS file's attempts span winproto.CCSPickupWait (verifyAttempts, F15).
 	return tlsverify.Verify(ctx, host, Endpoints(req.Location, req.Verify, req.SANs), req, s.p.prober, s.serverProbe,
-		tlsverify.Options{Attempts: s.p.attempts, RetryWait: s.p.retryWait, Clock: s.clock, Log: s.log})
+		tlsverify.Options{Attempts: s.p.verifyAttempts(req.Location.Kind), RetryWait: s.p.retryWait, Clock: s.clock, Log: s.log})
 }
 
 // serverProbe is the server-side probe (tlsverify.ServerProbe): the helper's tls-probe against ep.Addr

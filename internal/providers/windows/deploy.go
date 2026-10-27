@@ -32,7 +32,10 @@ var (
 	deployRefusals = withCodes(inputRefusals, winproto.ExitPrecondition, winproto.CodeHashMismatch, winproto.CodeFenced,
 		winproto.CodeOperationExists, winproto.CodeRecoveryPending, winproto.CodeBindingNotFound, winproto.CodeKeyUnusable)
 	restoreRefusals = withCodes(inputRefusals, winproto.ExitPrecondition, winproto.CodeUnknownOp, winproto.CodeSuperseded,
-		winproto.CodeBackupMissing)
+		winproto.CodeBackupMissing, winproto.CodeCCSPathUnsupported)
+	// ccs-deploy (W5 Ruling 14): iis-deploy's refusals and the CCS preconditions, each changing nothing.
+	ccsDeployRefusals = withCodes(deployRefusals, winproto.ExitPrecondition, winproto.CodeCCSDisabled, winproto.CodeCCSPathChanged,
+		winproto.CodeCCSPathUnsupported, winproto.CodeCCSPasswordMismatch, winproto.CodeCCSFileNotFound)
 )
 
 // withCodes is base with codes added at exit.
@@ -51,8 +54,9 @@ func withCodes(base map[string]int, exit int, codes ...string) map[string]int {
 // (the cause), the steps a restore fails at, the error classes, and the journal phases.
 var (
 	helperSteps = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal,
-		winproto.StepRestore}
-	causeSteps   = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal}
+		winproto.StepRestore, winproto.StepWriteFile}
+	causeSteps = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal,
+		winproto.StepWriteFile}
 	helperErrors = []string{winproto.ErrKeyUnusable, winproto.ErrReadBack, winproto.ErrStore, winproto.ErrFileChanged,
 		winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO}
 	helperPhases = []string{winproto.PhaseNone, winproto.PhasePrepared, winproto.PhaseWriting, winproto.PhaseCommitted,
