@@ -525,7 +525,9 @@ type prunable struct {
 // record still needs; at most MaxPrunePerRun, the oldest first. When the binding records cannot all be
 // read nothing is pruned and the plan warns binding_record_unreadable. The gate is entered before the
 // first removal (unless the caller did: wctx is then the gate's context). A CCS journal goes after its
-// temporary file and its backup (pruneCCS).
+// temporary file and its backup (pruneCCS). A CCS journal past the same age that a binding record still
+// needs keeps its journal but loses its temporary file and its backup (WN-22: a backup lives at most
+// JournalKeep after its journal became final; a later iis-restore answers BACKUP_MISSING).
 func (s *cleanupState) prune(wctx context.Context, g *gate, resp *winproto.CleanupPlanResponse) (int, error) {
 	needed, ok := s.recordOps()
 	if !ok {
@@ -533,8 +535,9 @@ func (s *cleanupState) prune(wctx context.Context, g *gate, resp *winproto.Clean
 		return 0, nil
 	}
 	var victims []prunable
+	var sweeps []*ccsJournal
 	for _, f := range s.files {
-		if f.Unread || needed[f.Op] {
+		if f.Unread {
 			continue
 		}
 		keep := winproto.JournalKeep
@@ -544,7 +547,13 @@ func (s *cleanupState) prune(wctx context.Context, g *gate, resp *winproto.Clean
 		case f.J.Phase == winproto.PhaseWriting, f.J.Phase == winproto.PhaseRestoring:
 			continue
 		}
-		if s.now.Sub(f.File.ModTime) > keep {
+		switch {
+		case s.now.Sub(f.File.ModTime) <= keep:
+		case needed[f.Op]:
+			if f.OK && f.J.CCS != nil {
+				sweeps = append(sweeps, f.J.CCS)
+			}
+		default:
 			victims = append(victims, prunable{name: f.File.Name, mod: f.File.ModTime, ccs: f.J.CCS})
 		}
 	}
@@ -579,6 +588,18 @@ func (s *cleanupState) prune(wctx context.Context, g *gate, resp *winproto.Clean
 			return pruned, failed(winproto.CodeIOError, "a journal could not be removed")
 		}
 		pruned++
+	}
+	// No marker in the journal: once the files are gone, a later plan finds nothing to remove.
+	for _, c := range sweeps {
+		if wctx == nil {
+			var err error
+			if wctx, err = g.enter(); err != nil {
+				return pruned, err
+			}
+		}
+		if _, err := s.pruneCCS(wctx, c); err != nil {
+			return pruned, err
+		}
 	}
 	return pruned, nil
 }

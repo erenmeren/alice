@@ -878,8 +878,8 @@ type CCSDumpResponse struct {
 }
 
 // CCSDeployInput is the JSON on ccs-deploy's stdin, at most MaxCCSDeployInput bytes. Path is the folder
-// Alice discovered, a compare-and-swap value only (W5 Ruling 4); ExpectSHA256 names the file's current
-// bytes (helperproto.AbsentSHA256 for none).
+// Alice discovered, a compare-and-swap value only (W5 Ruling 4); ExpectSHA256 is the SHA-256 of the DER
+// of the leaf the file holds now (W5 Rulings 13 and 14); the absent marker is refused (Ruling 7).
 type CCSDeployInput struct {
 	Path          string   `json:"path"`
 	Host          string   `json:"host"`

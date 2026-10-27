@@ -1405,6 +1405,63 @@ func TestPruneCCSBackups(t *testing.T) {
 		t.Fatal("a young journal was pruned")
 	}
 
+	t.Run("the latest operation of a file keeps its journal, not its backup", func(t *testing.T) {
+		f := newCleanup(t)
+		newBytes := []byte("the new file's bytes")
+		f.h.setCCS(ccsFolder, map[string][]byte{ccsName: newBytes})
+		put := func(op, phase, file string, age time.Duration) journal {
+			j := sampleCCSJournal(op)
+			j.Phase, j.CCS.PreviousFileSHA256, j.CCS.NewFileSHA256 = phase, hexSHA256(old), hexSHA256(newBytes)
+			j.Binding, j.CCS.File, j.CCS.Host = ccsRecordKey(file+".pfx"), file+".pfx", file
+			j.CCS.Backup = ccsBackupName(j.CCS.File, op)
+			if phase == winproto.PhaseRestoreFailed {
+				j.Steps = append(j.Steps, winproto.Step{Name: winproto.StepRestore, Status: winproto.StepFailed, Error: winproto.ErrIO})
+				j.FailedStep, j.Error = winproto.StepRestore, winproto.ErrIO
+			}
+			mustWrite(t, f.h, j)
+			if err := writeBindingRecord(f.h, j.Binding, op); err != nil {
+				t.Fatal(err)
+			}
+			f.h.modTimes[journalName(op)] = testNow.Add(-age)
+			f.h.ccsFiles[j.CCS.Temp] = fakeCCSFile{data: []byte("temporary")}
+			f.h.ccsFiles[j.CCS.Backup] = fakeCCSFile{data: old}
+			return j
+		}
+		latest := put(op1, winproto.PhaseCommitted, ccsHost, 8*day)
+		// Another file's latest operation, restore_failed 8 days old: its 30 days apply.
+		failedJ := put(op2, winproto.PhaseRestoreFailed, "b.example.test", 8*day)
+		f.reset()
+		if r := f.plan(); r.Pruned != 0 {
+			t.Fatalf("pruned %d", r.Pruned)
+		}
+		has := func(name string) bool { _, ok := f.h.ccsFiles[name]; return ok }
+		if has(latest.CCS.Backup) || has(latest.CCS.Temp) {
+			t.Fatal("the latest operation's backup or temporary file stays")
+		}
+		if _, ok := f.h.state[journalName(op1)]; !ok {
+			t.Fatal("the latest operation's journal was removed")
+		}
+		if !has(failedJ.CCS.Backup) || !has(failedJ.CCS.Temp) {
+			t.Fatal("a restore_failed journal's files were removed before 30 days")
+		}
+		// A second plan finds nothing more to remove.
+		f.reset()
+		f.plan()
+		for _, w := range f.h.writes() {
+			if strings.HasPrefix(w, "ccs-unlink") || strings.HasPrefix(w, "unlink") {
+				t.Fatalf("second plan: %v", f.h.writes())
+			}
+		}
+		// The operation can no longer be rolled back: BACKUP_MISSING, nothing written.
+		f.reset()
+		o, out := execute(t, context.Background(), f.h, bytes.NewReader(restoreInput([]string{}, []string{})), winproto.SubIISRestore,
+			winproto.ArgOp, op1)
+		wantError(t, o.Exit, out, winproto.ExitPrecondition, winproto.CodeBackupMissing)
+		if len(f.h.writes()) != 0 {
+			t.Fatalf("%v", f.h.writes())
+		}
+	})
+
 	t.Run("a removal that fails", func(t *testing.T) {
 		f := newCleanup(t)
 		f.h.setCCS(ccsFolder, nil)
