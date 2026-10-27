@@ -245,17 +245,27 @@ func convertCCS(d winproto.IISDumpResponse, c winproto.CCSDumpResponse) ([]provi
 	return certs, warns
 }
 
-// ccsFileFor is the file IIS serves an SNI host from (W5 Ruling 6, F17 as planned; F17's measured order replaces this
-// function only): the exact host's file, else the wildcard file of the one-label parent. Hosts are folded to ASCII
-// lower case already (CCSHost, parseSiteBinding), so the comparison ignores case.
+// ccsFileFor is the file IIS serves an SNI host from (W5 Ruling 6 as amended by ruling W5-13, F17 measured on
+// windows-2022 and windows-2025): the exact host's file, else the nearest wildcard file of a suffix at any depth
+// (a.b.example.test is served by *.example.test), the suffix keeping at least two labels, never the wildcard's own
+// parent (example.test is not served by *.example.test). Hosts are folded to ASCII lower case already (CCSHost,
+// parseSiteBinding), so the comparison ignores case.
+// shortcut: the order between two wildcard files that both cover a host (nearest first) is not measured; measure it
+// on a runner if a server ever holds both.
 func ccsFileFor(host string, has func(string) bool) (string, bool) {
 	if has(host) {
 		return host, true
 	}
-	if _, parent, ok := strings.Cut(host, "."); ok && strings.Contains(parent, ".") && has("*."+parent) {
-		return "*." + parent, true
+	for rest := host; ; {
+		_, suffix, ok := strings.Cut(rest, ".")
+		if !ok || !strings.Contains(suffix, ".") {
+			return "", false
+		}
+		if has("*." + suffix) {
+			return "*." + suffix, true
+		}
+		rest = suffix
 	}
-	return "", false
 }
 
 // ccsLocation is a CCS file's location without its file facts: the kind, the locator {type ccs_file, path, host},

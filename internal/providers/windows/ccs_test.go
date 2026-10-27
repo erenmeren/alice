@@ -783,7 +783,8 @@ func TestConvertCCS(t *testing.T) {
 		ccsSite("Admin", "*:9443:www.example.test", 3),
 		ccsSite("Admin", "*:9443:www.example.test", 3), // the same binding twice: one server
 		ccsSite("Shop", "10.0.0.5:8443:shop.example.test", 2),
-		ccsSite("Deep", "*:443:a.b.example.test", 3), // one label only: _.example.test.pfx does not serve a.b
+		ccsSite("Deep", "*:443:a.b.example.test", 3), // W5-13: _.example.test.pfx serves a.b.example.test too
+		ccsSite("Apex", "*:443:example.test", 3),     // but never its own parent
 		ccsSite("Plain", "*:443:plain.example.test", 1),
 		ccsSite("NoHost", "*:443:", 2),
 		ccsSite("Bad", "*:x:www.example.test", 3),
@@ -824,9 +825,12 @@ func TestConvertCCS(t *testing.T) {
 
 	wl := got[`C:\CCS\_.example.test.pfx`]
 	assert.Equal(t, "*.example.test", wl.Location.Locator["host"])
-	assert.Equal(t, []providers.CertServer{{Names: []string{"shop.example.test"}, Listens: []providers.CertListen{{Addr: "10.0.0.5", Port: 8443}}, Section: "Shop"}},
-		wl.Location.Servers, "the one-label parent's wildcard file")
-	assert.Equal(t, ProblemCertMissing, got[`C:\CCS\a.b.example.test.pfx`].Location.Problem, "two labels down: no file serves it")
+	assert.Equal(t, []providers.CertServer{
+		{Names: []string{"a.b.example.test"}, Listens: []providers.CertListen{{Addr: "*", Port: 443}}, Section: "Deep"},
+		{Names: []string{"shop.example.test"}, Listens: []providers.CertListen{{Addr: "10.0.0.5", Port: 8443}}, Section: "Shop"}},
+		wl.Location.Servers, "the wildcard file serves a suffix at any depth (W5-13)")
+	assert.NotContains(t, got, `C:\CCS\a.b.example.test.pfx`, "linked: no cert_missing location")
+	assert.Equal(t, ProblemCertMissing, got[`C:\CCS\example.test.pfx`].Location.Problem, "the wildcard's own parent: no file serves it")
 
 	for path, want := range map[string]string{
 		`C:\CCS\mismatch.example.test.pfx`:   winproto.CCSProblemPasswordMismatch,
@@ -893,18 +897,24 @@ func TestConvertCCS(t *testing.T) {
 	assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
 }
 
-// F17 (Ruling 6): the file IIS serves a host from: the exact file, then the one-label parent's wildcard file.
+// F17 (Ruling 6 as amended by ruling W5-13): the file IIS serves a host from: the exact file, then the nearest
+// wildcard file of a suffix at any depth that keeps two labels, never the wildcard's own parent.
 func TestCCSFileFor(t *testing.T) {
-	files := map[string]bool{"www.example.test": true, "*.example.test": true, "*.b.example.test": true}
+	files := map[string]bool{"www.example.test": true, "*.example.test": true, "*.b.example.test": true, "a.b.example.test": true}
 	has := func(h string) bool { return files[h] }
 	for host, want := range map[string]string{
-		"www.example.test":  "www.example.test",
-		"shop.example.test": "*.example.test",
-		"a.b.example.test":  "*.b.example.test",
-		"example.test":      "",
-		"*.example.test":    "*.example.test",
-		"x.other.test":      "",
-		"localhost":         "",
+		"www.example.test":   "www.example.test",
+		"shop.example.test":  "*.example.test",
+		"a.b.example.test":   "a.b.example.test", // the exact file wins over every wildcard
+		"x.b.example.test":   "*.b.example.test", // the nearest wildcard first
+		"x.c.example.test":   "*.example.test",   // two labels down
+		"x.y.c.example.test": "*.example.test",   // three
+		"b.example.test":     "*.example.test",
+		"example.test":       "", // the wildcard's own parent
+		"test":               "",
+		"*.example.test":     "*.example.test",
+		"x.other.test":       "",
+		"localhost":          "",
 	} {
 		got, ok := ccsFileFor(host, has)
 		assert.Equal(t, want, got, host)

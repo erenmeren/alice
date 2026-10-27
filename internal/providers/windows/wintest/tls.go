@@ -118,16 +118,23 @@ func (m *Model) certificateLocked(ip string, port int, sni string) (*tls.Certifi
 	return m.presentedLocked(b)
 }
 
-// ccsPresentedLocked is IIS's CCS lookup for an SNI host (F17 as modelled): <host>.pfx, else
-// _.<parent>.pfx of the one-label parent, compared without case, in the folder the registry names now.
+// ccsPresentedLocked is IIS's CCS lookup for an SNI host (F17 as measured, ruling W5-13): <host>.pfx, else
+// the nearest _.<suffix>.pfx of a suffix at any depth that keeps at least two labels (never the wildcard's
+// own parent), compared without case, in the folder the registry names now. The order between two wildcard
+// files is not measured (nearest first here).
 // A file the helper replaced or restored is served as it was until RefreshCCSRecords (F15, pinLocked).
 // The file is opened with the store's password; one it does not open serves nothing (F16). The chain is
 // the file's intermediates (F18 as modelled).
 func (m *Model) ccsPresentedLocked(sni string) (*tls.Certificate, error) {
 	host := fold(sni)
 	names := []string{host + ".pfx"}
-	if _, parent, ok := strings.Cut(host, "."); ok && parent != "" {
-		names = append(names, "_."+parent+".pfx")
+	for rest := host; ; {
+		_, suffix, ok := strings.Cut(rest, ".")
+		if !ok || !strings.Contains(suffix, ".") {
+			break
+		}
+		names = append(names, "_."+suffix+".pfx")
+		rest = suffix
 	}
 	d := m.ccsDirs[folderKey(m.iis.CCSPath)]
 	for _, n := range names {

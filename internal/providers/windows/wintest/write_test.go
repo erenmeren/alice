@@ -1162,8 +1162,17 @@ func TestModelCCSWildcard(t *testing.T) {
 	if got := f.servedCCS(t, "x.example.test"); got != sum256(wild.Cert.Raw) {
 		t.Fatalf("the wildcard file serves %s", got)
 	}
-	if got := f.servedCCS(t, "a.b.example.test"); got != "" {
-		t.Fatal("the wildcard file covers one label only")
+	// Ruling W5-13 (F17 measured): a wildcard file serves a suffix at any depth, never its own parent.
+	if got := f.servedCCS(t, "a.b.example.test"); got != sum256(wild.Cert.Raw) {
+		t.Fatalf("the wildcard file serves a host two labels down: %s", got)
+	}
+	if got := f.servedCCS(t, "example.test"); got != "" {
+		t.Fatal("the wildcard file does not serve its own parent")
+	}
+	deeper := f.issue("*.b.example.test")
+	f.put("_.b.example.test.pfx", deeper)
+	if got := f.servedCCS(t, "a.b.example.test"); got != sum256(deeper.Cert.Raw) {
+		t.Fatal("the nearest wildcard file comes first")
 	}
 	if got := f.servedCCS(t, "ccs.example.test"); got != sum256(f.old.Cert.Raw) {
 		t.Fatal("the exact file comes before the wildcard")
