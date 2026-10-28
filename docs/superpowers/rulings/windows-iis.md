@@ -2436,7 +2436,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
 of Task 4's report (Ruling 14 amended, below).
 
-### Runner runs used (7 of 8)
+### Runner runs used (8 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -2447,6 +2447,7 @@ of Task 4's report (Ruling 14 amended, below).
 | 5 | <https://github.com/erenmeren/alice/actions/runs/40671263696> | `ad9b7ee4` | **pass / pass** | After the flaky-test fix `f229223e` (a Windows-paths change): `windows-required` green, every RDP real test and `TestFidelityRDP` pass on both images |
 | 6 | <https://github.com/erenmeren/alice/actions/runs/40673844653> | `5a1b0a59` | **pass / pass** | After the go-jose bump `e656143d` (`go.mod` is a Windows path): `windows-required` green on both images |
 | 7 | <https://github.com/erenmeren/alice/actions/runs/40685266649> | `b2c730c4` | **pass / pass** | A documents-only push (the final gates record). The Windows legs ran anyway: a branch push is diffed against `main`, not against its previous push, so every push of a branch that touches a Windows path spends a run. `windows-required` green |
+| 8 | <https://github.com/erenmeren/alice/actions/runs/40697994891> | `2d86c053` | **pass / pass** | After the coordinator review's four fixes (`a01fc50f`, `21111254`, `fd6ef31e`, `55d78795`, `2d86c053`): `windows-required` green; the new `systemCanRead` bound runs in every real test that dumps a store |
 
 ## Rulings made during execution (W6)
 
@@ -2732,9 +2733,11 @@ own commit:
 2. **`systemCanRead` followed the key descriptor's DACL offset and `GetAce` without bounds** (W1 code): fixed in
    `21111254` (`checkRelativeDACL` before `IsValid`; a descriptor that fails it reads as unknown).
 3. **The host-preparation guide named only an older chain as the reason for the delete-and-set rebuild:** fixed in
-   `fd6ef31e` (a key access or chain change).
-4. **Ruling 11 did not say what an interrupted `file_changed` restore does with the grant:** this commit (it revokes
+   `fd6ef31e` (a key access or chain change); the admin guide had the same sentence, fixed in `2d86c053`.
+4. **Ruling 11 did not say what an interrupted `file_changed` restore does with the grant:** fixed in `55d78795` (it revokes
    the grant, then ends `restore_failed` `file_changed`).
+
+Runner run 8 (`2d86c053`, the last of the budget) is green on windows-2022 and windows-2025 with `windows-required` green: <https://github.com/erenmeren/alice/actions/runs/40697994891>.
 
 ## Acceptance (design §13 W6)
 
