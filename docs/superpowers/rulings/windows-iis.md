@@ -2387,3 +2387,15 @@ The review of `87d74673..cabd6323` found 0 critical, 1 important and 5 minor iss
 - **`winproto.RDPPickupWait` stays 0 (F20 route (a)).** Why: the measured maximum is 17 ms (runs 1-3). Its +50 % (26 ms) would not change `verifyAttempts`, because `pickupAttempts` keeps the provider's attempts. This is W5's precedent for `CCSPickupWait` (8-12 ms, kept 0), and `winproto_test.go` (Task 1) asserts 0.
 - **Coordinator to decide: Ruling 14's same-value write does not rebuild the served chain (F20).** In runs 1-3, adding the leaf's intermediate to `CA` and rewriting the same value still serves a chain of 1 after 20 s. Deleting the value and setting it again serves the full chain within 9-11 ms, with about 10 ms of self-signed fallback in between. So Ruling 14's "write even when it is the same" does not make an added intermediate reach the client. Options: (a) when an intermediate was added, `set_listener` deletes and then sets the value; (b) keep the rewrite and let the verification report `win.chain_differs`; (c) the unchanged rule ignores intermediates for RDP. Recommendation: (a).
 - **`TestFidelityRDP` compares the hosts as F19 found the runner.** The model gets the runner's self-signed certificate without its key, so its dump entry is the real one once DER and hashes match. `RDP_TLS_OFF` and `BINDING_NOT_FOUND` are not produced on a runner (`SecurityLayer` and the key are never written). Run 3 (<https://github.com/erenmeren/alice/actions/runs/40648774432>) found no fidelity difference, so the emulator needed no fix.
+
+### Review gate (Task 4)
+
+The review of `49630752..11ddde52` (Task 4 paths) found 0 critical, 0 important and 6 minor issues. The minors were fixed in `2da81ba8`, except Minor 2:
+- Minor 1: the revoke matched any non-inherited ACE. It now matches the grant's own flags (0), so an inherit-only NETWORK SERVICE ACE of the same mask is kept. The `write.go` contract says "flags 0".
+- Minor 2: if the grant's merge write-back also failed, an unrecorded NETWORK SERVICE read could remain. Not fixed here: it belongs to Task 2's restore code, and is carried to the Task 8 security review (Ruling 27).
+- Minor 3: the F21 test now asserts that a key the helper imported has F4's DACL.
+- Minor 4: `TestFidelityRDP` now also compares UNKNOWN_OP (and `iis-status` of an unknown op), SUPERSEDED asserted by code, and a deployment whose restore is `restore_forbidden`. The file comment names why the input refusals and BUSY are not compared.
+- Minor 5: the fidelity normalisation copies only the self-signed entry's key facts from the real answer. Every other field is compared, and the model is given the certificate's friendly name.
+- Minor 6: the grant goes before the first inherited ACE (canonical order), with the read-back expecting that place. The self-relative descriptor minimum is 20 bytes. `TestRealRunnerIsClean` asserts TermService as the first fixture found it.
+
+These are verified locally only (builds, vet, lint, archtest). The next runner run covers them.
