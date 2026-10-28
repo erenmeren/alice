@@ -198,10 +198,11 @@ func testedPackageDir(line string) (string, bool) {
 
 func TestTestedPackageDir(t *testing.T) {
 	for line, want := range map[string]string{
-		"alice/a_test [alice/a.test]": "a",      // the external test package of alice/a
-		"alice/b_test":                "b_test", // a real package whose directory ends in _test
-		"alice/c [alice/c.test]":      "c",      // alice/c built for its tests
-		"alice/c.test":                "",       // the generated test main
+		"alice/a_test [alice/a.test]":      "a",      // the external test package of alice/a
+		"alice/b_test":                     "b_test", // a real package whose directory ends in _test
+		"alice/b_test [alice/b_test.test]": "b_test", // the same package built for its own tests
+		"alice/c [alice/c.test]":           "c",      // alice/c built for its tests
+		"alice/c.test":                     "",       // the generated test main
 	} {
 		dir, ok := testedPackageDir(line)
 		assert.Equal(t, want, dir, line)
