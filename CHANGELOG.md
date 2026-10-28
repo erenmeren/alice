@@ -8,7 +8,8 @@
   the listener keeps its certificate. Before, the listener was pointed to a certificate
   Remote Desktop could not use and the deployment rolled back.
 - A Windows server whose helper is replaced by one below 1.2.0 keeps its Remote Desktop listener listed as the last
-  1.2.0 scan left it, instead of marking it missing; a deployment to it is refused as the helper being too old.
+  1.2.0 scan left it, instead of marking it missing, and pauses the listener's drift observation; a deployment to it
+  is refused as the helper being too old.
 - Setting the CCS password on a server that is not Windows answers 409 (`ALC-WIN-0011`) before the password rule is
   checked; it was 422 (`ALC-WIN-0019`) when the password also broke the rule.
 - `make secrets-scan` also scans the history of a git worktree and fails when no commit was scanned;

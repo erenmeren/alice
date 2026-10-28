@@ -1612,8 +1612,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   manages CCS files with a helper of 1.1.0 or later, deploys with a helper of 0.2.0 or later and cleans up with 0.3.0
   or later, so a server with an older helper keeps working with what it supports. When a server's helper is replaced
   by one below 1.2.0, its Remote Desktop listener stays listed as the last 1.2.0 scan left it (it is not marked
-  missing) and a deployment to it is refused as the helper being too old, until a 1.2.0 helper scans the server
-  again. When you update Alice,
+  missing and its drift observation pauses) and a deployment to it is refused as the helper being too old, until a
+  1.2.0 helper scans the server again. When you update Alice,
   check the new package's signature and the helper's checksum, copy the helper to the Windows servers, then update
   Alice, as the operator guide's [Updates](operator-guide.md#updates) describes.
 - **What is tested on real Windows.** Every change to the helper and the Windows provider, every night and every
