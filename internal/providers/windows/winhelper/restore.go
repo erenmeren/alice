@@ -145,8 +145,20 @@ func revokeRDPGrant(ctx context.Context, h WriteHost, j *journal) {
 		return
 	}
 	c := *r
-	c.ACLLeft = h.SetRDPKeyRead(ctx, j.Store, j.NewSHA1, false) != nil
+	c.ACLLeft = revokeKeyRead(ctx, h, j.Store, j.NewSHA1)
 	j.RDP = &c
+}
+
+// revokeKeyRead removes the grant and reports whether NETWORK SERVICE may still read the key: the
+// revoke failed, or it finished while RDPKeyRead still answers readable (or cannot answer) for a key
+// the journal says it could not read before (a grant the KSP merged into another ACE, which the
+// exact-mask revoke cannot take apart). A grant left behind is never silent (Ruling 27).
+func revokeKeyRead(ctx context.Context, h WriteHost, store, sha1 string) (left bool) {
+	if h.SetRDPKeyRead(ctx, store, sha1, false) != nil {
+		return true
+	}
+	readable, err := h.RDPKeyRead(ctx, store, sha1)
+	return err != nil || readable
 }
 
 // applyRestore carries out a planned restore after the gate and records its outcome in the journal.

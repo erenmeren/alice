@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1141,20 +1142,119 @@ func TestRDPRebuild(t *testing.T) {
 	})
 	t.Run("the journal", func(t *testing.T) {
 		j := sampleRDPJournal(op1)
-		j.RDP.Rebuild = true
+		j.RDP.Rebuild, j.PreviousSHA1 = true, j.NewSHA1
 		if !j.valid(op1) {
 			t.Fatal("a rebuild refused")
 		}
 		for name, edit := range map[string]func(*journal){
-			"over an absent value": func(j *journal) { j.RDP.PreviousAbsent, j.RDP.PreviousStore = true, winproto.RDPStoreSelfSigned },
-			"in prepared":          func(j *journal) { j.Phase = winproto.PhasePrepared },
+			"over an absent value":     func(j *journal) { j.RDP.PreviousAbsent, j.RDP.PreviousStore = true, winproto.RDPStoreSelfSigned },
+			"in prepared":              func(j *journal) { j.Phase = winproto.PhasePrepared },
+			"over another certificate": func(j *journal) { j.PreviousSHA1 = h1 },
 		} {
 			j := sampleRDPJournal(op1)
-			j.RDP.Rebuild = true
+			j.RDP.Rebuild, j.PreviousSHA1 = true, j.NewSHA1
 			edit(&j)
 			if j.valid(op1) {
 				t.Errorf("%s: accepted", name)
 			}
+		}
+	})
+}
+
+// TestRDPRebuildKillPoints (rebuild review Minor 2): a kill at every point of the rebuild path, with
+// NETWORK SERVICE able to read the key before or not, then iis-restore: the value is the new SHA-1
+// again (the pre-operation value), the journal restored, and a grant only this operation made revoked.
+func TestRDPRebuildKillPoints(t *testing.T) {
+	for _, had := range []bool{false, true} {
+		for _, p := range []string{"rdp.writing", "rdp.deleted", "rdp.set", "rdp.read_back"} {
+			t.Run(fmt.Sprintf("%s had=%v", p, had), func(t *testing.T) {
+				f := newRDPFixture(t, false)
+				f.h.addCert("MY", f.nw.Cert.Raw, true)
+				if had {
+					f.h.nsACEs = map[[2]string][]fakeACE{{"MY", f.newSHA1}: {{mask: fakeGrantMask}}}
+				}
+				f.setValue(f.newSHA1)
+				f.expect = f.newSHA256 // the intermediate is added, so not unchanged: the rebuild path
+				f.h.pointErr = func(name string) error {
+					if name == p {
+						return errors.New("kill")
+					}
+					return nil
+				}
+				var out bytes.Buffer
+				if o := Execute(context.Background(), f.h, []string{winproto.SubRDPDeploy, winproto.ArgOp, op1}, bytes.NewReader(f.in()), &out); !o.Killed {
+					t.Fatalf("%+v %s", o, out.Bytes())
+				}
+				f.h.pointErr = nil
+				if j := f.journal(op1); !j.RDP.Rebuild || j.Phase != winproto.PhaseWriting {
+					t.Fatalf("%+v %+v", j, j.RDP)
+				}
+				if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != f.newSHA256 {
+					t.Fatalf("status %s", raw)
+				}
+				if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored || r.RDPKeyACLLeft {
+					t.Fatalf("%s", raw)
+				}
+				want := []string{"grant MY " + f.newSHA1, "revoke MY " + f.newSHA1}
+				if had {
+					want = nil
+				}
+				if f.value() != f.newSHA1 || f.readable(f.newSHA1) != had || !slices.Equal(f.aclLog(), want) ||
+					f.journal(op1).Phase != winproto.PhaseRestored {
+					t.Fatalf("value %s readable %v acl %v", f.value(), f.readable(f.newSHA1), f.aclLog())
+				}
+			})
+		}
+	}
+	t.Run("a restored rebuild whose value someone deleted", func(t *testing.T) {
+		f := newRDPFixture(t, false)
+		f.h.addCert("MY", f.nw.Cert.Raw, true)
+		f.setValue(f.newSHA1)
+		f.expect = f.newSHA256
+		f.rdpCommitted(op1, f.in())
+		if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", raw)
+		}
+		f.setValue("")
+		if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
+			t.Fatalf("status %s", raw)
+		}
+	})
+}
+
+// TestRDPMergedGrantIsNeverSilent (Task 4 review Minor 2, Ruling 27): a grant the KSP merged into an
+// existing NETWORK SERVICE ACE, which the exact-mask revoke cannot take apart, leaves the key readable;
+// the restore and the take-back after a failed grant then answer rdp_key_acl_left.
+func TestRDPMergedGrantIsNeverSilent(t *testing.T) {
+	setup := func(t *testing.T) *rdpFixture {
+		f := newRDPFixture(t, false)
+		f.h.addCert("MY", f.nw.Cert.Raw, true)
+		f.h.nsACEs = map[[2]string][]fakeACE{{"MY", f.newSHA1}: {{mask: 0x1}}}
+		f.h.mergeGrant = true
+		return f
+	}
+	t.Run("a restore", func(t *testing.T) {
+		f := setup(t)
+		f.rdpCommitted(op1, f.in())
+		_, r, raw := f.restore(op1, []string{}, []string{})
+		if r.Phase != winproto.PhaseRestored || !r.RDPKeyACLLeft || !f.readable(f.newSHA1) || !f.journal(op1).RDP.ACLLeft {
+			t.Fatalf("%s", raw)
+		}
+	})
+	t.Run("the take-back after a failed grant", func(t *testing.T) {
+		f := setup(t)
+		f.h.grantErrAfter = errors.New("ncrypt")
+		o, r, raw := f.rdpDeploy(op1, f.in())
+		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepGrantKeyRead || !r.RDPKeyACLLeft || f.value() != f.oldSHA1 {
+			t.Fatalf("%s", raw)
+		}
+	})
+	t.Run("the key cannot be read after the revoke", func(t *testing.T) {
+		f := newRDPFixture(t, false)
+		f.rdpCommitted(op1, f.in())
+		f.h.keyReadErr = errors.New("ncrypt")
+		if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored || !r.RDPKeyACLLeft {
+			t.Fatalf("%s", raw)
 		}
 	})
 }

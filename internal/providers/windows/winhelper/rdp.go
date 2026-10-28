@@ -243,7 +243,7 @@ func (t *deployTx) runRDP(in content, sec *secrets, current string) (any, error)
 		if err := h.SetRDPKeyRead(t.ctx, j.Store, j.NewSHA1, true); err != nil {
 			// Whatever part of the grant was done is taken back (only ACEs of the grant's own mask, so a
 			// NETWORK SERVICE ACE the key held before stays); the listener is untouched.
-			r.ACLLeft = h.SetRDPKeyRead(t.ctx, j.Store, j.NewSHA1, false) != nil
+			r.ACLLeft = revokeKeyRead(t.ctx, h, j.Store, j.NewSHA1)
 			return t.failUnbound(winproto.StepGrantKeyRead, winproto.ErrKeyACL)
 		}
 		if err := point(h, "rdp.granted"); err != nil {

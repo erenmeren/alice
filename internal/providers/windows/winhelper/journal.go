@@ -134,11 +134,11 @@ func (r rdpJournal) valid(phase string) bool {
 }
 
 // rdpNamesNew reports a listener value that is this operation's certificate: the new SHA-1, or, while
-// the operation is not committed, an absent value its rebuild deleted (an interrupted delete-then-set:
-// the restore sets the value back, iis-status names the new leaf). A committed operation's value
-// deleted later was deleted by someone else.
+// the operation is interrupted (not committed, not restored), an absent value its rebuild deleted (an
+// interrupted delete-then-set: the restore sets the value back, iis-status names the new leaf). A
+// committed or restored operation's value deleted later was deleted by someone else.
 func rdpNamesNew(j journal, value string) bool {
-	return value == j.NewSHA1 || (value == "" && j.RDP.Rebuild && j.Phase != winproto.PhaseCommitted)
+	return value == j.NewSHA1 || (value == "" && j.RDP.Rebuild && j.Phase != winproto.PhaseCommitted && j.Phase != winproto.PhaseRestored)
 }
 
 // rdpPreviousValue is the value a restore of an RDP journal writes back: "" (deleted) when it was absent.
@@ -273,7 +273,8 @@ func (j journal) valid(op string) bool {
 	case winproto.JournalKindRDP:
 		// One listener named in code, no http.sys record; the import store is My (Ruling 6).
 		if j.RDP == nil || j.CCS != nil || !j.RDP.valid(j.Phase) || j.Binding != winproto.RDPCanonical || j.Locator != (winproto.Locator{}) ||
-			!reflect.DeepEqual(j.Previous, winproto.SSLBinding{}) || j.Store != defaultStore || !winproto.ValidSHA1(j.PreviousSHA1) {
+			!reflect.DeepEqual(j.Previous, winproto.SSLBinding{}) || j.Store != defaultStore || !winproto.ValidSHA1(j.PreviousSHA1) ||
+			(j.RDP.Rebuild && j.PreviousSHA1 != j.NewSHA1) {
 			return false
 		}
 	default:

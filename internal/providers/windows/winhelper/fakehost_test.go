@@ -248,7 +248,12 @@ type fakeWriteHost struct {
 	nsACEs           map[[2]string][]fakeACE
 	keyReadErr       error
 	keyACLErr        func(grant bool) error
-	acl              []string
+	// mergeGrant makes a grant merge into the key's first NETWORK SERVICE allow ACE (its mask OR the
+	// grant's, as the KSP does, F21) instead of appending one; grantErrAfter fails a grant after it
+	// changed the DACL.
+	mergeGrant    bool
+	grantErrAfter error
+	acl           []string
 }
 
 // fakeCCSFile is one file of the fake CCS folder.
@@ -972,7 +977,12 @@ func (f *fakeWriteHost) SetRDPKeyRead(_ context.Context, store, sha1 string, gra
 	}
 	k := [2]string{store, sha1}
 	if grant {
-		f.nsACEs[k] = append(f.nsACEs[k], fakeACE{mask: fakeGrantMask})
+		i := slices.IndexFunc(f.nsACEs[k], func(a fakeACE) bool { return !a.deny })
+		if f.mergeGrant && i >= 0 {
+			f.nsACEs[k][i].mask |= fakeGrantMask
+		} else {
+			f.nsACEs[k] = append(f.nsACEs[k], fakeACE{mask: fakeGrantMask})
+		}
 	} else {
 		f.nsACEs[k] = slices.DeleteFunc(f.nsACEs[k], func(a fakeACE) bool { return !a.deny && a.mask == fakeGrantMask })
 	}
@@ -982,6 +992,9 @@ func (f *fakeWriteHost) SetRDPKeyRead(_ context.Context, store, sha1 string, gra
 	}
 	f.acl = append(f.acl, e)
 	f.log = append(f.log, "acl "+e)
+	if grant {
+		return f.grantErrAfter
+	}
 	return nil
 }
 
