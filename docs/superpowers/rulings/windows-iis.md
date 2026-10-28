@@ -2331,3 +2331,7 @@ Added during execution:
     possible (nil risk, per the review); the deploy dialog's summary follows the opening location's
     kind; "Select all bindings of this certificate" also selects CCS files (Task 8).
   - A cut `iis-dump` site list may leave a partial-site `win_ccs_unlinked` warning (W5-9) — closed by final review I1.
+  - `internal/inventory/drift_observe.go` builds the location to probe without its stored warnings (line 151, the
+    `IsFile` branch), so a cut CCS file with no servers is drift-observed as skipped where a deployment would end
+    `verify_unreachable` (final review I1). Read-only: the drift view understates. Found by the re-review of
+    `e0752599..1682b186` after the main gate had started; carried to the next small batch (coordinator ruling).
