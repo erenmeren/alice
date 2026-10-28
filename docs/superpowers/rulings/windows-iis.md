@@ -2726,6 +2726,8 @@ key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (
 - Verified by a TLS handshake on 3389 after the RDP security-layer negotiation (Tasks 1, 6; F22, F23): **met**. `helperproto.RDPNegotiate`, `tlsverify.TLSProber{RDP: true}`, `tls-probe --rdp` as the fallback; no CredSSP, no event 4625 (F23).
 - The key ACL's own review (Ruling 27): **met**. [Security review (W6)](#security-review-w6): 0 critical, 1 important (fixed), 2 minor (fixed); the final fix wave's re-review passed all five items.
 - Real Windows: runner run 4 (`98e265c5`, the code head of the fix wave) green on windows-2022 and windows-2025 with `windows-required` green.
+- Real Windows at the code head: runner run 6 (`5a1b0a59`, after the go-jose bump) green on both images with `windows-required` green; 6 of 8 runs used.
+- Final gates (Task 8): `E2E_PROJECT=alice-e2e-w6 ALICE_E2E_PORT=9983 make ci` exit 0 at `5a1b0a59` (lint, test, coverage with every floor met: windows 98.8, winhelper 97.2, winproto 100, helperproto 100, tlsverify 98.9, wintest 97.6, alice-fakewindows 93.4, inventory 89.2; vuln, secrets-scan, fs-scan, e2e 169 passed, 4 skipped, 0 failed; image-check and image-scan). ci.yml run 40673844627 at `5a1b0a59` green in every job, `stack` included. `make matrix-check MATRIXCHECK_FLAGS=-strict`: 368 IDs, 0 gaps, 0 pending. The leak scan (dir mode over the patch of `7432cfd5..98e265c5`, `.gitleaks.toml`): no leaks found.
 
 ## Owner items (W6)
 
