@@ -214,7 +214,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
 // isCCSFile: a file of a Windows server's Centralized Certificate Store (R68); it is spoken of as a file, not a binding.
 const isCCSFile = (l: CertificateLocation) => l.kind === 'win_ccs_file';
-// isRDPListener: the Remote Desktop listener RDP-Tcp of a Windows server (R69); one per server, its port in the locator.
+// isRDPListener: the Remote Desktop listener RDP-Tcp of a Windows server (R69); one per server, its port in details.port.
 const isRDPListener = (l: CertificateLocation) => l.kind === 'win_rdp';
 
 // APPLICATION_NAMES are the proper names of the applications the helper's table knows (details.application); they
@@ -339,7 +339,7 @@ function LocationRow({
               {a}
             </Code>
           ))}
-          {rdp && l.locator?.port !== undefined && <Code translate="no">{String(l.locator.port)}</Code>}
+          {rdp && typeof l.details?.port === 'number' && <Code translate="no">{String(l.details.port)}</Code>}
         </Stack>
       </Table.Td>
       <Table.Td>

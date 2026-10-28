@@ -31,19 +31,26 @@ func newRDPFixture(t *testing.T) *rdpFixture {
 	f := &rdpFixture{winDeployFixture: newWinDeployFixture(t)}
 	h := f.h
 	f.server = winTarget(t, h, f.admin, "iis-02").ID
-	loc := providers.CertLocation{Kind: providers.LocationWinRDP, CertPath: "rdp/RDP-Tcp", Supported: true,
-		Locator: providers.Locator{"type": "rdp", "listener": "RDP-Tcp", "port": 3389},
-		Details: map[string]any{"store": "Remote Desktop", "cert_sha1": thumbprint(f.old), "self_signed": true, "enabled": true,
-			"security_layer": 2, "nla": true, "cert_template": ""},
-		Servers: []providers.CertServer{}}
-	_, err := h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK,
-		Certificates: []providers.DiscoveredCertificate{{Location: loc, PEMChain: f.old.FullchainPEM, FileSHA256: derSHA(f.old)}}})
-	require.NoError(t, err)
+	f.scan(3389)
 	l := byPath(t, h, f.server, false)["rdp/RDP-Tcp"]
 	require.True(t, l.Supported)
 	require.Equal(t, providers.LocationWinRDP, l.Kind)
 	f.rdp = l.ID
 	return f
+}
+
+// scan reconciles iis-02's discovery: its listener on port, serving old as its self-signed certificate.
+func (f *rdpFixture) scan(port int) inventory.ReconcileSummary {
+	f.h.t.Helper()
+	loc := providers.CertLocation{Kind: providers.LocationWinRDP, CertPath: "rdp/RDP-Tcp", Supported: true,
+		Locator: providers.Locator{"type": "rdp", "listener": "RDP-Tcp"},
+		Details: map[string]any{"port": port, "store": "Remote Desktop", "cert_sha1": thumbprint(f.old), "self_signed": true,
+			"enabled": true, "security_layer": 2, "nla": true, "cert_template": ""},
+		Servers: []providers.CertServer{}}
+	sum, err := f.h.svc.Reconcile(f.h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK,
+		Certificates: []providers.DiscoveredCertificate{{Location: loc, PEMChain: f.old.FullchainPEM, FileSHA256: derSHA(f.old)}}})
+	require.NoError(f.h.t, err)
+	return sum
 }
 
 func (f *rdpFixture) details() map[string]any {
@@ -242,4 +249,22 @@ func TestRDPObservationReadsAutoenroll(t *testing.T) {
 	o, err = h.svc.LocationObservation(h.ctx, f.rdp)
 	require.NoError(t, err)
 	assert.True(t, o.RDPAutoenroll())
+}
+
+// Final review I1 (Rulings 3 and 16 amended): the listener's port is a detail, not its identity. A scan that reports
+// another port updates the same row's details; it is never skipped as a locator conflict.
+func TestRDPPortChangeUpdatesTheLocation(t *testing.T) {
+	f := newRDPFixture(t)
+	assert.InDelta(t, 3389, f.details()["port"], 0)
+	sum := f.scan(13389)
+	assert.Zero(t, sum.SkippedLocations)
+	assert.Equal(t, 1, sum.Locations)
+	assert.Zero(t, sum.NewLocations)
+	locs := byPath(t, f.h, f.server, false)
+	require.Len(t, locs, 1)
+	assert.Equal(t, f.rdp, locs["rdp/RDP-Tcp"].ID, "the same row")
+	assert.InDelta(t, 13389, f.details()["port"], 0)
+	var locator []byte
+	require.NoError(t, f.h.db.Owner.QueryRow(f.h.ctx, "SELECT locator FROM certificate_locations WHERE id = $1", f.rdp).Scan(&locator))
+	assert.JSONEq(t, `{"type":"rdp","listener":"RDP-Tcp"}`, string(locator))
 }

@@ -50,7 +50,8 @@ func (s *session) discoverRDP(ctx context.Context) ([]providers.DiscoveredCertif
 }
 
 // convertRDP turns an rdp-dump answer into the listener's location (W6 Rulings 3-5): none without the RDP-Tcp key;
-// one of kind win_rdp otherwise, cert_path rdp/RDP-Tcp, locator {type rdp, listener RDP-Tcp, port}, no servers. Its
+// one of kind win_rdp otherwise, cert_path rdp/RDP-Tcp, locator {type rdp, listener RDP-Tcp}, no servers, the port in
+// details.port (a detail, refreshed by every scan: a port in the stored locator would freeze the location). Its
 // certificate is the one the value names in My (absent there: cert_missing; without a usable key: its key problem),
 // or while the value is absent the single certificate of Remote Desktop (self_signed; none or two:
 // win_rdp_cert_unknown). Remote Desktop off is win_rdp_disabled, security layer 0 win_rdp_no_tls; a policy's
@@ -66,8 +67,8 @@ func convertRDP(d winproto.RDPDumpResponse) ([]providers.DiscoveredCertificate, 
 	}
 	template := cleanValue(d.CertTemplate, winproto.MaxText)
 	loc := providers.CertLocation{Kind: providers.LocationWinRDP, CertPath: winproto.RDPCanonical,
-		Locator: providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName, "port": d.Port},
-		Servers: []providers.CertServer{}, Details: map[string]any{"enabled": d.Enabled, "security_layer": d.SecurityLayer,
+		Locator: providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName},
+		Servers: []providers.CertServer{}, Details: map[string]any{"port": d.Port, "enabled": d.Enabled, "security_layer": d.SecurityLayer,
 			"nla": d.NLA, "cert_template": template, "self_signed": false}}
 	if template != "" {
 		loc.Warnings = append(loc.Warnings, winproto.WarnRDPAutoenroll)
@@ -110,18 +111,18 @@ func convertRDP(d winproto.RDPDumpResponse) ([]providers.DiscoveredCertificate, 
 	return []providers.DiscoveredCertificate{dc}, nil
 }
 
-// rdpPortOf is a win_rdp location's port: the locator's (Alice deploys to RDP-Tcp only), 0 for a locator Alice does
-// not deploy to.
+// rdpPortOf is a win_rdp location's port: details.port, the last scan's (Alice deploys to RDP-Tcp only), 0 for a
+// locator Alice does not deploy to or a port outside 1-65535.
 func rdpPortOf(loc providers.CertLocation) int {
 	typ, _ := loc.Locator["type"].(string)
 	listener, _ := loc.Locator["listener"].(string)
 	if typ != winproto.LocatorRDP || listener != winproto.RDPListenerName {
 		return 0
 	}
-	return locatorPort(loc.Locator["port"])
+	return locatorPort(loc.Details["port"])
 }
 
-// rdpEndpoints is the listener's endpoint (W6 Ruling 16): the locator's port (the Administrator's replaces it), SNI the
+// rdpEndpoints is the listener's endpoint (W6 Ruling 16): details.port (the Administrator's replaces it), SNI the
 // Administrator's or tlsverify.SNIFor of the SANs (RDP serves one certificate whatever the SNI; the name is the R51
 // trust check's), the helper's probe of 127.0.0.1, listening on every address. None for a locator Alice does not
 // deploy to.

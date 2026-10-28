@@ -796,8 +796,8 @@ export function windowsRDPFixture(o: Partial<CertificateLocation> = {}): Certifi
     cert_path: 'rdp/RDP-Tcp',
     servers: [],
     kind: 'win_rdp',
-    locator: { type: 'rdp', listener: 'RDP-Tcp', port: 3389 },
-    details: { store: 'Remote Desktop', cert_sha1: 'ef'.repeat(20), self_signed: true, enabled: true, security_layer: 2, nla: true, cert_template: '' },
+    locator: { type: 'rdp', listener: 'RDP-Tcp' },
+    details: { port: 3389, store: 'Remote Desktop', cert_sha1: 'ef'.repeat(20), self_signed: true, enabled: true, security_layer: 2, nla: true, cert_template: '' },
     ...o,
   });
 }

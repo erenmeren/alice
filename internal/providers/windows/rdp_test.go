@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -53,8 +54,13 @@ func newREnvOf(t *testing.T, own *pki.Leaf) *renv {
 }
 
 func rdpLoc(port int, details map[string]any) providers.CertLocation {
+	details = maps.Clone(details)
+	if details == nil {
+		details = map[string]any{}
+	}
+	details["port"] = port
 	return providers.CertLocation{Kind: providers.LocationWinRDP, CertPath: winproto.RDPCanonical, Supported: true,
-		Locator: providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName, "port": port},
+		Locator: providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName},
 		Servers: []providers.CertServer{}, Details: details}
 }
 
@@ -249,7 +255,9 @@ func TestConvertRDP(t *testing.T) {
 			l := c.Location
 			assert.Equal(t, providers.LocationWinRDP, l.Kind)
 			assert.Equal(t, winproto.RDPCanonical, l.CertPath)
-			assert.Equal(t, providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName, "port": 3389}, l.Locator)
+			assert.Equal(t, providers.Locator{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName}, l.Locator,
+				"the port is a detail, never the location's identity (final review I1)")
+			assert.Equal(t, 3389, l.Details["port"])
 			assert.Equal(t, tc.unsupported, l.Unsupported)
 			assert.Equal(t, tc.problem, l.Problem)
 			assert.Equal(t, tc.keyProblem, l.KeyProblem)
@@ -377,7 +385,7 @@ func TestRDPDeployOutcomeTable(t *testing.T) {
 			})
 		}, refused(ReasonHelperOutdated, false)},
 		{"a locator Alice does not deploy to", func(_ *testing.T, _ *renv, _ pki.Leaf, req *providers.DeployRequest) {
-			req.Location.Locator = providers.Locator{"type": winproto.LocatorRDP, "listener": "RDP-Other", "port": rdpPort}
+			req.Location.Locator = providers.Locator{"type": winproto.LocatorRDP, "listener": "RDP-Other"}
 		}, want{result: providers.DeployNoChange, reason: ReasonLocationUnsupported, errCode: ReasonLocationUnsupported, serves: "old", noDeploySent: true}},
 
 		{"key_acl: the grant failed, restored by the helper", func(_ *testing.T, r *renv, _ pki.Leaf, _ *providers.DeployRequest) { r.model.FailKeyACL(true) },

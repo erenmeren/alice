@@ -956,9 +956,10 @@ The answer is `winproto.DeployResponse` with `Store` empty, `AliceImported` fals
 (Amendment, R69, phase W6; design §13 W6 and §21; rulings `docs/superpowers/rulings/windows-iis.md` "W6 (R69)".)
 
 - **One location per server.** The listener `RDP-Tcp` (`HKLM\SYSTEM\CurrentControlSet\Control\Terminal
-  Server\WinStations\RDP-Tcp`) is a location of kind `win_rdp`: locator `{"type":"rdp","listener":"RDP-Tcp","port":<PortNumber>}`,
+  Server\WinStations\RDP-Tcp`) is a location of kind `win_rdp`: locator `{"type":"rdp","listener":"RDP-Tcp"}`,
   `cert_path` the canonical text `rdp/RDP-Tcp` (the UI shows "Remote Desktop (RDP-Tcp)" and the port), `key_path`
-  empty, `servers` `[]`. Details: `store` (`MY`, or `Remote Desktop` for the self-signed certificate), `cert_sha1`,
+  empty, `servers` `[]`. Details: `port` (`PortNumber`; a detail refreshed by every scan, not part of the locator, so a
+  changed port updates the same location), `store` (`MY`, or `Remote Desktop` for the self-signed certificate), `cert_sha1`,
   `self_signed`, `enabled`, `security_layer` (0, 1 or 2), `nla`, `cert_template`. Other WinStations, RD Gateway, RD
   Web Access, RD Connection Broker and RemoteApp certificates are not read. A server whose `RDP-Tcp` key is absent has
   no `win_rdp` location; a port outside 1-65535 leaves the location out with `locations_dropped`.
@@ -1028,7 +1029,7 @@ The answer is `winproto.DeployResponse` with `Store` `MY`, `AliceImported` and `
 `rdp_key_acl_left` when a take-back left NETWORK SERVICE able to read the key. `OUTCOME_UNKNOWN` follows the first
 durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served after at most 17 ms).
 
-- **Verification.** One endpoint: the locator's port (the Administrator's port replaces it), `Addr` `127.0.0.1`, SNI
+- **Verification.** One endpoint: `details.port`, the last scan's (the Administrator's port replaces it), `Addr` `127.0.0.1`, SNI
   the Administrator's or `tlsverify.SNIFor(nil, sans)` (Remote Desktop serves one certificate whatever the SNI; the
   name is the R51 trust check's). Alice's probe is `tlsverify.TLSProber{RDP: true}`; when Alice cannot reach the port,
   the helper's `tls-probe --rdp` of `127.0.0.1` decides. Both first run `helperproto.RDPNegotiate`: the 19-byte X.224

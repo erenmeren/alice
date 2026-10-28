@@ -295,18 +295,21 @@ func TestRDPEndpoints(t *testing.T) {
 	assert.Equal(t, []tlsverify.Endpoint{{Port: 13389, SNI: "admin.example.test", Addr: "127.0.0.1"}},
 		Endpoints(loc, providers.VerifyOptions{Port: 13389, SNI: "admin.example.test", Address: "192.0.2.7"}, []string{"rdp.example.test"}))
 	stored := rdpLoc(0, map[string]any{})
-	stored.Locator["port"] = json.Number("3389") // the locator as inventory stored it
+	stored.Details["port"] = float64(3389) // the details as inventory decodes them
 	assert.Equal(t, []tlsverify.Endpoint{{Port: 3389, SNI: "rdp.example.test", Addr: "127.0.0.1"}},
 		Endpoints(stored, providers.VerifyOptions{}, []string{"rdp.example.test"}))
 	for _, bad := range []providers.Locator{
-		{"type": winproto.LocatorRDP, "listener": "RDP-Other", "port": 3389},
-		{"type": winproto.BindingIPPort, "listener": winproto.RDPListenerName, "port": 3389},
-		{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName, "port": 0},
+		{"type": winproto.LocatorRDP, "listener": "RDP-Other"},
+		{"type": winproto.BindingIPPort, "listener": winproto.RDPListenerName},
 	} {
 		l := rdpLoc(3389, map[string]any{})
 		l.Locator = bad
 		assert.Empty(t, Endpoints(l, providers.VerifyOptions{}, []string{"rdp.example.test"}), "%v", bad)
 	}
+	noPort := rdpLoc(0, map[string]any{})
+	assert.Empty(t, Endpoints(noPort, providers.VerifyOptions{}, []string{"rdp.example.test"}), "port 0")
+	delete(noPort.Details, "port")
+	assert.Empty(t, Endpoints(noPort, providers.VerifyOptions{}, []string{"rdp.example.test"}), "no port")
 }
 
 // Review Focus 4 and W6 Ruling 16: Alice cannot reach the listener's port (a firewall that admits administrators

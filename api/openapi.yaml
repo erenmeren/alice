@@ -8980,7 +8980,8 @@ components:
             R59. The location's kind: a certificate file (server_file), or a Windows http.sys SSL binding, a BIG-IP
             client SSL profile entry, a Kubernetes TLS Secret (reserved for the targets that report them), or a PFX file
             of a Windows server's Centralized Certificate Store (win_ccs_file, R68), or the Remote Desktop listener RDP-Tcp
-            of a Windows server (win_rdp, R69; cert_path rdp/RDP-Tcp).
+            of a Windows server (win_rdp, R69; cert_path rdp/RDP-Tcp, locator {type rdp, listener RDP-Tcp}, the port in
+            details.port).
         locator:
           description: >-
             R59. The identity of a location that is not a file (a flat object of short strings, integers and booleans);
