@@ -2435,7 +2435,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
 of Task 4's report (Ruling 14 amended, below).
 
-### Runner runs used (6 of 8)
+### Runner runs used (7 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -2445,6 +2445,7 @@ of Task 4's report (Ruling 14 amended, below).
 | 4 | <https://github.com/erenmeren/alice/actions/runs/40667566229> | `98e265c5` | **pass / pass** | The code head after the final review fixes. `windows-required` green; every RDP real test (with the exportable-key refusal in `TestRealRDPKeyReadForNetworkService`), the DACL bounds test, `TestFidelityRDP` and `TestRealRunnerIsClean` pass on both images |
 | 5 | <https://github.com/erenmeren/alice/actions/runs/40671263696> | `ad9b7ee4` | **pass / pass** | After the flaky-test fix `f229223e` (a Windows-paths change): `windows-required` green, every RDP real test and `TestFidelityRDP` pass on both images |
 | 6 | <https://github.com/erenmeren/alice/actions/runs/40673844653> | `5a1b0a59` | **pass / pass** | After the go-jose bump `e656143d` (`go.mod` is a Windows path): `windows-required` green on both images |
+| 7 | <https://github.com/erenmeren/alice/actions/runs/40685266649> | `b2c730c4` | **pass / pass** | A documents-only push (the final gates record). The Windows legs ran anyway: a branch push is diffed against `main`, not against its previous push, so every push of a branch that touches a Windows path spends a run. `windows-required` green |
 
 ## Rulings made during execution (W6)
 
@@ -2726,7 +2727,7 @@ key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (
 - Verified by a TLS handshake on 3389 after the RDP security-layer negotiation (Tasks 1, 6; F22, F23): **met**. `helperproto.RDPNegotiate`, `tlsverify.TLSProber{RDP: true}`, `tls-probe --rdp` as the fallback; no CredSSP, no event 4625 (F23).
 - The key ACL's own review (Ruling 27): **met**. [Security review (W6)](#security-review-w6): 0 critical, 1 important (fixed), 2 minor (fixed); the final fix wave's re-review passed all five items.
 - Real Windows: runner run 4 (`98e265c5`, the code head of the fix wave) green on windows-2022 and windows-2025 with `windows-required` green.
-- Real Windows at the code head: runner run 6 (`5a1b0a59`, after the go-jose bump) green on both images with `windows-required` green; 6 of 8 runs used.
+- Real Windows at the code head: runner run 6 (`5a1b0a59`, after the go-jose bump) green on both images with `windows-required` green; 7 of 8 runs used (run 7, a documents-only push at `b2c730c4`, is green too).
 - Final gates (Task 8): `E2E_PROJECT=alice-e2e-w6 ALICE_E2E_PORT=9983 make ci` exit 0 at `5a1b0a59` (lint, test, coverage with every floor met: windows 98.8, winhelper 97.2, winproto 100, helperproto 100, tlsverify 98.9, wintest 97.6, alice-fakewindows 93.4, inventory 89.2; vuln, secrets-scan, fs-scan, e2e 169 passed, 4 skipped, 0 failed; image-check and image-scan). ci.yml run 40673844627 at `5a1b0a59` green in every job, `stack` included. `make matrix-check MATRIXCHECK_FLAGS=-strict`: 368 IDs, 0 gaps, 0 pending. The leak scan (dir mode over the patch of `7432cfd5..98e265c5`, `.gitleaks.toml`): no leaks found.
 
 ## Owner items (W6)
