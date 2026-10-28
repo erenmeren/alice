@@ -2435,13 +2435,14 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
 of Task 4's report (Ruling 14 amended, below).
 
-### Runner runs used (3 of 8)
+### Runner runs used (4 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
 | 1 | <https://github.com/erenmeren/alice/actions/runs/40644188468> | `90c2c8cf` | fail / fail | Only `TestRealRDPKeyReadForNetworkService` failed (both images alike). F19: RDP already on (`fDenyTSConnections` 0, TermService running, manual, as NetworkService), port 3389, `SecurityLayer` 2, NLA 1, policy key holds only `KeepAliveEnable`/`KeepAliveInterval`, one certificate in `Remote Desktop`, served while the value is absent. F20: `rdp-deploy` served after 10-13 ms, the delete after 6-17 ms; served chain 2 = `built_chain_length` 2; a same-value rewrite does not rebuild the served chain (20 s); a certificate only in `Remote Desktop` is not served when named (the self-signed one is). F21: without the grant the handshake is reset (Schannel 36870, 0x8009030D, `svchost[TermService]`); after the grant it is served at once; the KSP stores `GENERIC_READ` as `0x80120089`, so the revoke's exact-mask match found nothing; it also normalises a written `0x1` to `0x80000001` and merges a new NETWORK SERVICE allow ACE into an existing one. F22: 19-byte confirm, `RDP_NEG_RSP`, `selectedProtocol` 2 with NLA on and off. F23: 0 events 4625 after ten probes (Logon auditing on). `TestRealRDPSharedWithBinding` and `TestRealRunnerIsClean` passed |
 | 2 | <https://github.com/erenmeren/alice/actions/runs/40646627907> | `2e7415c1` | fail / fail | Only `TestFidelityRDP` failed, on its own assertions (it read the error code from `error`, not `code`; it restored an older operation after a newer one, which both hosts answer `SUPERSEDED`): every answer compared equal on both hosts. F21 fixed: the grant stored as `(A;;0x80120089;;;NS)`, the revoke gives F4's DACL back byte for byte; a NETWORK SERVICE deny ACE, another trustee's allow ACE and a NETWORK SERVICE `DELETE` allow ACE survive grant and revoke (no merge with a `DELETE` ACE). F19: `fDenyTSConnections` 1 stops the listener within 3-253 ms, 0 brings it back within 255 ms, no restart. F20: a delete then set of the value rebuilds the served chain (2 after 9-10 ms); a same-value rewrite still does not (20 s) |
 | 3 | <https://github.com/erenmeren/alice/actions/runs/40648774432> | `8d668f06` | **pass / pass** | `windows-required` green; every RDP real test and `TestFidelityRDP` pass on both images; F19-F23 as in run 2 (pickups 7-15 ms) |
+| 4 | <https://github.com/erenmeren/alice/actions/runs/40667566229> | `98e265c5` | **pass / pass** | The code head after the final review fixes. `windows-required` green; every RDP real test (with the exportable-key refusal in `TestRealRDPKeyReadForNetworkService`), the DACL bounds test, `TestFidelityRDP` and `TestRealRunnerIsClean` pass on both images |
 
 ## Rulings made during execution (W6)
 
