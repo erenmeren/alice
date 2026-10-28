@@ -2846,3 +2846,4 @@ Added during execution:
   - `TestWindowsRDPCrashTable` runs only with the previous certificate in `My`, not a self-signed `previous_absent`
     (Task 6).
   - `discover.go:51` appends to a slice it may alias (harmless; Task 6).
+- **Minors and residual 7 settled in R70** (`docs/superpowers/rulings/fixes-2026-10-28.md`).

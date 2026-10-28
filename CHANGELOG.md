@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — Fixes batch 3 (R70)
+
+**Changed**
+- A deployment to the Remote Desktop listener whose certificate's private key denies NETWORK SERVICE or Everyone the
+  read right is refused at **Allow NETWORK SERVICE to read the key** (`ALC-WIN-0023`) before anything changes: no
+  access entry is added and the listener keeps its certificate. Before, the listener was pointed to a certificate
+  Remote Desktop could not use and the deployment rolled back.
+- A Windows server whose helper is replaced by one below 1.2.0 keeps its Remote Desktop listener listed as the last
+  1.2.0 scan left it, instead of marking it missing; a deployment to it is refused as the helper being too old.
+- Setting the CCS password on a server that is not Windows answers 409 (`ALC-WIN-0011`) before the password rule is
+  checked; it was 422 (`ALC-WIN-0019`) when the password also broke the rule.
+- `make secrets-scan` also scans the history of a git worktree and fails when no commit was scanned;
+  `make actionlint` runs the pinned shellcheck image over the workflows' `run:` scripts (needs Docker).
+
+**Fixed**
+- The e-mails about the Remote Desktop listener name the listener in their reason line, not a binding; the notice that
+  automatic deployment of an ACME certificate stopped names the listener when its last failure was the listener.
+- A Centralized Certificate Store file whose folder listing was cut (too many files to read) is never recorded as
+  checked by reading it back alone: the drift check keeps the warning, and such a deployment success is refused.
+- The deploy dialog names the application of a binding another application owns, shows one summary per kind of place
+  when a certificate's places are of several kinds, and says **Select all places of this certificate** when the group
+  holds CCS files as well as bindings.
+- The CCS password panel says that Alice holds the store's password once it is set and sends one request per submit.
+
+Rulings: `docs/superpowers/rulings/fixes-2026-10-28.md`. No migration, no new error code; the helper stays 1.2.0.
+
 ## Unreleased — Windows servers (Remote Desktop certificate, R69)
 
 **Added**

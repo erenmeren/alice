@@ -2332,7 +2332,7 @@ None of these files holds key material.
 
 **Meaning.** Remote Desktop runs as NETWORK SERVICE, which must be able to read the certificate's private key. The helper could not give it that access, so it did not point the listener to the new certificate; the listener was not changed, and any access it had added was taken back. (HTTP 409, reason `windows.rdp_key_acl_failed`.)
 
-**Likely cause.** The key's security settings could not be read or written in the server's machine key store, for example because another program holds or protects the key.
+**Likely cause.** The key's security settings could not be read or written in the server's machine key store, for example because another program holds or protects the key. Or the key's access list already holds an entry that denies NETWORK SERVICE or Everyone the read right: the helper then refuses before adding anything (remove that entry under **Manage Private Keys**, then deploy again).
 
 **What to do.** Check the server's Application event log and its machine key store, then deploy again. The deployment ends **Failed, restored** although the listener was never changed; the deployment history in Alice shows each step, and the step **Allow NETWORK SERVICE to read the key** says if the access could not be taken back.
 

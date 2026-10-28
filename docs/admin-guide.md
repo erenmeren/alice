@@ -1532,11 +1532,7 @@ server once with the PowerShell setup script that **Add server** shows for **Win
 - **What a deployment to the Remote Desktop listener does.** The helper imports the intermediate certificates into
   `CA` and the certificate, with a private key that cannot be exported, into **Personal** (`My`). Remote Desktop runs
   as NETWORK SERVICE, so the helper then gives NETWORK SERVICE read access to that one key (one entry of the key's
-  access list, nothing else changes; the key still cannot be exported) unless it can already read it. Alice never
-  gives NETWORK SERVICE access to a key that can be exported: when the certificate is already in **Personal** with an
-  exportable key, or one whose export policy the helper cannot read, the deployment is refused before anything
-  changes (`windows.key_unusable`). Replace that copy, or remove it and import the certificate again without marking
-  the key exportable, then deploy again. Then it points
+  access list, nothing else changes; the key still cannot be exported) unless it can already read it. Then it points
   the listener to the certificate (the registry value `SSLCertificateSHA1Hash` of `RDP-Tcp`, the only value it writes)
   and reads it back. The deployment's page shows **Import the chain**, **Import the certificate**, **Allow NETWORK
   SERVICE to read the key**, **Point the listener to the certificate** and **Verify**. Windows uses the new certificate
@@ -1551,6 +1547,13 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   access Alice added is taken back. If it could not be taken back, the step says so: remove the NETWORK SERVICE entry
   from the key's access list by hand (certificate's **Manage Private Keys** in the certificates console). A
   deployment whose key access could not be given ends **Failed, restored** with the listener untouched (`ALC-WIN-0023`).
+  Two keys are refused before anything changes. Alice never gives NETWORK SERVICE access to a key that can be
+  exported: when the certificate is already in **Personal** with an exportable key, or one whose export policy the
+  helper cannot read, the deployment is refused (`windows.key_unusable`); replace that copy, or remove it and import
+  the certificate again without marking the key exportable, then deploy again. And a key whose access list already
+  denies NETWORK SERVICE or Everyone the read right ends the deployment at **Allow NETWORK SERVICE to read the key**
+  with `ALC-WIN-0023`: no entry is added and the listener keeps the certificate it had; remove that deny entry
+  (**Manage Private Keys**) or deploy another certificate.
   Each deployment is event **1005** in the Application log (`operation <operation> rdp RDP-Tcp old <sha256> new
   <sha256> key_read_granted <true|false>`), a restore **1002**. If Remote Desktop stops accepting connections after a change, sign in through the
   server's console or over SSH: see [troubleshooting.md](troubleshooting.md#deployments).
@@ -1607,7 +1610,10 @@ server once with the PowerShell setup script that **Add server** shows for **Win
 - **Helper versions.** 1.0.0 is the first released helper, 1.1.0 adds the Centralized Certificate Store and 1.2.0
   the Remote Desktop certificate. Alice manages the Remote Desktop certificate with a helper of 1.2.0 or later,
   manages CCS files with a helper of 1.1.0 or later, deploys with a helper of 0.2.0 or later and cleans up with 0.3.0
-  or later, so a server with an older helper keeps working with what it supports. When you update Alice,
+  or later, so a server with an older helper keeps working with what it supports. When a server's helper is replaced
+  by one below 1.2.0, its Remote Desktop listener stays listed as the last 1.2.0 scan left it (it is not marked
+  missing) and a deployment to it is refused as the helper being too old, until a 1.2.0 helper scans the server
+  again. When you update Alice,
   check the new package's signature and the helper's checksum, copy the helper to the Windows servers, then update
   Alice, as the operator guide's [Updates](operator-guide.md#updates) describes.
 - **What is tested on real Windows.** Every change to the helper and the Windows provider, every night and every

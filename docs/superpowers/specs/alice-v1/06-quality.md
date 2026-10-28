@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10; fixes batch 2, R67: FX-07..FX-12, §24.11). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10; fixes batch 2, R67: FX-07..FX-12, §24.11; fixes batch 3, R70: WIN-65..WIN-67, §24.7). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -349,11 +349,12 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
 
-### 24.7 Windows servers (R60, R61, R62, R63, R68, R69)
+### 24.7 Windows servers (R60, R61, R62, R63, R68, R69, R70)
 
 (Phase W1, read only: WIN-01..WIN-14; phase W2, deployment, verification and rollback (R61): WIN-15..WIN-28;
 phase W3, drift and cleanup (R62): WIN-29..WIN-38; phase W4, real-Windows CI and release (R63): WIN-39..WIN-45; phase W5, Centralized Certificate Store (R68):
-WIN-46..WIN-55; phase W6, Remote Desktop certificate (R69): WIN-56..WIN-64;
+WIN-46..WIN-55; phase W6, Remote Desktop certificate (R69): WIN-56..WIN-64; fixes batch 3, the deferred minors
+(R70, rulings `docs/superpowers/rulings/fixes-2026-10-28.md`): WIN-65..WIN-67;
 design
 `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
 `docs/superpowers/rulings/windows-iis.md`.) The emulated host `internal/providers/windows/wintest` runs the helper's own
@@ -425,6 +426,9 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | WIN-62 | Drift of the listener and its repair; RDP off refuses; cleanup keeps a certificate the listener or a binding names; the RDP e-mails | A listener re-pointed or its value deleted outside Alice is drifted (`binding_repointed`) and repaired by a `drift_repair` deployment guarded by the token; a certificate removed from `My` or a broken key is reported with its cause, never repaired; a deployment to a listener turned off is refused with nothing changed (`ALC-WIN-0021`); W3's cleanup keeps a certificate the listener or a binding names (`rdp`) and never removes the self-signed one; the `rollback_failed`, `outcome_unknown` and `restored_unverified` e-mails have RDP texts naming the listener, the previous certificate and the console or SSH as the way in, the others carry the RDP note |
 | WIN-63 | Helper 1.2.0 on real Windows: the emulator matches; F19-F23; the runner is left clean | `TestFidelityRDP` gives equal answers on both hosts; on windows-2022 and windows-2025 the listener is found as F19 says, a raw write and a delete of the value are served at the next fresh handshake (F20), the handshake needs the grant and the revoke gives F4's DACL back byte for byte (F21), the negotiation answers as F22 says and ten probes with NLA on log no 4625 (F23); a certificate shared with an http.sys binding is kept; `winproto.Version` is `1.2.0` and `RDPMinVersion` `1.2.0`; the runner is left with the value absent, RDP and NLA as found and no fixture |
 | WIN-64 | The RDP journey in the browser, in English and Turkish | The server page shows "Remote Desktop (RDP-Tcp)" with its self-signed certificate; a deployment commits and verifies with the steps import chain, import certificate, grant key read, set listener and verify; with stale TLS a deployment rolls back to the previous certificate; the server page passes the accessibility check |
+| WIN-65 | An RDP deployment to a certificate whose key has a read-deny ACE for NETWORK SERVICE or Everyone | Ends at `grant_key_read` with `windows.rdp_key_acl_failed`; no ACE added, the listener's value as found |
+| WIN-66 | A scan of a Windows server whose helper is below 1.2.0, with a stored RDP listener | The listener is not marked missing; a binding the scan no longer lists is |
+| WIN-67 | A Windows location whose stored warnings carry `list_truncated` (a cut CCS file with no servers) | The drift probe carries the warnings (never observed as skipped); a skipped deployment success is refused; an uncut unlinked file still skips |
 
 ### 24.8 Hardening batch 1 (R64)
 
