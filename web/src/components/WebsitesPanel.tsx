@@ -83,8 +83,15 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const asOf = websitesAsOf(items);
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
   const windows = isWindows(target.type);
-  // R68: a Windows server lists the files of its Centralized Certificate Store beside its bindings.
-  const placeColumn = !windows ? 'locations.columns.file' : items.some(isCCSFile) ? 'locations.columns.bindingOrFile' : 'locations.columns.binding';
+  // R68: a Windows server lists the files of its Centralized Certificate Store beside its bindings; R69: and its Remote
+  // Desktop listener, so the column is then a place.
+  const placeColumn = !windows
+    ? 'locations.columns.file'
+    : items.some(isRDPListener)
+      ? 'locations.columns.place'
+      : items.some(isCCSFile)
+        ? 'locations.columns.bindingOrFile'
+        : 'locations.columns.binding';
   const row = (l: CertificateLocation) => (
     <LocationRow
       key={l.id}
@@ -184,7 +191,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
                         )}
                         {g.cert && <Expiry notAfter={g.cert.not_after} />}
                         <Text size="sm" c="dimmed">
-                          {t(g.items.some(isCCSFile) ? 'locations.group.countPlaces' : 'locations.group.count', { count: g.items.length })}
+                          {t(g.items.some(isRDPListener) ? 'locations.group.countAny' : g.items.some(isCCSFile) ? 'locations.group.countPlaces' : 'locations.group.count', { count: g.items.length })}
                         </Text>
                       </Group>
                     </Table.Th>
@@ -207,6 +214,8 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
 // isCCSFile: a file of a Windows server's Centralized Certificate Store (R68); it is spoken of as a file, not a binding.
 const isCCSFile = (l: CertificateLocation) => l.kind === 'win_ccs_file';
+// isRDPListener: the Remote Desktop listener RDP-Tcp of a Windows server (R69); one per server, its port in the locator.
+const isRDPListener = (l: CertificateLocation) => l.kind === 'win_rdp';
 
 // APPLICATION_NAMES are the proper names of the applications the helper's table knows (details.application); they
 // are names, not words, so they are the same in every language.
@@ -261,6 +270,7 @@ function LocationRow({
   const cert = l.certificate;
   const windows = isWindows(target.type);
   const ccs = isCCSFile(l);
+  const rdp = isRDPListener(l);
   // The certificate's and the key's problem, each worded for what it is (a Windows binding has a store, not files; a CCS
   // file is one file that holds the key too).
   const problems =
@@ -287,7 +297,14 @@ function LocationRow({
               </Text>
             ),
           )}
-          {names.length === 0 ? (
+          {rdp ? (
+            <>
+              <Text size="sm">{t('locations.rdp.name')}</Text>
+              <Text size="xs" c="dimmed">
+                {t('locations.rdp.help')}
+              </Text>
+            </>
+          ) : names.length === 0 ? (
             sections.length === 0 && <Text size="sm">{t(windows ? 'locations.noSite' : 'locations.noWebsite')}</Text>
           ) : (
             <Group gap={4}>
@@ -322,6 +339,7 @@ function LocationRow({
               {a}
             </Code>
           ))}
+          {rdp && l.locator?.port !== undefined && <Code translate="no">{String(l.locator.port)}</Code>}
         </Stack>
       </Table.Td>
       <Table.Td>
@@ -365,7 +383,13 @@ function LocationRow({
                 {t('locations.importedByAlice')}
               </StatusBadge>
             )}
+            {rdp && l.details?.self_signed === true && (
+              <StatusBadge tone="neutral" size="sm" testId="rdp-self-signed">
+                {t('locations.rdp.selfSigned')}
+              </StatusBadge>
+            )}
           </Group>
+          {rdp && typeof l.details?.nla === 'boolean' && <Text size="xs">{t(l.details.nla ? 'locations.rdp.nlaOn' : 'locations.rdp.nlaOff')}</Text>}
           {missing && <Text size="xs">{t('locations.missingSince', { time: formatDateTime(l.missing_since, i18n.language) })}</Text>}
           {!l.supported && <Text size="xs">{unsupportedText(t, target, l)}</Text>}
           {problems.map(({ p, key }, i) => (

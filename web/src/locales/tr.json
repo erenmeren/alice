@@ -1113,6 +1113,7 @@
     "win_ccs_files_ignored": "Adından bir ana bilgisayar adı çıkmayan Merkezi Sertifika Deposu dosyaları yok sayıldı: {{count}}.",
     "win_ccs_password_missing": "Alice'te bu sunucunun CCS parolası yok, bu yüzden Merkezi Sertifika Deposu dosyaları listelenmez. Bir Yönetici parolayı bu sayfada ayarlar.",
     "win_ccs_helper_outdated": "Bu sunucudaki yardımcı araç Merkezi Sertifika Deposu'nu okumak için çok eski. Kurulum betiğiyle güncelleyin, ardından Keşfet'i seçin.",
+    "win_rdp_helper_outdated": "Bu sunucudaki yardımcı araç Uzak Masaüstü dinleyicisini okumak için çok eski. Kurulum betiğiyle güncelleyin, ardından Keşfet'i seçin.",
     "win_ccs_password_mismatch": "Alice'teki CCS parolasının açmadığı Merkezi Sertifika Deposu dosyaları: {{count}}. IIS Yöneticisi'nde ayarlı parolayı denetleyin."
   },
   "targets": {
@@ -1871,7 +1872,8 @@
       "state": "Durum",
       "actions": "İşlemler",
       "binding": "Bağlama",
-      "bindingOrFile": "Bağlama veya dosya"
+      "bindingOrFile": "Bağlama veya dosya",
+      "place": "Yer"
     },
     "defaultServer": "(varsayılan sunucu)",
     "noWebsite": "(sunucu adı yok)",
@@ -1958,7 +1960,8 @@
       "chain_unresolved": "Alice bu dosyanın zincirini kendi sınırları içinde belirleyemedi; bu yüzden yalnızca web sitesinin sertifikasını tutuyor ve zinciri eksik sayılıyor.",
       "win_ctl": "Bu bağlama ayrıca güvenilen veren listesi veya istemci sertifikaları kullanıyor. Alice bunları modellemiyor.",
       "win_ccs_unlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor. Alice dosyaya dağıtım yapabilir ve dosyayı geri okuyarak denetler; hiçbir web sitesi yoklanamaz.",
-      "win_ccs_shadowed": "Bu dosyayı kullanacak biçimde ayarlanmış bir siteyi ana bilgisayar adının ve bağlantı noktasının http.sys bağlaması sunuyor; bu yüzden IIS o siteyi dosyadan sunmaz. Alice dosyaya yapılan bir dağıtımdan sonra o siteyi yoklamaz; sitenin sunduğunu değiştirmek için http.sys bağlamasına dağıtın."
+      "win_ccs_shadowed": "Bu dosyayı kullanacak biçimde ayarlanmış bir siteyi ana bilgisayar adının ve bağlantı noktasının http.sys bağlaması sunuyor; bu yüzden IIS o siteyi dosyadan sunmaz. Alice dosyaya yapılan bir dağıtımdan sonra o siteyi yoklamaz; sitenin sunduğunu değiştirmek için http.sys bağlamasına dağıtın.",
+      "win_rdp_autoenroll": "Bir Grup İlkesi ayarı Uzak Masaüstü sertifikasını otomatik olarak kaydediyor, bu yüzden Windows Alice'in dağıttığı sertifikayı kendiliğinden değiştirebilir."
     },
     "unsupported": {
       "variable": "Yol bir değişken kullanıyor, bu yüzden Alice hangi dosyanın kullanıldığını bilemez.",
@@ -1981,6 +1984,9 @@
       "win_foreign_app_iis_unused": "Bu bağlamayı hiçbir IIS sitesi kullanmıyor.",
       "win_ccs": "Bu http.sys kaydı IIS'i Merkezi Sertifika Deposu'na yönlendirir. Alice bu kayda değil, bu sayfada listelenen depo dosyalarına dağıtım yapar.",
       "win_store_unsupported": "Sertifika My veya WebHosting dışında bir depoda. Alice bu depoyu desteklemiyor.",
+      "win_rdp_disabled": "Bu sunucuda Uzak Masaüstü kapalı, bu yüzden sertifikayı sunacak bir şey yok. Uzak Masaüstü'nü açın, ardından Keşfet'i seçin.",
+      "win_rdp_no_tls": "Dinleyici TLS olmadan RDP güvenliği kullanıyor (güvenlik katmanı 0), bu yüzden hiçbir sertifika kullanmıyor. Güvenlik katmanını Anlaşma ya da TLS olarak ayarlayın, ardından Keşfet'i seçin.",
+      "win_rdp_cert_unknown": "Dinleyici bir sertifika belirtmiyor ve Remote Desktop deposunda tam olarak bir sertifika yok, bu yüzden Alice hangi sertifikayı sunduğunu bilemiyor.",
       "file_problem_windows": "Alice bu bağlamanın sertifikasını veya anahtarını kullanamıyor.",
       "file_problem_ccs": "Alice, Merkezi Sertifika Deposu'nun bu dosyasını kullanamıyor."
     },
@@ -2040,11 +2046,20 @@
       "count_one": "{{count}} bağlama",
       "count_other": "{{count}} bağlama",
       "countPlaces_one": "{{count}} bağlama veya dosya",
-      "countPlaces_other": "{{count}} bağlama veya dosya"
+      "countPlaces_other": "{{count}} bağlama veya dosya",
+      "countAny_one": "{{count}} yer",
+      "countAny_other": "{{count}} yer"
     },
     "problemsCCS": {
       "cert_missing": "Bu adı bir IIS sitesi kullanıyor, ancak deponun klasöründe bunun için bir dosya yok. İlk dosyayı klasöre koyun; Alice onu bundan sonra yönetir.",
       "key_missing": "Dosya, sertifikayı özel anahtarı olmadan içeriyor."
+    },
+    "rdp": {
+      "name": "Uzak Masaüstü (RDP-Tcp)",
+      "help": "Bu sunucuya Uzak Masaüstü bağlantılarının kullandığı dinleyici. Dağıtım, dinleyicinin sertifikasını değiştirir; başta bu, Windows'un kendinden imzalı sertifikasıdır.",
+      "selfSigned": "Windows tarafından kendinden imzalı",
+      "nlaOn": "Ağ Düzeyinde Kimlik Doğrulama: açık",
+      "nlaOff": "Ağ Düzeyinde Kimlik Doğrulama: kapalı"
     }
   },
   "deploy": {
@@ -2108,7 +2123,10 @@
     "chosenNoLongerFits": "Seçilen sertifika işaretli her bağlamaya uymuyor (başka bir anahtar türü). Başka bir sertifika seçin ya da o bağlamanın işaretini kaldırın.",
     "succeededUnverifiedCCS": "Yeni sertifika dosyaya yazıldı ve geri okundu.",
     "summaryCCS": "Alice ara sertifikaları sunucunun CA deposuna içe aktarır, yeni sertifikayı dosyanın yerine yazar, önceki dosyanın bir yedeğini Merkezi Sertifika Deposu klasöründe yanında tutar ve dosyayı kullanan IIS sitelerini denetler. Herhangi bir adım başarısız olursa Alice dosyayı yedekten geri yükler.",
-    "bindingsOrFiles": "Bağlamalar ve dosyalar"
+    "bindingsOrFiles": "Bağlamalar ve dosyalar",
+    "summaryRDP": "Alice sertifikayı sunucunun Kişisel (My) deposuna, ara sertifikaları CA deposuna içe aktarır, Uzak Masaüstü'nün çalıştığı hesap olan NETWORK SERVICE'e yeni özel anahtarı okuma izni verir, Uzak Masaüstü dinleyicisini (RDP-Tcp) şu an kullandığı sertifikanın (başta Windows'un kendinden imzalı sertifikası) yerine yeni sertifikaya yöneltir ve RDP anlaşmasından sonra sunulduğunu denetler. Herhangi bir adım başarısız olursa Alice dinleyiciyi önceki sertifikaya geri yöneltir.",
+    "places": "Dağıtılacak yerler",
+    "succeededUnverifiedRDP": "Yeni sertifika dağıtıldı ve Uzak Masaüstü dinleyicisi ona yöneltildi."
   },
   "deployments": {
     "page": {
@@ -2244,7 +2262,9 @@
       "sync": "Cihaz grubunu eşitleme",
       "save": "Yapılandırmayı kaydetme",
       "write_secret": "Secret'ı yazma",
-      "write_file": "Dosyayı yazma"
+      "write_file": "Dosyayı yazma",
+      "grant_key_read": "NETWORK SERVICE'in anahtarı okumasına izin verme",
+      "set_listener": "Dinleyiciyi sertifikaya yöneltme"
     },
     "stepStatus": {
       "started": "Çalışıyor",
@@ -2269,7 +2289,8 @@
         "failed": "Tamamlanmamış önceki değişiklik bu dosyaları hâlâ engelliyor."
       },
       "ccsUnlinked": "Bu dosyayı hiçbir IIS sitesi kullanmıyor; Alice bir web sitesini denetlemek yerine dosyayı geri okudu.",
-      "ccsRefreshFailed": "Alice, IIS'e yeni dosyayı yeniden okumasını bildiremedi; sitelerin onu sunup sunmadığını denetim gösterir."
+      "ccsRefreshFailed": "Alice, IIS'e yeni dosyayı yeniden okumasını bildiremedi; sitelerin onu sunup sunmadığını denetim gösterir.",
+      "rdpKeyACLLeft": "Alice, NETWORK SERVICE'e yeni sertifikanın özel anahtarı için verdiği okuma iznini geri alamadı; izin yerinde bırakıldı."
     },
     "currentStep": "Geçerli adım: {{step}}",
     "operation": "Sunucudaki tamamlanmamış önceki değişiklik (işlem kimliği): {{id}}",
@@ -2284,6 +2305,7 @@
     "vaultLabel": "Kasa",
     "versionLabel": "Kasa sürümü",
     "bindingLabel": "Bağlama",
+    "listenerLabel": "Dinleyici",
     "previousWindows": "Önceki sertifika: {{store}} \\ {{sha1}}",
     "previousWindowsForbidden": "Önceki sertifika (iptal edilmiş ya da ele geçirilmiş: onu yeniden bağlamayın): {{store}} \\ {{sha1}}",
     "warnings": {
@@ -2295,7 +2317,9 @@
       "store_error": "Windows sertifika deposunu açamadı ya da değiştiremedi.",
       "backup_missing": "Önceki sertifika ya da özel anahtarı artık sertifika deposunda değil.",
       "io_error": "Sunucuda bir Windows çağrısı başarısız oldu.",
-      "file_changed_windows": "Başka bir program bağlamayı değiştirdi: bağlama, Alice'in dağıtmadığı bir sertifikayı gösteriyor."
+      "key_acl": "Windows, NETWORK SERVICE'e sertifikanın özel anahtarını okuma izni veremedi.",
+      "file_changed_windows": "Başka bir program bağlamayı değiştirdi: bağlama, Alice'in dağıtmadığı bir sertifikayı gösteriyor.",
+      "file_changed_rdp": "Başka bir program Uzak Masaüstü dinleyicisini değiştirdi: dinleyici, Alice'in dağıtmadığı bir sertifikayı gösteriyor."
     },
     "windowsErrors": {
       "deployment": {
@@ -3853,6 +3877,7 @@
           "file": "Sertifika dosyası",
           "binding": "Bağlama",
           "place": "Sertifika dosyası veya bağlama",
+          "placeAny": "Yer",
           "state": "Durum",
           "auto": "Otomatik dağıtım",
           "actions": "İşlemler"

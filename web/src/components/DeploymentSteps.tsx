@@ -34,12 +34,23 @@ const CCS_GROUPS: { id: string; members: string[] }[] = [
   { id: 'write_file', members: ['write_file'] },
   { id: 'verify', members: ['verify'] },
 ];
+// A deployment to the Remote Desktop listener RDP-Tcp of a Windows server (R69): the intermediates go into the CA store,
+// the certificate into My, NETWORK SERVICE (the account Remote Desktop runs as) may read its key, the listener names it,
+// then Alice verifies after the RDP negotiation.
+const RDP_GROUPS: { id: string; members: string[] }[] = [
+  { id: 'import_chain', members: ['import_chain'] },
+  { id: 'import_certificate', members: ['import_certificate'] },
+  { id: 'grant_key_read', members: ['grant_key_read'] },
+  { id: 'set_listener', members: ['set_listener'] },
+  { id: 'verify', members: ['verify'] },
+];
 // kv_secret is the first step of a Key Vault deployment (the certificate is read from the vault before
 // anything reaches the server); it has a row only when the deployment came from a vault.
 const grouped = (groups: { members: string[] }[]) => new Set(['verify_current', 'kv_secret', ...groups.flatMap((g) => g.members)]);
 const GROUPED = grouped(GROUPS);
 const WINDOWS_GROUPED = grouped(WINDOWS_GROUPS);
 const CCS_GROUPED = grouped(CCS_GROUPS);
+const RDP_GROUPED = grouped(RDP_GROUPS);
 
 type Shown = 'started' | 'ok' | 'failed' | 'skipped' | 'waiting' | 'notRun' | 'unknown';
 
@@ -78,10 +89,10 @@ function statusText(s: Shown): string {
 const STATE: Record<Shown, StepState> = { ok: 'done', failed: 'failed', started: 'running', waiting: 'waiting', skipped: 'skipped', notRun: 'notRun', unknown: 'unknown' };
 
 // Step details the server allows (DeploymentStep.params): shown only in the detail page. None: no lines.
-function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: boolean): React.ReactNode[] {
+function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: boolean, rdp: boolean): React.ReactNode[] {
   const p = step.params ?? {};
   const lines: React.ReactNode[] = [];
-  if (p.error) lines.push(<Text key="error" size="xs">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(p.error, windows)) })}</Text>);
+  if (p.error) lines.push(<Text key="error" size="xs">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(p.error, windows, rdp)) })}</Text>);
   if (p.reason) {
     const key = `errors.${p.reason}.title`;
     lines.push(
@@ -98,6 +109,8 @@ function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n, windows: bo
   if (p.ccs_unlinked) lines.push(<Text key="ccsUnlinked" size="xs">{t('deployments.stepDetail.ccsUnlinked')}</Text>);
   // R68 (F15 route a): the helper could not tell IIS to read the replaced CCS file again; the verification decides.
   if (p.ccs_refresh_failed) lines.push(<Text key="ccsRefreshFailed" size="xs">{t('deployments.stepDetail.ccsRefreshFailed')}</Text>);
+  // R69: a restore of the Remote Desktop listener could not take NETWORK SERVICE's read access to the key back.
+  if (p.rdp_key_acl_left) lines.push(<Text key="rdpKeyACLLeft" size="xs">{t('deployments.stepDetail.rdpKeyACLLeft')}</Text>);
   if (p.trust_error) lines.push(<Text key="trustError" size="xs">{t('deployments.stepDetail.trustError', { reason: t(trustErrorKey(p.trust_error)) })}</Text>);
   if (step.name === 'recover_pending' && (step.status === 'ok' || step.status === 'skipped' || step.status === 'failed')) {
     lines.push(
@@ -137,7 +150,7 @@ interface Row {
 // DeploymentSteps lists the steps of one deployment with a status each, as the design's operation
 // timeline; markers never carry the meaning alone, every row says it in words. The list is not a live
 // region itself: the screen that owns it announces the overall state. windows: the steps of an http.sys binding; ccs: the
-// steps of a CCS file (R68).
+// steps of a CCS file (R68); rdp: the steps of the Remote Desktop listener (R69).
 export function DeploymentSteps({
   steps,
   status,
@@ -145,6 +158,7 @@ export function DeploymentSteps({
   vault = false,
   windows = false,
   ccs = false,
+  rdp = false,
 }: {
   steps: DeploymentStep[];
   status: DeploymentStatus | '';
@@ -152,11 +166,12 @@ export function DeploymentSteps({
   vault?: boolean;
   windows?: boolean;
   ccs?: boolean;
+  rdp?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const ended = FINAL_STATUSES.has(status);
-  const groups = ccs ? CCS_GROUPS : windows ? WINDOWS_GROUPS : GROUPS;
-  const groupedNames = ccs ? CCS_GROUPED : windows ? WINDOWS_GROUPED : GROUPED;
+  const groups = rdp ? RDP_GROUPS : ccs ? CCS_GROUPS : windows ? WINDOWS_GROUPS : GROUPS;
+  const groupedNames = rdp ? RDP_GROUPED : ccs ? CCS_GROUPED : windows ? WINDOWS_GROUPED : GROUPED;
   const rows: Row[] = [];
   if (detailed) rows.push({ id: 'verify_current', label: t('deployments.steps.verify_current'), status: singleStatus(steps, 'verify_current', ended), detail: lastOf(steps, 'verify_current') });
   if (vault || steps.some((s) => s.name === 'kv_secret')) rows.push({ id: 'kv_secret', label: t('deployments.steps.kv_secret'), status: singleStatus(steps, 'kv_secret', ended), detail: lastOf(steps, 'kv_secret') });
@@ -175,7 +190,7 @@ export function DeploymentSteps({
     rows.push({ id: name, label: t(known), rawName: known === 'deployments.steps.unknown' ? name : undefined, status: singleStatus(steps, name, ended), detail: lastOf(steps, name) });
   }
   const detail = (r: Row): React.ReactNode => {
-    const lines = detailed && r.detail ? stepDetails(r.detail, t, i18n, windows) : [];
+    const lines = detailed && r.detail ? stepDetails(r.detail, t, i18n, windows, rdp) : [];
     return lines.length > 0 ? lines : undefined;
   };
   return (

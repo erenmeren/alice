@@ -758,7 +758,7 @@ export interface CertificateLocation {
   verify_address?: string;
 }
 
-export type LocationKind = 'server_file' | 'win_sslbinding' | 'f5_clientssl' | 'k8s_tls_secret' | 'win_ccs_file';
+export type LocationKind = 'server_file' | 'win_sslbinding' | 'f5_clientssl' | 'k8s_tls_secret' | 'win_ccs_file' | 'win_rdp';
 
 export interface CertificateLocationList {
   items: CertificateLocation[];

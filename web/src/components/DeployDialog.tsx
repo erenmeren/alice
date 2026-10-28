@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { certificateBlock, deployCandidates, listAllCertificates, MAX_CERTIFICATES, MAX_DEPLOY_LOCATIONS } from '../api/deployable';
-import { deploymentView, isCCSDeployment, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
+import { deploymentView, isCCSDeployment, isRDPDeployment, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
 import { deployCertificate, getCertificate } from '../api/endpoints';
 import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/enums';
 import { isApiError } from '../api/client';
@@ -117,6 +117,8 @@ function DeployForm({
   const windows = location !== undefined && isWindows(location.target_type);
   // R68: a file of the server's Centralized Certificate Store is written in place, not bound.
   const ccs = location?.kind === 'win_ccs_file';
+  // R69: the Remote Desktop listener is picked like a binding; the summary names the listener.
+  const rdp = location?.kind === 'win_rdp';
   const [chosenId, setChosenId] = useState('');
   const [picked, setPicked] = useState<string[]>(bindings && location ? [location.id] : []);
   const [confirmChain, setConfirmChain] = useState(false);
@@ -265,8 +267,9 @@ function DeployForm({
                 <DeploymentSteps
                   steps={dep?.steps ?? []}
                   status={dep?.status ?? 'pending'}
-                  windows={(loc !== undefined && isWindows(loc.target_type) && loc.kind !== 'win_ccs_file') || (dep !== null && isWindowsDeployment(dep))}
+                  windows={(loc !== undefined && isWindows(loc.target_type) && loc.kind !== 'win_ccs_file' && loc.kind !== 'win_rdp') || (dep !== null && isWindowsDeployment(dep))}
                   ccs={loc?.kind === 'win_ccs_file' || (dep !== null && isCCSDeployment(dep))}
+                  rdp={loc?.kind === 'win_rdp' || (dep !== null && isRDPDeployment(dep))}
                 />
                 {step && dep && !isSettled(dep) && (
                   <Text size="xs" c="dimmed" aria-live="polite">
@@ -320,7 +323,7 @@ function DeployForm({
       }}
     >
       <Stack gap="md">
-        <Text size="sm">{t(ccs ? 'deploy.summaryCCS' : windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
+        <Text size="sm">{t(rdp ? 'deploy.summaryRDP' : ccs ? 'deploy.summaryCCS' : windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
 
         {certificate === undefined && (
           <>
@@ -365,7 +368,7 @@ function DeployForm({
         )}
 
         {bindings && (
-          <Checkbox.Group value={picked} onChange={setPicked} label={t(bindings.some((l) => l.kind === 'win_ccs_file') ? 'deploy.bindingsOrFiles' : 'deploy.bindings')}>
+          <Checkbox.Group value={picked} onChange={setPicked} label={t(bindings.some((l) => l.kind === 'win_rdp') ? 'deploy.places' : bindings.some((l) => l.kind === 'win_ccs_file') ? 'deploy.bindingsOrFiles' : 'deploy.bindings')}>
             <Stack gap="sm" mt="xs">
               {groups.map((g) => {
                 const name = g.cert ? certificateSubject(g.cert) : '';

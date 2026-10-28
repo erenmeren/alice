@@ -203,13 +203,17 @@ describe('Nginx deployment, website and fact labels cover the specification and 
 
   it('lists the unsupported reasons and file problems of the Go sources and the specification', () => {
     // R60: the Windows provider's own reasons and problems (internal/providers/windows/convert.go).
-    const winReasons = goConsts('internal/providers/windows/convert.go', /^Unsupported[A-Z]/);
+    // R69: the Remote Desktop listener's reasons (winproto.UnsupportedRDP*).
+    const winReasons = [
+      ...goConsts('internal/providers/windows/convert.go', /^Unsupported[A-Z]/),
+      ...goConsts('internal/providers/windows/winproto/winproto.go', /^UnsupportedRDP[A-Z]/),
+    ];
     // R68: a CCS file the server's password does not open keeps the helper's code (winproto.CCSProblemPasswordMismatch).
     const winProblems = [
       ...goConsts('internal/providers/windows/convert.go', /^Problem[A-Z]/),
       ...goConsts('internal/providers/windows/winproto/winproto.go', /^CCSProblemPasswordMismatch$/),
     ];
-    expect(winReasons).toEqual(expect.arrayContaining(['win_foreign_app', 'win_ccs', 'win_store_unsupported']));
+    expect(winReasons).toEqual(expect.arrayContaining(['win_foreign_app', 'win_ccs', 'win_store_unsupported', 'win_rdp_disabled', 'win_rdp_no_tls', 'win_rdp_cert_unknown']));
     expect(winProblems).toEqual(expect.arrayContaining(['cert_missing', 'key_missing', 'key_inaccessible', 'ccs_password_mismatch']));
     eq(goConsts('internal/providers/types.go', /^Unsupported[A-Z]/), UNSUPPORTED_REASONS.filter((r) => !winReasons.includes(r)));
     eq(knownValues('CertificateLocation', 'unsupported_reason').map((v) => v.replace(/ \(.*\)$/, '')).filter((r) => !winReasons.includes(r)), UNSUPPORTED_REASONS.filter((r) => !winReasons.includes(r)));
@@ -266,11 +270,14 @@ describe('Nginx deployment, website and fact labels cover the specification and 
       'win_ccs_password_missing',
       'win_ccs_helper_outdated',
       'win_ccs_password_mismatch',
+      // R69: the helper is too old for the Remote Desktop listener.
+      'win_rdp_helper_outdated',
     ];
-    expect(winWarnings).toEqual(expect.arrayContaining([...windowsOnly, 'win_ctl', 'win_ccs_unlinked', 'win_ccs_shadowed']));
+    expect(winWarnings).toEqual(expect.arrayContaining([...windowsOnly, 'win_ctl', 'win_ccs_unlinked', 'win_ccs_shadowed', 'win_rdp_autoenroll']));
     expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ctl');
     expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ccs_unlinked');
     expect(Object.keys(LOCATION_WARNINGS)).toContain('win_ccs_shadowed');
+    expect(Object.keys(LOCATION_WARNINGS)).toContain('win_rdp_autoenroll');
     expect(haproxyconfWarnings).toContain('config_file_not_read');
     const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_helper_too_old', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'config_dir_not_read', 'config_file_not_read', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
@@ -314,7 +321,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
 
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
     for (const w of [...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
-    for (const w of winWarnings.filter((x) => x !== 'win_ctl' && x !== 'win_ccs_unlinked' && x !== 'win_ccs_shadowed')) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    const locationOnly = ['win_ctl', 'win_ccs_unlinked', 'win_ccs_shadowed', 'win_rdp_autoenroll'];
+    for (const w of winWarnings.filter((x) => !locationOnly.includes(x))) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
     expect(warningKey({ code: 'win_expired_in_store', params: { count: '3' } })).toBe('warnings.win_expired_in_store');
     for (const code of ['win_ccs_files_ignored', 'win_ccs_password_mismatch']) {
       expect(warningKey({ code, params: { count: '2' } })).toBe(`warnings.${code}`);

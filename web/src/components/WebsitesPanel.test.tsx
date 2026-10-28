@@ -17,6 +17,7 @@ import {
   sessionHandlers,
   windowsBindingFixture,
   windowsCCSFileFixture,
+  windowsRDPFixture,
   windowsTargetFixture,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
@@ -617,5 +618,88 @@ describe('WebsitesPanel CCS files', () => {
     onNginx('operator', [binding], windowsTargetFixture);
     await renderRoute(winPath);
     expect(await screen.findByRole('columnheader', { name: 'Binding' })).toBeInTheDocument();
+  });
+});
+
+// R69: the Remote Desktop listener RDP-Tcp of a Windows server, beside its bindings and CCS files.
+describe('WebsitesPanel Remote Desktop listener', () => {
+  const winPath = `/servers/${windowsTargetFixture.id}`;
+  const SELF = { ...CERT, id: 'c-self', subject_cn: 'win-demo01' };
+  const binding = windowsBindingFixture({ id: 'w-host', certificate: CERT });
+  const ccs = windowsCCSFileFixture({ id: 'c-linked', certificate: { ...CERT, id: 'c-ccs', subject_cn: 'ccs.example.test' } });
+  const rdp = windowsRDPFixture({ id: 'r-on', certificate: SELF });
+  const rows = async () => {
+    const all = await screen.findAllByTestId('location-row');
+    return (id: string) => all.find((r) => r.getAttribute('data-location') === id)!;
+  };
+
+  it.each([
+    ['en', 'Remote Desktop (RDP-Tcp)', 'Network Level Authentication: on', 'Self-signed by Windows', 'Place', 'Deploy certificate: Remote Desktop (RDP-Tcp)'],
+    ['tr', 'Uzak Masaüstü (RDP-Tcp)', 'Ağ Düzeyinde Kimlik Doğrulama: açık', 'Windows tarafından kendinden imzalı', 'Yer', 'Sertifika dağıt: Uzak Masaüstü (RDP-Tcp)'],
+  ])('shows the listener with its port, NLA and the self-signed certificate (%s)', async (lang, name, nla, selfSigned, column, deployName) => {
+    onNginx('operator', [binding, ccs, rdp], windowsTargetFixture, false, lang);
+    await renderRoute(winPath, { languages: [lang] });
+    const row = await rows();
+    expect(within(row('r-on')).getByText(name)).toBeInTheDocument();
+    expect(within(row('r-on')).getByText('3389', { selector: 'code' })).toBeInTheDocument();
+    expect(within(row('r-on')).getByText('rdp/RDP-Tcp')).toBeInTheDocument();
+    expect(row('r-on')).toHaveTextContent(nla);
+    expect(within(row('r-on')).getByTestId('rdp-self-signed')).toHaveTextContent(selfSigned);
+    expect(screen.getByRole('button', { name: deployName })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: column })).toBeInTheDocument();
+    expectNoRawKeys(row('r-on').closest('table')!);
+  });
+
+  it('says NLA is off and shows no self-signed mark once the listener names a certificate of its own', async () => {
+    onNginx('operator', [windowsRDPFixture({ id: 'r-own', certificate: CERT, details: { store: 'MY', cert_sha1: 'ab'.repeat(20), self_signed: false, enabled: true, security_layer: 1, nla: false, cert_template: '' } })], windowsTargetFixture);
+    await renderRoute(winPath);
+    const row = await rows();
+    expect(row('r-own')).toHaveTextContent('Network Level Authentication: off');
+    expect(within(row('r-own')).queryByTestId('rdp-self-signed')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['win_rdp_disabled', 'Remote Desktop is off on this server'],
+    ['win_rdp_no_tls', 'security layer 0'],
+    ['win_rdp_cert_unknown', 'Alice cannot tell which certificate it serves'],
+  ])('shows why a listener cannot be used (%s) and offers no deployment', async (reason, text) => {
+    onNginx('operator', [windowsRDPFixture({ id: 'r-off', certificate: SELF, supported: false, unsupported_reason: reason })], windowsTargetFixture);
+    await renderRoute(winPath);
+    const row = await rows();
+    expect(row('r-off')).toHaveTextContent(text);
+    expect(within(row('r-off')).getByText('Not supported')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Deploy certificate:/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', 'A Group Policy setting autoenrols the Remote Desktop certificate'],
+    ['tr', 'Bir Grup İlkesi ayarı Uzak Masaüstü sertifikasını otomatik olarak kaydediyor'],
+  ])('warns when a Group Policy autoenrols the listener certificate (%s)', async (lang, text) => {
+    onNginx('operator', [windowsRDPFixture({ id: 'r-auto', certificate: SELF, warnings: ['win_rdp_autoenroll'] })], windowsTargetFixture, false, lang);
+    await renderRoute(winPath, { languages: [lang] });
+    const row = await rows();
+    expect(row('r-auto')).toHaveTextContent(text);
+    expectNoRawKeys(row('r-auto'));
+  });
+
+  it('keeps the binding and CCS rows as they were', async () => {
+    onNginx('operator', [binding, ccs, rdp], windowsTargetFixture);
+    await renderRoute(winPath);
+    const row = await rows();
+    expect(within(row('w-host')).getByText('http.sys/hostnameport/www.example.test:443')).toBeInTheDocument();
+    expect(within(row('w-host')).getByText('Default Web Site')).toBeInTheDocument();
+    expect(within(row('c-linked')).getByText('CCS Site')).toBeInTheDocument();
+    for (const id of ['w-host', 'c-linked']) {
+      expect(row(id)).not.toHaveTextContent('Remote Desktop');
+      expect(within(row(id)).queryByTestId('rdp-self-signed')).not.toBeInTheDocument();
+    }
+    expect(screen.getAllByRole('button', { name: /^Deploy certificate:/ })).toHaveLength(3);
+  });
+
+  it('counts a group holding the listener as places', async () => {
+    onNginx('operator', [rdp], windowsTargetFixture);
+    await renderRoute(winPath);
+    const group = await screen.findByTestId('certificate-group-row');
+    expect(group).toHaveTextContent('1 place');
   });
 });

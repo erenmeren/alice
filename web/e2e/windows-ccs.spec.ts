@@ -174,7 +174,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await discover(page, t, request);
       await expect(page.getByText(t('warnings.win_ccs_password_missing'), { exact: true })).toHaveCount(0);
       const table = page.getByRole('table', { name: t('locations.tableLabel') });
-      await expect(table.getByRole('columnheader', { name: t('locations.columns.bindingOrFile'), exact: true })).toBeVisible();
+      // R69: the server's Remote Desktop listener is listed too, so the column names a place.
+      await expect(table.getByRole('columnheader', { name: t('locations.columns.place'), exact: true })).toBeVisible();
       await expect(placeRow(page, t, LINKED)).toHaveCount(1);
       await expect(placeRow(page, t, LINKED)).toContainText('CCS Site');
       await expect(placeRow(page, t, LINKED).locator('code', { hasText: new RegExp(`^${escapeRegExp(HOST)}$`) })).toBeVisible();

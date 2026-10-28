@@ -1,6 +1,6 @@
 import { screen, within } from '@testing-library/react';
-import { isCCSDeployment, isWindowsDeployment } from '../api/deployments';
-import { ccsDeploymentFixture, stepFixture } from '../test/fixtures';
+import { isCCSDeployment, isRDPDeployment, isWindowsDeployment } from '../api/deployments';
+import { ccsDeploymentFixture, rdpDeploymentFixture, stepFixture } from '../test/fixtures';
 import { renderApp } from '../test/render';
 import { DeploymentSteps, currentStep } from './DeploymentSteps';
 
@@ -106,6 +106,44 @@ describe('DeploymentSteps', () => {
     await renderApp(<DeploymentSteps status="succeeded" detailed ccs steps={[stepFixture(1, 'write_file', 'ok', { ccs_refresh_failed: 'true' }), stepFixture(2, 'verify')]} />);
     expect(row('Write the file')).toHaveTextContent('Alice could not tell IIS to read the new file again; the verification shows whether the sites serve it.');
     expect(row('Verify')).not.toHaveTextContent('could not tell IIS');
+  });
+
+  it('shows the steps of the Remote Desktop listener (R69): chain, certificate, key read, listener, verify', async () => {
+    const d = rdpDeploymentFixture({ status: 'succeeded' });
+    expect(isWindowsDeployment(d)).toBe(false);
+    expect(isCCSDeployment(d)).toBe(false);
+    await renderApp(<DeploymentSteps status={d.status} steps={d.steps} rdp={isRDPDeployment(d)} windows={isWindowsDeployment(d)} />);
+    const items = within(screen.getByRole('list', { name: 'Steps' })).getAllByRole('listitem');
+    expect(items.map((li) => [li.getAttribute('data-step'), li.getAttribute('data-status')])).toEqual([
+      ['import_chain', 'ok'],
+      ['import_certificate', 'ok'],
+      ['grant_key_read', 'ok'],
+      ['set_listener', 'ok'],
+      ['verify', 'ok'],
+      ['journal', 'ok'],
+    ]);
+    expect(row('Allow NETWORK SERVICE to read the key')).toHaveTextContent('Done');
+    expect(row('Point the listener to the certificate')).toHaveTextContent('Done');
+    expect(screen.queryByText('Bind')).not.toBeInTheDocument();
+    expect(screen.queryByText('Backup')).not.toBeInTheDocument();
+  });
+
+  it('says in detail that NETWORK SERVICE kept read access to the key after a restore', async () => {
+    await renderApp(
+      <DeploymentSteps
+        status="rolled_back"
+        detailed
+        rdp
+        steps={[stepFixture(1, 'set_listener'), stepFixture(2, 'verify', 'failed'), stepFixture(3, 'restore', 'ok', { rdp_key_acl_left: 'true' })]}
+      />,
+    );
+    expect(row('Restore')).toHaveTextContent("Alice could not take back NETWORK SERVICE's read access to the new certificate's private key");
+    expect(row('Verify')).not.toHaveTextContent('NETWORK SERVICE');
+  });
+
+  it('names the key access failure of the grant step', async () => {
+    await renderApp(<DeploymentSteps status="rolled_back" detailed rdp windows={false} steps={[stepFixture(1, 'grant_key_read', 'failed', { error: 'key_acl' })]} />);
+    expect(row('Allow NETWORK SERVICE to read the key')).toHaveTextContent("Windows could not give NETWORK SERVICE read access to the certificate's private key.");
   });
 
   it('never draws a check mark for a step that was not run', async () => {

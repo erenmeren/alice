@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import type { DeploymentDetail } from '../api/types';
-import { deploymentDetailFixture, errorResponse, sessionFor, sessionHandlers, stepFixture, WIN_PREVIOUS_SHA1, windowsDeploymentFixture } from '../test/fixtures';
+import { deploymentDetailFixture, errorResponse, rdpDeploymentFixture, sessionFor, sessionHandlers, stepFixture, WIN_PREVIOUS_SHA1, windowsDeploymentFixture } from '../test/fixtures';
 import commonEn from '@locales/common/en.json';
 import commonTr from '@locales/common/tr.json';
 import enWeb from '../locales/en.json';
@@ -882,5 +882,30 @@ describe('Windows deployment texts', () => {
     show(deploymentDetailFixture({ id: ID, status: 'rolled_back', error: { code: 'ALC-DEP-0003', reason: 'deployment.verify_failed' } }));
     await renderRoute(`/deployments/${ID}`);
     expect(await screen.findByRole('alert')).toHaveTextContent('Check which part of the Nginx configuration answers for this website');
+  });
+});
+
+// R69: a deployment to the Remote Desktop listener of a Windows server.
+describe('DeploymentDetailPage of the Remote Desktop listener', () => {
+  it.each([
+    ['en', 'Listener', 'Remote Desktop (RDP-Tcp)', 'Previous certificate: Remote Desktop'],
+    ['tr', 'Dinleyici', 'Uzak Masaüstü (RDP-Tcp)', 'Önceki sertifika: Remote Desktop'],
+  ])('shows its steps, the listener and the previous certificate by store and thumbprint (%s)', async (lang, label, name, previous) => {
+    show(rdpDeploymentFixture({ id: ID }), 'auditor', lang);
+    await renderRoute(`/deployments/${ID}`, { languages: [lang] });
+    const list = await screen.findByRole('list', { name: /Steps|Adımlar/ });
+    expect(Array.from(list.querySelectorAll('[data-step]')).map((e) => e.getAttribute('data-step'))).toEqual([
+      'verify_current',
+      'import_chain',
+      'import_certificate',
+      'grant_key_read',
+      'set_listener',
+      'verify',
+      'journal',
+    ]);
+    expect(screen.getByText(label, { selector: 'dt' }).nextElementSibling).toHaveTextContent(name);
+    expect(screen.queryByText('Key file', { selector: 'dt' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('windows-previous')).toHaveTextContent(`${previous} \\ ${WIN_PREVIOUS_SHA1}`);
+    expectNoRawKeys();
   });
 });

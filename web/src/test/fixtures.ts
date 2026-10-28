@@ -788,6 +788,46 @@ export function ccsDeploymentFixture(o: Partial<DeploymentDetail> = {}): Deploym
   });
 }
 
+// windowsRDPFixture is the Remote Desktop listener RDP-Tcp of a Windows server (R69): on, TLS (security layer 2), NLA
+// on, the listener's value absent, so it serves Windows' self-signed certificate from the Remote Desktop store.
+export function windowsRDPFixture(o: Partial<CertificateLocation> = {}): CertificateLocation {
+  return windowsBindingFixture({
+    id: '0192c000-0000-7000-8000-00000000a0d1',
+    cert_path: 'rdp/RDP-Tcp',
+    servers: [],
+    kind: 'win_rdp',
+    locator: { type: 'rdp', listener: 'RDP-Tcp', port: 3389 },
+    details: { store: 'Remote Desktop', cert_sha1: 'ef'.repeat(20), self_signed: true, enabled: true, security_layer: 2, nla: true, cert_template: '' },
+    ...o,
+  });
+}
+
+// rdpDeploymentFixture is a deployment to the Remote Desktop listener of windowsTargetFixture (R69): the chain and the
+// certificate imported into My, NETWORK SERVICE given read access to its key, the listener pointed to it, verified.
+export function rdpDeploymentFixture(o: Partial<DeploymentDetail> = {}): DeploymentDetail {
+  return deploymentDetailFixture({
+    location_id: windowsRDPFixture().id,
+    target_id: windowsTargetFixture.id,
+    target_name: windowsTargetFixture.name,
+    cert_path: 'rdp/RDP-Tcp',
+    key_path: '',
+    backup_dir: '',
+    location_kind: 'win_rdp',
+    backup_store: 'Remote Desktop',
+    backup_sha1: WIN_PREVIOUS_SHA1,
+    steps: [
+      stepFixture(1, 'verify_current'),
+      stepFixture(2, 'import_chain'),
+      stepFixture(3, 'import_certificate'),
+      stepFixture(4, 'grant_key_read'),
+      stepFixture(5, 'set_listener'),
+      stepFixture(6, 'journal'),
+      stepFixture(7, 'verify', 'ok', { mode: 'remote' }),
+    ],
+    ...o,
+  });
+}
+
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
   return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };
 }

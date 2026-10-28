@@ -7,7 +7,7 @@
 // connection sees the first session's command, design 2026-10-21 §8).
 //
 //	alice-fakewindows serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
-//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off | ccs-password
+//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off | ccs-password | rdp-self-signed
 //
 // serve generates a fresh Ed25519 host key and the demo host's test CA and certificates when it starts (nothing is
 // stored in the repository or the image), listens for SSH on --listen and serves the demo's TLS bindings on --tls-bind
@@ -20,7 +20,9 @@
 // listener keep serving what it served before the next bind (a website that did not take the change, W2 Ruling 23)
 // until "ctl stale-tls-off", so a deployment's verification fails and is rolled back; the demo's CCS files (W5) go
 // stale with them, and so does its RDP listener (W6). The demo's Centralized Certificate Store (C:\CCS, two files) is encrypted with a password made at
-// start, which "ctl ccs-password" prints on its standard output (never logged).
+// start, which "ctl ccs-password" prints on its standard output (never logged). "ctl rdp-self-signed" deletes the RDP
+// listener's value, as someone outside Alice would, so it serves its self-signed certificate again (an e2e journey's
+// start, W6 Ruling 25).
 // The control API has no authentication beyond its address: it listens on loopback only (serve refuses any other
 // address), ctl talks to loopback only, and it runs inside the container ("docker compose exec -T fakewindows
 // /alice-fakewindows ctl prepare < script").
@@ -87,7 +89,8 @@ Commands:
         ping | hostkey (the SHA256 fingerprint of the host key) | endpoints (the TLS and RDP listeners) |
         prepare (stdin: Alice's Windows setup script; authorizes the key of its $AuthorizedKey line) |
         stale-tls-on (the listeners keep serving what they served before the next bind, CCS file or RDP write) |
-        stale-tls-off | ccs-password (the demo's CCS private-key password)
+        stale-tls-off | ccs-password (the demo's CCS private-key password) |
+        rdp-self-signed (the RDP listener's value deleted: it serves its self-signed certificate again)
 `
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -268,6 +271,12 @@ func (c *control) handler() http.Handler {
 		c.model.ServeStaleRDP(false)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
+	// The RDP listener back on its self-signed certificate (W6 Ruling 25): its value deleted, as someone outside Alice
+	// would, so every run of the e2e journey starts where a fresh demo host does.
+	mux.HandleFunc("POST /rdp-self-signed", func(w http.ResponseWriter, _ *http.Request) {
+		c.model.SetRDPThumbprint("")
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
 	// The demo's CCS password (W5 Ruling 25), made at start: the answer only, never logged.
 	mux.HandleFunc("GET /ccs-password", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -376,6 +385,8 @@ var ctlCommands = map[string][2]string{
 	"stale-tls-off": {http.MethodPost, "/stale-tls-off"},
 	// ccs-password: the demo's CCS private-key password, on stdout only.
 	"ccs-password": {http.MethodGet, "/ccs-password"},
+	// rdp-self-signed: the RDP listener's value deleted, so it serves its self-signed certificate again (W6).
+	"rdp-self-signed": {http.MethodPost, "/rdp-self-signed"},
 }
 
 func runCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {

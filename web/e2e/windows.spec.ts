@@ -92,7 +92,8 @@ async function deployToWeb(page: Page, t: Translate, subject: string, label: str
   await bindingRow(page, t, WEB).getByRole('button', { name: new RegExp(`^${escapeRegExp(prefix)}`) }).click();
   const dialog = page.getByRole('dialog', { name: t('deploy.title') });
   const groups = dialog.getByTestId('deploy-certificate-group');
-  await expect(groups, 'the picker groups the bindings by the certificate they serve').toHaveCount(4);
+  // R69: the Remote Desktop listener's self-signed certificate is a group of its own.
+  await expect(groups, 'the picker groups the bindings by the certificate they serve').toHaveCount(5);
   const group = groups.filter({ has: page.getByRole('heading', { level: 3, name: subject, exact: true }) });
   await expect(group).toHaveCount(1);
   await group.getByRole('button', { name: t('deploy.selectGroupNamed', { name: subject }) }).click();
@@ -194,11 +195,12 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(fact(page, t('targets.page.facts.elevated'))).toHaveText(t('targets.facts.yes'));
       await expect(page.getByText(t('targets.page.operationsTextWindows'))).toBeVisible();
 
-      // 4. One row per http.sys binding, with its IIS site; the WinRM and the CCS bindings are listed, not supported.
+      // 4. One row per http.sys binding, with its IIS site; the WinRM and the CCS bindings are listed, not supported. R69:
+      // the Remote Desktop listener is a fifth row, so the column names a place.
       const table = page.getByRole('table', { name: t('locations.tableLabel') });
       await expect(table.getByRole('columnheader', { name: t('webServer.siteColumn.windows'), exact: true })).toBeVisible();
-      await expect(table.getByRole('columnheader', { name: t('locations.columns.binding'), exact: true })).toBeVisible();
-      await expect(table.getByTestId('location-row')).toHaveCount(4);
+      await expect(table.getByRole('columnheader', { name: t('locations.columns.place'), exact: true })).toBeVisible();
+      await expect(table.getByTestId('location-row')).toHaveCount(5);
       for (const text of [WEB, INTRANET, WINRM, CCS]) await expect(bindingRow(page, t, text), text).toHaveCount(1);
       await expect(bindingRow(page, t, WEB)).toContainText('Default Web Site');
       await expect(bindingRow(page, t, WEB).getByRole('link', { name: 'www.win.example.test', exact: true })).toBeVisible();
@@ -223,13 +225,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(usedWhere.getByRole('link', { name: SERVER, exact: true })).toBeVisible();
       await expect(usedWhere.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) })).toBeVisible();
 
-      // 7. R61: the bindings grouped by the certificate they serve (three certificates, and the CCS entry without one).
+      // 7. R61: the bindings grouped by the certificate they serve (three certificates, the Remote Desktop listener's
+      // self-signed one (R69), and the CCS entry without one).
       const first = newCert(HOST);
       const firstLabel = `win-renewal-1-${lang}`;
       await uploadPair(page, t, first, firstLabel);
       await openServer(page, t);
       const groups = page.getByTestId('certificate-group');
-      await expect(groups).toHaveCount(4);
+      await expect(groups).toHaveCount(5);
       const webGroup = groups.filter({ has: page.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) }) });
       await expect(webGroup.getByTestId('certificate-group-row')).toContainText(HOST);
       await expect(webGroup.getByTestId('certificate-group-row')).toContainText(t('locations.group.count', { count: 1 }));

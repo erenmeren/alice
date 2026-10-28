@@ -68,6 +68,8 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   win_ccs_password_missing: [],
   win_ccs_helper_outdated: [],
   win_ccs_password_mismatch: ['count'],
+  // R69: the helper is below 1.2.0, so the Remote Desktop listener is not read (winproto.WarnRDPHelperOutdated).
+  win_rdp_helper_outdated: [],
 };
 
 export function warningKey(w: Warning): string {
@@ -102,6 +104,8 @@ export const LOCATION_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // (internal/providers/windows/ccs.go).
   win_ccs_unlinked: [],
   win_ccs_shadowed: [],
+  // R69: a Group Policy autoenrols the Remote Desktop certificate (winproto.WarnRDPAutoenroll).
+  win_rdp_autoenroll: [],
 };
 
 // locationWarningKey is the text key of a location warning; a code from a newer server gets the

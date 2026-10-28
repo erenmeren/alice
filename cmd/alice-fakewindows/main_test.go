@@ -603,7 +603,7 @@ func TestCtlCCSPasswordOpensTheDemoFiles(t *testing.T) {
 
 // The demo host's RDP listener (W6 Ruling 25): ctl endpoints names its port, it answers Alice's RDP probe with the
 // self-signed certificate rdp-dump shows, and ctl stale-tls-on keeps it on that certificate across an rdp-deploy until
-// stale-tls-off.
+// stale-tls-off; ctl rdp-self-signed puts it back on the self-signed certificate.
 func TestDemoHostHasRDP(t *testing.T) {
 	st := startStack(t)
 	key := clientKey(t)
@@ -658,4 +658,13 @@ func TestDemoHostHasRDP(t *testing.T) {
 	code, _, errOut = st.ctlRun(t, "", "stale-tls-off")
 	require.Equal(t, 0, code, errOut)
 	assert.Equal(t, sha256Hex(leaf.Cert.Raw), served(), "with stale TLS off the listener serves the new certificate")
+
+	code, out, errOut = st.ctlRun(t, "", "rdp-self-signed")
+	require.Equal(t, 0, code, errOut)
+	assert.JSONEq(t, `{"ok":true}`, out)
+	helper(winproto.SubRDPDump, nil, &d)
+	assert.False(t, d.ValueSet, "the listener's value is deleted")
+	require.NotNil(t, d.Certificate)
+	assert.Equal(t, selfSHA, d.Certificate.SHA256)
+	assert.Equal(t, selfSHA, served(), "the listener serves its self-signed certificate again")
 }

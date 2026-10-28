@@ -2,7 +2,7 @@ import { Anchor, Code, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { deploymentView, isCCSDeployment, isWindowsDeployment, rollbackForbidden, windowsPrevious } from '../api/deployments';
+import { deploymentView, isCCSDeployment, isRDPDeployment, isWindowsDeployment, rollbackForbidden, windowsPrevious } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
 import {
   deploymentStateKey,
@@ -111,7 +111,10 @@ export function DeploymentDetailPage() {
   const windows = isWindowsDeployment(d);
   // R68: a CCS file is one file that holds the key too, so there is no key file to name.
   const ccs = isCCSDeployment(d);
-  const previous = windows ? windowsPrevious(d) : null;
+  // R69: the Remote Desktop listener has no files either: the listener, its own steps, the previous certificate by store
+  // and thumbprint.
+  const rdp = isRDPDeployment(d);
+  const previous = windows || rdp ? windowsPrevious(d) : null;
   const chain = windows ? chainDiffers(d) : null;
   const time = (v: string | null) => (v ? formatDateTime(v, i18n.language) : '');
   // Ongoing recovery is described only while the deployment is not final; a finished one that went
@@ -153,7 +156,9 @@ export function DeploymentDetailPage() {
           ...(d.kv_version ? [{ key: 'version', label: t('deployments.versionLabel'), value: code(d.kv_version) }] : []),
         ]
       : []),
-    ...(windows
+    ...(rdp
+      ? [{ key: 'listener', label: t('deployments.listenerLabel'), value: t('locations.rdp.name') }]
+      : windows
       ? [{ key: 'binding', label: t('deployments.bindingLabel'), value: code(d.cert_path) }]
       : [
           { key: 'file', label: t('deployments.fileLabel'), value: code(d.cert_path) },
@@ -212,7 +217,7 @@ export function DeploymentDetailPage() {
       <div className={classes.detailGrid}>
         <div className={classes.stack}>
           <Panel title={t('deployments.page.sequence')} description={t('deployments.page.sequenceSub')} padded={false}>
-            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} windows={windows} ccs={ccs} />
+            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} windows={windows} ccs={ccs} rdp={rdp} />
           </Panel>
           {(recoveringNow || recoveredEarlier) && (
             <Panel title={t('deployments.recovery.title')} testId="recovery">
@@ -263,7 +268,7 @@ export function DeploymentDetailPage() {
                 )}
                 {d.failed_step && <Text size="sm">{t('deployments.failedStep', { step: t(stepNameKey(d.failed_step)) })}</Text>}
                 {d.cause_step && <Text size="sm">{t('deployments.causeStep', { step: t(stepNameKey(d.cause_step)) })}</Text>}
-                {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(d.helper_error, windows)) })}</Text>}
+                {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(stepErrorKey(d.helper_error, windows, rdp)) })}</Text>}
               </Stack>
             </Panel>
           )}

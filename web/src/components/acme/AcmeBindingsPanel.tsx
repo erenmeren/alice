@@ -29,7 +29,9 @@ const STATE_ICON = { current: 'CircleCheck', pending: 'Clock3', attention: 'Circ
 
 // placeColumnKey names the place column by the kinds it lists (R66): Binding when every row is a Windows binding,
 // Certificate file when none is, both when they are mixed. Any other kind counts as a file, a Windows server's CCS file too (R68).
+// The Remote Desktop listener (R69) is neither: with it the column is a place.
 function placeColumnKey(items: Pick<ACMEBinding, 'location_kind'>[]): string {
+  if (items.some((b) => b.location_kind === 'win_rdp')) return 'acme.issued.bindings.columns.placeAny';
   const bindings = items.filter((b) => b.location_kind === 'win_sslbinding').length;
   if (bindings === 0) return 'acme.issued.bindings.columns.file';
   return bindings === items.length ? 'acme.issued.bindings.columns.binding' : 'acme.issued.bindings.columns.place';
@@ -141,6 +143,8 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
                       </Anchor>
                     </Table.Td>
                     <Table.Td>
+                      {/* R69: the Remote Desktop listener is named as such, beside its canonical text. */}
+                      {b.location_kind === 'win_rdp' && <Text size="sm">{t('locations.rdp.name')}</Text>}
                       <Code translate="no" style={WRAP}>
                         {b.cert_path}
                       </Code>

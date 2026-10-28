@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../api/client';
-import { deploymentView, isCCSDeployment, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
+import { deploymentView, isCCSDeployment, isRDPDeployment, isSettled, isWindowsDeployment, watchDeployments } from '../api/deployments';
 import { isAbort } from '../api/jobs';
 import { deployBinding, type Binding, type BindingDeployResult, type KVCertificateDetail } from '../api/keyvault';
 import { BINDINGS_KEY, DEPLOYMENTS_KEY, KV_CERTIFICATES_KEY, targetKey } from '../api/queryKeys';
@@ -153,7 +153,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                   )}
                   {/* A vault binding's location has no kind in the API: the steps are listed once the deployment is read, and its
                       location_kind decides between the file steps and the Windows steps (no guess from the location's text). */}
-                  {dep && <DeploymentSteps steps={dep.steps} status={dep.status} vault windows={isWindowsDeployment(dep)} ccs={isCCSDeployment(dep)} />}
+                  {dep && <DeploymentSteps steps={dep.steps} status={dep.status} vault windows={isWindowsDeployment(dep)} ccs={isCCSDeployment(dep)} rdp={isRDPDeployment(dep)} />}
                   {step && dep && !isSettled(dep) && (
                     <Text size="xs" c="dimmed" aria-live="polite">
                       {t('deployments.currentStep', { step: t(step) })}

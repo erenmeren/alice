@@ -17,7 +17,9 @@ import {
   windowsBindingFixture,
   windowsCCSFileFixture,
   windowsDeploymentFixture,
+  windowsRDPFixture,
   ccsDeploymentFixture,
+  rdpDeploymentFixture,
 } from '../test/fixtures';
 import { renderWithAuth } from '../test/render';
 import { server } from '../test/server';
@@ -863,6 +865,30 @@ describe('DeployDialog on a Windows server', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
     const list = await screen.findByRole('list', { name: 'Steps' });
     for (const name of ['Import the chain', 'Write the file', 'Verify']) expect(within(list).getByText(name)).toBeInTheDocument();
+    expect(within(list).queryByText('Bind')).not.toBeInTheDocument();
+  });
+
+  it('offers the Remote Desktop listener like a binding and names the listener in the summary (R69)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const rdp = windowsRDPFixture({ id: 'r1', certificate: OTHER });
+    server.use(
+      http.post(`/api/v1/certificates/${NEW_ID}/deploy`, () => HttpResponse.json(accepted([D1, 'r1']), { status: 202 })),
+      http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(rdpDeploymentFixture({ id: String(params.id), location_id: 'r1' }))),
+    );
+    await showDialog({ location: rdp, siblings: [W1, rdp] });
+    expect(await screen.findByText(/points the Remote Desktop listener \(RDP-Tcp\) to the new certificate/)).toBeInTheDocument();
+    expect(screen.getByText(/gives NETWORK SERVICE, the account Remote Desktop runs as, read access to the new private key/)).toBeInTheDocument();
+    expect(screen.getByText(/points the listener back to the previous certificate/)).toBeInTheDocument();
+    expect(screen.queryByText(/points the binding/)).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Where to deploy' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Remote Desktop \(RDP-Tcp\).*rdp\/RDP-Tcp/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /0\.0\.0\.0:8443/ })).not.toBeChecked();
+    await userEvent.selectOptions(await screen.findByLabelText('Certificate'), NEW_ID);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    const list = await screen.findByRole('list', { name: 'Steps' });
+    for (const name of ['Import the chain', 'Import the certificate', 'Allow NETWORK SERVICE to read the key', 'Point the listener to the certificate', 'Verify'])
+      expect(within(list).getByText(name)).toBeInTheDocument();
     expect(within(list).queryByText('Bind')).not.toBeInTheDocument();
   });
 

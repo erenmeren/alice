@@ -66,6 +66,12 @@ export function isCCSDeployment(d: Pick<Deployment, 'location_kind'>): boolean {
   return d.location_kind === 'win_ccs_file';
 }
 
+// isRDPDeployment: a deployment to the Remote Desktop listener RDP-Tcp of a Windows server (R69), by the kind the API
+// names. It is neither a binding nor a file: isWindowsDeployment and isCCSDeployment are false for it.
+export function isRDPDeployment(d: Pick<Deployment, 'location_kind'>): boolean {
+  return d.location_kind === 'win_rdp';
+}
+
 // windowsPrevious is the previous certificate of a Windows deployment (store and SHA-1 thumbprint): the deployment's
 // own, else the params of its error (a failed rollback names them); null when neither names both.
 export function windowsPrevious(d: Pick<Deployment, 'error'> & { backup_store?: string; backup_sha1?: string }): { store: string; sha1: string } | null {

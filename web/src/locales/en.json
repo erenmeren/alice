@@ -1113,6 +1113,7 @@
     "win_ccs_files_ignored": "Files of the Centralized Certificate Store whose names give no host name were ignored: {{count}}.",
     "win_ccs_password_missing": "Alice has no CCS password for this server, so the files of its Centralized Certificate Store are not listed. An Administrator sets it on this page.",
     "win_ccs_helper_outdated": "The helper on this server is too old to read the Centralized Certificate Store. Update it with the setup script, then choose Discover.",
+    "win_rdp_helper_outdated": "The helper on this server is too old to read the Remote Desktop listener. Update it with the setup script, then choose Discover.",
     "win_ccs_password_mismatch": "Files of the Centralized Certificate Store that the CCS password in Alice does not open: {{count}}. Check the password set in IIS Manager."
   },
   "targets": {
@@ -1871,7 +1872,8 @@
       "state": "State",
       "actions": "Actions",
       "binding": "Binding",
-      "bindingOrFile": "Binding or file"
+      "bindingOrFile": "Binding or file",
+      "place": "Place"
     },
     "defaultServer": "(default server)",
     "noWebsite": "(no server name)",
@@ -1958,7 +1960,8 @@
       "chain_unresolved": "Alice could not work out the chain of this file within its limits, so it keeps only the website's certificate; its chain counts as incomplete.",
       "win_ctl": "This binding also uses a trusted-issuers list or client certificates. Alice does not model those.",
       "win_ccs_unlinked": "No IIS site uses this file. Alice can deploy to it and checks the file by reading it back; no website can be probed.",
-      "win_ccs_shadowed": "An http.sys binding of the host name and port serves a site set to use this file, so IIS does not serve that site from the file. Alice does not probe that site after a deployment to the file; deploy to the http.sys binding to change what the site serves."
+      "win_ccs_shadowed": "An http.sys binding of the host name and port serves a site set to use this file, so IIS does not serve that site from the file. Alice does not probe that site after a deployment to the file; deploy to the http.sys binding to change what the site serves.",
+      "win_rdp_autoenroll": "A Group Policy setting autoenrols the Remote Desktop certificate, so Windows may replace the certificate Alice deploys by itself."
     },
     "unsupported": {
       "variable": "The path uses a variable, so Alice cannot know which file is used.",
@@ -1981,6 +1984,9 @@
       "win_foreign_app_iis_unused": "No IIS site uses this binding.",
       "win_ccs": "This http.sys entry sends IIS to the Centralized Certificate Store. Alice deploys to the store's files, listed on this page, not to this entry.",
       "win_store_unsupported": "The certificate is in a store other than My or WebHosting. Alice does not support that store.",
+      "win_rdp_disabled": "Remote Desktop is off on this server, so nothing would serve the certificate. Turn Remote Desktop on, then choose Discover.",
+      "win_rdp_no_tls": "The listener uses RDP security without TLS (security layer 0), so it never uses a certificate. Set the security layer to Negotiate or TLS, then choose Discover.",
+      "win_rdp_cert_unknown": "The listener names no certificate and the Remote Desktop store does not hold exactly one, so Alice cannot tell which certificate it serves.",
       "file_problem_windows": "Alice cannot use the certificate or key of this binding.",
       "file_problem_ccs": "Alice cannot use this file of the Centralized Certificate Store."
     },
@@ -2040,11 +2046,20 @@
       "count_one": "{{count}} binding",
       "count_other": "{{count}} bindings",
       "countPlaces_one": "{{count}} binding or file",
-      "countPlaces_other": "{{count}} bindings or files"
+      "countPlaces_other": "{{count}} bindings or files",
+      "countAny_one": "{{count}} place",
+      "countAny_other": "{{count}} places"
     },
     "problemsCCS": {
       "cert_missing": "An IIS site uses this name, but the store's folder has no file for it. Place the first file in the folder; Alice manages it from then on.",
       "key_missing": "The file holds the certificate without its private key."
+    },
+    "rdp": {
+      "name": "Remote Desktop (RDP-Tcp)",
+      "help": "The listener Remote Desktop connections to this server use. A deployment replaces its certificate, at first Windows' own self-signed one.",
+      "selfSigned": "Self-signed by Windows",
+      "nlaOn": "Network Level Authentication: on",
+      "nlaOff": "Network Level Authentication: off"
     }
   },
   "deploy": {
@@ -2108,7 +2123,10 @@
     "chosenNoLongerFits": "The chosen certificate does not fit every ticked binding (another key type). Choose another certificate or untick that binding.",
     "succeededUnverifiedCCS": "The new certificate was written into the file and read back.",
     "summaryCCS": "Alice imports the intermediate certificates into the server's CA store, writes the new certificate into the file in place, keeping a backup of the previous file beside it in the Centralized Certificate Store folder, and checks the IIS sites that use the file. If any step fails, Alice restores the file from the backup.",
-    "bindingsOrFiles": "Bindings and files"
+    "bindingsOrFiles": "Bindings and files",
+    "summaryRDP": "Alice imports the certificate into the server's Personal (My) store and its intermediate certificates into the CA store, gives NETWORK SERVICE, the account Remote Desktop runs as, read access to the new private key, points the Remote Desktop listener (RDP-Tcp) to the new certificate in place of the one it uses now (at first Windows' own self-signed one), and checks that it is served after the RDP negotiation. If any step fails, Alice points the listener back to the previous certificate.",
+    "places": "Where to deploy",
+    "succeededUnverifiedRDP": "The new certificate was deployed and the Remote Desktop listener points to it."
   },
   "deployments": {
     "page": {
@@ -2244,7 +2262,9 @@
       "sync": "Synchronise the device group",
       "save": "Save the configuration",
       "write_secret": "Write the Secret",
-      "write_file": "Write the file"
+      "write_file": "Write the file",
+      "grant_key_read": "Allow NETWORK SERVICE to read the key",
+      "set_listener": "Point the listener to the certificate"
     },
     "stepStatus": {
       "started": "Running",
@@ -2269,7 +2289,8 @@
         "failed": "The unfinished earlier change still blocks these files."
       },
       "ccsUnlinked": "No IIS site uses this file, so Alice read the file back instead of checking a website.",
-      "ccsRefreshFailed": "Alice could not tell IIS to read the new file again; the verification shows whether the sites serve it."
+      "ccsRefreshFailed": "Alice could not tell IIS to read the new file again; the verification shows whether the sites serve it.",
+      "rdpKeyACLLeft": "Alice could not take back NETWORK SERVICE's read access to the new certificate's private key; the access was left in place."
     },
     "currentStep": "Current step: {{step}}",
     "operation": "Unfinished earlier change on the server (operation ID): {{id}}",
@@ -2284,6 +2305,7 @@
     "vaultLabel": "Vault",
     "versionLabel": "Vault version",
     "bindingLabel": "Binding",
+    "listenerLabel": "Listener",
     "previousWindows": "Previous certificate: {{store}} \\ {{sha1}}",
     "previousWindowsForbidden": "Previous certificate (revoked or compromised: never bind it again): {{store}} \\ {{sha1}}",
     "warnings": {
@@ -2295,7 +2317,9 @@
       "store_error": "Windows could not open or change the certificate store.",
       "backup_missing": "The previous certificate or its private key is no longer in the certificate store.",
       "io_error": "A Windows call on the server failed.",
-      "file_changed_windows": "Another program changed the binding: it names a certificate Alice did not deploy."
+      "key_acl": "Windows could not give NETWORK SERVICE read access to the certificate's private key.",
+      "file_changed_windows": "Another program changed the binding: it names a certificate Alice did not deploy.",
+      "file_changed_rdp": "Another program changed the Remote Desktop listener: it names a certificate Alice did not deploy."
     },
     "windowsErrors": {
       "deployment": {
@@ -3853,6 +3877,7 @@
           "file": "Certificate file",
           "binding": "Binding",
           "place": "Certificate file or binding",
+          "placeAny": "Place",
           "state": "State",
           "auto": "Automatic deployment",
           "actions": "Actions"
