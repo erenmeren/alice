@@ -1541,8 +1541,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   and reads it back. The deployment's page shows **Import the chain**, **Import the certificate**, **Allow NETWORK
   SERVICE to read the key**, **Point the listener to the certificate** and **Verify**. Windows uses the new certificate
   for the next connection, without a restart. When the listener already names
-  the certificate but serves an older chain, the helper removes the value and sets it again so Windows sends the new
-  chain; Remote Desktop serves its self-signed certificate for about 10 ms in between. Alice checks the listener on its
+  the certificate and the deployment changes its key access or chain, the helper removes the value and sets it again
+  so Windows picks the change up; Remote Desktop serves its self-signed certificate for about 10 ms in between. Alice checks the listener on its
   port with the Remote Desktop negotiation and a TLS handshake: the check never signs in and sends no credentials,
   so with Network Level Authentication on it leaves no failed logon in the Security log and cannot lock an account.
   When Alice cannot reach the port (a firewall that admits Remote Desktop from administrators' networks only), the
