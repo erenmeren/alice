@@ -379,12 +379,54 @@ func keyDACL(key windows.Handle) (*windows.SECURITY_DESCRIPTOR, []uint64, error)
 	if !ok || n < minRelativeSD {
 		return nil, nil, errKeyACL
 	}
-	// unsafe: buf holds the self-relative descriptor NCryptGetProperty wrote.
+	// unsafe: a byte view of the n bytes buf holds.
+	if checkRelativeDACL(unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n)) != nil {
+		return nil, nil, errKeyACL
+	}
+	// unsafe: buf holds the self-relative descriptor NCryptGetProperty wrote, its DACL bounds checked.
 	sd := (*windows.SECURITY_DESCRIPTOR)(unsafe.Pointer(&buf[0]))
 	if !sd.IsValid() || sd.Length() > n {
 		return nil, nil, errKeyACL
 	}
 	return sd, buf, nil
+}
+
+// checkRelativeDACL bounds a self-relative descriptor's DACL inside b before Windows reads it (security
+// review M1: IsValidSecurityDescriptor takes no length, and GetSecurityDescriptorLength sums sizes, not
+// offsets): SE_SELF_RELATIVE is set; a present DACL (SE_DACL_PRESENT, offset at byte 16) starts after the
+// 20-byte header, its 8-byte header and AclSize bytes lie inside b, and every ACE (at most maxACEs, each at
+// least 8 bytes) ends inside the ACL. A DACL that is not present, or at offset 0, is the NULL DACL.
+func checkRelativeDACL(b []byte) error {
+	if len(b) < minRelativeSD {
+		return errKeyACL
+	}
+	control := binary.LittleEndian.Uint16(b[2:])
+	if control&windows.SE_SELF_RELATIVE == 0 {
+		return errKeyACL
+	}
+	off := int(binary.LittleEndian.Uint32(b[16:]))
+	if control&windows.SE_DACL_PRESENT == 0 || off == 0 {
+		return nil
+	}
+	if off < minRelativeSD || off > len(b)-8 {
+		return errKeyACL
+	}
+	size, count := int(binary.LittleEndian.Uint16(b[off+2:])), int(binary.LittleEndian.Uint16(b[off+4:]))
+	end := off + size
+	if size < 8 || end > len(b) || count > maxACEs {
+		return errKeyACL
+	}
+	for pos, i := off+8, 0; i < count; i++ {
+		if pos+4 > end {
+			return errKeyACL
+		}
+		aceSize := int(binary.LittleEndian.Uint16(b[pos+2:]))
+		if aceSize < 8 || pos+aceSize > end {
+			return errKeyACL
+		}
+		pos += aceSize
+	}
+	return nil
 }
 
 // keyACEs is a key's DACL as a copy of each ACE's bytes, in order, with the descriptor's buffer.
@@ -447,9 +489,17 @@ func eachACE(dacl *windows.ACL, f func(a *windows.ACCESS_ALLOWED_ACE, sid *windo
 	if dacl.AceCount > maxACEs {
 		return errKeyACL
 	}
+	// The ACL's bounds as addresses: every ACE must end inside it (security review M1).
+	// unsafe: the ACL's 8-byte header; AclSize is bytes 2-3 (windows.ACL keeps it unexported).
+	aclSize := binary.LittleEndian.Uint16(unsafe.Slice((*byte)(unsafe.Pointer(dacl)), 8)[2:])
+	start := uintptr(unsafe.Pointer(dacl))
+	aclEnd := start + uintptr(aclSize)
 	for i := range uint32(dacl.AceCount) {
 		var a *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &a); err != nil || a == nil || a.Header.AceSize < 8 {
+			return errKeyACL
+		}
+		if at := uintptr(unsafe.Pointer(a)); at < start+8 || at+uintptr(a.Header.AceSize) > aclEnd {
 			return errKeyACL
 		}
 		var sid *windows.SID
