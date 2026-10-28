@@ -26,24 +26,33 @@ func locatorOf(loc providers.CertLocation) (winproto.Locator, bool) {
 	l.IP, _ = loc.Locator["ip"].(string)
 	l.Host, _ = loc.Locator["host"].(string)
 	l.AppID, _ = loc.Locator["app_id"].(string)
-	switch p := loc.Locator["port"].(type) {
+	l.Port = locatorPort(loc.Locator["port"])
+	_, ok := l.Canonical()
+	return l, ok
+}
+
+// locatorPort is a locator's port as Go or inventory holds it (an int, a JSON float64, providers.ParseLocator's
+// json.Number); 0 for anything outside 1-65535.
+func locatorPort(v any) int {
+	switch p := v.(type) {
 	case int:
-		l.Port = p
+		if p > 0 && p <= 65535 {
+			return p
+		}
 	case int64:
 		if p > 0 && p <= 65535 {
-			l.Port = int(p)
+			return int(p)
 		}
 	case float64:
 		if p == float64(int(p)) && p > 0 && p <= 65535 {
-			l.Port = int(p)
+			return int(p)
 		}
 	case json.Number: // the locator as inventory stored it (providers.ParseLocator)
 		if n, err := p.Int64(); err == nil && n > 0 && n <= 65535 {
-			l.Port = int(n)
+			return int(n)
 		}
 	}
-	_, ok := l.Canonical()
-	return l, ok
+	return 0
 }
 
 // Endpoints lists the endpoints of a Windows location to verify (W2 Ruling 15), deduplicated by port,
@@ -62,10 +71,13 @@ func locatorOf(loc providers.CertLocation) (winproto.Locator, bool) {
 // The Administrator's options apply: v.Port replaces the port, v.SNI every name, and v.Address (the
 // probe address) makes Alice's own probe, which then connects there, stand for every endpoint. A locator
 // Alice does not deploy to has no endpoints (the verification is then unreachable). A CCS file's endpoints
-// are its linked IIS bindings (ccsEndpoints, W5 Ruling 20).
+// are its linked IIS bindings (ccsEndpoints, W5 Ruling 20), the RDP listener's its one port (rdpEndpoints, W6 Ruling 16).
 func Endpoints(loc providers.CertLocation, v providers.VerifyOptions, sans []string) []tlsverify.Endpoint {
-	if loc.Kind == providers.LocationWinCCSFile {
+	switch loc.Kind {
+	case providers.LocationWinCCSFile:
 		return ccsEndpoints(loc, v, sans)
+	case providers.LocationWinRDP:
+		return rdpEndpoints(loc, v, sans)
 	}
 	l, ok := locatorOf(loc)
 	if !ok {
@@ -142,8 +154,13 @@ func (s *session) VerifyDeployment(ctx context.Context, req providers.VerifyRequ
 	if req.Verify.Address != "" {
 		host = req.Verify.Address
 	}
-	// A CCS file's attempts span winproto.CCSPickupWait (verifyAttempts, F15).
-	return tlsverify.Verify(ctx, host, Endpoints(req.Location, req.Verify, req.SANs), req, s.p.prober, s.serverProbe,
+	// The RDP listener is probed after the RDP negotiation, by Alice and by the helper (W6 Ruling 15).
+	prober, server := s.p.prober, s.serverProbe
+	if req.Location.Kind == providers.LocationWinRDP {
+		prober, server = s.p.rdpProber, s.rdpServerProbe
+	}
+	// A CCS file's attempts span winproto.CCSPickupWait, the RDP listener's RDPPickupWait (verifyAttempts, F15, F20).
+	return tlsverify.Verify(ctx, host, Endpoints(req.Location, req.Verify, req.SANs), req, prober, server,
 		tlsverify.Options{Attempts: s.p.verifyAttempts(req.Location.Kind), RetryWait: s.p.retryWait, Clock: s.clock, Log: s.log})
 }
 
@@ -153,11 +170,16 @@ func (s *session) VerifyDeployment(ctx context.Context, req providers.VerifyRequ
 // a failure of the SSH connection (it cannot be opened, or the command could not complete). tlsverify
 // checks the answer (leaf, chain bound, chain against its length).
 func (s *session) serverProbe(ctx context.Context, ep tlsverify.Endpoint, keyType string) (tlsverify.Served, bool, error) {
+	return s.probeWith(ctx, ep, keyType)
+}
+
+// probeWith is serverProbe with extra trailing arguments of tls-probe (the RDP probe's --rdp).
+func (s *session) probeWith(ctx context.Context, ep tlsverify.Endpoint, keyType string, extra ...string) (tlsverify.Served, bool, error) {
 	sni := ep.SNI
 	if sni == "" {
 		sni = helperproto.NoSNI
 	}
-	c, err := cmd(winproto.SubTLSProbe, nil, "--addr", ep.Addr, "--port", strconv.Itoa(ep.Port), "--sni", sni, "--key-type", keyType)
+	c, err := cmd(winproto.SubTLSProbe, nil, append([]string{"--addr", ep.Addr, "--port", strconv.Itoa(ep.Port), "--sni", sni, "--key-type", keyType}, extra...)...)
 	if err != nil || !helperproto.ValidIP(ep.Addr) || !helperproto.ValidPort(strconv.Itoa(ep.Port)) ||
 		(sni != helperproto.NoSNI && !helperproto.ValidSNI(sni)) {
 		return tlsverify.Served{}, false, nil

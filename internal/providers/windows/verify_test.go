@@ -285,3 +285,63 @@ func (p *paramsLog) Step(name string, status providers.StepStatus, params map[st
 		p.params = params
 	}
 }
+
+// W6 Ruling 16: the listener's one endpoint: the locator's port, SNI from the SANs, the helper's probe of the
+// loopback, on every address; the Administrator's port and SNI replace them. A locator Alice does not deploy to has none.
+func TestRDPEndpoints(t *testing.T) {
+	loc := rdpLoc(3390, map[string]any{})
+	assert.Equal(t, []tlsverify.Endpoint{{Port: 3390, SNI: "rdp.example.test", Addr: "127.0.0.1"}},
+		Endpoints(loc, providers.VerifyOptions{}, []string{"rdp.example.test"}))
+	assert.Equal(t, []tlsverify.Endpoint{{Port: 13389, SNI: "admin.example.test", Addr: "127.0.0.1"}},
+		Endpoints(loc, providers.VerifyOptions{Port: 13389, SNI: "admin.example.test", Address: "192.0.2.7"}, []string{"rdp.example.test"}))
+	stored := rdpLoc(0, map[string]any{})
+	stored.Locator["port"] = json.Number("3389") // the locator as inventory stored it
+	assert.Equal(t, []tlsverify.Endpoint{{Port: 3389, SNI: "rdp.example.test", Addr: "127.0.0.1"}},
+		Endpoints(stored, providers.VerifyOptions{}, []string{"rdp.example.test"}))
+	for _, bad := range []providers.Locator{
+		{"type": winproto.LocatorRDP, "listener": "RDP-Other", "port": 3389},
+		{"type": winproto.BindingIPPort, "listener": winproto.RDPListenerName, "port": 3389},
+		{"type": winproto.LocatorRDP, "listener": winproto.RDPListenerName, "port": 0},
+	} {
+		l := rdpLoc(3389, map[string]any{})
+		l.Locator = bad
+		assert.Empty(t, Endpoints(l, providers.VerifyOptions{}, []string{"rdp.example.test"}), "%v", bad)
+	}
+}
+
+// Review Focus 4 and W6 Ruling 16: Alice cannot reach the listener's port (a firewall that admits administrators
+// only): the helper's tls-probe --rdp of 127.0.0.1 decides; it is the plain probe's command line with --rdp last.
+func TestRDPVerifyFallsBackToTheHelper(t *testing.T) {
+	r := newREnv(t)
+	r.rprobe.setDown(true)
+	s := r.open(t)
+	req := r.rdpReq(r.issue())
+	out, err := s.DeployCertificate(context.Background(), req, nil)
+	providertest.CheckDeployOutcome(t, out, err)
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployCommitted, out.Result)
+	assert.Equal(t, "local", out.Verified, "the helper's probe decided")
+	var probes []string
+	for _, c := range r.srv.Commands() {
+		if strings.HasPrefix(c, winproto.SubTLSProbe) {
+			probes = append(probes, c)
+		}
+	}
+	require.NotEmpty(t, probes)
+	for _, p := range probes {
+		assert.Equal(t, "tls-probe --addr 127.0.0.1 --port 3389 --sni www.example.test --key-type any --rdp", p)
+	}
+	assert.NotEmpty(t, r.rprobe.seen(), "Alice tried first")
+	assert.Empty(t, r.probe.seen(), "never the plain TLS probe")
+
+	// The listener does not take the change: the helper's probe sees the self-signed certificate, and it is put back.
+	r = newREnv(t)
+	r.rprobe.setDown(true)
+	r.model.ServeStaleRDP(true)
+	out, err = r.open(t).DeployCertificate(context.Background(), r.rdpReq(r.issue()), nil)
+	providertest.CheckDeployOutcome(t, out, err)
+	require.NoError(t, err)
+	assert.Equal(t, providers.DeployRolledBack, out.Result)
+	assert.Equal(t, "deployment.verify_failed", out.Reason)
+	assert.Empty(t, r.model.RDPThumbprint())
+}

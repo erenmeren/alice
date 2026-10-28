@@ -85,7 +85,7 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, guard providers.Rol
 	default:
 		return restoreResult{}, protocolError(sub, "an unknown phase")
 	}
-	logSteps(log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepRestore))
+	logSteps(log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepRestore), aclLeftStep(a.RDPKeyACLLeft, steps))
 	return restoreResult{phase: a.Phase, failedStep: a.FailedStep, causeStep: a.CauseStep, class: a.Error, steps: steps}, nil
 }
 

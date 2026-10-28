@@ -188,7 +188,7 @@ func TestCCSNeedsHelper110(t *testing.T) {
 	res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
-	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSHelperOutdated}, codes(res.Warnings))
+	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSHelperOutdated, winproto.WarnRDPHelperOutdated}, codes(res.Warnings))
 	assert.Empty(t, ccsLocations(res.Certificates))
 	assert.Len(t, res.Certificates, 4, "the W4 bindings")
 
@@ -238,14 +238,14 @@ func TestDiscoverWithoutPasswordIsW4(t *testing.T) {
 			require.NoError(t, err)
 			res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 			require.NoError(t, err)
-			assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
+			assert.Equal(t, []string{"version", "iis-dump", "rdp-dump"}, e.srv.Commands())
 			assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSPasswordMissing}, codes(res.Warnings))
 			var paths []string
 			for _, c := range res.Certificates {
 				paths = append(paths, c.Location.CertPath)
 			}
 			assert.Equal(t, []string{"http.sys/ccs/443", "http.sys/hostnameport/www.win.example.test:443", "http.sys/ipport/0.0.0.0:5986",
-				"http.sys/ipport/0.0.0.0:8443"}, paths)
+				"http.sys/ipport/0.0.0.0:8443", winproto.RDPCanonical}, paths)
 			assert.Equal(t, UnsupportedCCS, byPath(res.Certificates)["http.sys/ccs/443"].Location.Unsupported, "the old win_ccs reason")
 		})
 	}
@@ -270,7 +270,7 @@ func TestDiscoverCCSLinks(t *testing.T) {
 	require.NoError(t, err)
 	res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"version", "iis-dump", "ccs-dump"}, e.srv.Commands())
+	assert.Equal(t, []string{"version", "iis-dump", "ccs-dump", "rdp-dump"}, e.srv.Commands())
 	assert.Equal(t, []uuid.UUID{testTarget}, cred.asked, "the provider asks for its own target's password only")
 	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSPasswordMismatch, winproto.WarnCCSFilesIgnored}, codes(res.Warnings))
 	assert.Equal(t, map[string]string{"count": "1"}, warningParams(res.Warnings, WarnCCSPasswordMismatch))
@@ -336,7 +336,7 @@ func TestDiscoverCCSLinks(t *testing.T) {
 			res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 			require.NoError(t, err)
 			assert.Empty(t, ccsLocations(res.Certificates))
-			assert.Len(t, res.Certificates, 4, "the bindings are kept")
+			assert.Len(t, res.Certificates, 5, "the bindings and the RDP listener are kept")
 			assert.Equal(t, []string{winproto.WarnCCSEnabled, providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
 		})
 	}
@@ -359,9 +359,9 @@ func TestDiscoverCCSLinks(t *testing.T) {
 			before := len(e.srv.Commands())
 			res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 			require.NoError(t, err)
-			assert.Equal(t, []string{"iis-dump"}, e.srv.Commands()[before:], "no ccs-dump")
+			assert.Equal(t, []string{"iis-dump", "rdp-dump"}, e.srv.Commands()[before:], "no ccs-dump")
 			assert.Empty(t, ccsLocations(res.Certificates))
-			assert.Len(t, res.Certificates, 4, "the bindings are kept")
+			assert.Len(t, res.Certificates, 5, "the bindings and the RDP listener are kept")
 			assert.Equal(t, []string{winproto.WarnCCSEnabled, providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
 		})
 	}
@@ -402,14 +402,14 @@ func TestEachCCSCallUsesItsOwnConnection(t *testing.T) {
 	c.waitNoOpenConnections(t)
 	_, err := s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err, "a reused connection would answer ccs-dump as iis-dump")
-	assert.Equal(t, 3, c.srv.Connections())
+	assert.Equal(t, 4, c.srv.Connections())
 	req := c.ccsReq(c.issue())
 	req.Verify.Skip = true
 	out, err := s.DeployCertificate(context.Background(), req, nil)
 	require.NoError(t, err, "a reused connection would answer ccs-deploy as version")
 	assert.Equal(t, providers.DeployCommitted, out.Result)
-	assert.Equal(t, 4, c.srv.Connections(), "one connection per helper call")
-	assert.Equal(t, []string{"version", "iis-dump", "ccs-dump", "ccs-deploy --op " + req.OperationID.String()}, c.srv.Commands())
+	assert.Equal(t, 5, c.srv.Connections(), "one connection per helper call")
+	assert.Equal(t, []string{"version", "iis-dump", "ccs-dump", "rdp-dump", "ccs-deploy --op " + req.OperationID.String()}, c.srv.Commands())
 	c.waitNoOpenConnections(t)
 }
 
@@ -439,7 +439,7 @@ func TestCCSPasswordIsNeverOutsideStdin(t *testing.T) {
 	}
 	for _, cmd := range c.srv.Commands() {
 		assert.NotContains(t, cmd, c.pw, "the password is never on a command line")
-		assert.Contains(t, []string{"version", "iis-dump", "ccs-dump", "ccs-deploy --op " + req.OperationID.String(), "iis-restore --op " + req.OperationID.String(),
+		assert.Contains(t, []string{"version", "iis-dump", "ccs-dump", "rdp-dump", "ccs-deploy --op " + req.OperationID.String(), "iis-restore --op " + req.OperationID.String(),
 			"tls-probe --addr 127.0.0.1 --port 443 --sni ccs.example.test --key-type ecdsa"}, cmd)
 	}
 	assert.Contains(t, string(c.stdinsOf(winproto.SubCCSDump)[0]), c.pw, "ccs-dump's password is on stdin")

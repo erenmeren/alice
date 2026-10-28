@@ -39,6 +39,11 @@ const (
 	ReasonCCSPasswordMismatch = "windows.ccs_password_mismatch" // CCS_PASSWORD_MISMATCH: Alice's password does not open the file
 	ReasonCCSPasswordMissing  = "windows.ccs_password_missing"  // Alice holds no CCS password of the server (refused before sending)
 	ReasonCCSFileNotFound     = "windows.ccs_file_not_found"    // CCS_FILE_NOT_FOUND: the folder holds no file for the host
+
+	// The Remote Desktop listener's reasons (W6, R69: ALC-WIN-0021..0023).
+	ReasonRDPDisabled     = "windows.rdp_disabled"       // RDP_DISABLED: Remote Desktop is off now
+	ReasonRDPTLSOff       = "windows.rdp_tls_off"        // RDP_TLS_OFF: the listener's security layer offers no TLS
+	ReasonRDPKeyACLFailed = "windows.rdp_key_acl_failed" // error class key_acl: NETWORK SERVICE could not be given read access to the key
 )
 
 // The engine's own reasons the helper's codes map to (Ruling 6), so its recovery paths work unchanged.
@@ -75,6 +80,9 @@ var helperReasons = map[string]struct {
 	winproto.CodeCCSPathUnsupported:  {ReasonLocationUnsupported, false},
 	winproto.CodeCCSPasswordMismatch: {ReasonCCSPasswordMismatch, false},
 	winproto.CodeCCSFileNotFound:     {ReasonCCSFileNotFound, false},
+
+	winproto.CodeRDPDisabled: {ReasonRDPDisabled, false},
+	winproto.CodeRDPTLSOff:   {ReasonRDPTLSOff, false},
 }
 
 // mapHelper names the Windows conditions in an error of the shared SSH layer: an exit that is no
@@ -151,6 +159,9 @@ var budgets = map[string]budget{
 	// chains) has no bound of its own, so it shares iis-dump's: a longer answer is a failed ccs-dump (Ruling 18).
 	winproto.SubCCSDump:   {linuxssh.LongCommandTimeout, winproto.DumpOutput},
 	winproto.SubCCSDeploy: {linuxssh.LongCommandTimeout, 64 << 10},
+	// rdp-dump reads the listener and at most one certificate with its chain, without a lock (W6 Ruling 18).
+	winproto.SubRDPDump:   {linuxssh.DefaultCommandTimeout, 1 << 20},
+	winproto.SubRDPDeploy: {linuxssh.LongCommandTimeout, 64 << 10},
 }
 
 // cmd builds the forced command line of a subcommand with its standard input (nil for none): the

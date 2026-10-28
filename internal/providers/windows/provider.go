@@ -31,6 +31,9 @@ type Options struct {
 	AllowUnverifiedHelper bool
 	// Prober is Alice's own TLS probe of a deployment's endpoints (nil = tlsverify.TLSProber{}).
 	Prober tlsverify.Prober
+	// RDPProber is Alice's own probe of the Remote Desktop listener, after the RDP negotiation (nil =
+	// tlsverify.TLSProber{RDP: true}, W6 Ruling 15).
+	RDPProber tlsverify.Prober
 	// RetryWait is the wait between verification attempts (0 = 2 s); Attempts the attempts per endpoint (0 = 5).
 	RetryWait time.Duration
 	Attempts  int
@@ -43,6 +46,7 @@ type Provider struct {
 	caps            providers.CapabilitySet
 	allowUnverified bool
 	prober          tlsverify.Prober
+	rdpProber       tlsverify.Prober
 	retryWait       time.Duration
 	attempts        int
 	// The inline rollback's iis-restore is sent again while the helper answers BUSY: restoreAttempts
@@ -77,10 +81,13 @@ func (p *Provider) RollbackTraits() providers.RollbackTraits {
 func New(o Options) *Provider {
 	p := &Provider{pool: o.Pool, caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverCerts,
 		providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapCleanupCertificates),
-		allowUnverified: o.AllowUnverifiedHelper, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
+		allowUnverified: o.AllowUnverifiedHelper, prober: o.Prober, rdpProber: o.RDPProber, retryWait: o.RetryWait, attempts: o.Attempts,
 		restoreAttempts: 3, restoreWait: 10 * time.Second}
 	if p.prober == nil {
 		p.prober = tlsverify.TLSProber{}
+	}
+	if p.rdpProber == nil {
+		p.rdpProber = tlsverify.TLSProber{RDP: true}
 	}
 	if p.retryWait <= 0 {
 		p.retryWait = 2 * time.Second

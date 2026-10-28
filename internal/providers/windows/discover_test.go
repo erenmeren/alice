@@ -36,7 +36,7 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 	require.NoError(t, err)
 	e := newEnvWith(t, m)
 	res := discover(t, e, providers.DiscoverRequest{SSHKeys: true, Certificates: true})
-	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
+	assert.Equal(t, []string{"version", "iis-dump", "rdp-dump"}, e.srv.Commands())
 	require.NotNil(t, res.WebServer)
 	assert.Equal(t, providers.WebServerFacts{Software: "iis", Version: "10.0", Found: true, ConfigValid: true}, *res.WebServer)
 	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSPasswordMissing}, codes(res.Warnings),
@@ -50,7 +50,7 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 		paths = append(paths, c.Location.CertPath)
 	}
 	assert.Equal(t, []string{"http.sys/ccs/443", "http.sys/hostnameport/www.win.example.test:443", "http.sys/ipport/0.0.0.0:5986",
-		"http.sys/ipport/0.0.0.0:8443"}, paths)
+		"http.sys/ipport/0.0.0.0:8443", winproto.RDPCanonical}, paths)
 	got := byPath(res.Certificates)
 
 	ccs := got["http.sys/ccs/443"]
@@ -163,5 +163,5 @@ func TestDiscoverIgnoresTheSSHHalf(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.WebServer, "certificates were read")
 	assert.Empty(t, res.Certificates, "an empty table")
-	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
+	assert.Equal(t, []string{"version", "iis-dump", "rdp-dump"}, e.srv.Commands())
 }

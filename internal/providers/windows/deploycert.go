@@ -25,10 +25,11 @@ const (
 // deployedClasses are the error classes of the helper's own restore after a failed step, with the
 // reason the rolled-back outcome carries (W2 Rulings 6, 10).
 var deployedClasses = map[string]string{
-	winproto.ErrKeyUnusable: ReasonKeyUnusable, // http.sys's 1312 at the bind, or the import's key
-	winproto.ErrStore:       ReasonStoreError,  // an import into a store failed
-	winproto.ErrReadBack:    reasonInterrupted, // the record read back differs from what was written
-	winproto.ErrIO:          ReasonIOError,     // the update failed, or the committed journal could not be written
+	winproto.ErrKeyUnusable: ReasonKeyUnusable,     // http.sys's 1312 at the bind, or the import's key
+	winproto.ErrStore:       ReasonStoreError,      // an import into a store failed
+	winproto.ErrReadBack:    reasonInterrupted,     // the record read back differs from what was written
+	winproto.ErrIO:          ReasonIOError,         // the update failed, or the committed journal could not be written
+	winproto.ErrKeyACL:      ReasonRDPKeyACLFailed, // rdp-deploy's grant_key_read failed, the listener untouched (W6 Ruling 9)
 }
 
 // DeployCertificate deploys a certificate and its key to an http.sys SSL binding in one helper
@@ -71,6 +72,11 @@ var deployedClasses = map[string]string{
 // manage windows.location_unsupported), the CCS password goes on standard input with the key, and its
 // Backup stays BackupRef{OperationID, PreviousSHA256} (W5 Ruling 21).
 //
+// The win_rdp location (W6, R69) takes the same table through rdp-deploy (deployRDP): its steps are import_chain,
+// import_certificate, grant_key_read and set_listener, its refusals add windows.rdp_disabled and windows.rdp_tls_off,
+// a failed grant is rolled back windows.rdp_key_acl_failed, and its Backup names the previous certificate's own store
+// (My, or Remote Desktop for the self-signed certificate: W6 Ruling 19).
+//
 // The private key goes from req.PrivateKeyPEM into the input JSON (built by hand, without a string copy
 // of the key) and from there only onto the command's standard input: the command line is exactly
 // "iis-deploy --op <id>" (W2 Ruling 4). Both buffers are cleared after the send; a command is never kept
@@ -94,6 +100,9 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	case providers.LocationWinCCSFile:
 		cl, ok = ccsLocatorOf(req.Location)
 		d.sub = winproto.SubCCSDeploy
+	case providers.LocationWinRDP:
+		ok = rdpPortOf(req.Location) != 0
+		d.sub = winproto.SubRDPDeploy
 	}
 	if !req.Location.Supported || !ok {
 		return d.refuse(providers.NewError(ReasonLocationUnsupported, false, nil, nil))
@@ -115,8 +124,11 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	if err := s.writeReady(); err != nil {
 		return d.refuse(asProviderError(err))
 	}
-	if d.sub == winproto.SubCCSDeploy {
+	switch d.sub {
+	case winproto.SubCCSDeploy:
 		return d.deployCCS(ctx, cl)
+	case winproto.SubRDPDeploy:
+		return d.deployRDP(ctx)
 	}
 	input, ok := deployInput(loc, req.ExpectCertSHA256, req.CertificatePEM, req.PrivateKeyPEM.Bytes(), req.Guard)
 	defer clear(input)
@@ -338,7 +350,16 @@ func (d *deployment) identity(a winproto.DeployResponse) bool {
 		!winproto.ValidSHA1(a.PreviousSHA1) || !store || a.BuiltChainLength < 0 || a.BuiltChainLength > winproto.MaxChainCerts+1 {
 		return false
 	}
-	if !ccs {
+	switch {
+	case ccs:
+	case d.sub == winproto.SubRDPDeploy:
+		// The answer's store is the import's (My, Ruling 6): the previous certificate's is the location's, kept only
+		// while the location names the certificate the helper replaced.
+		if d.out.Backup.PreviousSHA1 != a.PreviousSHA1 {
+			d.out.Backup.Store = ""
+		}
+		d.out.Backup.PreviousSHA1, d.out.Backup.PreviousSHA256 = a.PreviousSHA1, a.PreviousSHA256
+	default:
 		d.out.Backup.Store, d.out.Backup.PreviousSHA1, d.out.Backup.PreviousSHA256 = a.Store, a.PreviousSHA1, a.PreviousSHA256
 	}
 	return true
@@ -360,7 +381,7 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a successful phase with a failure"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
 		return d.verifyNew(ctx, a.Phase, a.BuiltChainLength)
 	case winproto.PhaseRestored:
 		// The helper restored the record itself (or never changed it) after the step that failed.
@@ -369,7 +390,7 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a restored answer without the step that failed"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
 			providers.DeployRolledBack, providers.PhaseRestored, a.FailedStep, a.CauseStep, a.Error
 		d.out.Reason = reason
@@ -379,14 +400,14 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a restore_forbidden answer outside the helper's contract"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
 		return d.forbidden(providers.PhaseRestoreForbidden, a.CauseStep)
 	case winproto.PhaseRestoreFailed:
 		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) || a.CauseStep == "" {
 			return d.uncertain(protocolError(sub, "a restore_failed answer outside the helper's contract"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
 			providers.DeployRollbackFailed, providers.PhaseRestoreFailed, a.FailedStep, a.CauseStep, a.Error
 		d.out.Reason, d.out.Params = restoreFailedReason(a.Error), d.backupParams()

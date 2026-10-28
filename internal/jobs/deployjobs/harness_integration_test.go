@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 	"slices"
@@ -204,8 +205,8 @@ func newEnv(t *testing.T) *env {
 	e.reg.Register(hookProvider{Provider: e.prov, wrap: e.wrapSession})
 	// The Windows provider on the same pool, Alice's probe reaching the emulated listeners (winProber), one
 	// verification attempt (its waits run on the session clock, the fake clock here).
-	e.win = windows.New(windows.Options{Pool: pool, AllowUnverifiedHelper: true, Prober: winProber{wins: e.winList}, Attempts: 1,
-		RetryWait: time.Millisecond})
+	e.win = windows.New(windows.Options{Pool: pool, AllowUnverifiedHelper: true, Prober: winProber{wins: e.winList},
+		RDPProber: winProber{wins: e.winList, rdp: true}, Attempts: 1, RetryWait: time.Millisecond})
 	e.reg.Register(winHookProvider{Provider: e.win, wrap: e.wrapSession})
 	e.az = fake.New(providers.KindAzureKV, providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapReadCertificateSecret)
 	e.reg.Register(e.az)
@@ -678,8 +679,12 @@ func (e *env) addWinServer(name string) *winServer {
 // winProber is Alice's own TLS probe against the emulated Windows servers: a probe of a binding port reaches the
 // model's listener for it (Model.Endpoint), with a fresh handshake (no session cache). Every emulated server listens on
 // 127.0.0.1, so with several Windows servers Alice's probe cannot tell which one it would reach: it is then unreachable
-// and the helper's tls-probe decides.
-type winProber struct{ wins func() []*winServer }
+// and the helper's tls-probe decides. With rdp it is Alice's probe of the RDP listener: the RDP negotiation first (W6
+// Ruling 15).
+type winProber struct {
+	wins func() []*winServer
+	rdp  bool
+}
 
 func (p winProber) Probe(ctx context.Context, _ string, port int, sni, keyType string) (tlsverify.Probe, error) {
 	wins := p.wins()
@@ -692,12 +697,22 @@ func (p winProber) Probe(ctx context.Context, _ string, port int, sni, keyType s
 	}
 	cfg := helperproto.ProbeTLSConfig(sni, keyType)
 	cfg.ClientSessionCache, cfg.SessionTicketsDisabled = nil, true
-	conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", ep)
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", ep)
 	if err != nil {
 		return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
 	}
-	defer func() { _ = conn.Close() }()
-	cs := conn.(*tls.Conn).ConnectionState()
+	defer func() { _ = raw.Close() }()
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	if p.rdp {
+		if _, err := helperproto.RDPNegotiate(raw); err != nil {
+			return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
+		}
+	}
+	conn := tls.Client(raw, cfg)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
+	}
+	cs := conn.ConnectionState()
 	chain := make([][]byte, 0, len(cs.PeerCertificates))
 	for _, c := range cs.PeerCertificates {
 		chain = append(chain, c.Raw)

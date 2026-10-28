@@ -36,6 +36,8 @@ var (
 	// ccs-deploy (W5 Ruling 14): iis-deploy's refusals and the CCS preconditions, each changing nothing.
 	ccsDeployRefusals = withCodes(deployRefusals, winproto.ExitPrecondition, winproto.CodeCCSDisabled, winproto.CodeCCSPathChanged,
 		winproto.CodeCCSPathUnsupported, winproto.CodeCCSPasswordMismatch, winproto.CodeCCSFileNotFound)
+	// rdp-deploy (W6 Ruling 9): iis-deploy's refusals and the listener's preconditions, each changing nothing.
+	rdpDeployRefusals = withCodes(deployRefusals, winproto.ExitPrecondition, winproto.CodeRDPDisabled, winproto.CodeRDPTLSOff)
 )
 
 // withCodes is base with codes added at exit.
@@ -54,11 +56,11 @@ func withCodes(base map[string]int, exit int, codes ...string) map[string]int {
 // (the cause), the steps a restore fails at, the error classes, and the journal phases.
 var (
 	helperSteps = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal,
-		winproto.StepRestore, winproto.StepWriteFile}
+		winproto.StepRestore, winproto.StepWriteFile, winproto.StepGrantKeyRead, winproto.StepSetListener}
 	causeSteps = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal,
-		winproto.StepWriteFile}
+		winproto.StepWriteFile, winproto.StepGrantKeyRead, winproto.StepSetListener}
 	helperErrors = []string{winproto.ErrKeyUnusable, winproto.ErrReadBack, winproto.ErrStore, winproto.ErrFileChanged,
-		winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO}
+		winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO, winproto.ErrKeyACL}
 	helperPhases = []string{winproto.PhaseNone, winproto.PhasePrepared, winproto.PhaseWriting, winproto.PhaseCommitted,
 		winproto.PhaseUnchanged, winproto.PhaseRestoring, winproto.PhaseRestored, winproto.PhaseRestoreFailed, winproto.PhaseFenced,
 		winproto.PhaseRestoreForbidden}
@@ -129,18 +131,21 @@ func step(log providers.StepLogger, name string, status providers.StepStatus, pa
 // logSteps reports the steps of a helper answer, each once with its final status (param error = its
 // class when it has one). refreshed names the step that carries ccs_refresh_failed ("" none): the helper's
 // resend of the http.sys ccs records after a CCS file's replace or restore failed (F15 route (a)); it decides
-// nothing, the verification judges what IIS serves.
-func logSteps(log providers.StepLogger, steps []providers.DeployStep, refreshed string) {
+// nothing, the verification judges what IIS serves. aclLeft names the step that carries rdp_key_acl_left ("" none):
+// the NETWORK SERVICE grant the helper could not take back (W6 Ruling 10, aclLeftStep).
+func logSteps(log providers.StepLogger, steps []providers.DeployStep, refreshed, aclLeft string) {
 	for _, st := range steps {
 		var params map[string]string
 		if st.Error != "" {
 			params = map[string]string{"error": st.Error}
 		}
-		if refreshed != "" && st.Name == refreshed {
-			if params == nil {
-				params = map[string]string{}
+		for flag, name := range map[string]string{ccsRefreshFailedParam: refreshed, rdpKeyACLLeftParam: aclLeft} {
+			if name != "" && st.Name == name {
+				if params == nil {
+					params = map[string]string{}
+				}
+				params[flag] = "true"
 			}
-			params[ccsRefreshFailedParam] = "true"
 		}
 		step(log, st.Name, st.Status, params)
 	}

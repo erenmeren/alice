@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"sync"
 	"testing"
@@ -95,6 +96,8 @@ type env struct {
 	prov  *Provider
 	ref   providers.TargetRef
 	probe *modelProber // Alice's own probe, which reaches the model's listeners
+	// rprobe is Alice's own RDP probe (W6): it negotiates the RDP security layer before the handshake.
+	rprobe *modelProber
 
 	mu    sync.Mutex
 	users []string // the SSH user of every authentication
@@ -123,7 +126,8 @@ func newEnvWith(t *testing.T, m *wintest.Model) *env {
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
 	t.Cleanup(e.pool.Close)
 	e.probe = &modelProber{m: m}
-	e.prov = New(Options{Pool: e.pool, AllowUnverifiedHelper: true, Prober: e.probe, Attempts: 2, RetryWait: time.Millisecond})
+	e.rprobe = &modelProber{m: m, rdp: true}
+	e.prov = New(Options{Pool: e.pool, AllowUnverifiedHelper: true, Prober: e.probe, RDPProber: e.rprobe, Attempts: 2, RetryWait: time.Millisecond})
 	e.prov.restoreWait = time.Millisecond
 	host, port := srv.Addr()
 	e.ref = providers.TargetRef{ID: testTarget, Name: "iis-01", Kind: providers.KindWindows,
@@ -172,6 +176,7 @@ type modelProber struct {
 	mu     sync.Mutex
 	down   bool
 	block  bool     // every probe waits until its context ends
+	rdp    bool     // the RDP negotiation comes first (helperproto.RDPNegotiate, W6 Ruling 15)
 	probes []string // "host:port sni keytype"
 }
 
@@ -202,12 +207,22 @@ func (p *modelProber) Probe(ctx context.Context, host string, port int, sni, key
 	}
 	cfg := helperproto.ProbeTLSConfig(sni, keyType)
 	cfg.ClientSessionCache, cfg.SessionTicketsDisabled = nil, true
-	conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", ep)
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", ep)
 	if err != nil {
 		return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
 	}
-	defer func() { _ = conn.Close() }()
-	cs := conn.(*tls.Conn).ConnectionState()
+	defer func() { _ = raw.Close() }()
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	if p.rdp {
+		if _, err := helperproto.RDPNegotiate(raw); err != nil {
+			return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
+		}
+	}
+	conn := tls.Client(raw, cfg)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return tlsverify.Probe{}, fmt.Errorf("%w: %w", tlsverify.ErrProbeFailed, err)
+	}
+	cs := conn.ConnectionState()
 	chain := make([][]byte, 0, len(cs.PeerCertificates))
 	for _, c := range cs.PeerCertificates {
 		chain = append(chain, c.Raw)

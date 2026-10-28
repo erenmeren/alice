@@ -561,10 +561,13 @@ func pickupAttempts(wait time.Duration, attempts int, retryWait time.Duration) i
 }
 
 // verifyAttempts are the verification attempts for a location: pickupAttempts with winproto.CCSPickupWait for a CCS
-// file, the provider's for a binding.
+// file and winproto.RDPPickupWait for the RDP listener (W6 Ruling 17), the provider's for a binding.
 func (p *Provider) verifyAttempts(kind providers.LocationKind) int {
-	if kind != providers.LocationWinCCSFile {
-		return p.attempts
+	switch kind {
+	case providers.LocationWinCCSFile:
+		return pickupAttempts(winproto.CCSPickupWait, p.attempts, p.retryWait)
+	case providers.LocationWinRDP:
+		return pickupAttempts(winproto.RDPPickupWait, p.attempts, p.retryWait)
 	}
-	return pickupAttempts(winproto.CCSPickupWait, p.attempts, p.retryWait)
+	return p.attempts
 }

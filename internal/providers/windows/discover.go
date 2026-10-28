@@ -10,7 +10,8 @@ import (
 
 // Discover reads the certificate half: iis-dump on a connection of its own, converted into one
 // location per http.sys SSL binding (convert), then the CCS files of ccs-dump on another (discoverCCS,
-// W5 Ruling 18), sorted together by cert path. A Windows server has no SSH key inventory (§2
+// W5 Ruling 18), then the Remote Desktop listener of rdp-dump on a third (discoverRDP, W6 Ruling 18), sorted
+// together by cert path. A Windows server has no SSH key inventory (§2
 // non-goal), so the SSH half sends nothing: a request for it alone is an empty result (the discovery
 // job always asks for it), a request for neither half is not supported.
 func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
@@ -36,7 +37,15 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		certs = append(certs, more...)
 		sortByPath(certs)
 	}
-	for _, w := range moreWarns {
+	rdp, rdpWarns, err := s.discoverRDP(ctx)
+	if err != nil {
+		return providers.DiscoveryResult{}, err
+	}
+	if len(rdp) > 0 {
+		certs = append(certs, rdp...)
+		sortByPath(certs)
+	}
+	for _, w := range append(moreWarns, rdpWarns...) {
 		if !slices.ContainsFunc(warns, func(o providers.Warning) bool { return o.Code == w.Code }) {
 			warns = append(warns, w)
 		}

@@ -105,3 +105,24 @@ func TestWindowsCCSLocationTargetContract(t *testing.T) {
 		Next:    providertest.Chain{CertificatePEM: next.FullchainPEM, PrivateKeyPEM: next.KeyPEM},
 	})
 }
+
+// W6: the same contract for the Remote Desktop listener (the value deleted again on a rollback over the self-signed
+// certificate, through iis-restore under the guard), each case on a fresh emulated host whose listener serves the
+// same self-signed certificate.
+func TestWindowsRDPLocationTargetContract(t *testing.T) {
+	self := pki.SelfSigned("win-rdp01", pki.ECDSA256, time.Now())
+	var r *renv
+	fresh := func(ctx context.Context) (providers.Session, error) {
+		r = newREnvOf(t, &self)
+		return r.prov.Open(ctx, r.ref, r.cred, providers.Env{})
+	}
+	if _, err := fresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next := r.issue()
+	providertest.CheckLocationTarget(t, providertest.LocationTargetHarness{
+		Traits: providers.TraitsOf(r.prov), Fresh: fresh, Location: r.rloc, ExpectCertSHA256: derSHA256(self.Cert.Raw),
+		Current: providertest.Chain{CertificatePEM: self.CertPEM, PrivateKeyPEM: self.KeyPEM},
+		Next:    providertest.Chain{CertificatePEM: next.FullchainPEM, PrivateKeyPEM: next.KeyPEM},
+	})
+}

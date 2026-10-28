@@ -108,11 +108,11 @@ func TestEveryHelperCallUsesItsOwnConnection(t *testing.T) {
 	e.waitNoOpenConnections(t)
 	_, err = s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err, "a reused connection would answer iis-dump as version")
-	assert.Equal(t, 3, e.srv.Connections(), "one connection per helper call")
-	assert.Equal(t, []string{"version", "win-facts", "iis-dump"}, e.srv.Commands())
+	assert.Equal(t, 4, e.srv.Connections(), "one connection per helper call")
+	assert.Equal(t, []string{"version", "win-facts", "iis-dump", "rdp-dump"}, e.srv.Commands())
 	e.waitNoOpenConnections(t)
 	require.NoError(t, s.Close())
-	assert.Equal(t, 3, e.srv.Connections(), "closing dials nothing")
+	assert.Equal(t, 4, e.srv.Connections(), "closing dials nothing")
 }
 
 func TestTestConnectionReport(t *testing.T) {
