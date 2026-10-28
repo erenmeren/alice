@@ -599,6 +599,10 @@ type DeployResponse struct {
 	// RDPKeyACLLeft is set on an RDP answer when a restore could not take back the NETWORK SERVICE read
 	// grant the operation added (W6 Ruling 10): the listener is restored, the key keeps that ACE.
 	RDPKeyACLLeft bool `json:"rdp_key_acl_left,omitempty"`
+	// RDPKeyGranted is set on an RDP answer when the operation gave NETWORK SERVICE read access to the new key
+	// (NETWORK SERVICE could not read it before, key_read_had false): a restore that did not run or did not finish
+	// leaves that access in place (the manual-action e-mails say so; security review M2).
+	RDPKeyGranted bool `json:"rdp_key_granted,omitempty"`
 }
 
 // RestoreInput is the JSON on iis-restore's stdin, at most MaxRestoreInput bytes: the rollback guard as
@@ -621,6 +625,8 @@ type RestoreResponse struct {
 	CCSRefreshFailed bool `json:"ccs_refresh_failed,omitempty"`
 	// RDPKeyACLLeft is DeployResponse's, for the restore of an RDP listener.
 	RDPKeyACLLeft bool `json:"rdp_key_acl_left,omitempty"`
+	// RDPKeyGranted is DeployResponse's, for the restore of an RDP listener.
+	RDPKeyGranted bool `json:"rdp_key_granted,omitempty"`
 }
 
 // StatusResponse answers iis-status and iis-fence (helperproto.NginxStatusResponse without

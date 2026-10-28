@@ -69,7 +69,8 @@ func TestWindowsDeploymentDTO(t *testing.T) {
 		assert.NotContains(t, m, "backup_store", "%+v", b)
 		assert.NotContains(t, m, "backup_sha1", "%+v", b)
 	}
-	for _, store := range []string{"My", "MY", "my", "WebHosting", "WEBHOSTING"} {
+	// W6 final review M1: the RDP listener's self-signed certificate is in Remote Desktop.
+	for _, store := range []string{"My", "MY", "my", "WebHosting", "WEBHOSTING", "Remote Desktop", "remote desktop"} {
 		m := deploymentMap(t, deploymentJSON(inventory.Deployment{ID: op, Backup: &providers.BackupRef{OperationID: op, Store: store}}))
 		assert.Equal(t, store, m["backup_store"])
 	}
@@ -122,11 +123,15 @@ func TestRDPStepParams(t *testing.T) {
 	d := inventory.Deployment{ID: uuid.New(), Steps: []inventory.DeploymentStep{
 		{N: 1, Name: "restore", Status: "ok", Params: map[string]string{"rdp_key_acl_left": "true"}},
 		{N: 2, Name: "restore", Status: "ok", Params: map[string]string{"rdp_key_acl_left": "yes"}},
+		{N: 3, Name: "grant_key_read", Status: "ok", Params: map[string]string{"rdp_key_granted": "true"}}, // security review M2
+		{N: 4, Name: "grant_key_read", Status: "ok", Params: map[string]string{"rdp_key_granted": "1"}},
 	}}
 	out := deploymentDetailJSON(d)
-	require.Len(t, out.Steps, 2)
+	require.Len(t, out.Steps, 4)
 	assert.Equal(t, map[string]string{"rdp_key_acl_left": "true"}, out.Steps[0].Params)
 	assert.Equal(t, map[string]string{}, out.Steps[1].Params)
+	assert.Equal(t, map[string]string{"rdp_key_granted": "true"}, out.Steps[2].Params)
+	assert.Equal(t, map[string]string{}, out.Steps[3].Params)
 }
 
 // R62 Ruling 18: a deployment always names the kind of its location: win_sslbinding for an IIS binding, server_file

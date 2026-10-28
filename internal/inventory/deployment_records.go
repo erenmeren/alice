@@ -695,9 +695,10 @@ FROM deployments d WHERE d.id = $1`, id, DeployStateRecovering).Scan(&exists, &p
 var (
 	backupStoreRE = regexp.MustCompile(`^[A-Za-z0-9 ._-]{1,64}$`)
 	backupSHA1RE  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	// mailStoreRE is the API's store rule (api paramStoreRE): one of the two stores Alice deploys to, in any letter
-	// case. An e-mail names no other store, so no server-reported text beyond these two reaches it.
-	mailStoreRE = regexp.MustCompile(`^(?i:my|webhosting)$`)
+	// mailStoreRE is the API's store rule (api paramStoreRE): one of the two stores Alice deploys to, or Remote Desktop
+	// (the RDP listener's self-signed certificate, W6), in any letter case. An e-mail names no other store, so no
+	// server-reported text beyond these three reaches it.
+	mailStoreRE = regexp.MustCompile(`^(?i:my|webhosting|remote desktop)$`)
 )
 
 // startBackupRef is the rollback_info of the start record of deployment id, written before the first change. A file
@@ -799,9 +800,10 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 // deployed_chain and built_chain: Windows serves a chain other than the one Alice deployed, W2 Ruling 16;
 // ccs_unlinked: a CCS file no IIS binding uses, verified by the helper's read-back only, W5 Ruling 8;
 // ccs_refresh_failed: the helper's refresh of the http.sys ccs records after a CCS write or restore failed, W5 F15;
-// rdp_key_acl_left: an RDP restore could not take back NETWORK SERVICE's read access to the key, W6 Ruling 10).
+// rdp_key_acl_left: an RDP restore could not take back NETWORK SERVICE's read access to the key, W6 Ruling 10;
+// rdp_key_granted: the RDP operation gave NETWORK SERVICE that access, security review M2).
 var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error",
-	"chain_differs", "deployed_chain", "built_chain", "ccs_unlinked", "ccs_refresh_failed", "rdp_key_acl_left"}
+	"chain_differs", "deployed_chain", "built_chain", "ccs_unlinked", "ccs_refresh_failed", "rdp_key_acl_left", "rdp_key_granted"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",

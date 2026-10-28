@@ -308,7 +308,9 @@ var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentR
 // (WindowsCCSTemplate), without backup_dir, with previous_certificate where the binding's text has it (W5-5). The RDP
 // listener's (W6 Ruling 20) is a binding's with windows_note=rdp, except for rdpDeploymentTemplates: the RDP text
 // (WindowsRDPTemplate), without backup_dir, with previous_certificate on all three; and rdp_key_acl_left=true when a
-// step of the deployment says a restore left NETWORK SERVICE's read access to the key in place (Ruling 10).
+// step of the deployment says a restore left NETWORK SERVICE's read access to the key in place (Ruling 10), and on the
+// RDP rollback_failed and outcome_unknown texts rdp_key_granted=true when a step says the operation gave that access
+// (security review M2: no restore took it back).
 func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string,
 	params map[string]string) (string, map[string]string, error) {
 	var (
@@ -347,13 +349,17 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 	if !rdp {
 		return WindowsTemplate(template), out, nil
 	}
-	var aclLeft bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployment_steps WHERE deployment_id = $1 AND params->>'rdp_key_acl_left' = 'true')`,
-		deployment).Scan(&aclLeft); err != nil {
+	var aclLeft, granted bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployment_steps WHERE deployment_id = $1 AND params->>'rdp_key_acl_left' = 'true'),
+    EXISTS (SELECT 1 FROM deployment_steps WHERE deployment_id = $1 AND params->>'rdp_key_granted' = 'true')`,
+		deployment).Scan(&aclLeft, &granted); err != nil {
 		return "", nil, fmt.Errorf("inventory: read the deployment's steps: %w", err)
 	}
 	if aclLeft {
 		out["rdp_key_acl_left"] = "true"
+	}
+	if granted && (template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown) {
+		out["rdp_key_granted"] = "true"
 	}
 	if rdpOwn {
 		return WindowsRDPTemplate(template), out, nil

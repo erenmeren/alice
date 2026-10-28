@@ -2155,6 +2155,7 @@
     "windows_note_rdp": "This location is the Remote Desktop (RDP-Tcp) listener of the server, not an IIS binding. Its private key must be readable by NETWORK SERVICE.",
     "windows_note_rdp_autoenroll": "A Group Policy setting on this server autoenrols the Remote Desktop certificate, so Windows may replace the listener's certificate by itself, outside Alice.",
     "windows_note_rdp_key_acl_left": "Note: Alice could not take back the read access to the new certificate's private key it gave NETWORK SERVICE. The access was left in place; remove it on the server if nothing else needs it.",
+    "windows_note_rdp_key_granted": "Note: Alice gave NETWORK SERVICE read access to the new certificate's private key; remove it once the listener no longer uses that certificate.",
     "backup": {
       "failed": {
         "subject": "Alice could not make its daily backup",
@@ -2314,7 +2315,7 @@
       },
       "rollback_failed_windows_rdp": {
         "subject": "Manual action needed: certificate restore failed on {{target_name}}",
-        "body": "Alice deployed a certificate on the server {{target_name}} (Remote Desktop listener {{cert_path}}). The change failed, and pointing the listener back to the previous certificate failed too.\n\nThe previous certificate stays in the server's certificate store. Previous certificate: {{previous_certificate}}. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to sign in. Check the certificate of the listener in the Remote Desktop settings, or with Win32_TSGeneralSetting (SSLCertificateSHA1Hash), and compare it with the previous certificate. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+        "body": "Alice deployed a certificate on the server {{target_name}} (Remote Desktop listener {{cert_path}}). The change failed, and pointing the listener back to the previous certificate failed too.\n\nThe previous certificate stays in the server's certificate store. Previous certificate: {{previous_certificate}}. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to sign in. Check the certificate of the listener in the Remote Desktop settings, or with Win32_TSGeneralSetting (SSLCertificateSHA1Hash), and compare it with the previous certificate. When the previous certificate is in the \"Remote Desktop\" store, delete the value SSLCertificateSHA1Hash instead, so Windows uses its self-signed certificate again. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
       },
       "outcome_unknown_windows_ccs": {
         "subject": "Alice could not confirm a certificate deployment on {{target_name}}",
@@ -2322,7 +2323,7 @@
       },
       "outcome_unknown_windows_rdp": {
         "subject": "Alice could not confirm a certificate deployment on {{target_name}}",
-        "body": "Alice started deploying a certificate on the server {{target_name}} (Remote Desktop listener {{cert_path}}), but could not confirm how it ended and has stopped trying.\n\nCheck now that new Remote Desktop sessions to the server work. A certificate Remote Desktop cannot use blocks them, so use the server's console or SSH to sign in. Check the certificate of the listener in the Remote Desktop settings, or with Win32_TSGeneralSetting (SSLCertificateSHA1Hash). If the change reached the server, the previous certificate is still in its certificate store. Previous certificate: {{previous_certificate}}. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
+        "body": "Alice started deploying a certificate on the server {{target_name}} (Remote Desktop listener {{cert_path}}), but could not confirm how it ended and has stopped trying.\n\nCheck now that new Remote Desktop sessions to the server work. A certificate Remote Desktop cannot use blocks them, so use the server's console or SSH to sign in. Check the certificate of the listener in the Remote Desktop settings, or with Win32_TSGeneralSetting (SSLCertificateSHA1Hash). If the change reached the server, the previous certificate is still in its certificate store. Previous certificate: {{previous_certificate}}. When the previous certificate is in the \"Remote Desktop\" store, delete the value SSLCertificateSHA1Hash, so Windows uses its self-signed certificate again. The deployment history in Alice shows each step. Deployment: {{deployment_id}}"
       },
       "restored_unverified_windows_ccs": {
         "subject": "The previous certificate file is back on {{target_name}} but Alice could not confirm the website serves it",

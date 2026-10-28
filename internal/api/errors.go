@@ -1435,11 +1435,12 @@ var (
 	paramTrustRE = regexp.MustCompile(`^(trusted|untrusted|unchecked)$`)
 	// R61. paramHelperVersionRE: the version a Windows helper reported (any short token of version characters: an
 	// unparsable one is what makes it outdated); paramVersionRE: a dotted-decimal version Alice requires;
-	// paramStoreRE: one of the two stores Alice deploys to (My, WebHosting), in any letter case (a NULL store reads
-	// MY), so no text the server reports reaches the UI; paramSHA1RE: a certificate's lower-case hex SHA-1.
+	// paramStoreRE: one of the two stores Alice deploys to (My, WebHosting) or Remote Desktop (the RDP listener's
+	// self-signed certificate, W6), in any letter case (a NULL store reads MY), so no text the server reports reaches
+	// the UI; paramSHA1RE: a certificate's lower-case hex SHA-1.
 	paramHelperVersionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$`)
 	paramVersionRE       = regexp.MustCompile(`^[0-9]{1,5}(\.[0-9]{1,5}){0,3}$`)
-	paramStoreRE         = regexp.MustCompile(`^(?i:my|webhosting)$`)
+	paramStoreRE         = regexp.MustCompile(`^(?i:my|webhosting|remote desktop)$`)
 	paramSHA1RE          = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 

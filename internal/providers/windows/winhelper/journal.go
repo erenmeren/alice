@@ -123,6 +123,10 @@ type rdpJournal struct {
 	Rebuild bool `json:"rebuild,omitempty"`
 }
 
+// granted reports an operation that gave NETWORK SERVICE read access to the new key (key_read_had false; false for
+// a journal that is not an RDP one).
+func (r *rdpJournal) granted() bool { return r != nil && r.KeyReadHad != nil && !*r.KeyReadHad }
+
 // valid reports RDP fields the helper may act on in phase: the previous store one of the two, the
 // self-signed store exactly when the value was absent (Ruling 4), and KeyReadHad known from the grant
 // step on (nil only in a journal that never reached it: prepared, or restored before it).

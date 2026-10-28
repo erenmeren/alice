@@ -248,7 +248,7 @@ func TestRDPDeployCommits(t *testing.T) {
 			prev, prevSHA1, prevStore = f.selfSHA256, f.selfSHA1, winproto.RDPStoreSelfSigned
 		}
 		if !slices.Equal(r.Steps, want) || r.Store != "MY" || !r.AliceImported || r.NewSHA1 != f.newSHA1 || r.NewSHA256 != f.newSHA256 ||
-			r.PreviousSHA1 != prevSHA1 || r.PreviousSHA256 != prev || r.BuiltChainLength != 2 || r.RDPKeyACLLeft {
+			r.PreviousSHA1 != prevSHA1 || r.PreviousSHA256 != prev || r.BuiltChainLength != 2 || r.RDPKeyACLLeft || !r.RDPKeyGranted {
 			t.Fatalf("absent=%v: %+v", absent, r)
 		}
 		if f.value() != f.newSHA1 || !f.readable(f.newSHA1) || !slices.Equal(f.aclLog(), []string{"grant MY " + f.newSHA1}) {
@@ -878,11 +878,14 @@ func TestRDPRestoreRevokesOnlyItsGrant(t *testing.T) {
 		f := newRDPFixture(t, false)
 		f.h.addCert("MY", f.nw.Cert.Raw, true)
 		f.h.nsACEs = map[[2]string][]fakeACE{{"MY", f.newSHA1}: {{mask: fakeGrantMask}}}
-		f.rdpCommitted(op1, f.in())
+		if r := f.rdpCommitted(op1, f.in()); r.RDPKeyGranted {
+			t.Fatal("no grant, so rdp_key_granted is not set (security review M2)")
+		}
 		if j := f.journal(op1); j.RDP.KeyReadHad == nil || !*j.RDP.KeyReadHad {
 			t.Fatalf("%+v", j.RDP)
 		}
-		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored || len(f.aclLog()) != 0 || !f.readable(f.newSHA1) {
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored || len(f.aclLog()) != 0 || !f.readable(f.newSHA1) ||
+			r.RDPKeyGranted {
 			t.Fatalf("%s %v", out, f.aclLog())
 		}
 	})

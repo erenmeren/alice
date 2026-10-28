@@ -9220,7 +9220,8 @@ components:
             binding uses the file, so the helper's read-back was the only check) and ccs_refresh_failed on write_file
             or restore (true: the helper could not refresh the http.sys ccs records afterwards; the verification
             decides). On the Remote Desktop listener (R69): rdp_key_acl_left on restore (true: the helper could not take
-            back the read access to the key it gave NETWORK SERVICE; it was left in place).
+            back the read access to the key it gave NETWORK SERVICE; it was left in place), and rdp_key_granted on
+            restore, else on grant_key_read (true: the operation gave NETWORK SERVICE read access to the key).
           additionalProperties: { type: string }
     Deployment:
       type: object
@@ -9291,8 +9292,8 @@ components:
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
         backup_dir: { type: string, description: 'Where the server keeps the previous files (/var/lib/alice-helper/backups/<id>); "" before a change and always "" for a Windows binding' }
         location_kind: { type: string, enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret, win_ccs_file, win_rdp], description: 'R62. The kind of the deployment''s location, always present: server_file for a certificate file, win_sslbinding for an IIS binding, win_ccs_file for a file of an IIS Centralized Certificate Store (R68), win_rdp for the Remote Desktop listener of a Windows server (R69)' }
-        backup_store: { type: string, pattern: '^([Mm][Yy]|[Ww][Ee][Bb][Hh][Oo][Ss][Tt][Ii][Nn][Gg])$', description: 'R61. A Windows binding only (absent otherwise): the certificate store that holds the previous certificate, My or WebHosting in any letter case (a binding without a store name reads MY)' }
-        backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
+        backup_store: { type: string, pattern: '^([Mm][Yy]|[Ww][Ee][Bb][Hh][Oo][Ss][Tt][Ii][Nn][Gg]|[Rr][Ee][Mm][Oo][Tt][Ee] [Dd][Ee][Ss][Kk][Tt][Oo][Pp])$', description: 'R61. A Windows binding or the Remote Desktop listener only (absent otherwise): the certificate store that holds the previous certificate, My or WebHosting, or Remote Desktop for the listener''s self-signed certificate (R69), in any letter case (a binding without a store name reads MY)' }
+        backup_sha1: { type: string, pattern: '^[0-9a-f]{40}$', description: 'R61. A Windows binding or the Remote Desktop listener only (absent otherwise): the SHA-1 thumbprint of the previous certificate' }
         requested_by: { type: [string, "null"], format: uuid }
         requested_by_name: { type: string }
         recovery_attempts: { type: integer }

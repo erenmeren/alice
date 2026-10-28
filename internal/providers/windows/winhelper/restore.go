@@ -312,7 +312,7 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	answer := func(j journal, from int) winproto.RestoreResponse {
 		return winproto.RestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):]), CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed,
-			RDPKeyACLLeft: j.RDP != nil && j.RDP.ACLLeft}
+			RDPKeyACLLeft: j.RDP != nil && j.RDP.ACLLeft, RDPKeyGranted: j.RDP.granted()}
 	}
 	switch {
 	case j.Phase == winproto.PhasePrepared, j.Phase == winproto.PhaseUnchanged, j.Phase == winproto.PhaseRestored,

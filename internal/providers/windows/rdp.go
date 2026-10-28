@@ -20,6 +20,10 @@ import (
 // Ruling 10; the grant step's when the helper's undo of a failed grant failed).
 const rdpKeyACLLeftParam = "rdp_key_acl_left"
 
+// rdpKeyGrantedParam is the step param of an RDP answer whose operation gave NETWORK SERVICE read access to the key
+// (on the step aclLeftStep picks; security review M2): the manual-action e-mails then say to remove it.
+const rdpKeyGrantedParam = "rdp_key_granted"
+
 // rdpReady refuses an RDP subcommand, or tls-probe --rdp, to a helper older than winproto.RDPMinVersion before
 // anything is sent (W6 Ruling 2), as ccsReady does for CCS.
 func (s *session) rdpReady() error {
@@ -205,8 +209,8 @@ func (d *deployment) deployRDP(ctx context.Context) (providers.DeployOutcome, er
 	return d.sent(ctx, c)
 }
 
-// aclLeftStep is the step an RDP answer's rdp_key_acl_left is reported on: the restore step when the answer has one,
-// else the grant step (the helper's undo of a failed grant), "" when the flag is not set.
+// aclLeftStep is the step an RDP answer's rdp_key_acl_left (or rdp_key_granted) is reported on: the restore step when
+// the answer has one, else the grant step (the helper's undo of a failed grant), "" when the flag is not set.
 func aclLeftStep(left bool, steps []providers.DeployStep) string {
 	switch {
 	case !left:

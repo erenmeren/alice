@@ -264,7 +264,7 @@ func (t *deployTx) answer() winproto.DeployResponse {
 	return winproto.DeployResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 		Steps: slices.Clone(j.Steps), NewSHA1: j.NewSHA1, NewSHA256: j.NewSHA256, PreviousSHA1: j.PreviousSHA1,
 		PreviousSHA256: j.PreviousSHA256, Store: j.Store, AliceImported: j.AliceImported, BuiltChainLength: t.built,
-		CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed, RDPKeyACLLeft: j.RDP != nil && j.RDP.ACLLeft}
+		CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed, RDPKeyACLLeft: j.RDP != nil && j.RDP.ACLLeft, RDPKeyGranted: j.RDP.granted()}
 }
 
 // write writes the journal and passes the point after it.

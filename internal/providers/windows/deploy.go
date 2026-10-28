@@ -132,14 +132,15 @@ func step(log providers.StepLogger, name string, status providers.StepStatus, pa
 // class when it has one). refreshed names the step that carries ccs_refresh_failed ("" none): the helper's
 // resend of the http.sys ccs records after a CCS file's replace or restore failed (F15 route (a)); it decides
 // nothing, the verification judges what IIS serves. aclLeft names the step that carries rdp_key_acl_left ("" none):
-// the NETWORK SERVICE grant the helper could not take back (W6 Ruling 10, aclLeftStep).
-func logSteps(log providers.StepLogger, steps []providers.DeployStep, refreshed, aclLeft string) {
+// the NETWORK SERVICE grant the helper could not take back (W6 Ruling 10, aclLeftStep); granted the step that carries
+// rdp_key_granted ("" none): the operation gave NETWORK SERVICE read access to the key (security review M2).
+func logSteps(log providers.StepLogger, steps []providers.DeployStep, refreshed, aclLeft, granted string) {
 	for _, st := range steps {
 		var params map[string]string
 		if st.Error != "" {
 			params = map[string]string{"error": st.Error}
 		}
-		for flag, name := range map[string]string{ccsRefreshFailedParam: refreshed, rdpKeyACLLeftParam: aclLeft} {
+		for flag, name := range map[string]string{ccsRefreshFailedParam: refreshed, rdpKeyACLLeftParam: aclLeft, rdpKeyGrantedParam: granted} {
 			if name != "" && st.Name == name {
 				if params == nil {
 					params = map[string]string{}

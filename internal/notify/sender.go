@@ -242,6 +242,8 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	// An RDP restore that left NETWORK SERVICE's read access to the key in place (W6 Ruling 10).
 	if params["rdp_key_acl_left"] == "true" {
 		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_rdp_key_acl_left", nil)
+	} else if params["rdp_key_granted"] == "true" { // the RDP manual-action texts: no restore took the access back
+		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_rdp_key_granted", nil)
 	}
 	body += "\n\n" + s.Catalog.T(locale, "email.footer", nil)
 	return Message{To: to, Subject: subject, Body: body}

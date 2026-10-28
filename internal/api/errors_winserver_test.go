@@ -157,5 +157,8 @@ func TestWindowsErrorParams(t *testing.T) {
 	assert.Nil(t, providerParams(map[string]string{"store": strings.Repeat("a", 65)}))
 	assert.Nil(t, providerParams(map[string]string{"store": "Call 555 0100 for support"}), "only the stores Alice deploys to")
 	assert.Nil(t, providerParams(map[string]string{"store": "Root"}))
+	assert.Nil(t, providerParams(map[string]string{"store": "Remote  Desktop"}))
+	assert.Equal(t, map[string]string{"store": "Remote Desktop"}, providerParams(map[string]string{"store": "Remote Desktop"}),
+		"W6: the listener's self-signed store")
 	assert.Equal(t, map[string]string{"store": "MY"}, providerParams(map[string]string{"store": "MY"}), "a NULL store reads MY")
 }

@@ -381,7 +381,8 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a successful phase with a failure"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps),
+			aclLeftStep(a.RDPKeyGranted, steps))
 		return d.verifyNew(ctx, a.Phase, a.BuiltChainLength)
 	case winproto.PhaseRestored:
 		// The helper restored the record itself (or never changed it) after the step that failed.
@@ -390,7 +391,8 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a restored answer without the step that failed"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps),
+			aclLeftStep(a.RDPKeyGranted, steps))
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
 			providers.DeployRolledBack, providers.PhaseRestored, a.FailedStep, a.CauseStep, a.Error
 		d.out.Reason = reason
@@ -400,14 +402,16 @@ func (d *deployment) answer(ctx context.Context, a winproto.DeployResponse) (pro
 			return d.uncertain(protocolError(sub, "a restore_forbidden answer outside the helper's contract"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps),
+			aclLeftStep(a.RDPKeyGranted, steps))
 		return d.forbidden(providers.PhaseRestoreForbidden, a.CauseStep)
 	case winproto.PhaseRestoreFailed:
 		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) || a.CauseStep == "" {
 			return d.uncertain(protocolError(sub, "a restore_failed answer outside the helper's contract"))
 		}
 		d.out.Steps = steps
-		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps))
+		logSteps(d.log, steps, refreshedStep(a.CCSRefreshFailed, winproto.StepWriteFile), aclLeftStep(a.RDPKeyACLLeft, steps),
+			aclLeftStep(a.RDPKeyGranted, steps))
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
 			providers.DeployRollbackFailed, providers.PhaseRestoreFailed, a.FailedStep, a.CauseStep, a.Error
 		d.out.Reason, d.out.Params = restoreFailedReason(a.Error), d.backupParams()

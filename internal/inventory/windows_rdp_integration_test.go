@@ -146,7 +146,7 @@ func TestRDPDeploymentMail(t *testing.T) {
 	base := func(id uuid.UUID) map[string]string {
 		return map[string]string{"target_name": "iis-02", "cert_path": "rdp/RDP-Tcp", "deployment_id": id.String()}
 	}
-	prev := thumbprint(f.old) // the Remote Desktop store is not one the e-mail names (the API's store rule)
+	prev := `Remote Desktop \ ` + thumbprint(f.old) // final review M1: the self-signed certificate's store is named
 	for _, tc := range []struct {
 		finish   inventory.DeploymentFinish
 		template string
@@ -195,6 +195,33 @@ func TestRDPDeploymentMail(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "true", kept["rdp_key_acl_left"], "the step param is kept")
+
+	// Security review M2: an operation that gave NETWORK SERVICE read access (the grant step's rdp_key_granted) says so
+	// on the RDP rollback_failed and outcome_unknown texts only.
+	for _, tc := range []struct {
+		finish   inventory.DeploymentFinish
+		template string
+		granted  bool
+	}{
+		{inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed, Result: "rollback_failed", FailedStep: "restore",
+			ErrorCode: "windows.backup_missing"}, inventory.TemplateDeploymentRollbackFailed, true},
+		{inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed, ErrorCode: "deployment.outcome_unknown"},
+			inventory.TemplateDeploymentOutcomeUnknown, true},
+		{inventory.DeploymentFinish{Status: inventory.DeployStatusRollbackFailed, Result: "rollback_failed", Phase: providers.PhaseRestored,
+			FailedStep: "verify_old", ErrorCode: "deployment.rollback_failed"}, inventory.TemplateDeploymentRestoredUnverified, false},
+	} {
+		r := f.request(f.rdp)
+		f.start(r.ID, nil)
+		require.NoError(t, h.svc.RecordDeploymentStep(h.ctx, r.ID, "grant_key_read", providers.StepOK,
+			map[string]string{"rdp_key_granted": "true"}))
+		require.NoError(t, h.svc.FinishDeployment(h.ctx, r.ID, tc.finish))
+		want := base(r.ID)
+		want["previous_certificate"] = prev
+		if tc.granted {
+			want["rdp_key_granted"] = "true"
+		}
+		assert.Equal(t, []queuedMail{{inventory.WindowsRDPTemplate(tc.template), want}}, f.deploymentMails(r.ID), tc.template)
+	}
 }
 
 // Ruling 7 (Q7): an incident's place on the RDP listener queues the incident cleanup of its server once it settles.

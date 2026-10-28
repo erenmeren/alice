@@ -422,8 +422,9 @@ var stepParamRules = map[string]*regexp.Regexp{
 	// W5 (R68): a CCS file's verify step verified by the helper's read-back only (no IIS binding uses the file,
 	// Ruling 8), and a write_file or restore step after which the helper's refresh of the http.sys ccs records failed.
 	"ccs_unlinked": paramTrueRE, "ccs_refresh_failed": paramTrueRE,
-	// W6 (R69) Ruling 10: an RDP restore step that could not take back NETWORK SERVICE's read access to the key.
-	"rdp_key_acl_left": paramTrueRE,
+	// W6 (R69) Ruling 10: an RDP restore step that could not take back NETWORK SERVICE's read access to the key; the
+	// step of an RDP answer whose operation gave NETWORK SERVICE that access (security review M2).
+	"rdp_key_acl_left": paramTrueRE, "rdp_key_granted": paramTrueRE,
 }
 
 var (

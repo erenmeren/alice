@@ -489,6 +489,10 @@ func TestRDPKeyACLLeftIsReported(t *testing.T) {
 		assert.Equal(t, providers.DeployRolledBack, out.Result)
 		assert.Equal(t, "true", log.params["restore"][rdpKeyACLLeftParam])
 		assert.Empty(t, log.params["set_listener"][rdpKeyACLLeftParam])
+		// Security review M2: the operation gave NETWORK SERVICE read access (the emulator's key had none).
+		assert.Equal(t, "true", log.params["grant_key_read"][rdpKeyGrantedParam])
+		assert.Equal(t, "true", log.params["restore"][rdpKeyGrantedParam])
+		assert.Empty(t, log.params["set_listener"][rdpKeyGrantedParam])
 	})
 	t.Run("the grant failed and its undo too", func(t *testing.T) {
 		r := newREnv(t)

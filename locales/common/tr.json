@@ -2155,6 +2155,7 @@
     "windows_note_rdp": "Bu konum, sunucunun bir IIS bağlaması değil, Uzak Masaüstü (RDP-Tcp) dinleyicisidir. Özel anahtarı NETWORK SERVICE tarafından okunabilmelidir.",
     "windows_note_rdp_autoenroll": "Bu sunucudaki bir Grup İlkesi ayarı Uzak Masaüstü sertifikasını otomatik kayıtla alır; bu yüzden Windows dinleyicinin sertifikasını Alice dışında kendiliğinden değiştirebilir.",
     "windows_note_rdp_key_acl_left": "Not: Alice, NETWORK SERVICE'e verdiği yeni sertifikanın özel anahtarını okuma erişimini geri alamadı. Erişim yerinde bırakıldı; başka bir şey gerekmiyorsa sunucuda kaldırın.",
+    "windows_note_rdp_key_granted": "Not: Alice, NETWORK SERVICE'e yeni sertifikanın özel anahtarını okuma erişimi verdi; dinleyici o sertifikayı artık kullanmadığında bu erişimi kaldırın.",
     "backup": {
       "failed": {
         "subject": "Alice günlük yedeğini alamadı",
@@ -2314,7 +2315,7 @@
       },
       "rollback_failed_windows_rdp": {
         "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
-        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (Uzak Masaüstü dinleyicisi: {{cert_path}}). Değişiklik başarısız oldu ve dinleyicinin önceki sertifikaya geri yöneltilmesi de başarısız oldu.\n\nÖnceki sertifika sunucunun sertifika deposunda kalır. Önceki sertifika: {{previous_certificate}}. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin ve önceki sertifikayla karşılaştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (Uzak Masaüstü dinleyicisi: {{cert_path}}). Değişiklik başarısız oldu ve dinleyicinin önceki sertifikaya geri yöneltilmesi de başarısız oldu.\n\nÖnceki sertifika sunucunun sertifika deposunda kalır. Önceki sertifika: {{previous_certificate}}. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin ve önceki sertifikayla karşılaştırın. Önceki sertifika \"Remote Desktop\" deposundaysa bunun yerine SSLCertificateSHA1Hash değerini silin; böylece Windows kendinden imzalı sertifikasını yeniden kullanır. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
       "outcome_unknown_windows_ccs": {
         "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını doğrulayamadı",
@@ -2322,7 +2323,7 @@
       },
       "outcome_unknown_windows_rdp": {
         "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını doğrulayamadı",
-        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (Uzak Masaüstü dinleyicisi: {{cert_path}}), ancak nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nSunucuya yeni Uzak Masaüstü oturumlarının açılabildiğini hemen denetleyin. Uzak Masaüstü'nün kullanamadığı bir sertifika bu oturumları engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır. Önceki sertifika: {{previous_certificate}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (Uzak Masaüstü dinleyicisi: {{cert_path}}), ancak nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nSunucuya yeni Uzak Masaüstü oturumlarının açılabildiğini hemen denetleyin. Uzak Masaüstü'nün kullanamadığı bir sertifika bu oturumları engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır. Önceki sertifika: {{previous_certificate}}. Önceki sertifika \"Remote Desktop\" deposundaysa SSLCertificateSHA1Hash değerini silin; böylece Windows kendinden imzalı sertifikasını yeniden kullanır. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
       "restored_unverified_windows_ccs": {
         "subject": "{{target_name}} sunucusunda önceki sertifika dosyası geri kondu, ancak Alice web sitesinin onu sunduğunu doğrulayamadı",

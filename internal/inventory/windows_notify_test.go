@@ -24,8 +24,10 @@ func TestPreviousCertificateText(t *testing.T) {
 		"SHA-256 only":         {&providers.BackupRef{OperationID: op, PreviousSHA256: sha256}, "SHA-256 " + sha256},
 		"bad store":            {&providers.BackupRef{Store: "MY\r\nBcc: x", PreviousSHA1: sha1}, sha1},
 		"my, any case":         {&providers.BackupRef{Store: "my", PreviousSHA1: sha1}, `my \ ` + sha1},
-		// W2 final review Minor 3: the API's rule (My or WebHosting), not the record's looser store rule.
-		"another store":  {&providers.BackupRef{Store: "Remote Desktop", PreviousSHA1: sha1}, sha1},
+		// W2 final review Minor 3: the API's rule (My, WebHosting or Remote Desktop), not the record's looser store rule.
+		"another store": {&providers.BackupRef{Store: "Trust", PreviousSHA1: sha1}, sha1},
+		// W6 final review M1: the RDP listener's self-signed certificate is in Remote Desktop.
+		"remote desktop": {&providers.BackupRef{Store: "Remote Desktop", PreviousSHA1: sha1}, `Remote Desktop \ ` + sha1},
 		"a long store":   {&providers.BackupRef{Store: "Please call 555-0100 about this certificate", PreviousSHA1: sha1}, sha1},
 		"bad thumbprint": {&providers.BackupRef{Store: "MY", PreviousSHA1: "0123456789ABCDEF0123456789ABCDEF01234567", PreviousSHA256: sha256}, "SHA-256 " + sha256},
 		"bad SHA-256":    {&providers.BackupRef{PreviousSHA256: "x"}, "-"},

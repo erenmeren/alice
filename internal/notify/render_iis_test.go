@@ -228,7 +228,7 @@ func TestWindowsRDPTemplatesAndNotesRenderInBothLanguages(t *testing.T) {
 	}
 
 	notes := map[string]string{"rdp": "email.windows_note_rdp", "autoenroll": "email.windows_note_rdp_autoenroll",
-		"acl": "email.windows_note_rdp_key_acl_left"}
+		"acl": "email.windows_note_rdp_key_acl_left", "granted": "email.windows_note_rdp_key_granted"}
 	for _, lang := range []string{"en", "tr"} {
 		text := map[string]string{}
 		for k, key := range notes {
@@ -251,5 +251,17 @@ func TestWindowsRDPTemplatesAndNotesRenderInBothLanguages(t *testing.T) {
 		assert.True(t, strings.HasSuffix(render(map[string]string{"windows_note": "rdp", "rdp_key_acl_left": "true"}),
 			"\n\n"+text["rdp"]+"\n\n"+text["acl"]+footer), lang)
 		assert.NotContains(t, render(map[string]string{"rdp_key_acl_left": "yes"}), text["acl"], "%s: only true asks for it", lang)
+		// Security review M2: the grant no restore took back; the note that it was left in place covers it.
+		assert.Contains(t, text["granted"], "NETWORK SERVICE", lang)
+		assert.True(t, strings.HasSuffix(render(map[string]string{"rdp_key_granted": "true"}), "\n\n"+text["granted"]+footer), lang)
+		both := render(map[string]string{"rdp_key_granted": "true", "rdp_key_acl_left": "true"})
+		assert.True(t, strings.HasSuffix(both, "\n\n"+text["acl"]+footer), lang)
+		assert.NotContains(t, both, text["granted"], lang)
+	}
+	// Final review M1: the RDP manual-action texts say how to go back to the self-signed certificate.
+	for _, tpl := range want[:2] {
+		for _, lang := range []string{"en", "tr"} {
+			assert.Contains(t, s.Render("ada@example.com", tpl, lang, params).Body, `"Remote Desktop"`, "%s %s", tpl, lang)
+		}
 	}
 }
