@@ -224,8 +224,14 @@ func (t *deployTx) runRDP(in content, sec *secrets, current string) (any, error)
 	if err := t.write("rdp.import_certificate"); err != nil {
 		return nil, err
 	}
-	if c, found, err := h.Certificate(t.ctx, j.Store, j.NewSHA1); err == nil && found {
+	c, found, err := h.Certificate(t.ctx, j.Store, j.NewSHA1)
+	if err == nil && found {
 		t.built = 1 + len(c.Chain)
+	}
+	// Security review I1: a copy that is not Alice's may have been added after the check before the
+	// gate, so its export policy is read again; NETWORK SERVICE never gets read on an exportable key.
+	if !j.AliceImported && (err != nil || !found || c.KeyExportable || c.ExportPolicyUnknown) {
+		return t.failUnbound(winproto.StepGrantKeyRead, winproto.ErrKeyACL)
 	}
 
 	// grant_key_read (Ruling 10): whether NETWORK SERVICE can read the key goes into the journal first.

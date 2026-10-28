@@ -422,6 +422,34 @@ func TestRDPDeployRefusesBeforeAnyWrite(t *testing.T) {
 	}
 }
 
+// TestRDPDeployExportableCopyAfterCheck (coordinator review 1): a third party adds the certificate with
+// an exportable key (or one whose export policy cannot be read) after the check before the gate;
+// ImportPFX answers existed and the deployment ends at grant_key_read without any ACE or listener write.
+func TestRDPDeployExportableCopyAfterCheck(t *testing.T) {
+	for name, change := range map[string]func(*winproto.StoreCertificate){
+		"exportable":            func(c *winproto.StoreCertificate) { c.KeyExportable = true },
+		"export policy unknown": func(c *winproto.StoreCertificate) { c.ExportPolicyUnknown = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRDPFixture(t, false)
+			f.h.pointErr = func(point string) error {
+				if point == "rdp.import_chain" {
+					f.h.setCert("MY", f.h.addCert("MY", f.nw.Cert.Raw, true), change)
+				}
+				return nil
+			}
+			f.clearLogs()
+			o, r, out := f.rdpDeploy(op1, f.in())
+			if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepGrantKeyRead || r.Error != winproto.ErrKeyACL || r.AliceImported {
+				t.Fatalf("%s", out)
+			}
+			if len(f.aclLog()) != 0 || f.readable(f.newSHA1) || f.value() != f.oldSHA1 {
+				t.Fatalf("acl %v writes %v", f.aclLog(), f.h.writes())
+			}
+		})
+	}
+}
+
 // TestRDPDeployInputHasNoLocator is Review Focus 1: the input names no listener, store, SID or registry
 // path, and it is decoded as strictly as W2's.
 func TestRDPDeployInputHasNoLocator(t *testing.T) {
