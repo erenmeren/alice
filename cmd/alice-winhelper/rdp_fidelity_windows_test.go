@@ -122,7 +122,7 @@ func (tw *rdpTwin) deploy(op string, leaf pki.Leaf, expect string) map[string]an
 func assertCode(t *testing.T, got map[string]any, code string) {
 	t.Helper()
 	assert.Equal(t, false, got["ok"], "%v", got)
-	assert.Equal(t, code, got["error"], "%v", got)
+	assert.Equal(t, code, got["code"], "%v", got)
 }
 
 func TestFidelityRDP(t *testing.T) {
@@ -136,27 +136,36 @@ func TestFidelityRDP(t *testing.T) {
 	removeChainLater(t, a, ca)
 	aSHA := sum256hex(a.Cert.Raw)
 
-	// A wrong expectation, then the deployment over the self-signed certificate.
+	// A wrong expectation; the deployment over the self-signed certificate and its rollback.
 	assertCode(t, tw.deploy(op1, a, aSHA), winproto.CodeHashMismatch)
 	assertPhase(t, tw.deploy(op1, a, self), winproto.PhaseCommitted)
 	tw.sameState(op1, aSHA)
 	tw.both(nil, winproto.SubRDPDump)
 	assertCode(t, tw.deploy(op1, a, self), winproto.CodeOperationExists)
-	assertPhase(t, tw.deploy(op2, a, aSHA), winproto.PhaseUnchanged)
-	tw.sameState(op2, "")
 	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op1)
+	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op1), winproto.PhaseRestored)
+	tw.sameState(op1, "")
+	tw.requirePickup("fidelity", "the self-signed certificate after the rollback", self)
+	tw.both(nil, winproto.SubRDPDump)
+	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op1)
+
+	// The same certificate again (the copy in My is used as it is), then unchanged.
+	assertPhase(t, tw.deploy(op2, a, self), winproto.PhaseCommitted)
+	tw.sameState(op2, aSHA)
+	assertPhase(t, tw.deploy(op3, a, aSHA), winproto.PhaseUnchanged)
+	tw.sameState(op3, "")
 
 	// A certificate in My without its key.
 	b := issue(ca, "alice-w6-fidelity-b.test")
 	importCertificate(t, "My", b.Cert)
 	tw.model.AddCertificate("My", b.CertPEM, nil, wintest.CertOptions{})
-	assertCode(t, tw.deploy(op3, b, aSHA), winproto.CodeKeyUnusable)
+	assertCode(t, tw.deploy(op4, b, aSHA), winproto.CodeKeyUnusable)
 
 	// Remote Desktop turned off (fDenyTSConnections, restored as found by the fixture).
 	require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(1), nil))
 	tw.model.SetRDP(wintest.RDPConfig{Present: true, Enabled: false, NLA: true, Port: tw.port, SecurityLayer: 2})
 	tw.both(nil, winproto.SubRDPDump)
-	assertCode(t, tw.deploy(op3, b, aSHA), winproto.CodeRDPDisabled)
+	assertCode(t, tw.deploy(op4, b, aSHA), winproto.CodeRDPDisabled)
 	require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(0), nil))
 	l, err := tw.h.RDPListener(tw.ctx)
 	require.NoError(t, err)
@@ -164,28 +173,27 @@ func TestFidelityRDP(t *testing.T) {
 	tw.requirePickup("fidelity", "the deployed certificate with RDP on again", aSHA)
 
 	// A fenced operation.
-	tw.both(nil, winproto.SubIISFence, winproto.ArgOp, op4)
+	tw.both(nil, winproto.SubIISFence, winproto.ArgOp, op5)
 	c := issue(ca, "alice-w6-fidelity-c.test")
 	removeChainLater(t, c, ca)
-	assertCode(t, tw.deploy(op4, c, aSHA), winproto.CodeFenced)
+	assertCode(t, tw.deploy(op5, c, aSHA), winproto.CodeFenced)
 
 	// A kill after the grant: the next deployment is refused, the restore takes the grant back.
-	tw.killBoth("rdp.granted", rdpDeployInput(t, c.FullchainPEM, c.KeyPEM, aSHA), winproto.SubRDPDeploy, winproto.ArgOp, op5)
-	pending := tw.deploy(op6, c, aSHA)
+	tw.killBoth("rdp.granted", rdpDeployInput(t, c.FullchainPEM, c.KeyPEM, aSHA), winproto.SubRDPDeploy, winproto.ArgOp, op6)
+	pending := tw.deploy(op7, c, aSHA)
 	assertCode(t, pending, winproto.CodeRecoveryPending)
-	assert.Equal(t, op5, pending["pending_op"])
-	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op5)
-	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op5), winproto.PhaseRestored)
-	tw.sameState(op5, aSHA)
+	assert.Equal(t, op6, pending["pending_op"])
+	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op6)
+	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op6), winproto.PhaseRestored)
+	tw.sameState(op6, aSHA)
 	readable, err := tw.h.RDPKeyRead(tw.ctx, "MY", thumbprint(c.Cert))
 	require.NoError(t, err)
 	assert.False(t, readable, "the restore took the grant on the killed operation's key back")
 	assert.Equal(t, readable, tw.model.KeyReadableByNetworkService("MY", thumbprint(c.Cert)))
 
-	// The rollback to the self-signed certificate.
-	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op1), winproto.PhaseRestored)
-	tw.sameState(op1, "")
-	tw.requirePickup("fidelity", "the self-signed certificate after the rollback", self)
+	// An older operation's restore after newer ones, and the latest one's.
+	tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op1)
+	tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op2)
+	tw.sameState(op2, "")
 	tw.both(nil, winproto.SubRDPDump)
-	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op1)
 }
