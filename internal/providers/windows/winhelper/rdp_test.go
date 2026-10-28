@@ -1030,6 +1030,17 @@ func TestRDPRevokeKeepsOtherACEs(t *testing.T) {
 			t.Fatalf("ACEs %v, want %v; acl %v", got, theirs, f.aclLog())
 		}
 	})
+	t.Run("a grant that appended then failed is taken back", func(t *testing.T) {
+		f := setup(t)
+		f.h.grantErrAfter = errors.New("ncrypt") // the ACE is on the key when the grant fails (R70, W6-3)
+		if o, r, out := f.rdpDeploy(op1, f.in()); o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepGrantKeyRead || r.RDPKeyACLLeft {
+			t.Fatalf("%s", out)
+		}
+		if got := f.h.nsACEs[[2]string{"MY", f.newSHA1}]; !slices.Equal(got, theirs) || f.readable(f.newSHA1) ||
+			!slices.Equal(f.aclLog(), []string{"grant MY " + f.newSHA1, "revoke MY " + f.newSHA1}) {
+			t.Fatalf("ACEs %v, want %v; acl %v", got, theirs, f.aclLog())
+		}
+	})
 	t.Run("a self-restore after the grant", func(t *testing.T) {
 		f := setup(t)
 		f.h.pointErr = func(name string) error {

@@ -1235,6 +1235,48 @@ func TestCleanupPlanBounds(t *testing.T) {
 	})
 }
 
+// TestCleanupPlanTrimsAdoptedEntries (W3-2, R70): an inventory one short of maxImports and a plan that
+// adopts two certificates only a journal names: the written inventory holds maxImports entries, the
+// oldest is gone, the adopted two are the last.
+func TestCleanupPlanTrimsAdoptedEntries(t *testing.T) {
+	f := newCleanup(t)
+	f.h.modTimes = map[string]time.Time{}
+	kept := f.imported("My")
+	inv, err := readImports(f.h)
+	if err != nil || len(inv.Imports) != 1 {
+		t.Fatal(err)
+	}
+	oldest := inv.Imports[0]
+	for i := 1; i < maxImports-1; i++ {
+		inv.Imports = append(inv.Imports, importEntry{Op: cleanupOp(1000 + i), Store: kept.store, SHA1: kept.sha1, SHA256: kept.sha256})
+	}
+	if err := writeImports(f.h, inv); err != nil {
+		t.Fatal(err)
+	}
+	var adopted []cref
+	for range 2 {
+		c := f.put("My", "alice")
+		j := importedJournal(c.op, c.store, c.sha1)
+		j.NewSHA256 = c.sha256
+		mustWrite(t, f.h, j)
+		f.h.modTimes[journalName(c.op)] = testNow
+		adopted = append(adopted, c)
+	}
+	f.plan()
+	got, err := readImports(f.h)
+	if err != nil || len(got.Imports) != maxImports {
+		t.Fatalf("%d entries, %v", len(got.Imports), err)
+	}
+	if slices.Contains(got.Imports, oldest) {
+		t.Fatalf("the oldest entry stayed: %+v", oldest)
+	}
+	for i, c := range adopted {
+		if e := got.Imports[maxImports-2+i]; e.Op != c.op || e.SHA1 != c.sha1 || e.SHA256 != c.sha256 {
+			t.Fatalf("entry %d: %+v, want %+v", maxImports-2+i, e, c)
+		}
+	}
+}
+
 // goneMeanwhile is a host whose store no longer holds a certificate when RemoveCertificate runs.
 type goneMeanwhile struct{ *fakeWriteHost }
 
