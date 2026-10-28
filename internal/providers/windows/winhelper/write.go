@@ -105,6 +105,36 @@ type WriteHost interface {
 	// is idempotent): IIS serves a replaced CCS file only after one (F15, ruling W5-10). n is the
 	// number of records updated; err the first failure (the others are still sent).
 	RefreshCCSRecords(ctx context.Context) (n int, err error)
+
+	// The Remote Desktop listener RDP-Tcp (W6, R69). No argument names a registry path, a value or a SID:
+	// the listener's key, the value SSLCertificateSHA1Hash, the policy key and NETWORK SERVICE (S-1-5-20)
+	// are the host's constants (Rulings 8 and 10).
+	//
+	// RDPListener reads the listener's effective settings (Ruling 5); Present is false when the RDP-Tcp
+	// key is absent.
+	RDPListener(ctx context.Context) (RDPListener, error)
+	// SetRDPCertificate writes SSLCertificateSHA1Hash as the 20 bytes of sha1; "" deletes the value.
+	SetRDPCertificate(ctx context.Context, sha1 string) error
+	// StoreCertificates lists a machine store's certificates (Remote Desktop's), at most limit.
+	StoreCertificates(ctx context.Context, store string, limit int) ([]winproto.StoreCertificate, error)
+	// RDPKeyRead reports whether NETWORK SERVICE (or Everyone) has an access-allowed ACE with the read
+	// bits on the private key of the certificate store holds (Ruling 10).
+	RDPKeyRead(ctx context.Context, store, sha1 string) (readable bool, err error)
+	// SetRDPKeyRead appends Ruling 10's one ACE (S-1-5-20, GENERIC_READ, no inheritance) to that key's
+	// DACL (grant), or removes the non-inherited NETWORK SERVICE ACEs from it; the rest of the security
+	// descriptor is unchanged. Removing an ACE that is not there changes nothing.
+	SetRDPKeyRead(ctx context.Context, store, sha1 string, grant bool) error
+}
+
+// RDPListener is the RDP-Tcp listener as Windows applies it (Ruling 5): Enabled (fDenyTSConnections
+// 0), SecurityLayer and NLA (UserAuthentication) are the policy key's values where set there, else the
+// listener's own. CertSHA1 is SSLCertificateSHA1Hash in lower-case hex, "" when the value is absent;
+// CertTemplate the policy's CertTemplateName ("" when unset).
+type RDPListener struct {
+	Present, Enabled, NLA bool
+	Port, SecurityLayer   int
+	CertSHA1              string
+	CertTemplate          string
 }
 
 // CCSEntry is one file ListCCS found.

@@ -63,6 +63,18 @@ type deployRequest struct {
 // its own buffers; the Linux helper's parseDeployInput rule). Syntax is BAD_CONTENT; a locator Alice
 // does not deploy to, an expected hash or a list that is not valid is INVALID_ARGUMENT (Ruling 5).
 func parseDeployInput(raw []byte, sec *secrets) (deployRequest, error) {
+	return parseDeployFields(raw, sec, true)
+}
+
+// parseRDPDeployInput decodes rdp-deploy's stdin, winproto.RDPDeployInput (W6 Ruling 8): parseDeployInput's
+// members without the locator, so exactly five. Any other member (a locator, a store, a SID, a
+// listener, a registry path) is BAD_CONTENT: the listener is RDP-Tcp, named in code.
+func parseRDPDeployInput(raw []byte, sec *secrets) (deployRequest, error) {
+	return parseDeployFields(raw, sec, false)
+}
+
+// parseDeployFields is the strict parser of both inputs; withLocator says whether "locator" is a member.
+func parseDeployFields(raw []byte, sec *secrets, withLocator bool) (deployRequest, error) {
 	var d deployRequest
 	badContent := refused(winproto.CodeBadContent, "the input is not a deployment")
 	p := jsonScan{b: raw}
@@ -81,6 +93,9 @@ func parseDeployInput(raw []byte, sec *secrets) (deployRequest, error) {
 		seen[string(name)] = true
 		switch string(name) {
 		case "locator":
+			if !withLocator {
+				return d, badContent
+			}
 			if d.loc, ok = p.locator(); !ok {
 				return d, badContent
 			}
@@ -110,7 +125,11 @@ func parseDeployInput(raw []byte, sec *secrets) (deployRequest, error) {
 			return d, badContent
 		}
 	}
-	if len(seen) != 6 || !p.lit('}') {
+	members := 5
+	if withLocator {
+		members = 6
+	}
+	if len(seen) != members || !p.lit('}') {
 		return d, badContent
 	}
 	p.ws()
@@ -118,6 +137,9 @@ func parseDeployInput(raw []byte, sec *secrets) (deployRequest, error) {
 		return d, badContent
 	}
 	canonical, ok := d.loc.Canonical()
+	if !withLocator {
+		canonical, ok = winproto.RDPCanonical, true
+	}
 	if !ok || !validSHA256(d.expect) || !winproto.ValidForbidden(d.spki) || !winproto.ValidForbidden(d.leaf) {
 		return d, refused(winproto.CodeInvalidArgument, "the binding, the expected hash or a forbidden list is not allowed")
 	}

@@ -28,8 +28,11 @@ const (
 // from the store, never from the journal: its DER must be the one the journal names, with a usable
 // key, and the guard (journal lists with the call's) must not list it. Errors are the host's.
 func planRestore(ctx context.Context, h WriteHost, j journal, g guard) (restoreKind, error) {
-	if j.Kind == winproto.JournalKindCCS {
+	switch j.Kind {
+	case winproto.JournalKindCCS:
 		return planRestoreCCS(ctx, h, j, g)
+	case winproto.JournalKindRDP:
+		return planRestoreRDP(ctx, h, j, g)
 	}
 	cur, found, err := h.Binding(ctx, j.Locator)
 	if err != nil {
@@ -96,6 +99,54 @@ func planRestoreCCS(ctx context.Context, h WriteHost, j journal, g guard) (resto
 	return restoreWrite, nil
 }
 
+// planRestoreRDP is planRestore for an RDP journal (W6 Ruling 11). The listener must still name this
+// operation's certificate; when it names the previous one (the value absent when it was), nothing is
+// written. The previous certificate must be in its store with a usable key, unless the value was absent
+// (RDP then serves its self-signed certificate, or makes a new one). The guard is checked on the
+// journal's previous leaf and SPKI hashes.
+func planRestoreRDP(ctx context.Context, h WriteHost, j journal, g guard) (restoreKind, error) {
+	l, err := h.RDPListener(ctx)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case !l.Present:
+		return restoreForeign, nil
+	case l.CertSHA1 == rdpPreviousValue(j):
+		return restoreDone, nil
+	case l.CertSHA1 != j.NewSHA1:
+		return restoreForeign, nil
+	}
+	if !j.RDP.PreviousAbsent {
+		der, usable, found, err := storeCert(ctx, h, j.RDP.PreviousStore, j.PreviousSHA1)
+		if err != nil {
+			return 0, err
+		}
+		if !found || !usable || der == nil || sum256(der) != j.PreviousSHA256 {
+			return restoreNoBackup, nil
+		}
+	}
+	if slices.Contains(g.Leaf, j.PreviousSHA256) || slices.Contains(g.SPKI, j.RDP.PreviousSPKISHA256) {
+		return restoreForbidden, nil
+	}
+	return restoreWrite, nil
+}
+
+// revokeRDPGrant takes back the NETWORK SERVICE read grant of an RDP journal's operation (Ruling 10),
+// once the listener no longer names its certificate: only when the operation recorded that NETWORK
+// SERVICE could not read the key before (key_read_had false; written before the grant, so a kill after
+// it still revokes). A revoke of an ACE that is not there changes nothing. A failure fails no restore:
+// ACLLeft records it, answered as rdp_key_acl_left.
+func revokeRDPGrant(ctx context.Context, h WriteHost, j *journal) {
+	r := j.RDP
+	if r == nil || r.KeyReadHad == nil || *r.KeyReadHad {
+		return
+	}
+	c := *r
+	c.ACLLeft = h.SetRDPKeyRead(ctx, j.Store, j.NewSHA1, false) != nil
+	j.RDP = &c
+}
+
 // applyRestore carries out a planned restore after the gate and records its outcome in the journal.
 // The error is errKilled, or a journal that could not say restoring (nothing was written then; the
 // answer is OUTCOME_UNKNOWN and iis-status reads the journal as it was).
@@ -119,6 +170,7 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 			c.RefreshFailed = err != nil
 			j.CCS = &c
 		}
+		revokeRDPGrant(ctx, h, &j)
 		_ = writeJournal(h, j)
 		if j.CCS != nil {
 			_ = h.RemoveCCS(ctx, j.CCS.Path, j.CCS.Temp) // best effort: an interrupted write's temporary file; pruning removes it otherwise
@@ -129,6 +181,7 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 	case restoreDone:
 		return restored()
 	case restoreForeign:
+		revokeRDPGrant(ctx, h, &j) // the listener names neither certificate: the grant serves nothing of Alice's
 		return failRestore(winproto.ErrFileChanged)
 	case restoreNoBackup:
 		return failRestore(winproto.ErrBackupMissing)
@@ -166,7 +219,21 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 	if err := point(h, "restore.restoring"); err != nil {
 		return j, err
 	}
-	if c := j.CCS; c != nil {
+	switch {
+	case j.RDP != nil:
+		// The value goes back (or is deleted), then the listener must read back as it.
+		prev := rdpPreviousValue(j)
+		if err := h.SetRDPCertificate(ctx, prev); err != nil {
+			return failRestore(winproto.ErrIO)
+		}
+		if err := point(h, "restore.bound"); err != nil {
+			return j, err
+		}
+		if l, err := h.RDPListener(ctx); err != nil || !l.Present || l.CertSHA1 != prev {
+			return failRestore(winproto.ErrReadBack)
+		}
+	case j.CCS != nil:
+		c := j.CCS
 		// The backup goes back over the file (MoveFileEx), then the file must read back as the previous bytes.
 		if err := h.RestoreCCS(ctx, c.Path, c.Backup, c.File); err != nil {
 			return failRestore(winproto.ErrIO)
@@ -177,7 +244,7 @@ func applyRestore(ctx context.Context, h WriteHost, j journal, kind restoreKind,
 		if sum, found, err := ccsFileSum(ctx, h, c.Path, c.File); err != nil || !found || sum != c.PreviousFileSHA256 {
 			return failRestore(winproto.ErrReadBack)
 		}
-	} else {
+	default:
 		switch err := h.UpdateBinding(ctx, j.Previous); {
 		case errors.Is(err, ErrKeyUnusable):
 			return failRestore(winproto.ErrKeyUnusable)
@@ -230,7 +297,8 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 	}
 	answer := func(j journal, from int) winproto.RestoreResponse {
 		return winproto.RestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
-			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):]), CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed}
+			Steps: slices.Clone(j.Steps[min(from, len(j.Steps)):]), CCSRefreshFailed: j.CCS != nil && j.CCS.RefreshFailed,
+			RDPKeyACLLeft: j.RDP != nil && j.RDP.ACLLeft}
 	}
 	switch {
 	case j.Phase == winproto.PhasePrepared, j.Phase == winproto.PhaseUnchanged, j.Phase == winproto.PhaseRestored,
@@ -264,6 +332,9 @@ func cmdIISRestore(ctx context.Context, c *call) (any, error) {
 		// An interrupted operation ends restore_failed file_changed instead (applyRestore), as in W2, so
 		// it no longer holds up the next deployment.
 		return nil, precondition(winproto.CodeSuperseded, "the CCS file was changed after this deployment; it is not rolled back")
+	case kind == restoreForeign && j.Kind == winproto.JournalKindRDP && j.Phase == winproto.PhaseCommitted:
+		// A listener re-pointed after the commit is someone else's (W6 Ruling 11): never written.
+		return nil, precondition(winproto.CodeSuperseded, "the Remote Desktop listener was changed after this deployment; it is not rolled back")
 	}
 	wctx, err := c.gate.enter()
 	if err != nil {

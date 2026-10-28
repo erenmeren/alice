@@ -102,6 +102,39 @@ type journal struct {
 	// Locator, Previous and Store are empty, and the SHA-1 and SHA-256 fields name the leaves.
 	Kind string      `json:"kind,omitempty"`
 	CCS  *ccsJournal `json:"ccs,omitempty"`
+	// RDP is an rdp-deploy's (kind winproto.JournalKindRDP, W6 Ruling 13): its Binding is
+	// winproto.RDPCanonical, its Store MY (the import store), its Locator and Previous are empty.
+	RDP *rdpJournal `json:"rdp,omitempty"`
+}
+
+// rdpJournal is what an RDP journal adds (W6 Ruling 13): where the previous certificate is
+// (PreviousStore MY, or Remote Desktop when the value was absent: PreviousAbsent, the restore then
+// deletes the value), the previous leaf's SPKI SHA-256 the guard checks, whether NETWORK SERVICE could
+// read the new key before the operation (KeyReadHad, written before any grant; nil until the grant step
+// read it) and whether a restore could not take this operation's grant back (ACLLeft).
+type rdpJournal struct {
+	PreviousStore      string `json:"previous_store"`
+	PreviousAbsent     bool   `json:"previous_absent"`
+	PreviousSPKISHA256 string `json:"previous_spki_sha256"`
+	KeyReadHad         *bool  `json:"key_read_had"`
+	ACLLeft            bool   `json:"acl_left,omitempty"`
+}
+
+// valid reports RDP fields the helper may act on in phase: the previous store one of the two, the
+// self-signed store exactly when the value was absent (Ruling 4), and KeyReadHad known from the grant
+// step on (nil only in a journal that never reached it: prepared, or restored before it).
+func (r rdpJournal) valid(phase string) bool {
+	return (r.PreviousStore == defaultStore || r.PreviousStore == winproto.RDPStoreSelfSigned) &&
+		r.PreviousAbsent == (r.PreviousStore == winproto.RDPStoreSelfSigned) && validSHA256(r.PreviousSPKISHA256) &&
+		(r.KeyReadHad != nil || phase == winproto.PhasePrepared || phase == winproto.PhaseRestored)
+}
+
+// rdpPreviousValue is the value a restore of an RDP journal writes back: "" (deleted) when it was absent.
+func rdpPreviousValue(j journal) string {
+	if j.RDP.PreviousAbsent {
+		return ""
+	}
+	return j.PreviousSHA1
 }
 
 // ccsJournal is what a CCS journal adds (W5 Ruling 14): the folder as the registry named it, the
@@ -145,10 +178,10 @@ var journalPhases = []string{winproto.PhasePrepared, winproto.PhaseWriting, winp
 	winproto.PhaseRestoring, winproto.PhaseRestored, winproto.PhaseRestoreFailed, winproto.PhaseRestoreForbidden}
 
 var stepNames = []string{winproto.StepImportChain, winproto.StepImportCertificate, winproto.StepBind, winproto.StepJournal, winproto.StepRestore,
-	winproto.StepWriteFile}
+	winproto.StepWriteFile, winproto.StepGrantKeyRead, winproto.StepSetListener}
 
 var errorClasses = []string{winproto.ErrKeyUnusable, winproto.ErrReadBack, winproto.ErrStore, winproto.ErrFileChanged,
-	winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO}
+	winproto.ErrForbidden, winproto.ErrBackupMissing, winproto.ErrIO, winproto.ErrKeyACL}
 
 // validSHA256 reports 64 lower-case hex digits (helperproto's absent marker is not a hash here).
 func validSHA256(s string) bool {
@@ -214,15 +247,21 @@ func (j journal) valid(op string) bool {
 	switch j.Kind {
 	case "":
 		canonical, ok := j.Locator.Canonical()
-		if !ok || canonical != j.Binding || j.CCS != nil || !validRecord(j.Previous, j.Binding) ||
+		if !ok || canonical != j.Binding || j.CCS != nil || j.RDP != nil || !validRecord(j.Previous, j.Binding) ||
 			j.Previous.CertSHA1 != j.PreviousSHA1 || !winproto.ValidStore(j.Store) {
 			return false
 		}
 	case winproto.JournalKindCCS:
 		// No binding, no store import: the fields of W2 a CCS operation never has stay empty.
-		if j.CCS == nil || !j.CCS.valid(op, j.Phase) || j.Binding != ccsRecordKey(j.CCS.File) || j.Locator != (winproto.Locator{}) ||
+		if j.CCS == nil || j.RDP != nil || !j.CCS.valid(op, j.Phase) || j.Binding != ccsRecordKey(j.CCS.File) || j.Locator != (winproto.Locator{}) ||
 			!reflect.DeepEqual(j.Previous, winproto.SSLBinding{}) || j.Store != "" || j.AliceImported || j.Existed != nil ||
 			!winproto.ValidSHA1(j.PreviousSHA1) {
+			return false
+		}
+	case winproto.JournalKindRDP:
+		// One listener named in code, no http.sys record; the import store is My (Ruling 6).
+		if j.RDP == nil || j.CCS != nil || !j.RDP.valid(j.Phase) || j.Binding != winproto.RDPCanonical || j.Locator != (winproto.Locator{}) ||
+			!reflect.DeepEqual(j.Previous, winproto.SSLBinding{}) || j.Store != defaultStore || !winproto.ValidSHA1(j.PreviousSHA1) {
 			return false
 		}
 	default:

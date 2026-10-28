@@ -226,6 +226,28 @@ type fakeWriteHost struct {
 	ccsWriteErr   error
 	ccsReplaceErr error
 	ccsRefreshErr error // RefreshCCSRecords answers it (logged all the same: the updates were tried)
+
+	// W6: the RDP listener. rdp holds the listener's own values (nil: the RDP-Tcp key is absent), its
+	// CertSHA1 the value SSLCertificateSHA1Hash ("" absent); the rdpPolicy* fields are the policy key's
+	// values, which override the listener's (Ruling 5). rdpReadFn decides what the n-th RDPListener read
+	// answers (read-back faults). keyRead is NETWORK SERVICE's read access by (store, sha1); acl logs every
+	// SetRDPKeyRead that changed it ("grant <store> <sha1>", "revoke <store> <sha1>"), as log does
+	// ("acl ..."). SetRDPCertificate logs "rdp-set <sha1>" or "rdp-delete". storeLists counts
+	// StoreCertificates calls.
+	rdp              *RDPListener
+	rdpPolicyEnabled *bool
+	rdpPolicyLayer   *int
+	rdpPolicyNLA     *bool
+	rdpErr           error
+	rdpReads         int
+	rdpReadFn        func(n int, l RDPListener) RDPListener
+	rdpSetErr        error
+	storeListErr     error
+	storeLists       int
+	keyRead          map[[2]string]bool
+	keyReadErr       error
+	keyACLErr        func(grant bool) error
+	acl              []string
 }
 
 // fakeCCSFile is one file of the fake CCS folder.
@@ -815,6 +837,120 @@ func (f *fakeWriteHost) RemoveCCS(_ context.Context, folder, name string) error 
 		delete(f.ccsFiles, name)
 		f.log = append(f.log, "ccs-unlink "+name)
 	}
+	return nil
+}
+
+func (f *fakeWriteHost) RDPListener(context.Context) (RDPListener, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.rdpErr != nil {
+		return RDPListener{}, f.rdpErr
+	}
+	if f.rdp == nil {
+		return RDPListener{}, nil
+	}
+	l := *f.rdp
+	l.Present = true
+	if f.rdpPolicyEnabled != nil {
+		l.Enabled = *f.rdpPolicyEnabled
+	}
+	if f.rdpPolicyLayer != nil {
+		l.SecurityLayer = *f.rdpPolicyLayer
+	}
+	if f.rdpPolicyNLA != nil {
+		l.NLA = *f.rdpPolicyNLA
+	}
+	f.rdpReads++
+	if f.rdpReadFn != nil {
+		l = f.rdpReadFn(f.rdpReads, l)
+	}
+	return l, nil
+}
+
+func (f *fakeWriteHost) SetRDPCertificate(_ context.Context, sha1 string) error {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.rdpSetErr != nil {
+		return f.rdpSetErr
+	}
+	if f.rdp == nil {
+		return errors.New("no RDP-Tcp key")
+	}
+	f.rdp.CertSHA1 = sha1
+	if sha1 == "" {
+		f.log = append(f.log, "rdp-delete")
+	} else {
+		f.log = append(f.log, "rdp-set "+sha1)
+	}
+	return nil
+}
+
+// StoreCertificates lists a store's certificates by SHA-1, at most limit.
+func (f *fakeWriteHost) StoreCertificates(_ context.Context, store string, limit int) ([]winproto.StoreCertificate, error) {
+	f.calls.Add(1)
+	f.wmu.Lock()
+	f.storeLists++
+	err := f.storeListErr
+	f.wmu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []winproto.StoreCertificate{}
+	for k, c := range f.certs {
+		if k[0] == store {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SHA1 < out[j].SHA1 })
+	return out[:min(len(out), limit)], nil
+}
+
+func (f *fakeWriteHost) hasCert(store, sha1 string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.certs[[2]string{store, sha1}]
+	return ok
+}
+
+func (f *fakeWriteHost) RDPKeyRead(_ context.Context, store, sha1 string) (bool, error) {
+	f.calls.Add(1)
+	if f.keyReadErr != nil {
+		return false, f.keyReadErr
+	}
+	if !f.hasCert(store, sha1) {
+		return false, errors.New("no such certificate")
+	}
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	return f.keyRead[[2]string{store, sha1}], nil
+}
+
+func (f *fakeWriteHost) SetRDPKeyRead(_ context.Context, store, sha1 string, grant bool) error {
+	f.calls.Add(1)
+	if f.keyACLErr != nil {
+		if err := f.keyACLErr(grant); err != nil {
+			return err
+		}
+	}
+	if !f.hasCert(store, sha1) {
+		return errors.New("no such certificate")
+	}
+	f.wmu.Lock()
+	defer f.wmu.Unlock()
+	if f.keyRead == nil {
+		f.keyRead = map[[2]string]bool{}
+	}
+	f.keyRead[[2]string{store, sha1}] = grant
+	e := "revoke " + store + " " + sha1
+	if grant {
+		e = "grant " + store + " " + sha1
+	}
+	f.acl = append(f.acl, e)
+	f.log = append(f.log, "acl "+e)
 	return nil
 }
 

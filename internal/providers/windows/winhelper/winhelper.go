@@ -90,6 +90,11 @@ var commands = map[string]command{
 	// ccs-deploy writes one CCS file under the gate.
 	winproto.SubCCSDump:   {elevated: true, input: winproto.MaxCCSDumpInput, run: cmdCCSDump},
 	winproto.SubCCSDeploy: {write: true, input: winproto.MaxCCSDeployInput, run: cmdCCSDeploy},
+
+	// rdp-dump (W6): an elevated read of the RDP-Tcp listener under no lock, no input; rdp-deploy sets the
+	// listener's certificate under the gate.
+	winproto.SubRDPDump:   {elevated: true, run: cmdRDPDump},
+	winproto.SubRDPDeploy: {write: true, input: winproto.MaxDeployInput, run: cmdRDPDeploy},
 }
 
 // RunForced is the "ssh" entry: it splits SSH_ORIGINAL_COMMAND with winproto.SplitCommandLine and runs it.

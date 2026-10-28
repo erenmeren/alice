@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -375,5 +376,78 @@ func TestReplyEncodeFailure(t *testing.T) {
 	out.Reset()
 	if code := reply(&out, nil, errors.New("plain")); code != 4 || !strings.Contains(out.String(), "IO_ERROR") {
 		t.Fatal(code, out.String())
+	}
+}
+
+// rdpServer is an RDP listener: it answers the Connection Request with confirm, then serves TLS with
+// its leaf (and the CA's intermediate).
+func rdpServer(t *testing.T, confirm []byte) (port string, leaf pki.Leaf) {
+	t.Helper()
+	ca := pki.NewCA("RDP Test", pki.ECDSA256, testNow)
+	leaf = ca.Issue(pki.Opts{CommonName: "rdp.example.test", SANs: []string{"rdp.example.test"}}, testNow)
+	cfg := &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.Cert.Raw, ca.Intermediate.Raw}, PrivateKey: leaf.Key}}}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				req := make([]byte, len(helperproto.RDPConnectionRequest))
+				if _, err := io.ReadFull(c, req); err != nil || !bytes.Equal(req, helperproto.RDPConnectionRequest) {
+					return
+				}
+				_, _ = c.Write(confirm)
+				_ = tls.Server(c, cfg).Handshake()
+			}()
+		}
+	}()
+	_, port, _ = net.SplitHostPort(ln.Addr().String())
+	return port, leaf
+}
+
+// TestTLSProbeRDP is Review Focus 4: --rdp negotiates the RDP security layer before the handshake.
+func TestTLSProbeRDP(t *testing.T) {
+	port, leaf := rdpServer(t, helperproto.RDPConfirm(helperproto.RDPProtocolHybrid))
+	code, out := run(t, &fakeHost{}, "tls-probe", "--addr", "127.0.0.1", "--port", port, "--sni", "_", "--key-type", "any", "--rdp")
+	var r winproto.TLSProbeResponse
+	if err := json.Unmarshal(out, &r); err != nil || code != 0 || r.LeafSHA256 != hexSHA256(leaf.Cert.Raw) || r.ChainLength != 2 {
+		t.Fatal(code, err, string(out))
+	}
+	// Without --rdp the TLS ClientHello meets the RDP listener: the probe fails as before.
+	old := probeTimeout
+	probeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = old })
+	code, out = run(t, &fakeHost{}, "tls-probe", "--addr", "127.0.0.1", "--port", port, "--sni", "_", "--key-type", "any")
+	wantError(t, code, out, 4, "PROBE_FAILED")
+	// A listener without TLS (standard RDP security).
+	noTLS, _ := rdpServer(t, helperproto.RDPFailure(2))
+	code, out = run(t, &fakeHost{}, "tls-probe", "--addr", "127.0.0.1", "--port", noTLS, "--sni", "_", "--key-type", "any", "--rdp")
+	wantError(t, code, out, 4, "PROBE_FAILED")
+	// The eight-argument form against a TLS endpoint is unchanged.
+	tport, _ := tlsServer(t)
+	if code, out := run(t, &fakeHost{}, "tls-probe", "--addr", "127.0.0.1", "--port", tport, "--sni", "_", "--key-type", "any"); code != 0 {
+		t.Fatal(string(out))
+	}
+	h := &fakeHost{}
+	good := []string{"tls-probe", "--addr", "127.0.0.1", "--port", port, "--sni", "_", "--key-type", "any"}
+	for _, args := range [][]string{
+		append(slices.Clone(good), "--rdp", "--rdp"),
+		append(slices.Clone(good), "--rdp", "x"),
+		append(slices.Clone(good), "--RDP"),
+		append(append(slices.Clone(good[:7]), "--rdp"), good[7:]...),
+		append([]string{"tls-probe", "--rdp"}, good[1:]...),
+	} {
+		code, out := run(t, h, args...)
+		wantError(t, code, out, 2, "USAGE")
+	}
+	if h.calls.Load() != 0 {
+		t.Fatal("the host dialled")
 	}
 }

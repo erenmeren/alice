@@ -593,6 +593,9 @@ type DeployResponse struct {
 	// that makes IIS read the file again (F15 route (a), ruling W5-10) failed after the file was
 	// written or restored: the file is right, what IIS serves is for the verification to judge.
 	CCSRefreshFailed bool `json:"ccs_refresh_failed,omitempty"`
+	// RDPKeyACLLeft is set on an RDP answer when a restore could not take back the NETWORK SERVICE read
+	// grant the operation added (W6 Ruling 10): the listener is restored, the key keeps that ACE.
+	RDPKeyACLLeft bool `json:"rdp_key_acl_left,omitempty"`
 }
 
 // RestoreInput is the JSON on iis-restore's stdin, at most MaxRestoreInput bytes: the rollback guard as
@@ -613,6 +616,8 @@ type RestoreResponse struct {
 	Steps      []Step `json:"steps"`
 	// CCSRefreshFailed is DeployResponse's, for the restore of a CCS file.
 	CCSRefreshFailed bool `json:"ccs_refresh_failed,omitempty"`
+	// RDPKeyACLLeft is DeployResponse's, for the restore of an RDP listener.
+	RDPKeyACLLeft bool `json:"rdp_key_acl_left,omitempty"`
 }
 
 // StatusResponse answers iis-status and iis-fence (helperproto.NginxStatusResponse without

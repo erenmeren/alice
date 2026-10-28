@@ -946,3 +946,27 @@ func (h host) Point(name string) error {
 	}
 	return nil
 }
+
+// errRDPNotModelled is what the RDP methods answer until the emulator models the listener (W6 Task 3).
+var errRDPNotModelled = errors.New("wintest: the RDP listener is not modelled")
+
+// RDPListener is not modelled yet (W6 Task 3).
+func (host) RDPListener(context.Context) (winhelper.RDPListener, error) {
+	return winhelper.RDPListener{}, errRDPNotModelled
+}
+
+// SetRDPCertificate is not modelled yet (W6 Task 3).
+func (host) SetRDPCertificate(context.Context, string) error { return errRDPNotModelled }
+
+// StoreCertificates is not modelled yet (W6 Task 3).
+func (host) StoreCertificates(context.Context, string, int) ([]winproto.StoreCertificate, error) {
+	return nil, errRDPNotModelled
+}
+
+// RDPKeyRead is not modelled yet (W6 Task 3).
+func (host) RDPKeyRead(context.Context, string, string) (bool, error) {
+	return false, errRDPNotModelled
+}
+
+// SetRDPKeyRead is not modelled yet (W6 Task 3).
+func (host) SetRDPKeyRead(context.Context, string, string, bool) error { return errRDPNotModelled }

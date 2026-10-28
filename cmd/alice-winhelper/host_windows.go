@@ -392,3 +392,27 @@ func (host) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
 	return d.DialContext(ctx, network, addr)
 }
+
+// errRDPNotImplemented is what the RDP methods answer until the real RDP half lands (W6 Task 4).
+var errRDPNotImplemented = errors.New("alice-winhelper: the RDP listener is not implemented")
+
+// RDPListener is not implemented yet (W6 Task 4).
+func (host) RDPListener(context.Context) (winhelper.RDPListener, error) {
+	return winhelper.RDPListener{}, errRDPNotImplemented
+}
+
+// SetRDPCertificate is not implemented yet (W6 Task 4).
+func (host) SetRDPCertificate(context.Context, string) error { return errRDPNotImplemented }
+
+// StoreCertificates is not implemented yet (W6 Task 4).
+func (host) StoreCertificates(context.Context, string, int) ([]winproto.StoreCertificate, error) {
+	return nil, errRDPNotImplemented
+}
+
+// RDPKeyRead is not implemented yet (W6 Task 4).
+func (host) RDPKeyRead(context.Context, string, string) (bool, error) {
+	return false, errRDPNotImplemented
+}
+
+// SetRDPKeyRead is not implemented yet (W6 Task 4).
+func (host) SetRDPKeyRead(context.Context, string, string, bool) error { return errRDPNotImplemented }

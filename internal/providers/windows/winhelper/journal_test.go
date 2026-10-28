@@ -695,3 +695,69 @@ func TestCCSBackupNameIsTheOperationsLastDigits(t *testing.T) {
 		t.Fatal("a backup named by the first digits is accepted")
 	}
 }
+
+func sampleRDPJournal(op string) journal {
+	return journal{Op: op, Phase: winproto.PhaseCommitted, Kind: winproto.JournalKindRDP, Binding: winproto.RDPCanonical,
+		PreviousSHA1: h1, PreviousSHA256: s256a, NewSHA1: h2, NewSHA256: s256b, Store: "MY", Intermediates: []certRef{},
+		AliceImported: true, Existed: boolPtr(false),
+		Steps: []winproto.Step{{Name: winproto.StepImportChain, Status: winproto.StepOK}, {Name: winproto.StepImportCertificate, Status: winproto.StepOK},
+			{Name: winproto.StepGrantKeyRead, Status: winproto.StepOK}, {Name: winproto.StepSetListener, Status: winproto.StepOK}},
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{},
+		RDP: &rdpJournal{PreviousStore: "MY", PreviousSPKISHA256: s256c, KeyReadHad: boolPtr(false)}}
+}
+
+// TestRDPJournalValidation (Ruling 13): an RDP journal round-trips; valid checks the fields of its kind.
+func TestRDPJournalValidation(t *testing.T) {
+	h := newWriteHost()
+	j := sampleRDPJournal(op1)
+	mustWrite(t, h, j)
+	if got, found, err := readJournal(h, op1); err != nil || !found || !reflect.DeepEqual(got, j) {
+		t.Fatalf("%v %v %+v", err, found, got)
+	}
+	if raw := h.state[journalName(op1)]; !strings.Contains(string(raw), `"kind":"rdp_listener"`) || !strings.Contains(string(raw), `"key_read_had":false`) {
+		t.Fatalf("%s", raw)
+	}
+	for name, edit := range map[string]func(*journal){
+		"a prepared journal before the grant": func(j *journal) { j.Phase, j.RDP.KeyReadHad = winproto.PhasePrepared, nil },
+		"restored before the grant":           func(j *journal) { j.Phase, j.RDP.KeyReadHad = winproto.PhaseRestored, nil },
+		"the self-signed previous":            func(j *journal) { j.RDP.PreviousAbsent, j.RDP.PreviousStore = true, winproto.RDPStoreSelfSigned },
+		"an ACE left":                         func(j *journal) { j.Phase, j.RDP.ACLLeft = winproto.PhaseRestored, true },
+	} {
+		j := sampleRDPJournal(op1)
+		edit(&j)
+		if !j.valid(op1) {
+			t.Errorf("%s: refused", name)
+		}
+	}
+	for name, edit := range map[string]func(*journal){
+		"previous_absent with MY":            func(j *journal) { j.RDP.PreviousAbsent = true },
+		"Remote Desktop with a value":        func(j *journal) { j.RDP.PreviousStore = winproto.RDPStoreSelfSigned },
+		"another previous store":             func(j *journal) { j.RDP.PreviousStore = "Root" },
+		"a locator":                          func(j *journal) { j.Locator = loc443() },
+		"a previous record":                  func(j *journal) { j.Previous.Port = 443 },
+		"key_read_had nil in committed":      func(j *journal) { j.RDP.KeyReadHad = nil },
+		"key_read_had nil in writing":        func(j *journal) { j.Phase, j.RDP.KeyReadHad = winproto.PhaseWriting, nil },
+		"key_read_had nil in unchanged":      func(j *journal) { j.Phase, j.RDP.KeyReadHad = winproto.PhaseUnchanged, nil },
+		"no RDP fields":                      func(j *journal) { j.RDP = nil },
+		"RDP fields on a binding":            func(j *journal) { b := sampleJournal(op1); b.RDP = j.RDP; *j = b },
+		"RDP fields on a CCS journal":        func(j *journal) { c := sampleCCSJournal(op1); c.RDP = j.RDP; *j = c },
+		"CCS fields":                         func(j *journal) { j.CCS = sampleCCSJournal(op1).CCS },
+		"another binding":                    func(j *journal) { j.Binding = "rdp/Other" },
+		"another store":                      func(j *journal) { j.Store = "WebHosting" },
+		"no store":                           func(j *journal) { j.Store = "" },
+		"a previous SPKI hash":               func(j *journal) { j.RDP.PreviousSPKISHA256 = "" },
+		"a previous thumbprint":              func(j *journal) { j.PreviousSHA1 = "" },
+		"an unknown step":                    func(j *journal) { j.Steps[2].Name = "grant" },
+		"an existing copy imported by Alice": func(j *journal) { j.Existed = boolPtr(true) },
+	} {
+		j := sampleRDPJournal(op1)
+		edit(&j)
+		if j.valid(op1) {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A binding journal carries no RDP members.
+	if raw, _ := json.Marshal(sampleJournal(op1)); strings.Contains(string(raw), `"rdp"`) {
+		t.Fatalf("%s", raw)
+	}
+}

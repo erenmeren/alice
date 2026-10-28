@@ -1512,3 +1512,42 @@ func TestPruneEntersTheGateOnlyToRemove(t *testing.T) {
 		t.Fatal("a removal without the gate")
 	}
 }
+
+// TestCleanupReadsRDPJournals (Ruling 13): an RDP journal is read and pruned like a binding's, and it
+// keeps its certificates while it is interrupted.
+func TestCleanupReadsRDPJournals(t *testing.T) {
+	f := newCleanup(t)
+	old, needed, live := cleanupOp(1), cleanupOp(2), cleanupOp(3)
+	mustWrite(t, f.h, sampleRDPJournal(old))
+	f.h.modTimes[journalName(old)] = testNow.Add(-8 * day)
+	mustWrite(t, f.h, sampleRDPJournal(needed))
+	f.h.modTimes[journalName(needed)] = testNow.Add(-60 * day)
+	if err := writeBindingRecord(f.h, winproto.RDPCanonical, needed); err != nil {
+		t.Fatal(err)
+	}
+	c := f.imported("My")
+	w := sampleRDPJournal(live)
+	w.Phase, w.NewSHA1, w.NewSHA256 = winproto.PhaseWriting, c.sha1, c.sha256
+	mustWrite(t, f.h, w)
+	f.h.modTimes[journalName(live)] = testNow.Add(-60 * day)
+	files, err := readJournals(f.h)
+	if err != nil || len(files) != 3 || !files[0].OK || files[0].J.Kind != winproto.JournalKindRDP {
+		t.Fatalf("%v %+v", err, files)
+	}
+	f.reset()
+	r := f.plan(c)
+	if r.Pruned != 1 || len(r.Candidates) != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if _, ok := f.h.state[journalName(old)]; ok {
+		t.Fatal("the old RDP journal stays")
+	}
+	for _, op := range []string{needed, live} {
+		if _, ok := f.h.state[journalName(op)]; !ok {
+			t.Fatalf("%s is gone", op)
+		}
+	}
+	if len(r.Watched) != 1 || r.Watched[0].Reason != winproto.KeptJournal {
+		t.Fatalf("%+v", r.Watched)
+	}
+}
