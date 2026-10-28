@@ -99,7 +99,7 @@ func (f *rdpFixture) setValue(sha1 string) {
 func (f *rdpFixture) readable(sha1 string) bool {
 	f.h.wmu.Lock()
 	defer f.h.wmu.Unlock()
-	return f.h.keyRead[[2]string{"MY", sha1}]
+	return nsCanRead(f.h.nsACEs[[2]string{"MY", sha1}])
 }
 
 func (f *rdpFixture) aclLog() []string {
@@ -296,7 +296,7 @@ func TestRDPDeployUnchanged(t *testing.T) {
 		t.Fatalf("record %+v", rec)
 	}
 	// The key not readable: the grant, then a write of the same value.
-	f.h.keyRead[[2]string{"MY", f.newSHA1}] = false
+	f.h.nsACEs[[2]string{"MY", f.newSHA1}] = nil
 	f.clearLogs()
 	o, r, out = f.rdpDeploy(op3, f.in())
 	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted ||
@@ -307,7 +307,7 @@ func TestRDPDeployUnchanged(t *testing.T) {
 		t.Fatal(ev.text)
 	}
 	// Readable and named, but another chain served: the value is written again, no grant.
-	f.h.keyRead[[2]string{"MY", f.newSHA1}] = true
+	f.h.nsACEs[[2]string{"MY", f.newSHA1}] = []fakeACE{{mask: fakeGrantMask}}
 	if err := writeBindingState(f.h, bindingRecord{Binding: winproto.RDPCanonical, Op: op3}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,10 +444,10 @@ func TestRDPDeployInputHasNoLocator(t *testing.T) {
 func TestRDPGrantOnlyTheListenersKey(t *testing.T) {
 	t.Run("an import", func(t *testing.T) {
 		f := newRDPFixture(t, false)
-		f.h.keyRead = map[[2]string]bool{}
+		f.h.nsACEs = map[[2]string][]fakeACE{}
 		f.rdpCommitted(op1, f.in())
-		if !slices.Equal(f.aclLog(), []string{"grant MY " + f.newSHA1}) || len(f.h.keyRead) != 1 {
-			t.Fatalf("%v %v", f.aclLog(), f.h.keyRead)
+		if !slices.Equal(f.aclLog(), []string{"grant MY " + f.newSHA1}) || len(f.h.nsACEs) != 1 {
+			t.Fatalf("%v %v", f.aclLog(), f.h.nsACEs)
 		}
 	})
 	t.Run("an existing copy", func(t *testing.T) {
@@ -853,7 +853,7 @@ func TestRDPRestoreRevokesOnlyItsGrant(t *testing.T) {
 	t.Run("NETWORK SERVICE could read the key already", func(t *testing.T) {
 		f := newRDPFixture(t, false)
 		f.h.addCert("MY", f.nw.Cert.Raw, true)
-		f.h.keyRead = map[[2]string]bool{{"MY", f.newSHA1}: true}
+		f.h.nsACEs = map[[2]string][]fakeACE{{"MY", f.newSHA1}: {{mask: fakeGrantMask}}}
 		f.rdpCommitted(op1, f.in())
 		if j := f.journal(op1); j.RDP.KeyReadHad == nil || !*j.RDP.KeyReadHad {
 			t.Fatalf("%+v", j.RDP)
@@ -931,6 +931,109 @@ func TestRDPNoKeyMaterialOutsideStdin(t *testing.T) {
 				if strings.Contains(s, "PRIVATE KEY") || strings.Contains(s, body) {
 					t.Fatalf("key material in %.80q", s)
 				}
+			}
+		})
+	}
+}
+
+// TestRDPRevokeKeepsOtherACEs (review I1): NETWORK SERVICE ACEs the key held before the operation, a
+// deny one and an allow one of another mask, survive the grant's revoke, on a restore and on the
+// take-back of a failed grant.
+func TestRDPRevokeKeepsOtherACEs(t *testing.T) {
+	theirs := []fakeACE{{deny: true, mask: fakeGrantMask}, {mask: 0x1}}
+	setup := func(t *testing.T) *rdpFixture {
+		f := newRDPFixture(t, false)
+		f.h.addCert("MY", f.nw.Cert.Raw, true)
+		f.h.nsACEs = map[[2]string][]fakeACE{{"MY", f.newSHA1}: slices.Clone(theirs)}
+		return f
+	}
+	t.Run("a restore", func(t *testing.T) {
+		f := setup(t)
+		f.rdpCommitted(op1, f.in())
+		if !f.readable(f.newSHA1) {
+			t.Fatal("not granted")
+		}
+		if _, r, out := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		if got := f.h.nsACEs[[2]string{"MY", f.newSHA1}]; !slices.Equal(got, theirs) {
+			t.Fatalf("ACEs %v, want %v", got, theirs)
+		}
+	})
+	t.Run("a failed grant taken back", func(t *testing.T) {
+		f := setup(t)
+		f.h.keyACLErr = func(grant bool) error {
+			if grant {
+				return errors.New("ncrypt")
+			}
+			return nil
+		}
+		if o, r, out := f.rdpDeploy(op1, f.in()); o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepGrantKeyRead {
+			t.Fatalf("%s", out)
+		}
+		if got := f.h.nsACEs[[2]string{"MY", f.newSHA1}]; !slices.Equal(got, theirs) || !slices.Equal(f.aclLog(), []string{"revoke MY " + f.newSHA1}) {
+			t.Fatalf("ACEs %v, want %v; acl %v", got, theirs, f.aclLog())
+		}
+	})
+	t.Run("a self-restore after the grant", func(t *testing.T) {
+		f := setup(t)
+		f.h.pointErr = func(name string) error {
+			if name == "rdp.granted" {
+				f.h.rdpSetErr = errors.New("registry") // set_listener fails after the grant: self-restore revokes
+			}
+			return nil
+		}
+		if o, r, out := f.rdpDeploy(op1, f.in()); o.Exit != 0 || r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", out)
+		}
+		if got := f.h.nsACEs[[2]string{"MY", f.newSHA1}]; !slices.Equal(got, theirs) {
+			t.Fatalf("ACEs %v, want %v", got, theirs)
+		}
+	})
+}
+
+// TestRDPKeyMethodsRefuseOtherStores (review minor 3): the host's key methods act on My only.
+func TestRDPKeyMethodsRefuseOtherStores(t *testing.T) {
+	f := newRDPFixture(t, false)
+	if _, err := f.h.RDPKeyRead(context.Background(), winproto.RDPStoreSelfSigned, f.selfSHA1); err == nil {
+		t.Fatal("RDPKeyRead read Remote Desktop")
+	}
+	if err := f.h.SetRDPKeyRead(context.Background(), winproto.RDPStoreSelfSigned, f.selfSHA1, true); err == nil || len(f.aclLog()) != 0 {
+		t.Fatalf("SetRDPKeyRead wrote Remote Desktop: %v %v", err, f.aclLog())
+	}
+	if _, err := f.h.RDPKeyRead(context.Background(), "MY", f.oldSHA1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRDPKillOverAnExistingCopy (review minor 2, Ruling 27 item 4): a key Alice did not import, killed
+// after the grant, loses that grant at the restore.
+func TestRDPKillOverAnExistingCopy(t *testing.T) {
+	for _, p := range []string{"rdp.granted", "rdp.grant_key_read"} {
+		t.Run(p, func(t *testing.T) {
+			f := newRDPFixture(t, false)
+			f.h.addCert("MY", f.nw.Cert.Raw, true)
+			f.h.pointErr = func(name string) error {
+				if name == p {
+					return errors.New("kill")
+				}
+				return nil
+			}
+			var out bytes.Buffer
+			if o := Execute(context.Background(), f.h, []string{winproto.SubRDPDeploy, winproto.ArgOp, op1}, bytes.NewReader(f.in()), &out); !o.Killed {
+				t.Fatalf("%+v %s", o, out.Bytes())
+			}
+			f.h.pointErr = nil
+			if j := f.journal(op1); j.AliceImported || j.Phase != winproto.PhaseWriting || j.RDP.KeyReadHad == nil || *j.RDP.KeyReadHad ||
+				!f.readable(f.newSHA1) {
+				t.Fatalf("%+v %+v", j, j.RDP)
+			}
+			if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+				t.Fatalf("%s", raw)
+			}
+			if f.readable(f.newSHA1) || f.value() != f.oldSHA1 ||
+				!slices.Equal(f.aclLog(), []string{"grant MY " + f.newSHA1, "revoke MY " + f.newSHA1}) {
+				t.Fatalf("readable %v value %s acl %v", f.readable(f.newSHA1), f.value(), f.aclLog())
 			}
 		})
 	}

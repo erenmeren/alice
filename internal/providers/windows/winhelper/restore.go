@@ -135,8 +135,10 @@ func planRestoreRDP(ctx context.Context, h WriteHost, j journal, g guard) (resto
 // revokeRDPGrant takes back the NETWORK SERVICE read grant of an RDP journal's operation (Ruling 10),
 // once the listener no longer names its certificate: only when the operation recorded that NETWORK
 // SERVICE could not read the key before (key_read_had false; written before the grant, so a kill after
-// it still revokes). A revoke of an ACE that is not there changes nothing. A failure fails no restore:
-// ACLLeft records it, answered as rdp_key_acl_left.
+// it still revokes). The revoke removes only allow ACEs of exactly the grant's mask (SetRDPKeyRead):
+// a NETWORK SERVICE ACE the key held before, deny or another mask, stays. A revoke of an ACE that is
+// not there changes nothing. A failure fails no restore: ACLLeft records it, answered as
+// rdp_key_acl_left.
 func revokeRDPGrant(ctx context.Context, h WriteHost, j *journal) {
 	r := j.RDP
 	if r == nil || r.KeyReadHad == nil || *r.KeyReadHad {

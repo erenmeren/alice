@@ -2335,3 +2335,26 @@ Added during execution:
     `IsFile` branch), so a cut CCS file with no servers is drift-observed as skipped where a deployment would end
     `verify_unreachable` (final review I1). Read-only: the drift view understates. Found by the re-review of
     `e0752599..1682b186` after the main gate had started; carried to the next small batch (coordinator ruling).
+
+# W6 (R69)
+
+## Rulings made during execution (W6)
+
+### Task 2 (winhelper)
+
+- **The key revoke removes only the grant's own ACE (amends Ruling 10, review I1).** `SetRDPKeyRead(..., false)` removes only non-inherited access-allowed ACEs for S-1-5-20 whose mask equals the grant's mask exactly (`GENERIC_READ`, or the mask F21 measures). Deny ACEs, other masks, other trustees, the owner, the group and the SACL stay unchanged. Why: `key_read_had` false only means "no allow ACE with the read bits". Removing every non-inherited NETWORK SERVICE ACE would also delete ACEs the operation never added, including a deny ACE, and widen the key's access past where it started.
+- **The journal goes `writing` before the grant when `key_read_had` is false (amends Ruling 12).** `key_read_had` false and phase `writing` are written before `SetRDPKeyRead(grant)`. A kill after the grant then leaves an operation that `iis-restore` rolls back and revokes. A kill right after `prepared` (before any grant) answers `prepared`, and the engine fences it, as in W2. Why: `iis-fence` tombstones only `prepared` journals, and `iis-restore` answers `prepared` without acting. A grant under a `prepared` journal could therefore leave an ACE whose record the tombstone erases.
+- **`KeyReadHad` may be nil in `prepared` or `restored` (amends Ruling 13).** Why: a failed `import_chain`, a failed `import_certificate` or a failed `RDPKeyRead` read ends `restored` before the grant step knew the field.
+- **A committed journal over an absent previous value answers `restored` when a third party deleted the value (amends Ruling 11).** It does not answer `SUPERSEDED`. Why: W2's rule that a listener already on the previous certificate counts as done applies, and the grant is revoked because the listener no longer uses the key. The machine ends in the same state either way; only the engine's label differs.
+- **`rdp_key_acl_left` travels as a response flag.** It is `RDPKeyACLLeft` on `DeployResponse` and `RestoreResponse`, following W5's `ccs_refresh_failed` pattern. Task 6 maps it onto the restore step's param `rdp_key_acl_left`. Why: `winproto.Step` has no params.
+- **The revoke does not run on `restore_failed` `io`/`read_back`, on `BACKUP_MISSING` or on `restore_forbidden`.** Why: the listener names, or may name, the new certificate, so revoking would break RDP. A later successful restore revokes.
+
+### Review gate (Task 2)
+
+The review of `87d74673..cabd6323` found 0 critical, 1 important and 5 minor issues. All were fixed in this commit:
+- I1: a revoke removed NETWORK SERVICE ACEs the operation did not add. Fixed by the tightened `SetRDPKeyRead` contract (`write.go`), the fake's per-key ACE list and `TestRDPRevokeKeepsOtherACEs`.
+- M1: the Ruling 12 and 13 deviations are recorded above.
+- M2: an existing-copy kill variant at `rdp.granted` and `rdp.grant_key_read` (`TestRDPKillOverAnExistingCopy`).
+- M3: the key methods refuse any store other than My (the contract, the fake, `TestRDPKeyMethodsRefuseOtherStores`).
+- M4: the Ruling 11 amendment is recorded above.
+- M5: `parseDeployFields` computes the canonical text from the locator only when there is one.

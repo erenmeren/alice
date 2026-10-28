@@ -118,11 +118,15 @@ type WriteHost interface {
 	// StoreCertificates lists a machine store's certificates (Remote Desktop's), at most limit.
 	StoreCertificates(ctx context.Context, store string, limit int) ([]winproto.StoreCertificate, error)
 	// RDPKeyRead reports whether NETWORK SERVICE (or Everyone) has an access-allowed ACE with the read
-	// bits on the private key of the certificate store holds (Ruling 10).
+	// bits on the private key of the certificate store holds (Ruling 10). The host refuses (an error)
+	// any store other than My (Ruling 6, WN-24).
 	RDPKeyRead(ctx context.Context, store, sha1 string) (readable bool, err error)
-	// SetRDPKeyRead appends Ruling 10's one ACE (S-1-5-20, GENERIC_READ, no inheritance) to that key's
-	// DACL (grant), or removes the non-inherited NETWORK SERVICE ACEs from it; the rest of the security
-	// descriptor is unchanged. Removing an ACE that is not there changes nothing.
+	// SetRDPKeyRead changes that key's DACL, refusing any store other than My as RDPKeyRead does.
+	// grant appends Ruling 10's one ACE: access-allowed, S-1-5-20, mask GENERIC_READ (or the mask F21
+	// measures), no inheritance flags. A revoke (grant false) removes only the non-inherited
+	// access-allowed ACEs for S-1-5-20 whose mask equals that grant mask exactly: every deny ACE, every
+	// other mask, every other trustee, the owner, the group and the SACL stay as they are (W6 Task 2
+	// review I1). Removing an ACE that is not there changes nothing.
 	SetRDPKeyRead(ctx context.Context, store, sha1 string, grant bool) error
 }
 

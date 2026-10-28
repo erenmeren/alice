@@ -230,8 +230,9 @@ type fakeWriteHost struct {
 	// W6: the RDP listener. rdp holds the listener's own values (nil: the RDP-Tcp key is absent), its
 	// CertSHA1 the value SSLCertificateSHA1Hash ("" absent); the rdpPolicy* fields are the policy key's
 	// values, which override the listener's (Ruling 5). rdpReadFn decides what the n-th RDPListener read
-	// answers (read-back faults). keyRead is NETWORK SERVICE's read access by (store, sha1); acl logs every
-	// SetRDPKeyRead that changed it ("grant <store> <sha1>", "revoke <store> <sha1>"), as log does
+	// answers (read-back faults). nsACEs are the non-inherited NETWORK SERVICE ACEs of each key by (store,
+	// sha1): it can read the key when one allows fakeGrantMask; a grant appends Ruling 10's ACE, a revoke
+	// removes only allow ACEs of exactly that mask; acl logs every SetRDPKeyRead that wrote ("grant <store> <sha1>", "revoke <store> <sha1>"), as log does
 	// ("acl ..."). SetRDPCertificate logs "rdp-set <sha1>" or "rdp-delete". storeLists counts
 	// StoreCertificates calls.
 	rdp              *RDPListener
@@ -244,7 +245,7 @@ type fakeWriteHost struct {
 	rdpSetErr        error
 	storeListErr     error
 	storeLists       int
-	keyRead          map[[2]string]bool
+	nsACEs           map[[2]string][]fakeACE
 	keyReadErr       error
 	keyACLErr        func(grant bool) error
 	acl              []string
@@ -916,17 +917,42 @@ func (f *fakeWriteHost) hasCert(store, sha1 string) bool {
 	return ok
 }
 
+// fakeACE is one non-inherited NETWORK SERVICE ACE of a key: an access-allowed one, or a deny one.
+type fakeACE struct {
+	deny bool
+	mask uint32
+}
+
+// fakeGrantMask is the mask of Ruling 10's ACE (GENERIC_READ).
+const fakeGrantMask uint32 = 0x80000000
+
+// nsCanRead reports an allow ACE with the grant's read bits.
+func nsCanRead(aces []fakeACE) bool {
+	return slices.ContainsFunc(aces, func(a fakeACE) bool { return !a.deny && a.mask&fakeGrantMask == fakeGrantMask })
+}
+
+// keyArgs refuses what the real host refuses: a store other than My, a certificate it does not hold.
+func (f *fakeWriteHost) keyArgs(store, sha1 string) error {
+	if store != "MY" {
+		return errors.New("only My")
+	}
+	if !f.hasCert(store, sha1) {
+		return errors.New("no such certificate")
+	}
+	return nil
+}
+
 func (f *fakeWriteHost) RDPKeyRead(_ context.Context, store, sha1 string) (bool, error) {
 	f.calls.Add(1)
 	if f.keyReadErr != nil {
 		return false, f.keyReadErr
 	}
-	if !f.hasCert(store, sha1) {
-		return false, errors.New("no such certificate")
+	if err := f.keyArgs(store, sha1); err != nil {
+		return false, err
 	}
 	f.wmu.Lock()
 	defer f.wmu.Unlock()
-	return f.keyRead[[2]string{store, sha1}], nil
+	return nsCanRead(f.nsACEs[[2]string{store, sha1}]), nil
 }
 
 func (f *fakeWriteHost) SetRDPKeyRead(_ context.Context, store, sha1 string, grant bool) error {
@@ -936,15 +962,20 @@ func (f *fakeWriteHost) SetRDPKeyRead(_ context.Context, store, sha1 string, gra
 			return err
 		}
 	}
-	if !f.hasCert(store, sha1) {
-		return errors.New("no such certificate")
+	if err := f.keyArgs(store, sha1); err != nil {
+		return err
 	}
 	f.wmu.Lock()
 	defer f.wmu.Unlock()
-	if f.keyRead == nil {
-		f.keyRead = map[[2]string]bool{}
+	if f.nsACEs == nil {
+		f.nsACEs = map[[2]string][]fakeACE{}
 	}
-	f.keyRead[[2]string{store, sha1}] = grant
+	k := [2]string{store, sha1}
+	if grant {
+		f.nsACEs[k] = append(f.nsACEs[k], fakeACE{mask: fakeGrantMask})
+	} else {
+		f.nsACEs[k] = slices.DeleteFunc(f.nsACEs[k], func(a fakeACE) bool { return !a.deny && a.mask == fakeGrantMask })
+	}
 	e := "revoke " + store + " " + sha1
 	if grant {
 		e = "grant " + store + " " + sha1

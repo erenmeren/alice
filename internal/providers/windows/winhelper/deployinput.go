@@ -136,9 +136,9 @@ func parseDeployFields(raw []byte, sec *secrets, withLocator bool) (deployReques
 	if p.i != len(p.b) {
 		return d, badContent
 	}
-	canonical, ok := d.loc.Canonical()
-	if !withLocator {
-		canonical, ok = winproto.RDPCanonical, true
+	canonical, ok := winproto.RDPCanonical, true
+	if withLocator {
+		canonical, ok = d.loc.Canonical()
 	}
 	if !ok || !validSHA256(d.expect) || !winproto.ValidForbidden(d.spki) || !winproto.ValidForbidden(d.leaf) {
 		return d, refused(winproto.CodeInvalidArgument, "the binding, the expected hash or a forbidden list is not allowed")
