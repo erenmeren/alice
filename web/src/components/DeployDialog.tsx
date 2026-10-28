@@ -26,6 +26,7 @@ import { InternalLink } from './InternalLink';
 import { LocationWarning } from './LocationWarning';
 import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
+import { foreignAppText } from './WebsitesPanel';
 import deploy from './deploy.module.css';
 import { DialogActions, Notice } from './ui';
 import { CanaryChoice, serviceIdOf } from './CanaryChoice';
@@ -114,11 +115,6 @@ function DeployForm({
         ? siblings
         : [location, ...siblings]
       : null;
-  const windows = location !== undefined && isWindows(location.target_type);
-  // R68: a file of the server's Centralized Certificate Store is written in place, not bound.
-  const ccs = location?.kind === 'win_ccs_file';
-  // R69: the Remote Desktop listener is picked like a binding; the summary names the listener.
-  const rdp = location?.kind === 'win_rdp';
   const [chosenId, setChosenId] = useState('');
   const [picked, setPicked] = useState<string[]>(bindings && location ? [location.id] : []);
   const [confirmChain, setConfirmChain] = useState(false);
@@ -151,6 +147,10 @@ function DeployForm({
 
   const places = detail.data?.locations ?? [];
   const targets: CertificateLocation[] = bindings ? pickedBindings : location ? [location] : places.filter((p) => picked.includes(p.id));
+  // One summary per kind of place among the opening location and the ticked places, the opening kind first (W5-12c,
+  // R70): a CCS file is written in place, not bound (R68); the Remote Desktop listener gets its own sentence (R69).
+  const summaries = [...new Set([...(location ? [location] : []), ...targets].map(summaryKey))];
+  if (summaries.length === 0) summaries.push('deploy.summary');
   const tooMany = targets.length > MAX_DEPLOY_LOCATIONS;
   const knownLocations = bindings ?? (location ? [location] : places);
 
@@ -323,9 +323,11 @@ function DeployForm({
       }}
     >
       <Stack gap="md">
-        <Text size="sm">{t(rdp ? 'deploy.summaryRDP' : ccs ? 'deploy.summaryCCS' : windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
-        {/* The listener ticked beside the place the dialog was opened from: its own sentence (the NETWORK SERVICE grant) too. */}
-        {!rdp && targets.some((l) => l.kind === 'win_rdp') && <Text size="sm">{t('deploy.summaryRDP')}</Text>}
+        {summaries.map((key) => (
+          <Text key={key} size="sm">
+            {t(key)}
+          </Text>
+        ))}
 
         {certificate === undefined && (
           <>
@@ -375,6 +377,8 @@ function DeployForm({
               {groups.map((g) => {
                 const name = g.cert ? certificateSubject(g.cert) : '';
                 const choosable = g.items.filter((p) => p.deployable && canDeployTo(p)).map((p) => p.id);
+                // A group that holds a CCS file or the listener beside its bindings selects "places" (W5-12d, R70).
+                const mixed = g.items.some((p) => p.kind !== 'win_sslbinding');
                 const headingId = `deploy-group-${g.key || 'none'}`;
                 return (
                   // A group per certificate, named by its heading (level 3: the dialog's title is the h2).
@@ -384,8 +388,8 @@ function DeployForm({
                         {g.cert ? name : t('locations.group.noCertificate')}
                       </Title>
                       {g.cert && choosable.length > 0 && (
-                        <Button size="xs" variant="subtle" aria-label={t('deploy.selectGroupNamed', { name })} onClick={() => setPicked(choosable)}>
-                          {t('deploy.selectGroup')}
+                        <Button size="xs" variant="subtle" aria-label={t(mixed ? 'deploy.selectGroupPlacesNamed' : 'deploy.selectGroupNamed', { name })} onClick={() => setPicked(choosable)}>
+                          {t(mixed ? 'deploy.selectGroupPlaces' : 'deploy.selectGroup')}
                         </Button>
                       )}
                     </Group>
@@ -469,6 +473,12 @@ function DeployForm({
   );
 }
 
+// summaryKey names the summary of a place's kind: the Remote Desktop listener, a CCS file, a Windows binding, else a
+// Linux website.
+function summaryKey(l: CertificateLocation): string {
+  return l.kind === 'win_rdp' ? 'deploy.summaryRDP' : l.kind === 'win_ccs_file' ? 'deploy.summaryCCS' : isWindows(l.target_type) ? 'deploy.summaryWindows' : 'deploy.summary';
+}
+
 // WebsiteChoice is one tickable website of a certificate: where it is, why it cannot be chosen, and
 // (after a refusal) that the server stopped here. A place whose server's software cannot deploy (the
 // server-computed deployable, from the deploy_certificate capability) is listed disabled with the
@@ -479,7 +489,7 @@ function WebsiteChoice({ place, refused, refusedText, disabled }: { place: Certi
   const reason = unavailable
     ? ''
     : !place.supported
-    ? t(unsupportedReasonKey(place.unsupported_reason))
+    ? (foreignAppText(t, place) ?? t(unsupportedReasonKey(place.unsupported_reason)))
     : place.missing_since !== null
       ? t('locations.rowUnavailable.missing')
       : place.active_deployment_id !== null

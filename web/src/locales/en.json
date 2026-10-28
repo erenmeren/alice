@@ -2116,6 +2116,8 @@
     "bindings": "Bindings",
     "selectGroup": "Select all bindings of this certificate",
     "selectGroupNamed": "Select all bindings of this certificate: {{name}}",
+    "selectGroupPlaces": "Select all places of this certificate",
+    "selectGroupPlacesNamed": "Select all places of this certificate: {{name}}",
     "succeededUnverifiedWindows": "The new certificate was deployed and the binding points to it.",
     "rollbackFailedRestoredWindows": "The binding names the previous certificate again, but Alice could not confirm that the website serves it. Check the website now.",
     "serverOperationPendingWindows": "The new certificate was not deployed. An unfinished earlier change on the server blocks this binding; see below.",

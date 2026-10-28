@@ -904,6 +904,62 @@ describe('DeployDialog on a Windows server', () => {
     expect(screen.getByText(/points the binding to the new certificate/)).toBeInTheDocument();
   });
 
+  it('names the application of a foreign binding (C4, R70)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const winrm = windowsBindingFixture({ id: 'wf1', cert_path: 'http.sys/ipport/0.0.0.0:5986', certificate: SERVED, supported: false, unsupported_reason: 'win_foreign_app', details: { application: 'winrm', app_id: '{4dc3e181-e14b-4a21-b022-59fc669b0914}' } });
+    const unknown = windowsBindingFixture({ id: 'wf2', cert_path: 'http.sys/ipport/0.0.0.0:49443', certificate: SERVED, supported: false, unsupported_reason: 'win_foreign_app', details: { app_id: '{5d89a20c-beab-4389-9447-324788eb944a}' } });
+    await showDialog({ location: W1, siblings: [W1, winrm, unknown] });
+    expect(await screen.findByText('This binding belongs to another application (WinRM). Alice does not change it.')).toBeInTheDocument();
+    expect(screen.getByText('This binding belongs to another application with the id {5d89a20c-beab-4389-9447-324788eb944a}. Alice does not change it.')).toBeInTheDocument();
+    expect(screen.queryByText(/\{\{/)).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /0\.0\.0\.0:5986/ })).toBeDisabled();
+  });
+
+  it('shows one summary per kind of place, the opening kind first (W5-12c, R70)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const file = windowsCCSFileFixture({ id: 'c1', certificate: SERVED });
+    const rdp = windowsRDPFixture({ id: 'r1', certificate: SERVED });
+    const summaries = () => screen.getAllByText(/^Alice imports/).map((e) => e.textContent ?? '');
+    await showDialog({ location: W1, siblings: [W1, file, rdp] });
+    await screen.findByText(/points the binding to the new certificate/);
+    expect(summaries()).toEqual([expect.stringContaining('into the certificate store of the binding')]);
+    await userEvent.click(screen.getByRole('button', { name: 'Select all places of this certificate: www.example.test' }));
+    expect(summaries()).toEqual([
+      expect.stringContaining('into the certificate store of the binding'),
+      expect.stringContaining('intermediate certificates into the server'),
+      expect.stringContaining("into the server's Personal (My) store"),
+    ]);
+    screen.getByText(/keeping a backup of the previous file/);
+    screen.getByText(/gives NETWORK SERVICE/);
+  });
+
+  it('puts the listener summary first when opened from the listener with a binding ticked (W5-12c, R70)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const rdp = windowsRDPFixture({ id: 'r1', certificate: OTHER });
+    await showDialog({ location: rdp, siblings: [W1, rdp] });
+    await screen.findByText(/gives NETWORK SERVICE/);
+    await userEvent.click(screen.getByRole('checkbox', { name: /0\.0\.0\.0:8443/ }));
+    const texts = screen.getAllByText(/^Alice imports/).map((e) => e.textContent ?? '');
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toContain("into the server's Personal (My) store");
+    expect(texts[1]).toContain('into the certificate store of the binding');
+  });
+
+  it('says "places" for the select-all of a group that holds a CCS file, "bindings" for one of bindings only (W5-12d, R70)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const file = windowsCCSFileFixture({ id: 'c1', certificate: SERVED });
+    await showDialog({ location: W1, siblings: [W3, W1, file] });
+    await screen.findByText(/points the binding to the new certificate/);
+    expect(screen.getByRole('button', { name: 'Select all places of this certificate: www.example.test' })).toHaveTextContent('Select all places of this certificate');
+    expect(screen.getByRole('button', { name: 'Select all bindings of this certificate: api.example.test' })).toHaveTextContent('Select all bindings of this certificate');
+    await userEvent.click(screen.getByRole('button', { name: 'Select all places of this certificate: www.example.test' }));
+    expect(screen.getByRole('checkbox', { name: /ccs\.example\.test\.pfx/ })).toBeChecked();
+  });
+
   it('keeps the binding wording when no CCS file is among the siblings', async () => {
     asRole('operator');
     certificates([NEW_CERT]);

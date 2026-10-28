@@ -2116,6 +2116,8 @@
     "bindings": "Bağlamalar",
     "selectGroup": "Bu sertifikanın tüm bağlamalarını seç",
     "selectGroupNamed": "Bu sertifikanın tüm bağlamalarını seç: {{name}}",
+    "selectGroupPlaces": "Bu sertifikanın tüm yerlerini seç",
+    "selectGroupPlacesNamed": "Bu sertifikanın tüm yerlerini seç: {{name}}",
     "succeededUnverifiedWindows": "Yeni sertifika dağıtıldı ve bağlama onu gösteriyor.",
     "rollbackFailedRestoredWindows": "Bağlama yeniden önceki sertifikayı gösteriyor, ancak Alice web sitesinin onu sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
     "serverOperationPendingWindows": "Yeni sertifika dağıtılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu bağlamayı engelliyor; aşağıya bakın.",
