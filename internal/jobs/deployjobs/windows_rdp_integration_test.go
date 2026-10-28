@@ -120,6 +120,15 @@ func (e *env) assertRDPServes(s *rdpServer, want pki.Leaf) {
 	assert.Equal(e.t, pki.Fingerprint(want.Cert), e.winLocation(s.winServer).CertFileSHA256, "Alice's token is what the listener names")
 }
 
+// assertRDPAbsent checks a listener whose previous value was absent (previous_absent) against Alice's record: the value
+// is absent again, the listener serves its self-signed certificate and the location's token is that certificate.
+func (e *env) assertRDPAbsent(s *rdpServer) {
+	e.t.Helper()
+	assert.Empty(e.t, s.model.RDPThumbprint(), "the value is absent again")
+	assert.Equal(e.t, pki.Fingerprint(s.self.Cert), e.rdpServed(), "the listener serves its self-signed certificate")
+	assert.Equal(e.t, pki.Fingerprint(s.self.Cert), e.winLocation(s.winServer).CertFileSHA256, "Alice's token is the self-signed leaf")
+}
+
 // deployTo uploads l (with its chain as given) and deploys it to locs through the engine.
 func (e *env) deployTo(l pki.Leaf, chainPEM []byte, locs ...uuid.UUID) []inventory.Deployment {
 	e.t.Helper()
@@ -266,48 +275,59 @@ var rdpKillRows = map[string]winKillRow{
 // Review Focus 1 and 2: the helper is killed at every crash point of an RDP deployment and its restore (it answers
 // nothing), the server reboots, and Alice's recovery ends the deployment: the listener then names exactly the previous
 // or the new certificate, the listener serves what the record claims, and no NETWORK SERVICE grant is left on the new
-// key unless it is the listener's; a kill before writing is fenced.
+// key unless it is the listener's; a kill before writing is fenced. Once with the previous certificate in My, once with
+// the self-signed previous (W6-17 of fixes batch 3: the value absent, previous_absent; the same crash points, and
+// "previous" is then the self-signed certificate: assertRDPAbsent).
 func TestWindowsRDPCrashTable(t *testing.T) {
-	e := newEnv(t)
-	s := e.addRDPServer("iis-01", false)
-	s.model.ServeStaleRDP(true)
-	e.request(s.loc)
-	e.drain()
-	points := s.model.Points()
-	require.Len(t, points, len(rdpKillRows), "%v", points)
-	for _, p := range points {
-		require.Contains(t, rdpKillRows, p, "a crash point without a row")
-	}
+	for _, mode := range []struct {
+		name       string
+		selfSigned bool
+	}{{"my", false}, {"self_signed", true}} {
+		e := newEnv(t)
+		s := e.addRDPServer("iis-01", mode.selfSigned)
+		s.model.ServeStaleRDP(true)
+		e.request(s.loc)
+		e.drain()
+		points := s.model.Points()
+		require.Len(t, points, len(rdpKillRows), "%s: %v", mode.name, points)
+		for _, p := range points {
+			require.Contains(t, rdpKillRows, p, "%s: a crash point without a row", mode.name)
+		}
 
-	for _, point := range points {
-		tc := rdpKillRows[point]
-		t.Run(point, func(t *testing.T) {
-			e := newEnv(t)
-			s := e.addRDPServer("iis-01", false)
-			s.model.ServeStaleRDP(tc.stale)
-			s.model.KillAt(point)
-			id := e.request(s.loc)[0]
-			e.drain()
-			require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State, "a killed helper is an uncertain outcome")
+		for _, point := range points {
+			tc := rdpKillRows[point]
+			t.Run(mode.name+"/"+point, func(t *testing.T) {
+				e := newEnv(t)
+				s := e.addRDPServer("iis-01", mode.selfSigned)
+				s.model.ServeStaleRDP(tc.stale)
+				s.model.KillAt(point)
+				id := e.request(s.loc)[0]
+				e.drain()
+				require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State, "a killed helper is an uncertain outcome")
 
-			s.model.ServeStaleRDP(false)
-			s.model.Reboot()
-			d := e.settle(id)
-			assert.Equal(t, tc.status, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
-			assert.Equal(t, tc.reason, d.ErrorCode)
-			e.assertRDPServes(s, tc.want(e))
-			if tc.status != inventory.DeployStatusSucceeded {
-				assert.False(t, s.model.KeyReadableByNetworkService("My", thumbprintOf(e.nw.Cert.Raw)), "no grant is left on the new key")
-			}
-			if tc.status == inventory.DeployStatusRolledBack {
-				assert.Equal(t, winproto.PhaseRestored, s.phase(t, id), "the helper's journal agrees with the record")
-			}
-			assert.Equal(t, 1, s.sent(winproto.SubRDPDeploy), "the certificate is sent at most once")
-			if tc.fenced {
-				assert.Equal(t, winproto.PhaseFenced, s.phase(t, id))
-				assert.Equal(t, tc.phase, d.Phase)
-			}
-		})
+				s.model.ServeStaleRDP(false)
+				s.model.Reboot()
+				d := e.settle(id)
+				assert.Equal(t, tc.status, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
+				assert.Equal(t, tc.reason, d.ErrorCode)
+				if mode.selfSigned && tc.status != inventory.DeployStatusSucceeded {
+					e.assertRDPAbsent(s)
+				} else {
+					e.assertRDPServes(s, tc.want(e))
+				}
+				if tc.status != inventory.DeployStatusSucceeded {
+					assert.False(t, s.model.KeyReadableByNetworkService("My", thumbprintOf(e.nw.Cert.Raw)), "no grant is left on the new key")
+				}
+				if tc.status == inventory.DeployStatusRolledBack {
+					assert.Equal(t, winproto.PhaseRestored, s.phase(t, id), "the helper's journal agrees with the record")
+				}
+				assert.Equal(t, 1, s.sent(winproto.SubRDPDeploy), "the certificate is sent at most once")
+				if tc.fenced {
+					assert.Equal(t, winproto.PhaseFenced, s.phase(t, id))
+					assert.Equal(t, tc.phase, d.Phase)
+				}
+			})
+		}
 	}
 }
 

@@ -50,20 +50,25 @@ func TestMigration00037WindowsRDP(t *testing.T) {
 		map[string]any{"kind": "win_rdp_listener", "cert_path": "rdp/RDP-Tcp2"}))), "the kind list stays closed")
 }
 
-// 00037's Down refuses while a win_rdp location or deployment exists, and otherwise restores the lists of 00036.
+// 00037's Down refuses while a win_rdp location or deployment exists, each alone (W6-17 of fixes batch 3: the RDP
+// deployment's row points at a win_sslbinding location of the same server, which the foreign key allows, so the
+// deployment is what remains once the RDP location is gone), and otherwise restores the lists of 00036.
 func TestMigration00037Down(t *testing.T) {
 	ctx := context.Background()
 	d := pgtest.New(t)
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
-	w, win, loc := seedRDPWorld(t, d)
-	require.NoError(t, insertRow(t, d.App, "deployments", with(deploymentRow(w), map[string]any{"location_id": loc, "target_id": win,
+	w, win, _ := seedRDPWorld(t, d)
+	binding := uuid.New()
+	require.NoError(t, insertRow(t, d.App, "certificate_locations", with(rdpLocation(binding, win), map[string]any{"kind": "win_sslbinding",
+		"cert_path": "http.sys/ipport/0.0.0.0:443", "locator": `{"ip":"0.0.0.0","port":443,"type":"ipport"}`, "details": `{}`})))
+	require.NoError(t, insertRow(t, d.App, "deployments", with(deploymentRow(w), map[string]any{"location_id": binding, "target_id": win,
 		"location_kind": "win_rdp", "cert_path": "rdp/RDP-Tcp", "key_path": "", "state": "done", "status": "succeeded",
 		"finished_at": time.Now()})))
 
 	for _, step := range []struct{ what, cleanup string }{
-		{"an RDP deployment exists", "DELETE FROM deployments WHERE location_kind = 'win_rdp'"},
-		{"an RDP location exists", "DELETE FROM certificate_locations WHERE kind = 'win_rdp'"},
+		{"an RDP location and an RDP deployment exist", "DELETE FROM certificate_locations WHERE kind = 'win_rdp'"},
+		{"an RDP deployment alone", "DELETE FROM deployments WHERE location_kind = 'win_rdp'"},
 	} {
 		_, err = p.DownTo(ctx, 36)
 		assert.Equal(t, rdpDownRefused, sqlState(err), "%s: %v", step.what, err)
