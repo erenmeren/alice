@@ -2435,7 +2435,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
 of Task 4's report (Ruling 14 amended, below).
 
-### Runner runs used (4 of 8)
+### Runner runs used (5 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -2443,6 +2443,7 @@ of Task 4's report (Ruling 14 amended, below).
 | 2 | <https://github.com/erenmeren/alice/actions/runs/40646627907> | `2e7415c1` | fail / fail | Only `TestFidelityRDP` failed, on its own assertions (it read the error code from `error`, not `code`; it restored an older operation after a newer one, which both hosts answer `SUPERSEDED`): every answer compared equal on both hosts. F21 fixed: the grant stored as `(A;;0x80120089;;;NS)`, the revoke gives F4's DACL back byte for byte; a NETWORK SERVICE deny ACE, another trustee's allow ACE and a NETWORK SERVICE `DELETE` allow ACE survive grant and revoke (no merge with a `DELETE` ACE). F19: `fDenyTSConnections` 1 stops the listener within 3-253 ms, 0 brings it back within 255 ms, no restart. F20: a delete then set of the value rebuilds the served chain (2 after 9-10 ms); a same-value rewrite still does not (20 s) |
 | 3 | <https://github.com/erenmeren/alice/actions/runs/40648774432> | `8d668f06` | **pass / pass** | `windows-required` green; every RDP real test and `TestFidelityRDP` pass on both images; F19-F23 as in run 2 (pickups 7-15 ms) |
 | 4 | <https://github.com/erenmeren/alice/actions/runs/40667566229> | `98e265c5` | **pass / pass** | The code head after the final review fixes. `windows-required` green; every RDP real test (with the exportable-key refusal in `TestRealRDPKeyReadForNetworkService`), the DACL bounds test, `TestFidelityRDP` and `TestRealRunnerIsClean` pass on both images |
+| 5 | <https://github.com/erenmeren/alice/actions/runs/40671263696> | `ad9b7ee4` | **pass / pass** | After the flaky-test fix `f229223e` (a Windows-paths change): `windows-required` green, every RDP real test and `TestFidelityRDP` pass on both images |
 
 ## Rulings made during execution (W6)
 
@@ -2705,8 +2706,11 @@ After the fix wave, ci.yml run 40667566328 (`98e265c5`) found two failures:
 - `go`: `TestDiscoverWithoutRDPIsW5` compared a CCS file's `modified_at` across two discoveries that straddled a
   second; fixed in `f229223e` (the field is dropped from both sides before the comparison).
 - `secrets`: trivy reports `github.com/go-jose/go-jose/v4` v4.1.5, CVE-2026-116587 (HIGH, fixed in 4.1.6). The
-  dependency is not W6's and the branch does not bump it: a repository-wide dependency change belongs on `main`
-  (coordinator item). The same job failed for the same reason on run 3's ci.yml (40648774421).
+  dependency is not W6's, but the vulnerability also stops the local `make ci` at `make vuln` (osv-scanner,
+  GHSA-mgcc-cww5-fp2q) before the e2e, so the branch bumps it to v4.1.6 in its own commit `e656143d` (go.mod and
+  go.sum only; the Windows helper's checksums are unchanged, so go-jose is not linked into it). The coordinator may
+  take that commit to `main` on its own or drop it. The same job failed for the same reason on run 3's ci.yml
+  (40648774421).
 
 Found during W6 and not fixed (outside its scope): `systemCanRead` in `cmd/alice-winhelper/stores_windows.go` reads a
 key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (W1 code); the deploy picker shows a raw
