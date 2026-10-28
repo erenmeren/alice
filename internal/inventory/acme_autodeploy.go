@@ -233,7 +233,7 @@ WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, no
 			}
 		}
 		if p.stop != nil {
-			ok, err := s.stopACMEDeploy(ctx, tx, id, sn.current.id, names, p.stop.failed, p.stopCode)
+			ok, err := s.stopACMEDeploy(ctx, tx, id, sn.current.id, names, p.stop.failed, p.stopCode, p.stopVariant)
 			if err != nil {
 				return err
 			}
@@ -317,14 +317,14 @@ WHERE b.acme_certificate_id = $1 ORDER BY b.location_id`, id, sn.service)
 		locs = append(locs, b.location)
 	}
 	rows, err = tx.Query(ctx, `SELECT d.location_id, d.certificate_id, d.trigger = $3, d.state = 'done', d.state = 'holding', d.status, d.error_code,
-    d.created_at, d.finished_at
+    d.location_kind, d.created_at, d.finished_at
 FROM deployments d WHERE d.location_id = ANY($1) AND (d.state <> 'done' OR d.certificate_id = $2) ORDER BY d.created_at, d.id`, locs, c.id, TriggerACMERenewal)
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the deployments: %w", err)
 	}
 	sn.deployments, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (acmeDeployment, error) {
 		var d acmeDeployment
-		err := r.Scan(&d.location, &d.certificate, &d.automatic, &d.done, &d.holding, &d.status, &d.errorCode, &d.createdAt, &d.finishedAt)
+		err := r.Scan(&d.location, &d.certificate, &d.automatic, &d.done, &d.holding, &d.status, &d.errorCode, &d.kind, &d.createdAt, &d.finishedAt)
 		d.createdAt, d.finishedAt = d.createdAt.UTC(), utcPtr(d.finishedAt)
 		return d, err
 	})
@@ -439,8 +439,10 @@ WHERE id = $1 AND deploy_held_certificate_id IS DISTINCT FROM $2`, id, current, 
 }
 
 // stopACMEDeploy stops the automatic deployments of the current certificate (the column is the once-only mark): audit
-// acme.auto_deploy.stopped and one e-mail. It reports false when it was stopped already.
-func (s *Service) stopACMEDeploy(ctx context.Context, tx pgx.Tx, id, current uuid.UUID, names []string, failed int, code string) (bool, error) {
+// acme.auto_deploy.stopped and one e-mail, whose reason is code's title; with variant (reasonVariantRDP: the last failure
+// was the RDP listener's) the e-mail carries reason_variant, so the title names the listener (W6 final review M2). It
+// reports false when it was stopped already.
+func (s *Service) stopACMEDeploy(ctx context.Context, tx pgx.Tx, id, current uuid.UUID, names []string, failed int, code, variant string) (bool, error) {
 	tag, err := tx.Exec(ctx, `UPDATE acme_certificates SET deploy_stopped_certificate_id = $2
 WHERE id = $1 AND deploy_stopped_certificate_id IS DISTINCT FROM $2`, id, current)
 	if err != nil {
@@ -457,6 +459,9 @@ WHERE id = $1 AND deploy_stopped_certificate_id IS DISTINCT FROM $2`, id, curren
 	if s.notifier != nil {
 		p := acmeDeployParams(names)
 		p["count"], p["error_reason"] = strconv.Itoa(failed), code
+		if variant != "" {
+			p["reason_variant"] = variant
+		}
 		if err := s.notifyACME(ctx, tx, id, TemplateACMEAutoDeployStopped, p); err != nil {
 			return false, fmt.Errorf("inventory: queue the stop notice: %w", err)
 		}

@@ -15,7 +15,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/i18n"
 	"alice/internal/inventory"
+	"alice/internal/notify"
 	"alice/internal/providers"
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
@@ -23,6 +25,7 @@ import (
 	"alice/internal/secrets"
 	"alice/internal/testutil/fakeacme"
 	"alice/internal/testutil/pki"
+	"alice/locales"
 )
 
 // R62 W3 Task 8: R52 for Windows bindings. The engine is R52's; the new rule is the scan's (a bound binding that
@@ -458,4 +461,59 @@ func TestDriftProbeCarriesTheStoredWarnings(t *testing.T) {
 	require.Len(t, probes, 1)
 	assert.Equal(t, f.file, probes[0].LocationID)
 	assert.Nil(t, probes[0].Request.Location.Warnings, "a file's request is unchanged")
+}
+
+// W6 final review M2 (fixes batch 3, fix round 1; Review Focus 5): the automatic-deployment stop notice renders the
+// reason of the last failed deployment. When that deployment was the Remote Desktop listener's, the notice carries
+// reason_variant=rdp and its reason is the listener title (errors.windows.<code>.title_rdp), never the binding's; a
+// binding's last failure queues no variant and renders the binding title as before.
+func TestACMEAutoDeployStopNamesTheRDPListener(t *testing.T) {
+	f := newWinDriftFixture(t, false)
+	h := f.h
+	rf := &rdpFixture{winDeployFixture: f.winDeployFixture}
+	rf.server = winTarget(t, h, f.admin, "iis-02").ID
+	rf.scan(3389)
+	rdp := byPath(t, h, rf.server, false)["rdp/RDP-Tcp"].ID
+	iis3 := winTarget(t, h, f.admin, "iis-03").ID
+	b := winBinding(443, "Default Web Site", &f.old)
+	b.Location.Details["cert_sha1"] = thumbprint(f.old)
+	_, err := h.svc.Reconcile(h.ctx, iis3, providers.DiscoveryResult{WebServer: iisOK, Certificates: []providers.DiscoveredCertificate{b}})
+	require.NoError(t, err)
+	binding := byPath(t, h, iis3, false)["http.sys/ipport/0.0.0.0:443"].ID
+
+	// stop binds a new certificate for name to loc (automatic) and fails its deployments until the wave stops; the params
+	// of the stop notice.
+	stop := func(name string, loc uuid.UUID) map[string]string {
+		t.Helper()
+		c, cur := f.w.issued(name)
+		f.w.bind(c, true, loc)
+		for i := range inventory.AutoDeployMaxFailed {
+			require.Equal(t, 1, f.w.plan().Created, "%s: attempt %d", name, i+1)
+			f.w.finishAll(cur, inventory.DeployStatusFailed, "windows.binding_changed")
+			h.clock.Advance(inventory.AutoDeployRetryAfter)
+		}
+		require.Equal(t, inventory.ACMEDeployRun{Stopped: 1}, f.w.plan(), name)
+		var raw []byte
+		require.NoError(t, h.db.Owner.QueryRow(h.ctx, `SELECT params FROM notifications_outbox WHERE template_key = $1 AND params->>'name' = $2
+ORDER BY created_at, id LIMIT 1`, inventory.TemplateACMEAutoDeployStopped, name).Scan(&raw))
+		var p map[string]string
+		require.NoError(t, json.Unmarshal(raw, &p))
+		return p
+	}
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	listener, bindingTitle := cat.T("en", "errors.windows.binding_changed.title_rdp", nil), cat.T("en", "errors.windows.binding_changed.title", nil)
+
+	p := stop("rdp.example.test", rdp)
+	assert.Equal(t, "windows.binding_changed", p["error_reason"])
+	assert.Equal(t, "rdp", p["reason_variant"])
+	body := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployStopped, "en", p).Body
+	assert.Contains(t, body, "Reason of the last failed deployment: "+listener)
+	assert.NotContains(t, body, bindingTitle)
+
+	q := stop("shop.example.test", binding)
+	assert.Equal(t, "windows.binding_changed", q["error_reason"])
+	assert.NotContains(t, q, "reason_variant", "a binding's stop notice is unchanged")
+	assert.Contains(t, s.Render("ada@example.com", inventory.TemplateACMEAutoDeployStopped, "en", q).Body, "Reason of the last failed deployment: "+bindingTitle)
 }

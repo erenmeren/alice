@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"alice/internal/providers"
 )
 
 // Hold reasons of an ACME certificate's current certificate (acme_certificates.deploy_held_reason).
@@ -55,6 +57,7 @@ type acmeDeployment struct {
 	holding     bool // a wave-1 deployment under its canary's observation (R65): waiting, not working
 	status      string
 	errorCode   string
+	kind        providers.LocationKind // location_kind: the stop notice of the RDP listener's failure names the listener (W6 final review M2)
 	createdAt   time.Time
 	finishedAt  *time.Time
 }
@@ -88,13 +91,14 @@ type acmeAttention struct {
 // checks refuse does not use up the budget), the hold to set (when the apply step finds a location it could deploy to),
 // the stop of the wave, and the attention marks to change.
 type acmeDeployPlan struct {
-	deploy    []uuid.UUID
-	budget    int
-	hold      string      // ACMEHoldLicense or ACMEHoldChainIncomplete; candidates are the locations it is about
-	candidate []uuid.UUID // the locations a hold would have deployed to
-	stop      *planStop   // version is the certificate id, name unused
-	stopCode  string      // the reason of the last counted failure
-	attention []acmeAttention
+	deploy      []uuid.UUID
+	budget      int
+	hold        string      // ACMEHoldLicense or ACMEHoldChainIncomplete; candidates are the locations it is about
+	candidate   []uuid.UUID // the locations a hold would have deployed to
+	stop        *planStop   // version is the certificate id, name unused
+	stopCode    string      // the reason of the last counted failure
+	stopVariant string      // reason_variant of the stop notice: reasonVariantRDP when that failure was the RDP listener's, else ""
+	attention   []acmeAttention
 	// R65: the rollout to create (deploy is then its wave 1), and why the canary was skipped ("" or "expiry").
 	createRollout *rolloutWaves
 	canarySkipped string
@@ -154,7 +158,10 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	lastAuto := map[uuid.UUID]acmeDeployment{} // the newest finished automatic deployment of the current certificate
 	anyOfCurrent, inFlight := false, 0
 	lastCode := ""
-	var lastCodeAt time.Time
+	var (
+		lastCodeAt time.Time
+		lastKind   providers.LocationKind
+	)
 	for _, d := range sn.deployments {
 		if !d.done {
 			busy[d.location] = true
@@ -190,7 +197,7 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 			failed++
 			capped[d.location]++
 			if d.finishedAt != nil && !d.finishedAt.Before(lastCodeAt) {
-				lastCode, lastCodeAt = d.errorCode, *d.finishedAt
+				lastCode, lastCodeAt, lastKind = d.errorCode, *d.finishedAt, d.kind
 			}
 		}
 		if d.finishedAt != nil && d.finishedAt.After(lastFailure[d.location]) {
@@ -236,6 +243,9 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 		p.stopCode = lastCode
 		if p.stopCode == "" { // only internal faults used the attempts up
 			p.stopCode = ReasonInternal
+		}
+		if lastKind == providers.LocationWinRDP {
+			p.stopVariant = reasonVariantRDP
 		}
 		return p
 	}

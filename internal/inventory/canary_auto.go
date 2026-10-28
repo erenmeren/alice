@@ -176,7 +176,7 @@ WHERE c.deleted_at IS NULL AND c.current_certificate_id = $1 AND b.location_id =
 		if err := tx.QueryRow(ctx, "SELECT names FROM acme_certificates WHERE id = $1", id).Scan(&names); err != nil {
 			return fmt.Errorf("inventory: read the ACME certificate: %w", err)
 		}
-		if _, err := s.stopACMEDeploy(ctx, tx, id, r.CertificateID, names, len(r.Wave1), reason); err != nil {
+		if _, err := s.stopACMEDeploy(ctx, tx, id, r.CertificateID, names, len(r.Wave1), reason, ""); err != nil {
 			return err
 		}
 	}
