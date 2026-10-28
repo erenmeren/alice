@@ -406,7 +406,10 @@ func systemCanRead(key windows.Handle) *bool {
 		return nil
 	}
 	// unsafe: buf holds the self-relative descriptor NCryptGetProperty wrote; the ACL and ACEs it points
-	// to lie inside it and are read through the Windows calls.
+	// to are bounded inside it first (coordinator review 2), then read through the Windows calls.
+	if checkRelativeDACL(unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n)) != nil {
+		return nil
+	}
 	sd := (*windows.SECURITY_DESCRIPTOR)(unsafe.Pointer(&buf[0]))
 	if !sd.IsValid() {
 		return nil
