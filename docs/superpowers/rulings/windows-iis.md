@@ -2358,6 +2358,10 @@ The plan's 28 rulings stand as written, except where an entry says "Amended" or 
    1.0.0 included (Ruling 2 read literally).
 3. **One location per server: the `RDP-Tcp` listener.** As written. Precision (Task 6): a listener port outside
    1-65535 leaves the `win_rdp` location out with `locations_dropped` (W2 Ruling 18: nothing marked missing).
+   **Amended (final review I1):** the locator is `{"type":"rdp","listener":"RDP-Tcp"}`; the port is the detail
+   `port`, refreshed by every scan. Why: a port in the stored locator froze the location after a port change
+   (`locatorConflict` skipped every later scan, so the details, the certificate and the verified port stayed old),
+   and fixing it after a release would need a data migration.
 4. **The listener's current certificate and the token.** As written; F19 confirmed that the certificate served while
    the value is absent is the single certificate of `Remote Desktop`. Precision (pre-flight): `rdp-deploy` with none
    or two self-signed certificates and the value absent answers `HASH_MISMATCH` (no token can match).
@@ -2377,7 +2381,9 @@ The plan's 28 rulings stand as written, except where an entry says "Amended" or 
     non-inherited access-allowed ACEs for S-1-5-20 with flags 0 and that exact mask (deny ACEs, other masks, other
     trustees and inherited ACEs stay), then reads the key again: a key NETWORK SERVICE can still read, or whose read
     fails, sets `rdp_key_acl_left`. "Can read" stays an allow ACE for S-1-5-20 or S-1-1-0 with `GENERIC_READ` or
-    `GENERIC_ALL`.
+    `GENERIC_ALL`. **Amended (security review I1):** a copy of the new certificate already in `My` whose key is
+    exportable, or whose export policy the helper cannot read, is refused with `KEY_UNUSABLE` before the gate
+    (nothing changed), so NETWORK SERVICE is never given access to an exportable key.
 11. **Rollback through `iis-restore` on an RDP journal.** **Amended (Task 2):** a committed journal over an absent
     previous value answers `restored` (not `SUPERSEDED`) when a third party deleted the value. The revoke does not run
     on `restore_failed` `io`/`read_back`, on `BACKUP_MISSING` or on `restore_forbidden`.
@@ -2392,13 +2398,17 @@ The plan's 28 rulings stand as written, except where an entry says "Amended" or 
     the served chain (Task 2 rulings below).
 15. **The RDP probe mode.** As written; F22 confirmed the bytes and F23 that the probe needs no credentials.
 16. **Verification endpoints of a `win_rdp` location.** As written (`TestRDPEndpoints`,
-    `TestRDPVerifyFallsBackToTheHelper`).
+    `TestRDPVerifyFallsBackToTheHelper`). **Amended (final review I1):** the port is `details.port` (the last
+    scan's), not the locator's; the Administrator's verify port still replaces it.
 17. **Pickup.** As written: `winproto.RDPPickupWait` stays 0 (F20 route (a), at most 17 ms; Task 4 ruling).
 18. **Discovery call order.** As written (`TestDiscoverWithoutRDPIsW5`, `TestConvertRDP`).
 19. **Engine and inventory sites.** As written (Task 5). Precision (Task 6): `rdp_key_acl_left` is logged as the step
     param `rdp_key_acl_left` `"true"` on the restore step, or on `grant_key_read` when the outcome has no restore step.
-20. **Notices and e-mails.** As written (Task 5). The RDP texts name a self-signed previous certificate by its SHA-1
-    only (deferred minor, owner item).
+20. **Notices and e-mails.** As written (Task 5). **Amended (final review M1, security review M2):** the e-mails and
+    the API name the store `Remote Desktop` of a self-signed previous certificate; the RDP rollback_failed and
+    outcome_unknown texts say to delete `SSLCertificateSHA1Hash` when the previous certificate is in that store, and,
+    when the operation gave NETWORK SERVICE read access (`rdp_key_granted` on the grant or restore step), that it
+    should be removed once the listener no longer uses the certificate.
 21. **Drift.** As written (`TestWindowsRDPDriftRepaired`, `TestDriftCauseRDP`).
 22. **Interactions, unchanged.** As written.
 23. **Emulator model.** As written (Task 3). The model keeps one "NETWORK SERVICE can read" flag per key (Ruling 23
@@ -2617,7 +2627,72 @@ Minors 1-5 were fixed in the next docs commit:
 
 ## Security review (W6)
 
-To be filled by Task 8 (Ruling 27).
+Reviewer: a fresh reviewer who wrote none of the code (Ruling 27). Range `7432cfd5..edebc095`, read-only; nothing run
+on Windows (the runner facts from runs 1-3). Counts: 0 critical, 1 important, 2 minor. Report:
+`.superpowers/sdd/2026-10-28-windows-w6-rdp/security-review.md`.
+
+Checklist verdicts:
+1. **The ACE is exactly Ruling 10's; nothing else changes; parsing is bounds-safe:** the ACE and the rest of the
+   descriptor pass; bounds safety was partial (M1).
+2. **No input reaches a SID, a store, a key or a registry name:** pass; journal content selects which My key a
+   restore revokes on, within the WN-24 envelope (an administrator's write to the journal directory; residual 6).
+3. **Every restore path revokes this operation's grant when `key_read_had` is false, and only that grant:** pass,
+   within the amended Rulings 10 and 11.
+4. **A kill between the grant and the journal write cannot leave an unrecorded ACE:** pass.
+5. **The key stays not exportable:** pass for Alice's imports; fail for an existing exportable copy (I1).
+
+Findings:
+- **I1, NETWORK SERVICE got read access to an existing, exportable key:** fixed in `5f903ecb` (`rdp-deploy` refuses
+  such a copy, or one whose export policy cannot be read, with `KEY_UNUSABLE` before the gate; fake-host,
+  fidelity and real tests; admin and host guides).
+- **M1, the DACL parser trusted the KSP's offsets:** fixed in `434adcd7` (SE_SELF_RELATIVE required, the DACL and
+  every ACE bounded inside the buffer; `TestCheckRelativeDACL`, `TestEachACEStaysInsideTheACL` on every Windows run).
+- **M2, a failed or unknown restore left the grant without any notice:** fixed in `42ea6a51` (`rdp_key_granted`
+  from the helper, through the step param, to a note on the RDP rollback_failed and outcome_unknown e-mails).
+
+Residual risks for the owner:
+1. WN-23 as accepted: every NETWORK SERVICE service can use the RDP key for TLS; the ACE stays after a later
+   deployment replaces the certificate (cleanup removes it with Alice's import; a third party's copy keeps it).
+2. An unrecoverable KSP merge (the write-back fails too) leaves a merged NS ACE, reported as `rdp_key_acl_left`;
+   not observed on runners.
+3. A DACL change by another administrator in the milliseconds between the grant's two reads is reverted.
+4. A KSP that canonicalises a non-canonical DACL on the write-back may change it; the grant still fails closed.
+5. The revoke removes every identical NS ACE (flags 0, mask `0x80120089`), also one an administrator added later.
+6. Journal tampering (Administrators/SYSTEM write to `C:\ProgramData\Alice\helper\`) can make a restore revoke the
+   exact ACE on another My key, set another usable certificate or delete the value; never a grant, another SID,
+   store or registry path. The helper checks the directory's owner only.
+7. "Can read" ignores deny ACEs and group membership: an NS deny with an Everyone allow reads as readable (RDP then
+   fails verification and rolls back); a key readable through Users reads as not readable (a redundant ACE, revoked
+   on rollback).
+8. Not measured on runners: `SecurityLayer` 0, `RDP_NEG_FAILURE`, and whether `GENERIC_READ` lets NS export an
+   exportable key (moot after I1's refusal).
+9. A TermService account other than NETWORK SERVICE needs another trustee: verification fails and the deployment
+   rolls back.
+
+## Final review fixes (W6)
+
+The independent final review of `7432cfd5..edebc095` (`.superpowers/sdd/2026-10-28-windows-w6-rdp/final-review.md`)
+found 0 critical, 1 important and 5 minor issues ("ready to merge: with fixes").
+
+- **I1, a change of the RDP port froze the `win_rdp` location:** fixed in `04cea854` (Rulings 3 and 16 amended: the
+  port is `details.port`; `TestConvertRDP`, `TestRDPEndpoints`, `TestRDPPortChangeUpdatesTheLocation`).
+- **M1, a self-signed previous certificate lost its store in the e-mails and the API; the RDP rollback_failed text
+  gave the wrong recovery:** fixed in `42ea6a51` (`remote desktop` in `mailStoreRE` and `paramStoreRE`, the
+  `SSLCertificateSHA1Hash` sentence in both RDP texts, EN and TR, `api/openapi.yaml`'s `backup_store` and
+  `backup_sha1`). The web already showed the store.
+- **M2, the shared `errors.windows.*` titles use the binding wording for RDP e-mails and API problems:** deferred
+  (wording; the RDP note is appended and the web overrides; the next small batch can add `*_rdp` titles).
+- **M3, a helper downgraded below 1.2.0 marks an existing `win_rdp` location missing:** deferred (rare; the row comes
+  back on the next 1.2.0 scan; adding `locations_dropped` there would change W5 on every 1.1.0 server).
+- **M4, the cleanup's protection depended on reading the whole listener:** fixed in `a13342b3` (a narrow read of
+  `SSLCertificateSHA1Hash`; a bad hash value still fails the cleanup closed).
+- **M5, `iis-status` names the previous leaf for an absent value even after Windows made a new self-signed
+  certificate:** deferred (the outcome is right, `restored_unverified`; owner item 6 keeps the regeneration
+  unmeasured).
+
+Deferred-minor triage: of the 23 items, two were fixed with M1 (the RDP e-mails' self-signed store, the openapi
+description), three carries were found done (the `rdp_key_acl_left` param, the web labels, the documents), and the
+rest stay deferred as known debt (listed under [Deferred to W7+](#deferred-to-w7)).
 
 ## Acceptance (design §13 W6)
 
@@ -2668,9 +2743,15 @@ Added during execution:
 - **A failed grant ends `rolled_back`** (`windows.rdp_key_acl_failed`) although the listener was never touched
   (Task 6 ruling). Confirm the label.
 - **`rdp_key_acl_left` on `grant_key_read`** when the outcome has no restore step (Task 6 ruling).
-- **The RDP e-mails name a self-signed previous certificate by its SHA-1 only** and say it "stays in the store" (it is
-  in `Remote Desktop`, and the restore deletes the value instead): Task 5 review minor, for the final review to
-  triage (a one-sentence fix is the candidate).
+- **The RDP e-mails name a self-signed previous certificate by its SHA-1 only:** fixed at the final review (M1): the
+  store `Remote Desktop` is named and the RDP texts say to delete `SSLCertificateSHA1Hash` for it.
+- **Ruling 3/16 amended (final review I1):** the listener's port is a detail, not part of the locator, so a port
+  change updates the same location. Confirm.
+- **Ruling 10 amended (security review I1):** Alice never gives NETWORK SERVICE access to an exportable key. A copy
+  of the certificate already in `My` whose key is exportable (or whose export policy cannot be read) makes the
+  deployment fail `windows.key_unusable` with nothing changed; the administrator must replace that copy or import it
+  again non-exportable. Confirm.
+- **WN-23 residuals** ([Security review (W6)](#security-review-w6), residual risks 1-9): accept or act on them.
 - **The helper-outdated warning** shows on every helper below 1.2.0, 1.0.0 included (Task 6 ruling).
 - **The W4 and W5 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode, the
   helper update procedure): a 1.2.0 helper needs the same "update the helpers first, then Alice" step.
@@ -2702,9 +2783,10 @@ Added during execution:
   - The emulator's NETWORK SERVICE state is one bool per key (Ruling 23 allows it); NLA off selects SSL there, while
     F22 measured HYBRID with NLA on and off (Task 3).
   - The migration test never proves the `deployments` EXISTS of the Down on its own (Task 5).
-  - The RDP manual-action e-mails name a self-signed previous certificate by its SHA-1 only and say it "stays in the
-    store" (Task 5; owner item).
-  - `api/openapi.yaml`'s `backup_store`/`backup_sha1` descriptions still say "A Windows binding only" (Task 5).
+  - Final review M2: the shared `errors.windows.*` titles use the binding wording in RDP e-mails and API problems.
+  - Final review M3: a helper downgraded below 1.2.0 marks an existing `win_rdp` location missing.
+  - Final review M5: `iis-status` reads an absent value as the previous self-signed leaf without checking the
+    `Remote Desktop` store.
   - `TestRDPDeployOutcomeTable`'s refusal rows do not assert that nothing changed (the value, the imports) (Task 6).
   - `logSteps` builds a per-step map literal; two `if`s would be simpler (Task 6).
   - `TestConvertRDP`'s failed `rdp-dump` has no budget or undecodable rows (Task 6).
