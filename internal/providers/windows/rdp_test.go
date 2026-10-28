@@ -289,15 +289,26 @@ func TestConvertRDP(t *testing.T) {
 		assert.Empty(t, certs)
 		assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(warns))
 	})
-	t.Run("a failed rdp-dump keeps the bindings: locations_dropped", func(t *testing.T) {
-		r := newREnv(t)
-		r.script(winproto.SubRDPDump, func([]byte) linuxsshtest.Response { return refusalResponse(winproto.ExitFailed, winproto.CodeIOError) })
-		res, err := r.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
-		require.NoError(t, err)
-		assert.Empty(t, rdpLocations(res.Certificates))
-		assert.Contains(t, byPath(res.Certificates), "http.sys/hostnameport/"+wHost+":443")
-		assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
-	})
+	// A failed rdp-dump keeps the bindings: locations_dropped, nothing marked missing (W6-16: also an answer
+	// over the budget and one that does not decode).
+	for _, tc := range []struct {
+		name   string
+		answer linuxsshtest.Response
+	}{
+		{"a failed rdp-dump keeps the bindings: locations_dropped", refusalResponse(winproto.ExitFailed, winproto.CodeIOError)},
+		{"an rdp-dump over its output budget keeps the bindings", linuxsshtest.Response{Stdout: []byte(strings.Repeat("{", int(budgets[winproto.SubRDPDump].maxOutput)+1))}},
+		{"an rdp-dump that does not decode keeps the bindings", linuxsshtest.Response{Stdout: []byte("not json\n")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newREnv(t)
+			r.script(winproto.SubRDPDump, func([]byte) linuxsshtest.Response { return tc.answer })
+			res, err := r.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+			require.NoError(t, err)
+			assert.Empty(t, rdpLocations(res.Certificates))
+			assert.Contains(t, byPath(res.Certificates), "http.sys/hostnameport/"+wHost+":443")
+			assert.Equal(t, []string{providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
+		})
+	}
 	t.Run("discovered on the emulator", func(t *testing.T) {
 		r := newREnv(t)
 		res, err := r.open(t).Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
@@ -414,6 +425,7 @@ func TestRDPDeployOutcomeTable(t *testing.T) {
 			req := r.rdpReq(nl)
 			tc.setup(t, r, nl, &req)
 			before := r.countSent(winproto.SubRDPDeploy)
+			valueBefore := r.model.RDPThumbprint()
 			s := r.open(t)
 			out, err := s.DeployCertificate(context.Background(), req, &stepLog{})
 			providertest.CheckDeployOutcome(t, out, err)
@@ -441,6 +453,10 @@ func TestRDPDeployOutcomeTable(t *testing.T) {
 				assert.Equal(t, want, out.Backup, "the previous certificate's store (W6 Ruling 19)")
 			}
 			r.model.ServeStaleRDP(false)
+			if w.result == providers.DeployNoChange { // W6-14: a refusal leaves the listener and My as they were
+				assert.Equal(t, valueBefore, r.model.RDPThumbprint(), "the value is unchanged")
+				assert.False(t, r.model.HasCertificate("My", sha1Hex(nl.Cert.Raw)), "the new leaf is not imported")
+			}
 			switch w.serves {
 			case "old":
 				assert.Equal(t, derSHA256(r.self.Cert.Raw), r.rdpServed())
