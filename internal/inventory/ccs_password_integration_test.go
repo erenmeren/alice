@@ -346,3 +346,29 @@ func TestWindowsServerPathsReportADatabaseFailure(t *testing.T) {
 		}
 	}
 }
+
+// Fixes batch 3 C2 (WIN-67; defence in depth, the provider refuses the skip first): the W5 Ruling 8 exception that
+// records a skipped verification of a CCS file no binding uses needs an uncut file. With list_truncated stored, the skip
+// is refused as for any other location (TestSkippedVerificationNeedsTheSetting) and the outcome stays uncertain.
+func TestCCSSkipNeedsAnUncutFile(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.h
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET servers = '[]' WHERE id = $1", f.file)
+	require.NoError(t, err)
+	skipped := inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Result: "deployed", CertFileSHA256: derSHA(f.nw), Verified: "skipped"}
+	r := f.request(f.file)
+	f.start(r.ID, nil)
+	require.NoError(t, h.svc.FinishDeployment(h.ctx, r.ID, skipped), "an uncut file no binding uses: the helper's read-back is its check")
+
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET warnings = ARRAY['list_truncated'] WHERE id = $1", f.file)
+	require.NoError(t, err)
+	r2 := f.request(f.file)
+	f.start(r2.ID, nil)
+	assert.ErrorIs(t, h.svc.FinishDeployment(h.ctx, r2.ID, skipped), inventory.ErrDeploymentState, "a cut file: the bindings may be unknown")
+	outcome := providers.DeployOutcome{Result: providers.DeployCommitted, Phase: providers.PhaseCommitted, Verified: "skipped"}
+	require.NoError(t, h.svc.RecordOutcome(h.ctx, r2.ID, inventory.DeployOutcomeRecord(outcome, nil, false), h.clock.Now().Add(time.Minute)))
+	d, err := h.svc.Deployment(h.ctx, r2.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.DeployStateRecovering, d.State, "an unrequested skip is not a success")
+	assert.Equal(t, "uncertain", d.Result)
+}

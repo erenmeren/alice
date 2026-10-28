@@ -1085,10 +1085,12 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 	}
 	if success && verified == "skipped" && !f.release {
 		// A CCS file no IIS binding uses (discovery stored no servers) has no endpoint to probe: the helper's read-back
-		// is its only check (W5 Ruling 8), so its provider answers skipped although the location does not skip.
+		// is its only check (W5 Ruling 8), so its provider answers skipped although the location does not skip. Not when
+		// the site list was cut (list_truncated): a binding may use the file; defence in depth: the provider already
+		// refuses the skip (W5 final review I1).
 		var skip bool
-		if err := tx.QueryRow(ctx, `SELECT skip_verify OR (kind = $2 AND servers = '[]'::jsonb) FROM certificate_locations WHERE id = $1`,
-			d.location, providers.LocationWinCCSFile).Scan(&skip); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT skip_verify OR (kind = $2 AND servers = '[]'::jsonb AND NOT 'list_truncated' = ANY(warnings))
+FROM certificate_locations WHERE id = $1`, d.location, providers.LocationWinCCSFile).Scan(&skip); err != nil {
 			return fmt.Errorf("inventory: read the location's verification settings: %w", err)
 		}
 		if !skip {
