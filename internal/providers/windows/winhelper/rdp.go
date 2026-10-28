@@ -268,9 +268,26 @@ func (t *deployTx) runRDP(in content, sec *secrets, current string) (any, error)
 		return t.answer(), nil
 	}
 
+	// Ruling 14 amended (F20): a same-value rewrite does not make Schannel rebuild the served chain;
+	// deleting the value and setting it again does. The writing journal records the rebuild before the
+	// delete, so a restore reads an absent value as this operation's interrupted rebuild.
+	rebuild := current == j.NewSHA1
+	if rebuild {
+		r := *j.RDP
+		r.Rebuild = true
+		j.RDP = &r
+	}
 	j.Phase = winproto.PhaseWriting
 	if err := t.write("rdp.writing"); err != nil {
 		return nil, err
+	}
+	if rebuild {
+		if err := h.SetRDPCertificate(t.ctx, ""); err != nil {
+			return t.selfRestore(winproto.StepSetListener, winproto.ErrIO)
+		}
+		if err := point(h, "rdp.deleted"); err != nil {
+			return nil, err
+		}
 	}
 	if err := h.SetRDPCertificate(t.ctx, j.NewSHA1); err != nil {
 		return t.selfRestore(winproto.StepSetListener, winproto.ErrIO)

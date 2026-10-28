@@ -118,6 +118,9 @@ type rdpJournal struct {
 	PreviousSPKISHA256 string `json:"previous_spki_sha256"`
 	KeyReadHad         *bool  `json:"key_read_had"`
 	ACLLeft            bool   `json:"acl_left,omitempty"`
+	// Rebuild: set_listener deletes the value and sets it again, because the listener named the new
+	// certificate already (Ruling 14 amended, F20); recorded with the writing journal, before the delete.
+	Rebuild bool `json:"rebuild,omitempty"`
 }
 
 // valid reports RDP fields the helper may act on in phase: the previous store one of the two, the
@@ -126,7 +129,16 @@ type rdpJournal struct {
 func (r rdpJournal) valid(phase string) bool {
 	return (r.PreviousStore == defaultStore || r.PreviousStore == winproto.RDPStoreSelfSigned) &&
 		r.PreviousAbsent == (r.PreviousStore == winproto.RDPStoreSelfSigned) && validSHA256(r.PreviousSPKISHA256) &&
-		(r.KeyReadHad != nil || phase == winproto.PhasePrepared || phase == winproto.PhaseRestored)
+		(r.KeyReadHad != nil || phase == winproto.PhasePrepared || phase == winproto.PhaseRestored) &&
+		(!r.Rebuild || (!r.PreviousAbsent && phase != winproto.PhasePrepared))
+}
+
+// rdpNamesNew reports a listener value that is this operation's certificate: the new SHA-1, or, while
+// the operation is not committed, an absent value its rebuild deleted (an interrupted delete-then-set:
+// the restore sets the value back, iis-status names the new leaf). A committed operation's value
+// deleted later was deleted by someone else.
+func rdpNamesNew(j journal, value string) bool {
+	return value == j.NewSHA1 || (value == "" && j.RDP.Rebuild && j.Phase != winproto.PhaseCommitted)
 }
 
 // rdpPreviousValue is the value a restore of an RDP journal writes back: "" (deleted) when it was absent.

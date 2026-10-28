@@ -295,18 +295,21 @@ func TestRDPDeployUnchanged(t *testing.T) {
 	if rec, _ := readBindingState(f.h, winproto.RDPCanonical); rec.Op != op2 || len(rec.Chain) != 2 {
 		t.Fatalf("record %+v", rec)
 	}
-	// The key not readable: the grant, then a write of the same value.
+	// The key not readable: the grant, then the same value deleted and set again (Ruling 14 amended, F20).
 	f.h.nsACEs[[2]string{"MY", f.newSHA1}] = nil
 	f.clearLogs()
 	o, r, out = f.rdpDeploy(op3, f.in())
 	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted ||
-		!slices.Equal(f.machineWrites(), []string{"acl grant MY " + f.newSHA1, "rdp-set " + f.newSHA1, "event 1005"}) {
+		!slices.Equal(f.machineWrites(), []string{"acl grant MY " + f.newSHA1, "rdp-delete", "rdp-set " + f.newSHA1, "event 1005"}) {
 		t.Fatalf("%s %v", out, f.machineWrites())
 	}
 	if ev := f.h.events[len(f.h.events)-1]; !strings.HasSuffix(ev.text, " key_read_granted true") {
 		t.Fatal(ev.text)
 	}
-	// Readable and named, but another chain served: the value is written again, no grant.
+	if j := f.journal(op3); !j.RDP.Rebuild {
+		t.Fatalf("%+v", j.RDP)
+	}
+	// Readable and named, but another chain served: deleted and set again, no grant.
 	f.h.nsACEs[[2]string{"MY", f.newSHA1}] = []fakeACE{{mask: fakeGrantMask}}
 	if err := writeBindingState(f.h, bindingRecord{Binding: winproto.RDPCanonical, Op: op3}); err != nil {
 		t.Fatal(err)
@@ -314,11 +317,24 @@ func TestRDPDeployUnchanged(t *testing.T) {
 	f.clearLogs()
 	const op4 = "44444444-4444-4444-8444-444444444444"
 	o, r, out = f.rdpDeploy(op4, f.in())
-	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || !slices.Equal(f.machineWrites(), []string{"rdp-set " + f.newSHA1, "event 1005"}) {
+	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted || !slices.Equal(f.machineWrites(), []string{"rdp-delete", "rdp-set " + f.newSHA1, "event 1005"}) {
 		t.Fatalf("%s %v", out, f.machineWrites())
 	}
 	if ev := f.h.events[len(f.h.events)-1]; !strings.HasSuffix(ev.text, " key_read_granted false") {
 		t.Fatal(ev.text)
+	}
+	// An added intermediate, the same certificate: deleted and set again.
+	delete(f.h.ca, f.interSHA1)
+	f.clearLogs()
+	const op5 = "55555555-5555-4555-8555-555555555555"
+	o, r, out = f.rdpDeploy(op5, f.in())
+	if o.Exit != 0 || r.Phase != winproto.PhaseCommitted ||
+		!slices.Equal(f.machineWrites(), []string{"intermediate " + f.interSHA1, "rdp-delete", "rdp-set " + f.newSHA1, "event 1005"}) {
+		t.Fatalf("%s %v", out, f.machineWrites())
+	}
+	// Another certificate on the listener: one set, no delete (the normal case).
+	if j := f.journal(op1); j.RDP.Rebuild {
+		t.Fatalf("%+v", j.RDP)
 	}
 }
 
@@ -1037,4 +1053,108 @@ func TestRDPKillOverAnExistingCopy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRDPRebuild is Ruling 14 amended (F20): a value the listener holds already is deleted and set
+// again; an interruption between the two is this operation's, and the restore sets the value back.
+func TestRDPRebuild(t *testing.T) {
+	// sameValue is a listener that names the new certificate already, with a key NETWORK SERVICE cannot
+	// read: the deployment grants, then deletes and sets the value.
+	sameValue := func(t *testing.T) *rdpFixture {
+		f := newRDPFixture(t, false)
+		f.h.addCert("MY", f.nw.Cert.Raw, true)
+		f.setValue(f.newSHA1)
+		f.expect = f.newSHA256
+		return f
+	}
+	kill := func(f *rdpFixture, at string) {
+		f.t.Helper()
+		f.h.pointErr = func(name string) error {
+			if name == at {
+				return errors.New("kill")
+			}
+			return nil
+		}
+		var out bytes.Buffer
+		if o := Execute(context.Background(), f.h, []string{winproto.SubRDPDeploy, winproto.ArgOp, op1}, bytes.NewReader(f.in()), &out); !o.Killed {
+			f.t.Fatalf("%+v %s", o, out.Bytes())
+		}
+		f.h.pointErr = nil
+	}
+	t.Run("a kill between the delete and the set", func(t *testing.T) {
+		f := sameValue(t)
+		kill(f, "rdp.deleted")
+		if f.value() != "" {
+			t.Fatalf("value %q", f.value())
+		}
+		if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.Phase != winproto.PhaseWriting || st.CurrentCertSHA256 != f.newSHA256 {
+			t.Fatalf("status %s", raw)
+		}
+		f.clearLogs()
+		if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+			t.Fatalf("%s", raw)
+		}
+		if f.value() != f.newSHA1 || f.readable(f.newSHA1) ||
+			!slices.Equal(f.machineWrites(), []string{"rdp-set " + f.newSHA1, "acl revoke MY " + f.newSHA1, "event 1002"}) {
+			t.Fatalf("value %s writes %v", f.value(), f.machineWrites())
+		}
+		if j := f.journal(op1); j.Phase != winproto.PhaseRestored || !j.RDP.Rebuild {
+			t.Fatalf("%+v %+v", j, j.RDP)
+		}
+	})
+	t.Run("the set after the delete fails", func(t *testing.T) {
+		f := sameValue(t)
+		f.h.pointErr = func(name string) error {
+			if name == "rdp.deleted" {
+				f.h.rdpSetErr = errors.New("registry")
+				f.h.rdpReadFn = func(_ int, l RDPListener) RDPListener { f.h.rdpSetErr = nil; return l }
+			}
+			return nil
+		}
+		o, r, out := f.rdpDeploy(op1, f.in())
+		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepSetListener || r.Error != winproto.ErrIO ||
+			f.value() != f.newSHA1 || f.readable(f.newSHA1) {
+			t.Fatalf("%s value %q", out, f.value())
+		}
+	})
+	t.Run("the delete fails", func(t *testing.T) {
+		f := sameValue(t)
+		f.h.rdpSetErr = errors.New("registry")
+		o, r, out := f.rdpDeploy(op1, f.in())
+		if o.Exit != 0 || r.Phase != winproto.PhaseRestored || r.FailedStep != winproto.StepSetListener || f.value() != f.newSHA1 || f.readable(f.newSHA1) {
+			t.Fatalf("%s", out)
+		}
+	})
+	t.Run("a committed rebuild whose value someone deleted", func(t *testing.T) {
+		f := sameValue(t)
+		f.rdpCommitted(op1, f.in())
+		f.setValue("")
+		if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
+			t.Fatalf("status %s", raw)
+		}
+		f.clearLogs()
+		o, _, out := f.restore(op1, []string{}, []string{})
+		wantError(t, o.Exit, out, winproto.ExitPrecondition, winproto.CodeSuperseded)
+		if len(f.h.writes()) != 0 {
+			t.Fatalf("%v", f.h.writes())
+		}
+	})
+	t.Run("the journal", func(t *testing.T) {
+		j := sampleRDPJournal(op1)
+		j.RDP.Rebuild = true
+		if !j.valid(op1) {
+			t.Fatal("a rebuild refused")
+		}
+		for name, edit := range map[string]func(*journal){
+			"over an absent value": func(j *journal) { j.RDP.PreviousAbsent, j.RDP.PreviousStore = true, winproto.RDPStoreSelfSigned },
+			"in prepared":          func(j *journal) { j.Phase = winproto.PhasePrepared },
+		} {
+			j := sampleRDPJournal(op1)
+			j.RDP.Rebuild = true
+			edit(&j)
+			if j.valid(op1) {
+				t.Errorf("%s: accepted", name)
+			}
+		}
+	})
 }

@@ -114,7 +114,7 @@ func planRestoreRDP(ctx context.Context, h WriteHost, j journal, g guard) (resto
 		return restoreForeign, nil
 	case l.CertSHA1 == rdpPreviousValue(j):
 		return restoreDone, nil
-	case l.CertSHA1 != j.NewSHA1:
+	case !rdpNamesNew(j, l.CertSHA1):
 		return restoreForeign, nil
 	}
 	if !j.RDP.PreviousAbsent {
