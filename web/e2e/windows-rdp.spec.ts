@@ -197,7 +197,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(rollback).toHaveCount(0);
       windowsExec(['ctl', 'stale-tls-off']);
 
-      // 4. The server page stays accessible with the listener at every width.
+      // 4. The server page stays accessible with the listener at the widths expectAccessible checks.
       await openServer(page, t);
       await expect(listenerRow(page, t)).toHaveCount(1);
       await expectAccessible(page, 'windows server, Remote Desktop after the deployments');

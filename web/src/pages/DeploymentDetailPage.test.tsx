@@ -878,6 +878,30 @@ describe('Windows deployment texts', () => {
     for (const part of Object.values(ownText)) expect(alert).toHaveTextContent(part.replace(/\{\{port\}\}/g, '443'));
   });
 
+  // R69: the Remote Desktop listener's own texts (deployments.rdpErrors), else the Windows ones, else the shared ones:
+  // none speaks of a binding, netsh, IIS Manager, files or Nginx.
+  const rdpOwn = (lang: 'en' | 'tr', reason: string) => {
+    const [ns, name] = reason.split('.');
+    const r = ((lang === 'en' ? enWeb : trWeb).deployments as unknown as { rdpErrors: Record<string, Record<string, Record<string, string>>> }).rdpErrors;
+    return r[ns]?.[name] ?? {};
+  };
+  const WRONG_RDP_EN = /binding|netsh|IIS Manager/i;
+  // "Binding" here is Alice's binding of a location to an issued certificate or a vault, not an http.sys binding; the
+  // cleanup's reason never ends a deployment.
+  const RDP_EXEMPT = ['deployment.drift_not_bound', 'deployment.drift_repair_superseded', 'windows.cleanup_outcome_unknown'];
+  const WRONG_RDP_TR = /bağlama|netsh|IIS Yöneticisi/i;
+
+  it.each(['en', 'tr'] as const)('words every such reason for the Remote Desktop listener (%s)', (lang) => {
+    const bad: string[] = [];
+    for (const r of reasons.filter((x) => !RDP_EXEMPT.includes(x))) {
+      for (const part of ['title', 'cause', 'action']) {
+        const text = rdpOwn(lang, r)[part] ?? own(lang, r)[part] ?? shared(lang, r)?.[part] ?? '';
+        if (wrong(lang, text) || (lang === 'en' ? WRONG_RDP_EN : WRONG_RDP_TR).test(text)) bad.push(`${r}.${part}: ${text}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it('keeps the shared texts for a Linux deployment', async () => {
     show(deploymentDetailFixture({ id: ID, status: 'rolled_back', error: { code: 'ALC-DEP-0003', reason: 'deployment.verify_failed' } }));
     await renderRoute(`/deployments/${ID}`);
@@ -906,6 +930,46 @@ describe('DeploymentDetailPage of the Remote Desktop listener', () => {
     expect(screen.getByText(label, { selector: 'dt' }).nextElementSibling).toHaveTextContent(name);
     expect(screen.queryByText('Key file', { selector: 'dt' })).not.toBeInTheDocument();
     expect(screen.getByTestId('windows-previous')).toHaveTextContent(`${previous} \\ ${WIN_PREVIOUS_SHA1}`);
+    expectNoRawKeys();
+  });
+});
+
+// R69 (Ruling 20): a failed rollback of the Remote Desktop listener, or one it could not confirm, names the listener,
+// where to check it on the server and that the console or SSH is the way in, never a binding or files.
+describe('DeploymentDetailPage of a failed Remote Desktop rollback', () => {
+  it.each([
+    ['en', 'Alice cannot confirm which certificate the Remote Desktop listener serves', 'Win32_TSGeneralSetting', "the server's console or SSH"],
+    ['tr', 'Alice, Uzak Masaüstü dinleyicisinin hangi sertifikayı sunduğunu doğrulayamıyor', 'Win32_TSGeneralSetting', 'sunucunun konsolunu ya da SSH'],
+  ])('rollback_failed (%s)', async (lang, headline, where, wayIn) => {
+    show(
+      rdpDeploymentFixture({ id: ID, status: 'rollback_failed', result: 'rollback_failed', phase: 'writing', verified: '', error: { code: 'ALC-DEP-0008', reason: 'deployment.rollback_failed' } }),
+      'auditor',
+      lang,
+    );
+    await renderRoute(`/deployments/${ID}`, { languages: [lang] });
+    const alert = await screen.findByRole('alert');
+    expect(screen.getByText(new RegExp(headline))).toBeInTheDocument();
+    expect(alert).toHaveTextContent(where);
+    expect(alert).toHaveTextContent(wayIn);
+    expect(alert.textContent ?? '').not.toMatch(lang === 'en' ? /binding|netsh|files/i : /bağlama|netsh|dosyalar/i);
+    expectNoRawKeys();
+  });
+
+  it.each([
+    ['en', 'The Remote Desktop listener names the previous certificate again', 'Remote Desktop settings'],
+    ['tr', 'Uzak Masaüstü dinleyicisi yeniden önceki sertifikayı gösteriyor', 'Uzak Masaüstü ayarları'],
+  ])('restored_unverified (%s)', async (lang, headline, where) => {
+    show(
+      rdpDeploymentFixture({ id: ID, status: 'rollback_failed', result: 'rollback_failed', phase: 'restored', verified: '', error: { code: 'ALC-DEP-0019', reason: 'deployment.restored_unverified' } }),
+      'auditor',
+      lang,
+    );
+    await renderRoute(`/deployments/${ID}`, { languages: [lang] });
+    const alert = await screen.findByRole('alert');
+    expect(screen.getAllByText(new RegExp(headline)).length).toBeGreaterThan(0);
+    expect(alert).toHaveTextContent(where);
+    expect(alert).toHaveTextContent('Win32_TSGeneralSetting');
+    expect(alert.textContent ?? '').not.toMatch(lang === 'en' ? /binding|netsh|files/i : /bağlama|netsh|dosyalar/i);
     expectNoRawKeys();
   });
 });

@@ -892,6 +892,18 @@ describe('DeployDialog on a Windows server', () => {
     expect(within(list).queryByText('Bind')).not.toBeInTheDocument();
   });
 
+  it('adds the listener summary when the listener is ticked beside the binding the dialog was opened from (R69)', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const rdp = windowsRDPFixture({ id: 'r1', certificate: OTHER });
+    await showDialog({ location: W1, siblings: [W1, rdp] });
+    expect(await screen.findByText(/points the binding to the new certificate/)).toBeInTheDocument();
+    expect(screen.queryByText(/gives NETWORK SERVICE/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('checkbox', { name: /rdp\/RDP-Tcp/ }));
+    expect(screen.getByText(/gives NETWORK SERVICE, the account Remote Desktop runs as, read access to the new private key/)).toBeInTheDocument();
+    expect(screen.getByText(/points the binding to the new certificate/)).toBeInTheDocument();
+  });
+
   it('keeps the binding wording when no CCS file is among the siblings', async () => {
     asRole('operator');
     certificates([NEW_CERT]);

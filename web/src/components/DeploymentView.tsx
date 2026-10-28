@@ -48,26 +48,31 @@ const UNRESOLVED = /\{\{\s*\w+\s*\}\}/;
 // unfinished earlier change on the server that ALC-DEP-0023/0024 name) is shown as data, because the
 // action tells the operator to use it. neutral: a decision, not a failure (a cancelled deployment).
 // windows: a deployment to an http.sys binding (R61); a shared text that speaks of the files and the backup folder of a
-// Linux server has its binding wording in deployments.windowsErrors.<reason>.<part>, used in its place.
+// Linux server has its binding wording in deployments.windowsErrors.<reason>.<part>, used in its place. rdp: a deployment
+// to the Remote Desktop listener (R69): its listener wording in deployments.rdpErrors.<reason>.<part> comes first, then
+// the Windows one (the helper and the connection), then the shared one.
 export function DeploymentErrorAlert({
   error,
   heading,
   withCause = true,
   neutral = false,
   windows = false,
+  rdp = false,
 }: {
   error: ErrorRef | null;
   heading?: string;
   withCause?: boolean;
   neutral?: boolean;
   windows?: boolean;
+  rdp?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   if (!error) return null;
   const params = error.params ?? {};
   const text = (part: 'title' | 'cause' | 'action'): string => {
+    const listener = `deployments.rdpErrors.${error.reason}.${part}`;
     const own = `deployments.windowsErrors.${error.reason}.${part}`;
-    const key = windows && i18n.exists(own) ? own : `errors.${error.reason}.${part}`;
+    const key = rdp && i18n.exists(listener) ? listener : (windows || rdp) && i18n.exists(own) ? own : `errors.${error.reason}.${part}`;
     if (!i18n.exists(key)) return '';
     const out = t(key, params);
     return UNRESOLVED.test(out) ? '' : out;
@@ -110,6 +115,9 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
   const { t, i18n } = useTranslation();
   const view = deploymentView(d);
   const windows = isWindowsDeployment(d);
+  const rdp = isRDPDeployment(d);
+  // place picks the headline of the place's kind: the Remote Desktop listener's (R69), a binding's, else the files'.
+  const place = (files: string, binding: string, listener: string) => (rdp ? listener : windows ? binding : files);
   let color: string;
   let headline: string;
   let extra = '';
@@ -119,7 +127,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         const checked = d.verified === 'remote' || d.verified === 'local';
         const trust = d.verification?.trust;
         color = checked ? 'green' : 'yellow';
-        headline = t(checked ? 'deploy.succeeded' : windows ? 'deploy.succeededUnverifiedWindows' : isCCSDeployment(d) ? 'deploy.succeededUnverifiedCCS' : isRDPDeployment(d) ? 'deploy.succeededUnverifiedRDP' : 'deploy.succeededUnverified');
+        headline = t(checked ? 'deploy.succeeded' : windows ? 'deploy.succeededUnverifiedWindows' : isCCSDeployment(d) ? 'deploy.succeededUnverifiedCCS' : rdp ? 'deploy.succeededUnverifiedRDP' : 'deploy.succeededUnverified');
         extra = d.verified === 'local' ? t('deploy.verifiedLocally') : d.verified === 'skipped' ? t('deploy.verifySkipped') : '';
         if (checked && untrustedSuccess(d) && trust) {
           // R51: served, but the chain is not trusted: a warning that names the fault, never "verified".
@@ -140,11 +148,11 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
       case 'failed':
         // A cancelled deployment sent nothing: a decision, not a failure of the server.
         color = isCancelled(d) ? 'gray' : 'red';
-        headline = t(d.error?.reason === SERVER_OPERATION_PENDING ? (windows ? 'deploy.serverOperationPendingWindows' : 'deploy.serverOperationPending') : 'deploy.noChange');
+        headline = t(d.error?.reason === SERVER_OPERATION_PENDING ? place('deploy.serverOperationPending', 'deploy.serverOperationPendingWindows', 'deploy.serverOperationPendingRDP') : 'deploy.noChange');
         break;
       case 'rolled_back':
         color = 'orange';
-        headline = t(d.error?.reason === PENDING_CHANGE_RESTORED ? (windows ? 'deploy.pendingChangeRestoredWindows' : 'deploy.pendingChangeRestored') : 'deploy.rolledBack');
+        headline = t(d.error?.reason === PENDING_CHANGE_RESTORED ? place('deploy.pendingChangeRestored', 'deploy.pendingChangeRestoredWindows', 'deploy.pendingChangeRestoredRDP') : 'deploy.rolledBack');
         break;
       default:
         // rollback_failed: the headline follows the phase, so it never contradicts the cause. With
@@ -155,10 +163,8 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
           rollbackForbidden(d)
             ? 'deploy.rollbackForbidden'
             : d.phase === 'restored'
-              ? windows
-                ? 'deploy.rollbackFailedRestoredWindows'
-                : 'deploy.rollbackFailedRestored'
-              : 'deploy.rollbackFailed',
+              ? place('deploy.rollbackFailedRestored', 'deploy.rollbackFailedRestoredWindows', 'deploy.rollbackFailedRestoredRDP')
+              : place('deploy.rollbackFailed', 'deploy.rollbackFailed', 'deploy.rollbackFailedRDP'),
         );
     }
   } else if (view === 'observing') {
@@ -198,9 +204,9 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
           <Text size="sm">{t('deployments.recovery.next', { time: formatDateTime(d.recover_after, i18n.language) })}</Text>
         )}
       </Alert>
-      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} neutral={isCancelled(d)} windows={windows} />}
+      {d.status !== 'succeeded' && <DeploymentErrorAlert error={d.error} neutral={isCancelled(d)} windows={windows} rdp={rdp} />}
       {d.verify_failed && d.status !== 'succeeded' && (
-        <DeploymentErrorAlert error={d.verify_failed} heading={t('deployments.verifyFailedTitle')} withCause={false} windows={windows} />
+        <DeploymentErrorAlert error={d.verify_failed} heading={t('deployments.verifyFailedTitle')} withCause={false} windows={windows} rdp={rdp} />
       )}
     </Stack>
   );

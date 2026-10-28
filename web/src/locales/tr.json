@@ -1986,7 +1986,7 @@
       "win_store_unsupported": "Sertifika My veya WebHosting dışında bir depoda. Alice bu depoyu desteklemiyor.",
       "win_rdp_disabled": "Bu sunucuda Uzak Masaüstü kapalı, bu yüzden sertifikayı sunacak bir şey yok. Uzak Masaüstü'nü açın, ardından Keşfet'i seçin.",
       "win_rdp_no_tls": "Dinleyici TLS olmadan RDP güvenliği kullanıyor (güvenlik katmanı 0), bu yüzden hiçbir sertifika kullanmıyor. Güvenlik katmanını Anlaşma ya da TLS olarak ayarlayın, ardından Keşfet'i seçin.",
-      "win_rdp_cert_unknown": "Dinleyici bir sertifika belirtmiyor ve Remote Desktop deposunda tam olarak bir sertifika yok, bu yüzden Alice hangi sertifikayı sunduğunu bilemiyor.",
+      "win_rdp_cert_unknown": "Dinleyici bir sertifika belirtmiyor ve \"Remote Desktop\" deposunda tam olarak bir sertifika yok, bu yüzden Alice hangi sertifikayı sunduğunu bilemiyor.",
       "file_problem_windows": "Alice bu bağlamanın sertifikasını veya anahtarını kullanamıyor.",
       "file_problem_ccs": "Alice, Merkezi Sertifika Deposu'nun bu dosyasını kullanamıyor."
     },
@@ -2126,7 +2126,11 @@
     "bindingsOrFiles": "Bağlamalar ve dosyalar",
     "summaryRDP": "Alice sertifikayı sunucunun Kişisel (My) deposuna, ara sertifikaları CA deposuna içe aktarır, Uzak Masaüstü'nün çalıştığı hesap olan NETWORK SERVICE'e yeni özel anahtarı okuma izni verir, Uzak Masaüstü dinleyicisini (RDP-Tcp) şu an kullandığı sertifikanın (başta Windows'un kendinden imzalı sertifikası) yerine yeni sertifikaya yöneltir ve RDP anlaşmasından sonra sunulduğunu denetler. Herhangi bir adım başarısız olursa Alice dinleyiciyi önceki sertifikaya geri yöneltir.",
     "places": "Dağıtılacak yerler",
-    "succeededUnverifiedRDP": "Yeni sertifika dağıtıldı ve Uzak Masaüstü dinleyicisi ona yöneltildi."
+    "succeededUnverifiedRDP": "Yeni sertifika dağıtıldı ve Uzak Masaüstü dinleyicisi ona yöneltildi.",
+    "serverOperationPendingRDP": "Yeni sertifika dağıtılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik Uzak Masaüstü dinleyicisini engelliyor; aşağıya bakın.",
+    "pendingChangeRestoredRDP": "Yeni sertifika dağıtılmadı. Alice Uzak Masaüstü dinleyicisini tamamlanmamış önceki bir değişiklikten önceki sertifikaya geri yöneltti. Bu, Dağıt'ı seçtiğinizde sunduğu sertifika olmayabilir.",
+    "rollbackFailedRestoredRDP": "Uzak Masaüstü dinleyicisi yeniden önceki sertifikayı gösteriyor, ancak Alice onu sunduğunu doğrulayamadı. Uzak Masaüstü ayarlarını şimdi denetleyin.",
+    "rollbackFailedRDP": "Alice, Uzak Masaüstü dinleyicisinin hangi sertifikayı sunduğunu doğrulayamıyor. Elle işlem gerekiyor."
   },
   "deployments": {
     "page": {
@@ -2400,6 +2404,113 @@
         },
         "protocol_error": {
           "action": "alice-helper.exe dosyasını güncel Alice paketinden sunucuya kopyalayın ve Windows kurulum betiğini yeniden çalıştırın, ardından bağlantıyı test edin."
+        }
+      }
+    },
+    "rdpErrors": {
+      "deployment": {
+        "rollback_failed": {
+          "cause": "Dağıtım başarısız oldu ve Uzak Masaüstü dinleyicisini (RDP-Tcp) önceki sertifikaya geri yöneltme tamamlanmadı ya da doğrulanamadı. Önceki sertifika sunucunun sertifika depolarında duruyor; deposu ve parmak izi bu dağıtımla birlikte gösteriliyor.",
+          "action": "Sunucuda dinleyicinin gösterdiği sertifikayı (root/cimv2/TerminalServices ad alanında Win32_TSGeneralSetting, TerminalName RDP-Tcp, SSLCertificateSHA1Hash) önceki sertifikayla karşılaştırın; yanlışsa Uzak Masaüstü ayarlarında geri ayarlayın. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; sunucuya ulaşmak için sunucunun konsolunu ya da SSH'yi kullanın."
+        },
+        "restored_unverified": {
+          "title": "Uzak Masaüstü dinleyicisi yeniden önceki sertifikayı gösteriyor, ancak Alice onu sunduğunu doğrulayamadı.",
+          "cause": "Alice Uzak Masaüstü dinleyicisini (RDP-Tcp) önceki sertifikaya geri yöneltti, ancak ardından dinleyicinin onu yeniden sunduğunu doğrulayamadı.",
+          "action": "Sunucudaki Uzak Masaüstü ayarlarını şimdi denetleyin: dinleyicinin gösterdiği sertifikayı (root/cimv2/TerminalServices ad alanında Win32_TSGeneralSetting, TerminalName RDP-Tcp, SSLCertificateSHA1Hash) önceki sertifikayla karşılaştırın. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; sunucuya ulaşmak için sunucunun konsolunu ya da SSH'yi kullanın."
+        },
+        "rollback_file_changed": {
+          "title": "Dağıtım sırasında başka bir program Uzak Masaüstü dinleyicisini değiştirdi. Elle işlem gerekiyor.",
+          "cause": "Alice dağıtırken ya da dinleyiciyi geri yöneltirken başka bir program Uzak Masaüstü dinleyicisini değiştirdi: dinleyici, Alice'in dağıtmadığı bir sertifikayı gösteriyor; bu yüzden Alice onu yeniden değiştirmedi.",
+          "action": "Dinleyiciyi hangi programın değiştirdiğini bulun (örneğin Uzak Masaüstü sertifikasını otomatik kaydeden bir Grup İlkesi), dinleyicinin gösterdiği sertifikayı (root/cimv2/TerminalServices ad alanında Win32_TSGeneralSetting, TerminalName RDP-Tcp, SSLCertificateSHA1Hash) denetleyin, ardından sunucunun sayfasında Keşfet'i seçin. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; sunucuya ulaşmak için sunucunun konsolunu ya da SSH'yi kullanın."
+        },
+        "in_progress": {
+          "cause": "Alice bir sunucunun Uzak Masaüstü dinleyicisine aynı anda tek bir dağıtım yapar."
+        },
+        "verify_failed": {
+          "cause": "Değişiklikten sonra Uzak Masaüstü dinleyicisi önceki sertifikayı sunmaya devam etti; örneğin Uzak Masaüstü yeni sertifikayı almadı ya da sunucunun önündeki bir şey onun bağlantı noktasında yanıt veriyor. Dağıtımın durumu, dinleyicinin yeniden önceki sertifikayı gösterip göstermediğini belirtir.",
+          "action": "Dinleyicinin gösterdiği sertifikayı (root/cimv2/TerminalServices ad alanında Win32_TSGeneralSetting, TerminalName RDP-Tcp, SSLCertificateSHA1Hash) ve dinleyicinin bağlantı noktasında neyin yanıt verdiğini denetleyin, ardından yeniden dağıtın."
+        },
+        "interrupted": {
+          "cause": "Dağıtım sürerken sunucuyla bağlantı koptu, Alice yeniden başladı ya da yardımcı araç Uzak Masaüstü dinleyicisini değiştirmeyi tamamlayamadı. Dağıtımın durumu, dinleyicinin hangi sertifikayı gösterdiğini belirtir; Alice bunu henüz bilmiyorsa denetlemeyi sürdürür."
+        },
+        "verify_chain": {
+          "cause": "Uzak Masaüstü dinleyicisinin gönderdiği sertifika sayısı, Alice'in beklediği zincirden farklı; örneğin Windows zinciri depolarındaki başka ara sertifikalardan kurdu. Dağıtımın durumu bir şeyin değişip değişmediğini belirtir.",
+          "action": "Sunucunun Ara Sertifika Yetkilileri deposundaki ara sertifikaları denetleyin, ardından yeniden dağıtın."
+        },
+        "verify_untrusted": {
+          "action": "Sunucunun Ara Sertifika Yetkilileri deposundaki ara sertifikaları ve sunucunun önündeki hiçbir şeyin dinleyicinin bağlantı noktasında yanıt vermediğini denetleyin, ardından yeniden dağıtın."
+        },
+        "nothing_to_restore": {
+          "cause": "Yardımcı araç bu dağıtımın Uzak Masaüstü dinleyicisini değiştirmediğini buldu; geri konacak bir şey yoktu."
+        },
+        "superseded": {
+          "title": "Daha sonraki bir değişiklik Uzak Masaüstü dinleyicisinin sertifikasını değiştirdi; Alice onu geri yüklemedi.",
+          "cause": "Alice bu dağıtımı bitirirken sunucudaki daha sonraki bir işlem Uzak Masaüstü dinleyicisini değiştirdi. Alice dinleyicinin şimdi hangi sertifikayı gösterdiğini bilemiyor."
+        },
+        "target_deleted": {
+          "action": "Sunucu hâlâ varsa Uzak Masaüstü dinleyicisinin gösterdiği sertifikayı denetleyin."
+        },
+        "recovery_exhausted": {
+          "cause": "Alice yaklaşık bir gün boyunca dağıtımın nasıl bittiğini öğrenemedi; çoğunlukla sunucuya ulaşamadığı için. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika depolarında."
+        },
+        "outcome_unknown": {
+          "cause": "Alice'in bu dağıtımı denetlemek ya da geri almak için gereken kayıtları artık yok. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika depolarında."
+        },
+        "rescan_needed": {
+          "title": "Alice dağıtmadan önce bu sunucunun Uzak Masaüstü dinleyicisini yeniden okumalı.",
+          "cause": "Alice Uzak Masaüstü dinleyicisinin şimdi hangi sertifikayı gösterdiğini bilmiyor; arada kimsenin onu değiştirmediğinden emin olmak için bunu bilmesi gerekiyor."
+        },
+        "pending_change_restored": {
+          "title": "Alice Uzak Masaüstü dinleyicisinin tamamlanmamış önceki bir değişikliğini geri aldı; bu sertifika dağıtılmadı.",
+          "cause": "Sunucudaki Uzak Masaüstü dinleyicisinin önceki bir değişikliği tamamlanmadı ve Alice onu artık izlemiyordu. Alice dinleyiciyi o değişiklikten önceki sertifikaya geri yöneltti. Bu dağıtımın sertifikası dağıtılmadı.",
+          "action": "Alice'in dinleyiciyi yeniden okuması için sunucunun sayfasında Keşfet'i seçin, ardından sertifikayı yeniden dağıtın."
+        },
+        "server_operation_pending": {
+          "title": "Sunucudaki Uzak Masaüstü dinleyicisinin tamamlanmamış bir değişikliği yeni değişiklikleri durduruyor.",
+          "cause": "Uzak Masaüstü dinleyicisinin önceki bir değişikliği tamamlanmadı ve Alice onu artık izlemiyor; bu yüzden yardımcı araç yeni değişiklikleri reddediyor. Alice o değişikliği geri almadı. Bu dağıtımın sertifikası dağıtılmadı.",
+          "action": "Dağıtımın ayrıntıları tamamlanmamış değişikliği (işlem kimliği) belirtir. Dinleyicinin gösterdiği sertifikayı (root/cimv2/TerminalServices ad alanında Win32_TSGeneralSetting, TerminalName RDP-Tcp, SSLCertificateSHA1Hash) denetleyin, sunucunun sayfasında Keşfet'i seçin, ardından yeniden dağıtın."
+        },
+        "rollback_forbidden": {
+          "cause": "Yeni sertifika hizmete alınamadı ve Uzak Masaüstü dinleyicisinin değişiklikten önce gösterdiği sertifika iptal edilmiş ya da özel anahtarı ele geçirilmiş. Alice böyle bir sertifikayı hiçbir zaman geri koymaz; bu yüzden dinleyici başarısız değişikliğin bıraktığı gibi kalıyor.",
+          "action": "Dağıtım geçmişinde gösterilen nedeni bulup giderin, ardından geçerli bir sertifikayı yeniden dağıtın ya da olayda Yeniden dene'yi seçin. Dinleyiciyi asla elle önceki sertifikaya geri yöneltmeyin: anahtarı ele geçirilmiş. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; sunucuya ulaşmak için sunucunun konsolunu ya da SSH'yi kullanın."
+        }
+      },
+      "nginx": {
+        "location_unsupported": {
+          "cause": "Alice Uzak Masaüstü dinleyicisini şu an değiştiremiyor (Uzak Masaüstü kapalı, TLS kullanmıyor ya da Alice sertifikasını bilemiyor) ya da dinleyici artık yok. Hiçbir şey değiştirilmedi."
+        }
+      },
+      "windows": {
+        "backup_missing": {
+          "cause": "Geri alma, önceki sertifikanın deposunda Windows'un kullanabileceği bir özel anahtarla bulunmasını gerektirir. Sertifika kaldırılmış ya da anahtarı silinmiş veya artık erişilemez durumda. Hiçbir şey değiştirilmedi: Uzak Masaüstü dinleyicisi Alice'in dağıttığı sertifikayı sunmaya devam ediyor.",
+          "action": "Uzak Masaüstü dinleyicisini hemen denetleyin. Ona geçerli bir sertifika dağıtın ya da önceki sertifikayı anahtarıyla yeniden içe aktarın (dağıtım, deposunu ve SHA-1 parmak izini gösterir). Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; sunucuya ulaşmak için sunucunun konsolunu ya da SSH'yi kullanın."
+        },
+        "binding_changed": {
+          "title": "Uzak Masaüstü dinleyicisi artık Alice'in beklediği sertifikayı göstermiyor. Hiçbir şey değiştirilmedi.",
+          "cause": "Son taramadan bu yana biri ya da başka bir program (örneğin Uzak Masaüstü sertifikasını otomatik kaydeden bir Grup İlkesi) dinleyiciyi başka bir sertifikaya yöneltti. Alice yalnızca gördüğü sertifikayı değiştirir; bu yüzden yardımcı hiçbir şeyi değiştirmedi.",
+          "action": "Alice'in dinleyiciyi şimdiki hâliyle görmesi için sunucuyu yeniden tarayın, sonra yeniden dağıtın."
+        },
+        "binding_not_found": {
+          "title": "Windows sunucusunda artık RDP-Tcp Uzak Masaüstü dinleyicisi yok. Hiçbir şey değiştirilmedi.",
+          "cause": "Son taramadan bu yana sunucunun kayıt defterinde RDP-Tcp dinleyicisi yok.",
+          "action": "Sunucuyu yeniden tarayın. Uzak Masaüstü kullanılabilir olmalıysa sunucuda kurun, yeniden tarayın ve dinleyicisine dağıtın."
+        },
+        "busy": {
+          "cause": "Alice yardımcısı bir sunucuda aynı anda tek bir yeri değiştirir ve başka bir yardımcı işlemi kilidini beklediği süreden uzun tuttu. Hiçbir şey değiştirilmedi."
+        },
+        "key_unusable": {
+          "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan zaten bulunuyor. Bu nedenle duran bir dağıtımda Uzak Masaüstü dinleyicisi önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları söyler."
+        },
+        "location_unsupported": {
+          "title": "Alice şu an bu Uzak Masaüstü dinleyicisine dağıtım yapmaz.",
+          "cause": "Uzak Masaüstü kapalı, dinleyici TLS kullanmıyor ya da Alice hangi sertifikayı sunduğunu bilemiyor.",
+          "action": "Sunucu sayfasının dinleyici için gösterdiği nedeni giderin, sunucuyu yeniden tarayın ve ona dağıtın."
+        },
+        "not_elevated": {
+          "cause": "Yardımcı yükseltilmeden çalıştı, bu yüzden Uzak Masaüstü dinleyicisini ve makine sertifika depolarını okuyamıyor. Windows Server 2022 ve 2025'te yerel Yöneticiler grubundaki bir üyenin anahtarla girişi yükseltilmiş olur; bu yüzden çoğunlukla hesaba sıkılaştırılmış bir etki alanı temeli ya da UAC uzak kısıtlaması uygulanıyor."
+        },
+        "store_error": {
+          "cause": "Yardımcı My makine sertifika deposunu ya da ara sertifika deposunu (CA) açamadı veya Windows ona sertifika eklemeyi reddetti."
         }
       }
     }

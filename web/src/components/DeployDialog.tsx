@@ -324,6 +324,8 @@ function DeployForm({
     >
       <Stack gap="md">
         <Text size="sm">{t(rdp ? 'deploy.summaryRDP' : ccs ? 'deploy.summaryCCS' : windows ? 'deploy.summaryWindows' : 'deploy.summary')}</Text>
+        {/* The listener ticked beside the place the dialog was opened from: its own sentence (the NETWORK SERVICE grant) too. */}
+        {!rdp && targets.some((l) => l.kind === 'win_rdp') && <Text size="sm">{t('deploy.summaryRDP')}</Text>}
 
         {certificate === undefined && (
           <>

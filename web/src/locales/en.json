@@ -2126,7 +2126,11 @@
     "bindingsOrFiles": "Bindings and files",
     "summaryRDP": "Alice imports the certificate into the server's Personal (My) store and its intermediate certificates into the CA store, gives NETWORK SERVICE, the account Remote Desktop runs as, read access to the new private key, points the Remote Desktop listener (RDP-Tcp) to the new certificate in place of the one it uses now (at first Windows' own self-signed one), and checks that it is served after the RDP negotiation. If any step fails, Alice points the listener back to the previous certificate.",
     "places": "Where to deploy",
-    "succeededUnverifiedRDP": "The new certificate was deployed and the Remote Desktop listener points to it."
+    "succeededUnverifiedRDP": "The new certificate was deployed and the Remote Desktop listener points to it.",
+    "serverOperationPendingRDP": "The new certificate was not deployed. An unfinished earlier change on the server blocks the Remote Desktop listener; see below.",
+    "pendingChangeRestoredRDP": "The new certificate was not deployed. Alice pointed the Remote Desktop listener back to the certificate from before an unfinished earlier change. That may not be the certificate it served when you chose Deploy.",
+    "rollbackFailedRestoredRDP": "The Remote Desktop listener names the previous certificate again, but Alice could not confirm that it serves it. Check the Remote Desktop settings now.",
+    "rollbackFailedRDP": "Alice cannot confirm which certificate the Remote Desktop listener serves. Manual action is needed."
   },
   "deployments": {
     "page": {
@@ -2400,6 +2404,113 @@
         },
         "protocol_error": {
           "action": "Copy alice-helper.exe from the current Alice bundle to the server and run the Windows setup script again, then test the connection."
+        }
+      }
+    },
+    "rdpErrors": {
+      "deployment": {
+        "rollback_failed": {
+          "cause": "The deployment failed, and pointing the Remote Desktop listener (RDP-Tcp) back to the previous certificate did not finish or could not be confirmed. The previous certificate stays in the server's certificate stores; its store and thumbprint are shown with this deployment.",
+          "action": "On the server, compare the certificate the listener names (SSLCertificateSHA1Hash of Win32_TSGeneralSetting, TerminalName RDP-Tcp, in the root/cimv2/TerminalServices namespace) with the previous certificate, and set it back in the Remote Desktop settings if it is wrong. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to reach it."
+        },
+        "restored_unverified": {
+          "title": "The Remote Desktop listener names the previous certificate again, but Alice could not confirm that it serves it.",
+          "cause": "Alice pointed the Remote Desktop listener (RDP-Tcp) back to the previous certificate, but then could not confirm that the listener serves it again.",
+          "action": "Check the Remote Desktop settings on the server now: compare the certificate the listener names (SSLCertificateSHA1Hash of Win32_TSGeneralSetting, TerminalName RDP-Tcp, in the root/cimv2/TerminalServices namespace) with the previous certificate. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to reach it."
+        },
+        "rollback_file_changed": {
+          "title": "Another program changed the Remote Desktop listener during the deployment. Manual action is needed.",
+          "cause": "While Alice was deploying or pointing the listener back, another program changed the Remote Desktop listener: it names a certificate Alice did not deploy, so Alice did not change it again.",
+          "action": "Find out which program changed the listener (for example a Group Policy that autoenrols the Remote Desktop certificate), check the certificate the listener names (SSLCertificateSHA1Hash of Win32_TSGeneralSetting, TerminalName RDP-Tcp, in the root/cimv2/TerminalServices namespace), then choose Discover on the server's page. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to reach it."
+        },
+        "in_progress": {
+          "cause": "Alice runs one deployment to the Remote Desktop listener of a server at a time."
+        },
+        "verify_failed": {
+          "cause": "After the change the Remote Desktop listener kept serving the previous certificate, for example because Remote Desktop did not pick the new certificate up, or something in front of the server answers on its port. The deployment's status shows whether the listener names the previous certificate again.",
+          "action": "Check the certificate the listener names (SSLCertificateSHA1Hash of Win32_TSGeneralSetting, TerminalName RDP-Tcp, in the root/cimv2/TerminalServices namespace) and what answers on the listener's port, then deploy again."
+        },
+        "interrupted": {
+          "cause": "While the deployment ran, the connection to the server was lost, Alice restarted, or the helper could not finish changing the Remote Desktop listener. The deployment's status shows which certificate the listener names; if Alice does not know yet, it keeps checking."
+        },
+        "verify_chain": {
+          "cause": "The number of certificates the Remote Desktop listener sends differs from the chain Alice expected, for example because Windows built the chain from other intermediate certificates in its stores. The deployment's status shows whether anything was changed.",
+          "action": "Check the intermediate certificates in the server's Intermediate Certification Authorities store, then deploy again."
+        },
+        "verify_untrusted": {
+          "action": "Check the intermediate certificates in the server's Intermediate Certification Authorities store, and that nothing in front of the server answers on the listener's port, then deploy again."
+        },
+        "nothing_to_restore": {
+          "cause": "The helper found that this deployment had not changed the Remote Desktop listener, so there was nothing to put back."
+        },
+        "superseded": {
+          "title": "A later change replaced the Remote Desktop listener's certificate, so Alice did not restore it.",
+          "cause": "While Alice was finishing this deployment, a later operation on the server changed the Remote Desktop listener. Alice cannot tell which certificate it names now."
+        },
+        "target_deleted": {
+          "action": "If the server still exists, check the certificate its Remote Desktop listener names."
+        },
+        "recovery_exhausted": {
+          "cause": "For about a day Alice could not find out how the deployment ended, usually because it could not reach the server. If the change reached the server, the previous certificate is still in its certificate stores."
+        },
+        "outcome_unknown": {
+          "cause": "Alice no longer has the records it needs to check or undo this deployment. If the change reached the server, the previous certificate is still in its certificate stores."
+        },
+        "rescan_needed": {
+          "title": "Alice must read this server's Remote Desktop listener again before deploying.",
+          "cause": "Alice does not know which certificate the Remote Desktop listener names now, which it needs to make sure nobody changed it in the meantime."
+        },
+        "pending_change_restored": {
+          "title": "Alice undid an unfinished earlier change of the Remote Desktop listener; this certificate was not deployed.",
+          "cause": "An earlier change of the Remote Desktop listener on the server did not finish, and Alice no longer followed it. Alice pointed the listener back to the certificate from before that change. The certificate of this deployment was not deployed.",
+          "action": "Choose Discover on the server's page so that Alice reads the listener again, then deploy the certificate again."
+        },
+        "server_operation_pending": {
+          "title": "An unfinished change of the Remote Desktop listener on the server stops new changes.",
+          "cause": "An earlier change of the Remote Desktop listener did not finish, and Alice no longer follows it, so the helper refuses new changes. Alice did not undo that change. This deployment's certificate was not deployed.",
+          "action": "The deployment's details name the unfinished change (operation id). Check the certificate the listener names (SSLCertificateSHA1Hash of Win32_TSGeneralSetting, TerminalName RDP-Tcp, in the root/cimv2/TerminalServices namespace), choose Discover on the server's page, then deploy again."
+        },
+        "rollback_forbidden": {
+          "cause": "The new certificate could not be put in service, and the certificate the Remote Desktop listener named before the change was revoked or its private key is compromised. Alice never puts such a certificate back, so the listener stays as the failed change left it.",
+          "action": "Find and fix the cause shown in the deployment history, then deploy a valid certificate again or choose Retry on the incident. Never point the listener back to the previous certificate by hand: its key is compromised. A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to reach it."
+        }
+      },
+      "nginx": {
+        "location_unsupported": {
+          "cause": "Alice cannot change the Remote Desktop listener now (Remote Desktop is off, it uses no TLS, or Alice cannot tell its certificate), or it no longer exists. Nothing was changed."
+        }
+      },
+      "windows": {
+        "backup_missing": {
+          "cause": "A rollback needs the previous certificate in its store with a private key Windows can use. It was removed, or its key is gone or no longer accessible. Nothing was changed: the Remote Desktop listener still serves the certificate Alice deployed.",
+          "action": "Check the Remote Desktop listener now. Deploy a valid certificate to it, or import the previous certificate with its key again (the deployment names its store and SHA-1 thumbprint). A certificate Remote Desktop cannot use blocks new Remote Desktop sessions, so use the server's console or SSH to reach it."
+        },
+        "binding_changed": {
+          "title": "The Remote Desktop listener no longer names the certificate Alice expected. Nothing was changed.",
+          "cause": "Since the last scan, someone or another program (for example a Group Policy that autoenrols the Remote Desktop certificate) pointed the listener at another certificate. Alice replaces only the certificate it saw, so the helper changed nothing.",
+          "action": "Scan the server again so Alice sees the listener as it is now, then deploy again."
+        },
+        "binding_not_found": {
+          "title": "The Windows server has no Remote Desktop listener RDP-Tcp any more. Nothing was changed.",
+          "cause": "The registry of the server holds no RDP-Tcp listener since the last scan.",
+          "action": "Scan the server again. If Remote Desktop should be available, set it up on the server, scan again and deploy to its listener."
+        },
+        "busy": {
+          "cause": "The Alice helper changes one place at a time on a server, and another helper process held its lock for longer than it waits. Nothing was changed."
+        },
+        "key_unusable": {
+          "cause": "The certificate is already in the store without a private key Windows can use. A deployment stopped by it left the Remote Desktop listener serving its previous certificate; for a rollback, the deployment's steps say what was done."
+        },
+        "location_unsupported": {
+          "title": "Alice does not deploy to this Remote Desktop listener now.",
+          "cause": "Remote Desktop is off, the listener uses no TLS, or Alice cannot tell which certificate it serves.",
+          "action": "Fix the reason the server page shows for the listener, scan the server again and deploy to it."
+        },
+        "not_elevated": {
+          "cause": "The helper ran without elevation, so it cannot read the Remote Desktop listener or the machine certificate stores. On Windows Server 2022 and 2025 a key logon of a local Administrators member is elevated, so this usually means that a hardened domain baseline or a UAC remote restriction filters the account."
+        },
+        "store_error": {
+          "cause": "The helper could not open the machine certificate store My or the intermediate store (CA), or Windows refused to add a certificate to it."
         }
       }
     }
