@@ -2386,7 +2386,8 @@ The plan's 28 rulings stand as written, except where an entry says "Amended" or 
     (nothing changed), so NETWORK SERVICE is never given access to an exportable key.
 11. **Rollback through `iis-restore` on an RDP journal.** **Amended (Task 2):** a committed journal over an absent
     previous value answers `restored` (not `SUPERSEDED`) when a third party deleted the value. The revoke does not run
-    on `restore_failed` `io`/`read_back`, on `BACKUP_MISSING` or on `restore_forbidden`.
+    on `restore_failed` `io`/`read_back`, on `BACKUP_MISSING` or on `restore_forbidden`. An interrupted journal whose
+    listener names neither certificate revokes the grant, then ends `restore_failed` `file_changed`.
 12. **Recovery after a reboot or a kill.** **Amended (Task 2):** the journal goes `writing` before the grant when
     `key_read_had` is false, so a kill after the grant is rolled back and revoked; a kill right after `prepared` answers
     `prepared` and the engine fences it, as in W2.
@@ -2715,8 +2716,25 @@ After the fix wave, ci.yml run 40667566328 (`98e265c5`) found two failures:
   (40648774421).
 
 Found during W6 and not fixed (outside its scope): `systemCanRead` in `cmd/alice-winhelper/stores_windows.go` reads a
-key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (W1 code); the deploy picker shows a raw
-`{{application}}` for the WinRM binding (seen by the web implementer, pre-existing).
+key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (W1 code; fixed later by the
+coordinator review, item 2); the deploy picker shows a raw `{{application}}` for the WinRM binding (seen by the web
+implementer, pre-existing).
+
+### Coordinator review (W6)
+
+The coordinator's independent review of `7432cfd5..b7cb4db3` was "ready to merge" with four minors, each fixed in its
+own commit:
+
+1. **The exportable-key check on an existing copy in `My` ran before the gate:** a copy added with an exportable key
+   after that check made `ImportPFX` answer `existed`, and the grant went on that key (security review I1's residual
+   race). Fixed in `a01fc50f`: after the import, a copy that is not Alice's is read again, and an exportable key or an
+   unreadable export policy ends `grant_key_read` `key_acl` before any ACE (`TestRDPDeployExportableCopyAfterCheck`).
+2. **`systemCanRead` followed the key descriptor's DACL offset and `GetAce` without bounds** (W1 code): fixed in
+   `21111254` (`checkRelativeDACL` before `IsValid`; a descriptor that fails it reads as unknown).
+3. **The host-preparation guide named only an older chain as the reason for the delete-and-set rebuild:** fixed in
+   `fd6ef31e` (a key access or chain change).
+4. **Ruling 11 did not say what an interrupted `file_changed` restore does with the grant:** this commit (it revokes
+   the grant, then ends `restore_failed` `file_changed`).
 
 ## Acceptance (design §13 W6)
 
