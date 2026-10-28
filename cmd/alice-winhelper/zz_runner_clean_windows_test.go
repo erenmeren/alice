@@ -25,27 +25,29 @@ var packageStart = time.Now()
 func TestRealRunnerIsClean(t *testing.T) {
 	requireReal(t)
 
-	// No http.sys record on the W2 and W3 ports nor on W5's (the helper's own listing, which the W1 twin
-	// checks against netsh's records; W5's ccs records included).
+	// No http.sys record on the W2 and W3 ports nor on W5's or W6's (the helper's own listing, which the
+	// W1 twin checks against netsh's records; W5's ccs records included).
 	list, err := sslBindings()
 	require.NoError(t, err)
 	require.NotEmpty(t, list, "positive control: the runner image's own records are listed")
 	for _, b := range list {
-		assert.False(t, b.Port >= 45330 && b.Port <= 45398 || b.Port >= 45480 && b.Port <= 45499, "an http.sys record is left: %+v", b)
+		assert.False(t, b.Port >= 45330 && b.Port <= 45398 || b.Port >= 45480 && b.Port <= 45499 || b.Port >= 45500 && b.Port <= 45519,
+			"an http.sys record is left: %+v", b)
 	}
 
-	// No alice-w2-, alice-w3- or alice-w5- certificate in My, WebHosting or CA (by subject or friendly
-	// name: the helper names its imports "Alice <first SAN> ...", and every W2, W3 and W5 fixture name
-	// starts so).
+	// No alice-w2-, alice-w3-, alice-w5- or alice-w6- certificate in My, WebHosting, CA or Remote Desktop
+	// (by subject or friendly name: the helper names its imports "Alice <first SAN> ...", and every W2,
+	// W3, W5 and W6 fixture name starts so).
 	out := powershell(t, `$n = 0
-foreach ($s in @('My', 'WebHosting', 'CA')) {
+foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
     $p = "Cert:\LocalMachine\$s"
     if (-not (Test-Path -LiteralPath $p)) { continue }
     foreach ($c in Get-ChildItem -LiteralPath $p) {
         $n++
         if ($c.Subject -like '*alice-w2-*' -or $c.FriendlyName -like '*alice-w2-*' -or
             $c.Subject -like '*alice-w3-*' -or $c.FriendlyName -like '*alice-w3-*' -or
-            $c.Subject -like '*alice-w5*' -or $c.FriendlyName -like '*alice-w5*') { "left $s $($c.Thumbprint) $($c.Subject)" }
+            $c.Subject -like '*alice-w5*' -or $c.FriendlyName -like '*alice-w5*' -or
+            $c.Subject -like '*alice-w6-*' -or $c.FriendlyName -like '*alice-w6-*') { "left $s $($c.Thumbprint) $($c.Subject)" }
     }
 }
 "count $n"`)
@@ -68,12 +70,13 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	// its file's creation time (the image's own keys are older than this test binary).
 	assert.Empty(t, machineKeysSince(t, packageStart), "machine keys created during this run are left")
 
-	// No alice-w2-, alice-w3- or alice-w5- site.
+	// No alice-w2-, alice-w3-, alice-w5- or alice-w6- site.
 	sites, err := exec.Command(appcmdPath(), "list", "site", "/text:name").Output()
 	require.NoError(t, err)
 	require.Contains(t, string(sites), "Default Web Site", "positive control: appcmd lists the image's own site")
 	for _, name := range strings.Fields(string(sites)) {
-		assert.False(t, strings.HasPrefix(name, "alice-w2-") || strings.HasPrefix(name, "alice-w3-") || strings.HasPrefix(name, "alice-w5-"),
+		assert.False(t, strings.HasPrefix(name, "alice-w2-") || strings.HasPrefix(name, "alice-w3-") || strings.HasPrefix(name, "alice-w5-") ||
+			strings.HasPrefix(name, "alice-w6-"),
 			"an IIS site is left: %s", name)
 	}
 
@@ -82,7 +85,7 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	left, err := filepath.Glob(`C:\ProgramData\Alice\helper-test-*`)
 	require.NoError(t, err)
 	assert.Empty(t, left, "test data directories are left")
-	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity", "alice-w5-ccs-site", "alice-w5-ccs-diag"} {
+	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity", "alice-w5-ccs-site", "alice-w5-ccs-diag", "alice-w6-fidelity"} {
 		_, err = os.Stat(filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", dir))
 		assert.ErrorIs(t, err, os.ErrNotExist, "the fixture sites' directory %s is left", dir)
 	}
@@ -101,4 +104,15 @@ foreach ($s in @('My', 'WebHosting', 'CA')) {
 	assert.Empty(t, left, "the CCS fixture account's profile is left")
 	users := powershell(t, `$u = Get-LocalUser -Name 'alice-w5-ccs' -ErrorAction SilentlyContinue; if ($u) { 'left' } else { 'none' }`)
 	assert.Equal(t, "none", strings.TrimSpace(string(users)), "the CCS fixture account alice-w5-ccs is left")
+
+	// W6: the RDP values as the first RDP fixture found them (fDenyTSConnections, UserAuthentication and
+	// SSLCertificateSHA1Hash, absent on the images, F12). The fixture stops a TermService it started.
+	now, err := readRDPValues()
+	require.NoError(t, err)
+	if rdpAsFoundSet {
+		assert.Equal(t, rdpAsFound.String(), now.String(), "the RDP values are restored as found")
+	} else {
+		t.Logf("no RDP fixture ran; the RDP values are %s", now)
+	}
+	assert.Nil(t, now.Hash, "SSLCertificateSHA1Hash is absent, as on the runner images (F12)")
 }

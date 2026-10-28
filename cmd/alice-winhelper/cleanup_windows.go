@@ -32,10 +32,8 @@ import (
 	"alice/internal/providers/windows/winhelper"
 )
 
-// Registry locations of the listeners' certificates (F12).
+// Registry locations of the WinRM listeners' certificates (F12; RDP-Tcp's are rdp_windows.go's).
 const (
-	keyRDPTcp        = `SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`
-	valueRDPHash     = "SSLCertificateSHA1Hash"
 	keyWinRMListener = `SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener`
 	winRMHTTPSSuffix = "+HTTPS"
 	valueWinRMThumb  = "certThumbprint"
@@ -135,45 +133,19 @@ func deleteCertificateKey(c *windows.CertContext) error {
 // ProtectedThumbprints reads the RDP listener's and every WinRM HTTPS listener's certificate (F12,
 // W3 Ruling 6) as lower-case SHA-1 hex. A key or value that does not exist names no certificate; one
 // that exists but cannot be read, or holds no SHA-1, is an error (the cleanup then removes nothing).
-func (host) ProtectedThumbprints(ctx context.Context) (winhelper.Protected, error) {
-	if err := ctx.Err(); err != nil {
-		return winhelper.Protected{}, err
-	}
+func (h host) ProtectedThumbprints(ctx context.Context) (winhelper.Protected, error) {
 	var p winhelper.Protected
-	rdp, err := rdpThumbprint()
+	rdp, err := h.RDPListener(ctx) // a missing RDP-Tcp key or value names none
 	if err != nil {
 		return winhelper.Protected{}, err
 	}
-	if rdp != "" {
-		p.RDP = []string{rdp}
+	if rdp.CertSHA1 != "" {
+		p.RDP = []string{rdp.CertSHA1}
 	}
 	if p.WinRM, err = winRMThumbprints(); err != nil {
 		return winhelper.Protected{}, err
 	}
 	return p, nil
-}
-
-// rdpThumbprint is RDP-Tcp's SSLCertificateSHA1Hash, "" when the key or the value is absent.
-func rdpThumbprint() (string, error) {
-	k, err := openKey(keyRDPTcp)
-	if errors.Is(err, registry.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = k.Close() }()
-	v, _, err := k.GetBinaryValue(valueRDPHash)
-	if errors.Is(err, registry.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	if len(v) != sha1.Size {
-		return "", errBadValue
-	}
-	return hex.EncodeToString(v), nil
 }
 
 // winRMThumbprints is the certThumbprint of every WinRM listener key ending in +HTTPS, folded to

@@ -284,6 +284,11 @@ jobs:
             'TestRealCCSRefusesReparsePoints',
             'TestFidelityCCS',
             'TestRealCCSSharedFolderRemoved',
+            'TestRealRDPListenerOnRunner',
+            'TestRealRDPDeployIsPickedUp',
+            'TestRealRDPKeyReadForNetworkService',
+            'TestRealRDPNegotiation',
+            'TestRealRDPSharedWithBinding',
             'TestRealRunnerIsClean'
           )
           $text = Get-Content -LiteralPath $log -Raw
