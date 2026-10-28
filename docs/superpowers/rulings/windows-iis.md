@@ -2695,9 +2695,32 @@ Deferred-minor triage: of the 23 items, two were fixed with M1 (the RDP e-mails'
 description), three carries were found done (the `rdp_key_acl_left` param, the web labels, the documents), and the
 rest stay deferred as known debt (listed under [Deferred to W7+](#deferred-to-w7)).
 
+The fix wave (`04cea854`, `5f903ecb`, `434adcd7`, `a13342b3`, `42ea6a51`, `98e265c5`) had one scoped re-review by a
+reviewer that wrote none of it: all five items addressed, no new important finding. Two residual minors are parked
+(no second fix wave): the admin guide's refusal sentences sit inside the deployment steps (`docs/admin-guide.md`
+around 1536-1539), and the real exportable-key test asserts only the code `KEY_UNUSABLE`, which the older "no usable
+key" refusal also answers (the winhelper fake test proves the new check's path).
+
+After the fix wave, ci.yml run 40667566328 (`98e265c5`) found two failures:
+- `go`: `TestDiscoverWithoutRDPIsW5` compared a CCS file's `modified_at` across two discoveries that straddled a
+  second; fixed in `f229223e` (the field is dropped from both sides before the comparison).
+- `secrets`: trivy reports `github.com/go-jose/go-jose/v4` v4.1.5, CVE-2026-116587 (HIGH, fixed in 4.1.6). The
+  dependency is not W6's and the branch does not bump it: a repository-wide dependency change belongs on `main`
+  (coordinator item). The same job failed for the same reason on run 3's ci.yml (40648774421).
+
+Found during W6 and not fixed (outside its scope): `systemCanRead` in `cmd/alice-winhelper/stores_windows.go` reads a
+key's descriptor offsets without the bounds `434adcd7` added for the RDP grant (W1 code); the deploy picker shows a raw
+`{{application}}` for the WinRM binding (seen by the web implementer, pre-existing).
+
 ## Acceptance (design §13 W6)
 
-To be filled by Task 8.
+- Location kind `win_rdp` for the RDP-Tcp listener (Tasks 5-6): **met**. Migration `00037` (Down `Z1035`), `providers.LocationWinRDP`, `convertRDP`, the locator `{"type":"rdp","listener":"RDP-Tcp"}` with the port in `details.port` (final review I1, `04cea854`); `TestConvertRDP`, `TestRDPPortChangeUpdatesTheLocation`, `TestDiscoverWithoutRDPIsW5`.
+- Import as in §6.3 (Task 2, W2's code): **met**. `rdp-deploy` reuses `import_chain` and `import_certificate` (store `My`, Ruling 6); `TestRDPDeployCommits`; an existing copy whose key is exportable is refused before any change (security review I1, `5f903ecb`).
+- Read on the key granted to NETWORK SERVICE (Tasks 2, 4; F21): **met**. One ACE `(A;;0x80120089;;;NS)` (the KSP's stored form of `GENERIC_READ`), inserted before the first inherited ACE, read back, revoked by every restore of its operation (exact mask, flags 0), never silent when left (`rdp_key_acl_left`); F4's DACL comes back byte for byte on both images (runs 2-4).
+- The listener's hash set, `SSLCertificateSHA1Hash` (Tasks 2, 4; F20): **met**. Raw registry write, served in at most 17 ms (route (a), `RDPPickupWait` 0); a value the listener already holds is deleted then set so Schannel rebuilds the chain (Ruling 14 amended).
+- Verified by a TLS handshake on 3389 after the RDP security-layer negotiation (Tasks 1, 6; F22, F23): **met**. `helperproto.RDPNegotiate`, `tlsverify.TLSProber{RDP: true}`, `tls-probe --rdp` as the fallback; no CredSSP, no event 4625 (F23).
+- The key ACL's own review (Ruling 27): **met**. [Security review (W6)](#security-review-w6): 0 critical, 1 important (fixed), 2 minor (fixed); the final fix wave's re-review passed all five items.
+- Real Windows: runner run 4 (`98e265c5`, the code head of the fix wave) green on windows-2022 and windows-2025 with `windows-required` green.
 
 ## Owner items (W6)
 
