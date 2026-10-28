@@ -1,6 +1,6 @@
 import { Button, Group, PasswordInput, Stack, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setCCSPassword } from '../api/endpoints';
 import { TARGETS_KEY, targetKey } from '../api/queryKeys';
@@ -36,27 +36,35 @@ export function CCSPasswordPanel({ target, canSet }: { target: Target; canSet: b
   const current = answer && answer.version > target.version ? answer : target;
   const setAt = current.ccs_password_set_at ?? null;
 
+  // inFlight: two submits before React renders busy (Enter and a click in one turn) send one request (W5-12b, R70).
+  const inFlight = useRef(false);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy) return;
-    const password = value;
-    setValue('');
-    setSaved(false);
-    setError(null);
-    const valid = CCS_PASSWORD.test(password);
-    setInvalid(!valid);
-    if (!valid) return;
-    setBusy(true);
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      const res = await run(() => setCCSPassword(current.id, current.version, password));
-      setAnswer(res);
-      client.setQueryData(targetKey(current.id), res);
-      setSaved(true);
-    } catch (err) {
-      setError(err);
+      const password = value;
+      setValue('');
+      setSaved(false);
+      setError(null);
+      const valid = CCS_PASSWORD.test(password);
+      setInvalid(!valid);
+      if (!valid) return;
+      setBusy(true);
+      try {
+        const res = await run(() => setCCSPassword(current.id, current.version, password));
+        setAnswer(res);
+        client.setQueryData(targetKey(current.id), res);
+        setSaved(true);
+      } catch (err) {
+        setError(err);
+      }
+      setBusy(false);
+      void client.invalidateQueries({ queryKey: TARGETS_KEY });
+    } finally {
+      inFlight.current = false;
     }
-    setBusy(false);
-    void client.invalidateQueries({ queryKey: TARGETS_KEY });
   };
 
   return (

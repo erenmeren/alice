@@ -1107,6 +1107,7 @@
     "win_shared_config": "IIS on this server uses a shared configuration. Its sites come from the shared location.",
     "win_autocertrebind": "Automatic rebinding of renewed certificates is turned on in http.sys. It can replace a certificate Alice deploys.",
     "win_ccs_enabled": "IIS on this server uses the Centralized Certificate Store. Alice lists its files and deploys to them once an Administrator sets the CCS password on this page.",
+    "win_ccs_enabled_set": "IIS on this server uses the Centralized Certificate Store. Alice holds its CCS password, lists its files and deploys to them.",
     "win_expired_in_store": "The certificate store of this server still holds expired certificates: {{count}}.",
     "win_ccs_remote": "The Centralized Certificate Store of this server is in a shared folder of another computer. Alice manages a store only in a local folder of the server, so its files are not listed.",
     "win_ccs_path_unsupported": "The folder of this server's Centralized Certificate Store is not a plain local folder (for example a link or a device path), so Alice does not list its files.",

@@ -1,14 +1,21 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import commonEn from '@locales/common/en.json';
 import type { Target } from '../api/types';
+import { setCCSPassword } from '../api/endpoints';
 import { formatDateTime } from '../datetime';
 import { errorResponse, sessionFor, sessionHandlers, windowsCCSTargetFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { CCSPasswordPanel } from './CCSPasswordPanel';
+
+// The endpoint is counted, not replaced: two submits in one tick must send one request (W5-12b, R70).
+vi.mock('../api/endpoints', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../api/endpoints')>();
+  return { ...mod, setCCSPassword: vi.fn(mod.setCCSPassword) };
+});
 
 const SET_AT = '2026-10-27T09:30:00Z';
 const PUT_URL = `/api/v1/targets/${windowsCCSTargetFixture.id}/ccs-password`;
@@ -102,6 +109,25 @@ describe('CCSPasswordPanel', () => {
     const carrying = seen.filter((r) => r.url.includes(pw) || r.body.includes(pw));
     expect(carrying.map((r) => new URL(r.url).pathname)).toEqual([PUT_URL]);
     expect(document.body.innerHTML).not.toContain(pw);
+  });
+
+  it('sends one request when the form is submitted twice in the same tick (W5-12b, R70)', async () => {
+    const { puts } = onPut();
+    vi.mocked(setCCSPassword).mockClear();
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel target={windowsCCSTargetFixture} canSet />);
+    await user.type(field(), secret(20));
+    const form = field().closest('form');
+    if (!form) throw new Error('no form');
+    // One act: the second submit runs before React renders the first's busy state (Enter and a click in one turn).
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(setCCSPassword).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(formatDateTime(SET_AT, 'en-US'))).toBeInTheDocument();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(field()).toHaveValue('');
   });
 
   it('shows the server\'s refusal and an empty field', async () => {

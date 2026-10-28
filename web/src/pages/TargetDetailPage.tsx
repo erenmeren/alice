@@ -489,7 +489,7 @@ function FactWarnings({ target }: { target: Target }) {
     <Stack gap="xs">
       {warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP}>
-          {t(capabilityText(target, warningKey(w)), { ...w.params, software })}
+          {t(w.code === 'win_ccs_enabled' && target.ccs_password_set_at ? 'warnings.win_ccs_enabled_set' : capabilityText(target, warningKey(w)), { ...w.params, software })}
           {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? (
             <Code ml="xs">{w.code}</Code>
           ) : null}

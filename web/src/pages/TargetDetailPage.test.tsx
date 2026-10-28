@@ -977,6 +977,17 @@ describe('TargetDetailPage CCS password panel', () => {
     expect(screen.queryByLabelText(/^CCS password/)).not.toBeInTheDocument();
   });
 
+  it('asks for the CCS password in the warning while none is set (W5-12a, R70)', async () => {
+    await open('admin', windowsCCSTargetFixture);
+    expect(screen.getByText(/once an Administrator sets the CCS password on this page/)).toBeInTheDocument();
+  });
+
+  it('says Alice holds the CCS password once it is set (W5-12a, R70)', async () => {
+    await open('admin', { ...windowsCCSTargetFixture, ccs_password_set_at: '2026-10-27T09:30:00Z' });
+    expect(screen.getByText('IIS on this server uses the Centralized Certificate Store. Alice holds its CCS password, lists its files and deploys to them.')).toBeInTheDocument();
+    expect(screen.queryByText(/once an Administrator sets/)).not.toBeInTheDocument();
+  });
+
   it('is absent on a Windows server without CCS and on another server type', async () => {
     await open('admin', windowsTargetFixture);
     expect(heading()).not.toBeInTheDocument();
