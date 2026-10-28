@@ -108,7 +108,9 @@ type DriftProbe struct {
 // (the deployment engine's verification: every endpoint of the location, from Alice where Alice's probe reaches the
 // listen, else from the server itself) with no chain length, its SANs and key type, the location's verification
 // settings, and the trust policy of the desired chain (R51: the system roots, with the issuing ACME authority's CA
-// bundle).
+// bundle). A win_rdp listener kept through a scan by a helper below 1.2.0 (the server warning warnRDPHelperOutdated,
+// fixes batch 3 Ruling 5) is left out: its endpoint is 127.0.0.1, which only a 1.2.0 helper probes, so an older one
+// would mark it unreachable instead of keeping the last 1.2.0 scan's state.
 func (s *Service) DriftProbes(ctx context.Context, target uuid.UUID) ([]DriftProbe, error) {
 	rows, err := s.pool.Query(ctx, `SELECT l.id, l.cert_path, l.key_path, l.servers, l.verify_port, coalesce(l.verify_sni, ''), l.skip_verify,
     dc.fingerprint_sha256, dc.sans, dc.key_algorithm, dc.pem_chain,
@@ -120,7 +122,9 @@ FROM certificate_locations l
 JOIN certificates dc ON dc.id = src.cert_id
 LEFT JOIN location_observations o ON o.location_id = l.id
 WHERE l.target_id = $1 AND l.missing_since IS NULL
-ORDER BY o.tls_attempted_at NULLS FIRST, l.id LIMIT $2`, target, driftProbesPerTarget)
+  AND NOT (l.kind = 'win_rdp' AND EXISTS (SELECT 1 FROM targets t WHERE t.id = l.target_id
+                                         AND t.facts->'warnings' @> jsonb_build_array(jsonb_build_object('Code', $3::text))))
+ORDER BY o.tls_attempted_at NULLS FIRST, l.id LIMIT $2`, target, driftProbesPerTarget, warnRDPHelperOutdated)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the locations to probe: %w", err)
 	}

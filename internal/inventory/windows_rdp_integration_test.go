@@ -268,6 +268,43 @@ func TestRDPHelperDowngradeKeepsTheListener(t *testing.T) {
 	assert.True(t, missing(f.rdp), "without the warning, a listener not listed is missing")
 }
 
+// Final review I2 (fixes batch 3, M3's side effect): while a server's last scan carried win_rdp_helper_outdated, the
+// drift observation leaves its kept listener out (its endpoint is 127.0.0.1, which only a 1.2.0 helper probes; an older
+// one would answer "not reached" and mark the listener unreachable, against Ruling 5's "last 1.2.0 scan's state") and
+// still probes the server's binding. Without the warning the listener is probed (control).
+func TestDriftProbeSkipsTheListenerOfAnOutdatedHelper(t *testing.T) {
+	d := newWinDriftFixture(t, false)
+	f := &rdpFixture{winDeployFixture: d.winDeployFixture}
+	h := f.h
+	f.server = winTarget(t, h, f.admin, "iis-02").ID
+	b := winBinding(443, "Default Web Site", &f.old)
+	b.Location.Details["cert_sha1"] = thumbprint(f.old)
+	f.scan(3389, b)
+	locs := byPath(t, h, f.server, false)
+	f.rdp = locs["rdp/RDP-Tcp"].ID
+	binding := locs["http.sys/ipport/0.0.0.0:443"].ID
+	d.w.bind(d.acme, false, f.rdp, binding)
+	probed := func() []uuid.UUID {
+		t.Helper()
+		probes, err := h.svc.DriftProbes(h.ctx, f.server)
+		require.NoError(t, err)
+		ids := make([]uuid.UUID, 0, len(probes))
+		for _, p := range probes {
+			ids = append(ids, p.LocationID)
+		}
+		return ids
+	}
+	assert.ElementsMatch(t, []uuid.UUID{f.rdp, binding}, probed(), "control: a 1.2.0 helper's listener is probed")
+
+	_, err := h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK, Certificates: []providers.DiscoveredCertificate{b},
+		Warnings: []providers.Warning{{Code: winproto.WarnRDPHelperOutdated, Params: map[string]string{}}}})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{binding}, probed(), "the kept listener is left out; the binding is still probed")
+
+	f.scan(3389, b)
+	assert.ElementsMatch(t, []uuid.UUID{f.rdp, binding}, probed(), "a 1.2.0 helper's scan resumes the observation")
+}
+
 // Ruling 7 (Q7): an incident's place on the RDP listener queues the incident cleanup of its server once it settles.
 func TestRDPIncidentQueuesCleanup(t *testing.T) {
 	f := newRDPFixture(t)
