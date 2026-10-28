@@ -793,12 +793,16 @@ const (
 	windowsNoteRDPAutoenroll = "rdp_autoenroll"
 )
 
+// reasonVariantRDP is the param reason_variant of every e-mail of the RDP listener (W6 final review M2): notify.Sender
+// renders a reason (error_reason) from errors.<code>.title_rdp where that key exists, else from the plain title.
+const reasonVariantRDP = "rdp"
+
 // windowsLocationMail is the template and params of a drift e-mail about o as queued (mirror of windowsDeploymentMail).
 // Anything but a Windows binding keeps both as given, byte for byte. A Windows binding's is the Windows text: of its
 // cause for a detected drift, the detected text of its cause for a prepared repair that cannot be made, else the
 // Windows text of the template; with windows_note=autocertrebind when its server's AutoCertRebind task is on. The RDP
 // listener's is a binding's with windows_note=rdp, or rdp_autoenroll when a policy autoenrols its certificate (W6
-// Ruling 20); AutoCertRebind re-points bindings only.
+// Ruling 20), and reason_variant=rdp (final review M2); AutoCertRebind re-points bindings only.
 func windowsLocationMail(o LocationObservation, template string, params map[string]string) (string, map[string]string) {
 	if !windowsBinding(o.kind) || !slices.Contains(DriftTemplates(), template) {
 		return template, params
@@ -810,8 +814,11 @@ func windowsLocationMail(o LocationObservation, template string, params map[stri
 	} else {
 		template += windowsTemplateSuffix
 	}
-	out := make(map[string]string, len(params)+1)
+	out := make(map[string]string, len(params)+2)
 	maps.Copy(out, params)
+	if o.kind == providers.LocationWinRDP {
+		out["reason_variant"] = reasonVariantRDP
+	}
 	switch {
 	case o.kind == providers.LocationWinRDP && o.rdpAutoenroll:
 		out["windows_note"] = windowsNoteRDPAutoenroll

@@ -310,7 +310,8 @@ var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentR
 // (WindowsRDPTemplate), without backup_dir, with previous_certificate on all three; and rdp_key_acl_left=true when a
 // step of the deployment says a restore left NETWORK SERVICE's read access to the key in place (Ruling 10), and on the
 // RDP rollback_failed and outcome_unknown texts rdp_key_granted=true when a step says the operation gave that access
-// (security review M2: no restore took it back).
+// (security review M2: no restore took it back). Every mail of the listener carries reason_variant=rdp (final review
+// M2): the sender renders a reason from the listener title of its code (errors.<code>.title_rdp) where one exists.
 func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string,
 	params map[string]string) (string, map[string]string, error) {
 	var (
@@ -361,6 +362,7 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 	if granted && (template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown) {
 		out["rdp_key_granted"] = "true"
 	}
+	out["reason_variant"] = reasonVariantRDP
 	if rdpOwn {
 		return WindowsRDPTemplate(template), out, nil
 	}

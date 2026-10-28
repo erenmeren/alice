@@ -143,8 +143,8 @@ func TestWindowsLostIncludesRDP(t *testing.T) {
 func TestRDPDeploymentMail(t *testing.T) {
 	f := newRDPFixture(t)
 	h := f.h
-	base := func(id uuid.UUID) map[string]string {
-		return map[string]string{"target_name": "iis-02", "cert_path": "rdp/RDP-Tcp", "deployment_id": id.String()}
+	base := func(id uuid.UUID) map[string]string { // final review M2: every mail of the listener asks for the listener titles
+		return map[string]string{"target_name": "iis-02", "cert_path": "rdp/RDP-Tcp", "deployment_id": id.String(), "reason_variant": "rdp"}
 	}
 	prev := `Remote Desktop \ ` + thumbprint(f.old) // final review M1: the self-signed certificate's store is named
 	for _, tc := range []struct {
@@ -222,6 +222,20 @@ func TestRDPDeploymentMail(t *testing.T) {
 		}
 		assert.Equal(t, []queuedMail{{inventory.WindowsRDPTemplate(tc.template), want}}, f.deploymentMails(r.ID), tc.template)
 	}
+
+	// Final review M2 (fixes batch 3): a failure whose code has a listener title (errors.windows.binding_changed.title_rdp)
+	// is queued with the variant like every other mail of the listener; a binding's mail is unchanged, byte for byte.
+	r3 := f.request(f.rdp)
+	require.NoError(t, h.svc.FinishDeployment(h.ctx, r3.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
+		ErrorCode: "windows.binding_changed"}))
+	want = base(r3.ID)
+	want["windows_note"] = "rdp"
+	assert.Equal(t, []queuedMail{{inventory.WindowsTemplate(inventory.TemplateDeploymentFailed), want}}, f.deploymentMails(r3.ID))
+	b := f.request(f.bound)
+	require.NoError(t, h.svc.FinishDeployment(h.ctx, b.ID, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed,
+		ErrorCode: "windows.binding_changed"}))
+	assert.Equal(t, []queuedMail{{inventory.WindowsTemplate(inventory.TemplateDeploymentFailed), map[string]string{"target_name": "iis-01",
+		"cert_path": "http.sys/ipport/0.0.0.0:443", "deployment_id": b.ID.String()}}}, f.deploymentMails(b.ID), "a binding's params")
 }
 
 // Ruling 7 (Q7): an incident's place on the RDP listener queues the incident cleanup of its server once it settles.

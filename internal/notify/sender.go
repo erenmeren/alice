@@ -218,8 +218,9 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	}
 	if code, ok := params["error_reason"]; ok {
 		delete(clean, "error_reason")
-		clean["reason"] = s.reasonTitle(locale, code)
+		clean["reason"] = s.reasonTitle(locale, code, params["reason_variant"])
 	}
+	delete(clean, "reason_variant") // the variant of the reason's title (W6 final review M2); never rendered itself
 	subject := oneLine(s.Catalog.T(locale, "email."+template+".subject", clean))
 	body := strings.TrimSpace(s.Catalog.T(locale, "email."+template+".body", clean))
 	// The license note sits before the footer (L-28); the param that asks for it is not rendered.
@@ -252,12 +253,21 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 // reasonCode is the form of a closed error code (internal/api errors.go reasons).
 var reasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 
-// reasonTitle is the plain title of an error code in locale (see Render).
-func (s *Sender) reasonTitle(locale, code string) string {
+// reasonVariant is the form of a title variant (reason_variant: "rdp", the Remote Desktop listener's titles).
+var reasonVariant = regexp.MustCompile(`^[a-z]+$`)
+
+// reasonTitle is the plain title of an error code in locale (see Render): errors.<code>.title_<variant> when the
+// variant is a word and that key exists (W6 final review M2: the listener's titles), else errors.<code>.title.
+func (s *Sender) reasonTitle(locale, code, variant string) string {
 	if reasonCode.MatchString(code) {
-		key := "errors." + code + ".title"
-		if t := s.Catalog.T(locale, key, nil); t != key {
-			return oneLine(t)
+		keys := []string{"errors." + code + ".title"}
+		if reasonVariant.MatchString(variant) {
+			keys = append([]string{keys[0] + "_" + variant}, keys...)
+		}
+		for _, key := range keys {
+			if t := s.Catalog.T(locale, key, nil); t != key {
+				return oneLine(t)
+			}
 		}
 	}
 	return oneLine(s.Catalog.T(locale, "errors.internal.unexpected.title", nil))

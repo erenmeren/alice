@@ -1108,11 +1108,13 @@
       },
       "binding_changed": {
         "title": "The Windows binding no longer serves the certificate Alice expected. Nothing was changed.",
+        "title_rdp": "The Remote Desktop listener no longer names the certificate Alice expected. Nothing was changed.",
         "cause": "Since the last scan, someone or another program pointed this http.sys binding at another certificate (in IIS Manager, with netsh or a script). Alice replaces only the certificate it saw, so the helper changed nothing.",
         "action": "Scan the server again so Alice sees the binding as it is now, then deploy again."
       },
       "binding_not_found": {
         "title": "The Windows server has no such binding any more. Nothing was changed.",
+        "title_rdp": "The Windows server has no Remote Desktop listener RDP-Tcp any more. Nothing was changed.",
         "cause": "http.sys holds no SSL binding for this address and port, or for this host name and port: the site's HTTPS binding was removed or changed since the last scan.",
         "action": "Scan the server again. If the binding should exist, add it in IIS Manager, scan again and deploy to it."
       },
@@ -1143,6 +1145,7 @@
       },
       "location_unsupported": {
         "title": "Alice does not deploy to this Windows binding.",
+        "title_rdp": "Alice does not deploy to this Remote Desktop listener now.",
         "cause": "Alice deploys to an http.sys binding by its IP address and port or by its host name and port, with an ASCII host name (an international domain name in its xn-- form). A binding of the central certificate store, or with a host name or address in another form, is listed but not changed. Nothing was sent.",
         "action": "Use an IIS binding with an ASCII host name (or an IP address), scan the server again and deploy to that binding."
       },
@@ -1153,6 +1156,7 @@
       },
       "drift_not_repairable": {
         "title": "Alice cannot repair this binding: its certificate or key is gone from the server.",
+        "title_rdp": "Alice cannot repair the Remote Desktop listener: its certificate or key is gone from the server.",
         "cause": "The binding names a certificate that its store no longer holds, or a certificate whose private key http.sys cannot use. Alice does not deploy to a binding in this state and never removes a certificate that a binding uses.",
         "action": "Find out what removed the certificate or changed the key, import the certificate again (or bind another one) on the server, then scan the server again in Alice."
       },

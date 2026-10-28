@@ -265,3 +265,39 @@ func TestWindowsRDPTemplatesAndNotesRenderInBothLanguages(t *testing.T) {
 		}
 	}
 }
+
+// W6 final review M2 (fixes batch 3, Ruling 6): an e-mail of the Remote Desktop listener carries reason_variant=rdp. The
+// reason of a code with a listener title (errors.<code>.title_rdp) is then that title, which names the listener and never
+// a binding, in English and Turkish; the param itself is never rendered. Without the variant, or for a code without a
+// listener title, the plain title as before; a variant that is not a word forms no key.
+func TestRenderReasonVariant(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	base := map[string]string{"name": "rdp.example", "names": "rdp.example", "count": "1", "expires_at": "2026-12-01 09:00 UTC"}
+	render := func(lang string, extra map[string]string) string {
+		p := maps.Clone(base)
+		maps.Copy(p, extra)
+		return s.Render("ada@example.com", inventory.TemplateACMERenewalFailed, lang, p).Body
+	}
+	for _, lang := range []string{"en", "tr"} {
+		for _, code := range []string{"binding_changed", "binding_not_found", "location_unsupported", "drift_not_repairable"} {
+			key := "errors.windows." + code + ".title_rdp"
+			text := cat.T(lang, key, nil)
+			require.NotEqual(t, key, text, "%s %s", lang, code)
+			assert.NotRegexp(t, `(?i)binding|bağlama`, text, "%s %s", lang, code)
+			assert.Contains(t, text, map[string]string{"en": "Remote Desktop", "tr": "Uzak Masaüstü"}[lang], "%s %s", lang, code)
+		}
+		binding := cat.T(lang, "errors.windows.binding_changed.title", nil)
+		listener := cat.T(lang, "errors.windows.binding_changed.title_rdp", nil)
+		body := render(lang, map[string]string{"error_reason": "windows.binding_changed", "reason_variant": "rdp"})
+		assert.Contains(t, body, listener, lang)
+		assert.NotContains(t, body, binding, lang)
+		assert.NotContains(t, body, "reason_variant", lang)
+		assert.Contains(t, render(lang, map[string]string{"error_reason": "windows.binding_changed"}), binding, "%s: no variant", lang)
+		assert.Contains(t, render(lang, map[string]string{"error_reason": "windows.binding_changed", "reason_variant": "rdp.x"}), binding,
+			"%s: a variant that is not a word", lang)
+		assert.Contains(t, render(lang, map[string]string{"error_reason": "windows.busy", "reason_variant": "rdp"}),
+			cat.T(lang, "errors.windows.busy.title", nil), "%s: a code without a listener title", lang)
+	}
+}
