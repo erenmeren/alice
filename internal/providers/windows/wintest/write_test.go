@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -1850,9 +1849,12 @@ func TestModelRDPSecurityLayer(t *testing.T) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	_, _ = c.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x05, 0, 0, 0, 0, 0})
-	// Closed, not timed out (W6-7): EOF, or a reset when the listener closed with bytes still unread.
-	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
-		t.Fatalf("a TLS ClientHello without the negotiation is closed unanswered; got %v", err)
+	// Closed, not timed out (W6-7): no byte and any close (EOF, or a reset when the listener closed with
+	// bytes still unread; on Windows the reset is WSAECONNRESET, not syscall.ECONNRESET), never a timeout.
+	n, err := c.Read(make([]byte, 1))
+	var ne net.Error
+	if n != 0 || err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatalf("a TLS ClientHello without the negotiation is closed unanswered; got %d byte(s), %v", n, err)
 	}
 }
 

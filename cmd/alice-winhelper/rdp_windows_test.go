@@ -258,6 +258,16 @@ func (f *rdpFixture) call(stdin []byte, args ...string) map[string]any {
 	return got
 }
 
+// callWithMessage is call with the answer's message kept (execOn drops it, for the real/model comparisons).
+func (f *rdpFixture) callWithMessage(stdin []byte, args ...string) map[string]any {
+	f.t.Helper()
+	var out bytes.Buffer
+	winhelper.Execute(f.ctx, f.h, args, bytes.NewReader(stdin), &out)
+	var got map[string]any
+	require.NoError(f.t, json.Unmarshal(bytes.TrimSpace(out.Bytes()), &got), "%v: %s", args, out.String())
+	return got
+}
+
 func (f *rdpFixture) dump() map[string]any {
 	f.t.Helper()
 	d := f.call(nil, winproto.SubRDPDump)
@@ -788,7 +798,7 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	expBefore, _ := keySDDL(t, "My", expThumb)
 	valueBefore, err := f.h.RDPListener(f.ctx)
 	require.NoError(t, err)
-	refused := f.call(rdpDeployInput(t, exp.FullchainPEM, exp.KeyPEM, selfSHA256), winproto.SubRDPDeploy, winproto.ArgOp, op2)
+	refused := f.callWithMessage(rdpDeployInput(t, exp.FullchainPEM, exp.KeyPEM, selfSHA256), winproto.SubRDPDeploy, winproto.ArgOp, op2)
 	assert.Equal(t, false, refused["ok"], "%v", refused)
 	assert.Equal(t, winproto.CodeKeyUnusable, refused["code"], "%v", refused)
 	// W6-P2 (R70): the refusal is the export-policy one, not the older "without a usable key".
