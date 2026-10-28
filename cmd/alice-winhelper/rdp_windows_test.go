@@ -807,6 +807,79 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	}
 }
 
+// keyACEBytes is a key's DACL as its ACEs' bytes, in order (what the helper would rewrite).
+func keyACEBytes(t *testing.T, store, thumb string) [][]byte {
+	t.Helper()
+	var out [][]byte
+	require.NoError(t, withStoreKey(store, thumb, func(key windows.Handle) error {
+		aces, _, err := keyACEs(key)
+		out = aces
+		return err
+	}))
+	return out
+}
+
+// TestRealRDPKeyReadRefusesADeny (WIN-65, residual risk 7's deny half, R70): an access-denied ACE with
+// the read bits for NETWORK SERVICE on the key of a certificate the helper imported (F4's DACL) makes
+// RDPKeyRead errKeyReadDenied as the KSP stores it; a deny of another trustee, or one without the read
+// bits, does not. An rdp-deploy of that certificate ends at grant_key_read with class key_acl: the DACL
+// bytes and SSLCertificateSHA1Hash are as before, no ACE was added. The Everyone row is crafted
+// (TestNetworkServiceCanReadDeny): a deny for Everyone also denies the test's own account the key.
+func TestRealRDPKeyReadRefusesADeny(t *testing.T) {
+	f := newRDPFixture(t)
+	selfSHA256 := asString(dumpCert(t, f.dump())["sha256"])
+	ca := fixtureCA("alice-w6-deny")
+	interThumb := thumbprint(ca.Intermediate)
+	t.Cleanup(func() { removeCertificate(t, "CA", interThumb, false) })
+	leaf := issue(ca, "alice-w6-deny.test")
+	thumb := f.importInto("My", leaf)
+	for i, c := range []struct {
+		name   string
+		thumb  string
+		mask   uint32
+		who    windows.WELL_KNOWN_SID_TYPE
+		alias  string // the trustee in SDDL
+		denied bool
+	}{
+		{"NETWORK SERVICE denied GENERIC_READ", thumb, windows.GENERIC_READ, windows.WinNetworkServiceSid, "NS", true},
+		{"Guests denied GENERIC_READ", "", windows.GENERIC_READ, windows.WinBuiltinGuestsSid, "BG", false},
+		{"NETWORK SERVICE denied WRITE_DAC only", "", windows.WRITE_DAC, windows.WinNetworkServiceSid, "NS", false},
+	} {
+		th := c.thumb
+		if th == "" {
+			th = f.importInto("My", issue(ca, fmt.Sprintf("alice-w6-deny-%d.test", i+1)))
+		}
+		addACE(t, "My", th, windows.DENY_ACCESS, c.mask, c.who)
+		dacl, _ := keySDDL(t, "My", th)
+		t.Logf("WIN-65: %s: the key's DACL with the deny ACE as the KSP stores it: %s", c.name, dacl)
+		require.Contains(t, dacl, "(D;;", c.name)
+		require.Contains(t, dacl, ";;;"+c.alias+")", c.name)
+		readable, err := f.h.RDPKeyRead(f.ctx, "MY", th)
+		if c.denied {
+			assert.ErrorIs(t, err, errKeyReadDenied, c.name)
+			continue
+		}
+		require.NoError(t, err, c.name)
+		assert.False(t, readable, c.name)
+	}
+
+	// rdp-deploy of the denied certificate through the helper's entry: refused at grant_key_read before
+	// any ACE or listener change.
+	acesBefore := keyACEBytes(t, "My", thumb)
+	hashBefore, err := rawBinary(keyRDPTcp, valueRDPHash)
+	require.NoError(t, err)
+	got := f.call(rdpDeployInput(t, leaf.FullchainPEM, leaf.KeyPEM, selfSHA256), winproto.SubRDPDeploy, winproto.ArgOp, op1)
+	t.Logf("WIN-65: rdp-deploy of the denied certificate: %v", got)
+	assertPhase(t, got, winproto.PhaseRestored)
+	assert.Equal(t, winproto.StepGrantKeyRead, got["failed_step"], "%v", got)
+	assert.Equal(t, winproto.ErrKeyACL, got["error"], "%v", got)
+	assert.Equal(t, false, got["alice_imported"], "%v", got)
+	assert.Equal(t, acesBefore, keyACEBytes(t, "My", thumb), "no ACE was added to the denied key")
+	hashAfter, err := rawBinary(keyRDPTcp, valueRDPHash)
+	require.NoError(t, err)
+	assert.Equal(t, hashBefore, hashAfter, "SSLCertificateSHA1Hash is as found")
+}
+
 // ---- F22, F23 ------------------------------------------------------------------------------------------
 
 // TestRealRDPNegotiation measures F22 (the confirm bytes with NLA on and off; SecurityLayer is never

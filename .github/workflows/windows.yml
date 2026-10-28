@@ -287,6 +287,7 @@ jobs:
             'TestRealRDPListenerOnRunner',
             'TestRealRDPDeployIsPickedUp',
             'TestRealRDPKeyReadForNetworkService',
+            'TestRealRDPKeyReadRefusesADeny',
             'TestRealRDPNegotiation',
             'TestRealRDPSharedWithBinding',
             'TestFidelityRDP',

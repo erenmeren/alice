@@ -58,6 +58,12 @@ const (
 // this mask.
 const rdpGrantMask uint32 = windows.GENERIC_READ | 0x00120089
 
+// rdpDenyReadMask are the bits of an access-denied ACE that take away the read the grant would give:
+// GENERIC_READ, GENERIC_ALL and the key-read bits of rdpGrantMask (FILE_READ_DATA, FILE_READ_EA,
+// FILE_READ_ATTRIBUTES), without READ_CONTROL and SYNCHRONIZE, which the KSP also stores into a deny of
+// GENERIC_WRITE (F21).
+const rdpDenyReadMask uint32 = windows.GENERIC_READ | windows.GENERIC_ALL | 0x89
+
 // minRelativeSD is the size of SECURITY_DESCRIPTOR_RELATIVE, the header of a self-relative descriptor.
 const minRelativeSD = 20
 
@@ -72,6 +78,9 @@ var (
 	errKeyACL    = errors.New("the key's security descriptor could not be read or written")
 	errNoKeyDACL = errors.New("the key's security descriptor has no DACL")
 	errKeyMerged = errors.New("the key did not keep the grant as one ACE of its own")
+	// errKeyReadDenied is residual risk 7's deny half (R70): an explicit deny wins over the ACE the grant
+	// would add, so the deployment ends at grant_key_read before any change.
+	errKeyReadDenied = errors.New("alice-winhelper: NETWORK SERVICE or Everyone is denied read on the key")
 )
 
 // RDPListener reads RDP-Tcp's settings as Windows applies them (Ruling 5). Present is false when the
@@ -267,7 +276,8 @@ func (h host) StoreCertificates(ctx context.Context, store string, limit int) ([
 }
 
 // RDPKeyRead reports whether NETWORK SERVICE or Everyone holds an access-allowed ACE with the read bits
-// on the key of the certificate in My (Ruling 10). Any other store is refused.
+// on the key of the certificate in My (Ruling 10). A key that denies one of them read is errKeyReadDenied
+// (residual risk 7's deny half, R70). Any other store is refused.
 func (host) RDPKeyRead(ctx context.Context, store, sha1Hex string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -456,7 +466,10 @@ func insertGrant(aces [][]byte, add []byte) [][]byte {
 }
 
 // networkServiceCanRead reports an access-allowed ACE that applies to the key itself, names NETWORK
-// SERVICE or Everyone and holds GENERIC_READ or GENERIC_ALL. A NULL DACL grants everyone.
+// SERVICE or Everyone and holds GENERIC_READ or GENERIC_ALL. A NULL DACL grants everyone. An
+// access-denied ACE that applies to the key, names one of them and holds a bit of rdpDenyReadMask is
+// errKeyReadDenied (residual risk 7's deny half, R70): an explicit deny wins over the ACE the grant
+// would add, so the caller ends before any change. Group membership is still not evaluated.
 func networkServiceCanRead(sd *windows.SECURITY_DESCRIPTOR) (bool, error) {
 	dacl, _, err := sd.DACL()
 	if err != nil {
@@ -473,14 +486,25 @@ func networkServiceCanRead(sd *windows.SECURITY_DESCRIPTOR) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	readable := false
+	readable, denied := false, false
 	err = eachACE(dacl, func(a *windows.ACCESS_ALLOWED_ACE, sid *windows.SID, _ []byte) {
-		if a.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && a.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0 &&
-			uint32(a.Mask)&(windows.GENERIC_READ|windows.GENERIC_ALL) != 0 && (windows.EqualSid(sid, ns) || windows.EqualSid(sid, world)) {
-			readable = true
+		if a.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || sid == nil || (!windows.EqualSid(sid, ns) && !windows.EqualSid(sid, world)) {
+			return
+		}
+		switch a.Header.AceType {
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			readable = readable || uint32(a.Mask)&(windows.GENERIC_READ|windows.GENERIC_ALL) != 0
+		case windows.ACCESS_DENIED_ACE_TYPE: // the same layout as an access-allowed ACE
+			denied = denied || uint32(a.Mask)&rdpDenyReadMask != 0
 		}
 	})
-	return readable, err
+	if err != nil {
+		return false, err
+	}
+	if denied {
+		return false, errKeyReadDenied
+	}
+	return readable, nil
 }
 
 // eachACE calls f with every ACE of an ACL: the ACE, its SID (nil for a type whose layout is not

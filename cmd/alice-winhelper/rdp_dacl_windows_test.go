@@ -100,3 +100,57 @@ func TestEachACEStaysInsideTheACL(t *testing.T) {
 	dacl2 := (*windows.ACL)(unsafe.Add(unsafe.Pointer(&buf2[0]), testDACLOff))
 	assert.ErrorIs(t, eachACE(dacl2, func(*windows.ACCESS_ALLOWED_ACE, *windows.SID, []byte) {}), errKeyACL)
 }
+
+// wellKnownACE is one explicit ACE of this mode and mask for a well-known SID.
+func wellKnownACE(t *testing.T, mode windows.ACCESS_MODE, mask uint32, who windows.WELL_KNOWN_SID_TYPE) []byte {
+	t.Helper()
+	sid, err := windows.CreateWellKnownSid(who)
+	require.NoError(t, err)
+	ace, err := explicitACE(mode, mask, sid)
+	require.NoError(t, err)
+	return ace
+}
+
+// TestNetworkServiceCanReadDeny (WIN-65, residual risk 7's deny half, R70) walks crafted DACLs: a deny
+// with a read bit for NETWORK SERVICE or Everyone is errKeyReadDenied, in the generic form, the form
+// the KSP stores (0x80120089) and the specific-only form; a deny for Guests, a deny without a read bit
+// (WRITE_DAC; GENERIC_WRITE as the KSP stores it, with READ_CONTROL and SYNCHRONIZE) and an
+// inherit-only deny are not. The real runner carries the NETWORK SERVICE rows (TestRealRDPKeyReadRefusesADeny).
+func TestNetworkServiceCanReadDeny(t *testing.T) {
+	ns, world, guests := windows.WELL_KNOWN_SID_TYPE(windows.WinNetworkServiceSid), windows.WELL_KNOWN_SID_TYPE(windows.WinWorldSid),
+		windows.WELL_KNOWN_SID_TYPE(windows.WinBuiltinGuestsSid)
+	inheritOnly := wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_READ, ns)
+	inheritOnly[1] |= windows.INHERIT_ONLY_ACE // byte 1 of an ACE is its flags
+	for _, c := range []struct {
+		name   string
+		aces   [][]byte
+		denied bool
+		read   bool
+	}{
+		{"NETWORK SERVICE denied GENERIC_READ", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_READ, ns)}, true, false},
+		{"NETWORK SERVICE denied as the KSP stores it", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, rdpGrantMask, ns)}, true, false},
+		{"NETWORK SERVICE denied the specific read bits", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, 0x120089, ns)}, true, false},
+		{"Everyone denied GENERIC_READ", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_READ, world)}, true, false},
+		{"a deny beside the grant", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_READ, ns), networkServiceACE(t)}, true, false},
+		{"Guests denied GENERIC_READ", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_READ, guests)}, false, false},
+		{"NETWORK SERVICE denied WRITE_DAC only", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.WRITE_DAC, ns)}, false, false},
+		{"NETWORK SERVICE denied GENERIC_WRITE as the KSP stores it", [][]byte{wellKnownACE(t, windows.DENY_ACCESS, windows.GENERIC_WRITE|0x120116, ns)}, false, false},
+		{"an inherit-only deny", [][]byte{inheritOnly}, false, false},
+		{"the grant alone", [][]byte{networkServiceACE(t)}, false, true},
+	} {
+		acl := 8
+		for _, a := range c.aces {
+			acl += len(a)
+		}
+		buf, _ := craftedSD(t, testDACLOff+acl, windows.SE_SELF_RELATIVE|windows.SE_DACL_PRESENT, testDACLOff, acl, len(c.aces), c.aces...)
+		// unsafe: buf holds the crafted self-relative descriptor (8-byte aligned).
+		readable, err := networkServiceCanRead((*windows.SECURITY_DESCRIPTOR)(unsafe.Pointer(&buf[0])))
+		if c.denied {
+			assert.ErrorIs(t, err, errKeyReadDenied, c.name)
+			assert.False(t, readable, c.name)
+			continue
+		}
+		require.NoError(t, err, c.name)
+		assert.Equal(t, c.read, readable, c.name)
+	}
+}
