@@ -297,13 +297,25 @@ func ccsSiteDirPath(dir string) string {
 
 // createCCSSite makes a started IIS site with an sslFlags=3 https binding on port for each host (and
 // the plain http binding every fixture site has), and the http.sys ccs:<port> record when IIS made
-// none: byIIS reports whether it did. removeCCSSite undoes it (register it first).
+// none: byIIS reports whether it did. A ccs:<port> record that exists before the site is a dirty
+// runner's, never adopted (W5-11, R70). removeCCSSite undoes it (register it first).
 func createCCSSite(name string, port int, dir string, hosts []string) (byIIS bool, err error) {
 	appcmd := func(args ...string) error {
 		if out, err := exec.Command(appcmdPath(), args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("appcmd %v: %w: %s", args, err, out)
 		}
 		return nil
+	}
+	hasRecord := func() bool {
+		list, err := sslBindings()
+		if err != nil {
+			return false
+		}
+		_, ok := findBinding(list, winproto.BindingCCS, port)
+		return ok
+	}
+	if hasRecord() {
+		return false, fmt.Errorf("a ccs:%d record exists before the test (dirty runner)", port)
 	}
 	if err := os.MkdirAll(ccsSiteDirPath(dir), 0o750); err != nil {
 		return false, err
@@ -328,14 +340,6 @@ func createCCSSite(name string, port int, dir string, hosts []string) (byIIS boo
 	}
 	if state != "Started" {
 		return false, fmt.Errorf("site %s is %q", name, state)
-	}
-	hasRecord := func() bool {
-		list, err := sslBindings()
-		if err != nil {
-			return false
-		}
-		_, ok := findBinding(list, winproto.BindingCCS, port)
-		return ok
 	}
 	for deadline := time.Now().Add(10 * time.Second); !byIIS && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
 		byIIS = hasRecord()

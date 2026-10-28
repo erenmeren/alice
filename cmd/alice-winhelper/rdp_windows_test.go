@@ -791,6 +791,8 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	refused := f.call(rdpDeployInput(t, exp.FullchainPEM, exp.KeyPEM, selfSHA256), winproto.SubRDPDeploy, winproto.ArgOp, op2)
 	assert.Equal(t, false, refused["ok"], "%v", refused)
 	assert.Equal(t, winproto.CodeKeyUnusable, refused["code"], "%v", refused)
+	// W6-P2 (R70): the refusal is the export-policy one, not the older "without a usable key".
+	assert.Contains(t, asString(refused["message"]), "export policy", "%v", refused)
 	expAfter, _ := keySDDL(t, "My", expThumb)
 	assert.Equal(t, expBefore, expAfter, "the exportable key's DACL is unchanged")
 	valueAfter, err := f.h.RDPListener(f.ctx)
