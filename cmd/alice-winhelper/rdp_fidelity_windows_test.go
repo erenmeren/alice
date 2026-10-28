@@ -1,0 +1,191 @@
+//go:build windows
+
+package main
+
+// TestFidelityRDP (W6 Task 4, R69): rdp-dump, rdp-deploy, iis-status, iis-restore and every refusal of
+// Task 2 a runner can produce run with winhelper's own code against the real helper's host (the runner's
+// RDP-Tcp listener, its stores, a private data directory) and against the emulator configured as F19
+// found the runner (RDP on, its port, security layer and NLA, the value absent, one self-signed
+// certificate in Remote Desktop: the runner's own, without its key). The answers are compared field by
+// field with messages dropped, and so are the journal, the listener's binding record and the import
+// inventory, the value afterwards and the chain a fresh handshake is served. The helper is the
+// specification: a difference means the emulator is wrong.
+//
+// Normalised, because it is the machine's: the self-signed certificate's entry in a dump is the real
+// one's in both answers once its DER and hashes are checked equal (the model has no key for it), and
+// the listener's port is the runner's on both. Not produced on a runner, so not compared here:
+// RDP_TLS_OFF (SecurityLayer is never written) and BINDING_NOT_FOUND (the RDP-Tcp key is never
+// removed); Task 2's emulator-side tests cover them.
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/pem"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"alice/internal/providers/windows/winproto"
+	"alice/internal/providers/windows/wintest"
+	"alice/internal/testutil/pki"
+)
+
+// rdpTwin is the real RDP fixture and an emulator configured like it.
+type rdpTwin struct {
+	*rdpFixture
+	model *wintest.Model
+}
+
+func newRDPTwin(t *testing.T) *rdpTwin {
+	t.Helper()
+	f := newRDPFixture(t)
+	l, err := f.h.RDPListener(f.ctx)
+	require.NoError(t, err)
+	require.Empty(t, l.CertSHA1, "F19: the value is absent on the runner images")
+	m := wintest.NewModel()
+	m.SetRDP(wintest.RDPConfig{Present: true, Enabled: l.Enabled, NLA: l.NLA, Port: l.Port, SecurityLayer: l.SecurityLayer,
+		CertTemplate: l.CertTemplate})
+	d := f.dump()
+	der, err := base64.StdEncoding.DecodeString(asString(dumpCert(t, d)["der"]))
+	require.NoError(t, err)
+	m.AddCertificate(winproto.RDPStoreSelfSigned, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil,
+		wintest.CertOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, m.Serve(ctx, "127.0.0.1:0"))
+	return &rdpTwin{rdpFixture: f, model: m}
+}
+
+// both runs one call on both hosts and requires the same exit status and answer (rdp-dump's
+// self-signed entry normalised); it returns the real answer.
+func (tw *rdpTwin) both(stdin []byte, args ...string) map[string]any {
+	tw.t.Helper()
+	ro, real := execOn(tw.t, tw.h, stdin, args)
+	mo, model := execOn(tw.t, tw.model.Host(), stdin, args)
+	require.NotNil(tw.t, real, "the real helper answers %v", args)
+	require.NotNil(tw.t, model, "the model answers %v", args)
+	if args[0] == winproto.SubRDPDump {
+		rc, _ := real["certificate"].(map[string]any)
+		mc, _ := model["certificate"].(map[string]any)
+		if rc != nil && mc != nil && rc["store"] == winproto.RDPStoreSelfSigned {
+			for _, k := range []string{"store", "sha1", "sha256", "der"} {
+				require.Equal(tw.t, rc[k], mc[k], "the self-signed certificate's %s", k)
+			}
+			model["certificate"] = rc
+		}
+	}
+	require.Equal(tw.t, ro.Exit, mo.Exit, "exit status of %v (real %v, model %v)", args, real, model)
+	require.Equal(tw.t, real, model, "answer of %v", args)
+	return real
+}
+
+// killBoth runs the call on both hosts with the helper killed at point: neither answers.
+func (tw *rdpTwin) killBoth(point string, stdin []byte, args ...string) {
+	tw.t.Helper()
+	require.True(tw.t, testKillHook, "this test needs the test build's kill hook: go test -tags alicetest")
+	tw.t.Setenv(testKillEnv, point)
+	ro, real := execOn(tw.t, tw.h, stdin, args)
+	tw.t.Setenv(testKillEnv, "")
+	tw.model.KillAt(point)
+	mo, model := execOn(tw.t, tw.model.Host(), stdin, args)
+	assert.True(tw.t, ro.Killed, "the real helper was killed at %s (answer %v)", point, real)
+	assert.True(tw.t, mo.Killed, "the model was killed at %s (answer %v)", point, model)
+	require.Equal(tw.t, ro.Exit, mo.Exit)
+}
+
+// sameState requires the same journal of op, the same listener binding record and import inventory,
+// the same value and, when want is set, the same chain served with want as its leaf.
+func (tw *rdpTwin) sameState(op, want string) {
+	tw.t.Helper()
+	mh := tw.model.Host()
+	for _, n := range []string{"bindings/" + sum256hex([]byte(winproto.RDPCanonical)) + ".json", "imports.json", "journal/" + op + ".json"} {
+		assert.Equal(tw.t, stateFile(tw.t, tw.h, n), stateFile(tw.t, mh, n), "state file %s", n)
+	}
+	rl, err := tw.h.RDPListener(tw.ctx)
+	require.NoError(tw.t, err)
+	assert.Equal(tw.t, rl.CertSHA1, tw.model.RDPThumbprint(), "the listener's value")
+	if want == "" {
+		return
+	}
+	real := tw.requirePickup("fidelity", "the deployed certificate", want)
+	model, _, _, err := rdpHandshake(tw.model.Endpoint(tw.port))
+	require.NoError(tw.t, err, "the model's RDP listener")
+	assert.Equal(tw.t, real, model, "the chain served by the listener")
+}
+
+func (tw *rdpTwin) deploy(op string, leaf pki.Leaf, expect string) map[string]any {
+	tw.t.Helper()
+	return tw.both(rdpDeployInput(tw.t, leaf.FullchainPEM, leaf.KeyPEM, expect), winproto.SubRDPDeploy, winproto.ArgOp, op)
+}
+
+func assertCode(t *testing.T, got map[string]any, code string) {
+	t.Helper()
+	assert.Equal(t, false, got["ok"], "%v", got)
+	assert.Equal(t, code, got["error"], "%v", got)
+}
+
+func TestFidelityRDP(t *testing.T) {
+	tw := newRDPTwin(t)
+	d := tw.both(nil, winproto.SubRDPDump)
+	self := asString(dumpCert(t, d)["sha256"])
+	assertCode(t, tw.both(nil, winproto.SubRDPDump, "extra"), winproto.CodeUsage)
+
+	ca := fixtureCA("alice-w6-fidelity")
+	a := issue(ca, "alice-w6-fidelity-a.test")
+	removeChainLater(t, a, ca)
+	aSHA := sum256hex(a.Cert.Raw)
+
+	// A wrong expectation, then the deployment over the self-signed certificate.
+	assertCode(t, tw.deploy(op1, a, aSHA), winproto.CodeHashMismatch)
+	assertPhase(t, tw.deploy(op1, a, self), winproto.PhaseCommitted)
+	tw.sameState(op1, aSHA)
+	tw.both(nil, winproto.SubRDPDump)
+	assertCode(t, tw.deploy(op1, a, self), winproto.CodeOperationExists)
+	assertPhase(t, tw.deploy(op2, a, aSHA), winproto.PhaseUnchanged)
+	tw.sameState(op2, "")
+	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op1)
+
+	// A certificate in My without its key.
+	b := issue(ca, "alice-w6-fidelity-b.test")
+	importCertificate(t, "My", b.Cert)
+	tw.model.AddCertificate("My", b.CertPEM, nil, wintest.CertOptions{})
+	assertCode(t, tw.deploy(op3, b, aSHA), winproto.CodeKeyUnusable)
+
+	// Remote Desktop turned off (fDenyTSConnections, restored as found by the fixture).
+	require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(1), nil))
+	tw.model.SetRDP(wintest.RDPConfig{Present: true, Enabled: false, NLA: true, Port: tw.port, SecurityLayer: 2})
+	tw.both(nil, winproto.SubRDPDump)
+	assertCode(t, tw.deploy(op3, b, aSHA), winproto.CodeRDPDisabled)
+	require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(0), nil))
+	l, err := tw.h.RDPListener(tw.ctx)
+	require.NoError(t, err)
+	tw.model.SetRDP(wintest.RDPConfig{Present: true, Enabled: l.Enabled, NLA: l.NLA, Port: l.Port, SecurityLayer: l.SecurityLayer})
+	tw.requirePickup("fidelity", "the deployed certificate with RDP on again", aSHA)
+
+	// A fenced operation.
+	tw.both(nil, winproto.SubIISFence, winproto.ArgOp, op4)
+	c := issue(ca, "alice-w6-fidelity-c.test")
+	removeChainLater(t, c, ca)
+	assertCode(t, tw.deploy(op4, c, aSHA), winproto.CodeFenced)
+
+	// A kill after the grant: the next deployment is refused, the restore takes the grant back.
+	tw.killBoth("rdp.granted", rdpDeployInput(t, c.FullchainPEM, c.KeyPEM, aSHA), winproto.SubRDPDeploy, winproto.ArgOp, op5)
+	pending := tw.deploy(op6, c, aSHA)
+	assertCode(t, pending, winproto.CodeRecoveryPending)
+	assert.Equal(t, op5, pending["pending_op"])
+	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op5)
+	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op5), winproto.PhaseRestored)
+	tw.sameState(op5, aSHA)
+	readable, err := tw.h.RDPKeyRead(tw.ctx, "MY", thumbprint(c.Cert))
+	require.NoError(t, err)
+	assert.False(t, readable, "the restore took the grant on the killed operation's key back")
+	assert.Equal(t, readable, tw.model.KeyReadableByNetworkService("MY", thumbprint(c.Cert)))
+
+	// The rollback to the self-signed certificate.
+	assertPhase(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op1), winproto.PhaseRestored)
+	tw.sameState(op1, "")
+	tw.requirePickup("fidelity", "the self-signed certificate after the rollback", self)
+	tw.both(nil, winproto.SubRDPDump)
+	tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, op1)
+}
