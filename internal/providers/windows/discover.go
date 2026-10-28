@@ -45,7 +45,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		certs = append(certs, rdp...)
 		sortByPath(certs)
 	}
-	for _, w := range append(moreWarns, rdpWarns...) {
+	for _, w := range slices.Concat(moreWarns, rdpWarns) {
 		if !slices.ContainsFunc(warns, func(o providers.Warning) bool { return o.Code == w.Code }) {
 			warns = append(warns, w)
 		}

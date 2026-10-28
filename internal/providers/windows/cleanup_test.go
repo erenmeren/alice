@@ -230,6 +230,10 @@ func TestCleanupAnswerValidation(t *testing.T) {
 		{"a bad store", func(r *winproto.CleanupPlanResponse) { r.Candidates[0].Store = `My\..` }},
 		{"a bad sha1", func(r *winproto.CleanupPlanResponse) { r.Candidates[0].SHA1 = hexOf('C', 40) }},
 		{"a bad sha256", func(r *winproto.CleanupPlanResponse) { r.Candidates[0].SHA256 = hexOf('d', 63) }},
+		{"a candidate listed twice", func(r *winproto.CleanupPlanResponse) {
+			r.Candidates[1] = r.Candidates[0]
+			r.Candidates[1].Store = "MY" // the store compares case-folded, as the helper keys it
+		}},
 		{"too many candidates", func(r *winproto.CleanupPlanResponse) {
 			for len(r.Candidates) <= winproto.MaxCleanupCandidates {
 				r.Candidates = append(r.Candidates, r.Candidates[1])
@@ -268,6 +272,9 @@ func TestCleanupAnswerValidation(t *testing.T) {
 			assert.Equal(t, "ssh.protocol_error", pe.Code)
 			assert.Equal(t, winproto.SubIISCleanup, pe.Params["subcommand"])
 			assert.Equal(t, providers.CleanupPlan{}, plan)
+			if tc.name == "a candidate listed twice" { // W3-4: the reason names the duplicate
+				assert.EqualError(t, pe.Cause, "windows: a candidate listed twice")
+			}
 		})
 	}
 	applies := []struct {

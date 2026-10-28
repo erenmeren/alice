@@ -162,13 +162,14 @@ func cleanupCall[T any](ctx context.Context, s *session, mode string, input []by
 
 // checkPlan converts a plan answer, or names why it breaks the helper's contract: at most
 // MaxCleanupCandidates candidates, each in a valid store with valid hashes, an eligibility of
-// eligibleValues, an RFC 3339 unbound_since and a not_after that is RFC 3339 or absent; the verdicts
+// eligibleValues, an RFC 3339 unbound_since and a not_after that is RFC 3339 or absent, each listed once; the verdicts
 // (checkWatched); known warnings (each once in the plan); a pruned count within MaxPrunePerRun.
 func checkPlan(r winproto.CleanupPlanResponse, sent map[providers.CleanupRef]bool) (providers.CleanupPlan, string) {
 	var plan providers.CleanupPlan
 	if len(r.Candidates) > winproto.MaxCleanupCandidates {
 		return plan, "more candidates than a plan lists"
 	}
+	seen := map[string]bool{} // the helper's own key form: the folded store and the SHA-1 (W3-4)
 	for _, c := range r.Candidates {
 		since, err1 := time.Parse(time.RFC3339, c.UnboundSince)
 		var notAfter time.Time
@@ -183,7 +184,10 @@ func checkPlan(r winproto.CleanupPlanResponse, sent map[providers.CleanupRef]boo
 			return providers.CleanupPlan{}, "a candidate with an unknown eligibility"
 		case err1 != nil || err2 != nil:
 			return providers.CleanupPlan{}, "a candidate with a time that is not RFC 3339"
+		case seen[foldASCII(c.Store)+c.SHA1]:
+			return providers.CleanupPlan{}, "a candidate listed twice"
 		}
+		seen[foldASCII(c.Store)+c.SHA1] = true
 		plan.Candidates = append(plan.Candidates, providers.CleanupCertificate{Store: c.Store, SHA1: c.SHA1, SHA256: c.SHA256,
 			FriendlyName: cleanValue(c.FriendlyName, winproto.MaxText), Eligible: c.Eligible, NotAfter: notAfter.UTC(), UnboundSince: since.UTC()})
 	}
