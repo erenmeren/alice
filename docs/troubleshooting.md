@@ -299,6 +299,28 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   websites than Alice lists", "This server uses more certificate files than Alice lists", or `ALC-SSH-0009`). Alice
   reads at most 1000 certificate files and 16 MiB of website summary per server; such servers are not fully managed
   in this release.
+- **Remote Desktop no longer connects after a deployment.** A certificate Remote Desktop cannot use stops new Remote
+  Desktop sessions to the Windows server. Sign in through the server's console (or the virtual machine's console) or
+  over SSH instead. Alice checks the listener after each change and puts the previous certificate back when the check
+  fails, so first open the deployment in **Deployments**:
+  - **Failed, restored**: the previous certificate (or Windows' self-signed one) is back. If Remote Desktop still does not
+    connect, the cause is elsewhere (the client's trust in the certificate, the firewall, a Group Policy setting).
+  - **Outcome not confirmed** or **Needs attention**: the e-mail and the page name the listener
+    and the previous certificate. On the server, check which certificate the listener uses (PowerShell:
+    `Get-CimInstance -Namespace root\cimv2\TerminalServices -ClassName Win32_TSGeneralSetting -Filter
+    "TerminalName='RDP-Tcp'"`, property `SSLCertificateSHA1Hash`), that the certificate is in **Personal** (`My`) with
+    its private key, and that NETWORK SERVICE may read the key (certificates console, **Manage Private Keys**). The
+    System log's Schannel event 36870 means Remote Desktop could not read the key. To go back to Windows' self-signed
+    certificate, delete the value `SSLCertificateSHA1Hash` under
+    `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`; Remote Desktop uses it for the
+    next connection. Then choose **Discover** in Alice.
+  - **Verified**, but the clients warn about the certificate: the clients connect with a name the certificate does
+    not hold, or do not trust its issuer. Deploy a certificate for the name the clients use.
+
+  A step note "Alice could not take back NETWORK SERVICE's read access" means the entry Alice added to the key's
+  access list stayed: remove the NETWORK SERVICE entry by hand if the certificate should not be used by Remote
+  Desktop. On a server that autoenrols its Remote Desktop certificate by Group Policy, Windows may replace Alice's
+  certificate; the server's page warns about it.
 
 ## Key Vault
 
@@ -2312,7 +2334,7 @@ None of these files holds key material.
 
 **Likely cause.** The key's security settings could not be read or written in the server's machine key store, for example because another program holds or protects the key.
 
-**What to do.** Check the server's Application event log and its machine key store, then deploy again. The deployment history in Alice shows each step.
+**What to do.** Check the server's Application event log and its machine key store, then deploy again. The deployment ends **Failed, restored** although the listener was never changed; the deployment history in Alice shows each step, and the step **Allow NETWORK SERVICE to read the key** says if the access could not be taken back.
 
 ## ALC-CRT-0001: Not a readable certificate
 

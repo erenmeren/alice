@@ -2664,6 +2664,98 @@
   ]
  },
  {
+  "id": "WIN-56",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestConvertRDP",
+   "internal/providers/windows:TestRDPNeedsHelper120",
+   "internal/providers/windows:TestDiscoverWithoutRDPIsW5",
+   "internal/providers/windows/winhelper:TestRDPDump"
+  ]
+ },
+ {
+  "id": "WIN-57",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRDPDeployCommits",
+   "internal/providers/windows/winhelper:TestRDPDeployUnchanged",
+   "internal/providers/windows/winhelper:TestRDPDeployRefusesBeforeAnyWrite",
+   "internal/providers/windows/winhelper:TestRDPDeployInputHasNoLocator"
+  ]
+ },
+ {
+  "id": "WIN-58",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRDPGrantOnlyTheListenersKey",
+   "internal/providers/windows/winhelper:TestRDPRestoreRevokesOnlyItsGrant",
+   "internal/providers/windows/winhelper:TestRDPGrantFails",
+   "internal/jobs/deployjobs:TestWindowsRDPKeyACLFails"
+  ]
+ },
+ {
+  "id": "WIN-59",
+  "status": "test",
+  "tests": [
+   "internal/providers/linuxssh/helperproto:TestRDPNegotiate",
+   "internal/providers/tlsverify:TestTLSProberRDP",
+   "internal/providers/windows/winhelper:TestTLSProbeRDP",
+   "internal/providers/windows:TestRDPEndpoints",
+   "internal/providers/windows:TestRDPVerifyFallsBackToTheHelper"
+  ]
+ },
+ {
+  "id": "WIN-60",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsRDPFirstDeployAndRollback",
+   "internal/jobs/deployjobs:TestWindowsRDPManualDeploy",
+   "internal/jobs/deployjobs:TestWindowsRDPGuardForbids",
+   "internal/jobs/deployjobs:TestWindowsRDPACMEAndKeyVault"
+  ]
+ },
+ {
+  "id": "WIN-61",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winhelper:TestRDPKillAtEveryPoint",
+   "internal/providers/windows/winhelper:TestRDPRestoreRules",
+   "internal/jobs/deployjobs:TestWindowsRDPCrashTable"
+  ]
+ },
+ {
+  "id": "WIN-62",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestWindowsRDPDriftRepaired",
+   "internal/jobs/deployjobs:TestWindowsRDPDisabledRefuses",
+   "internal/jobs/deployjobs:TestWindowsRDPSharedCertificateCleanup",
+   "internal/inventory:TestRDPDeploymentMail",
+   "internal/inventory:TestDriftCauseRDP"
+  ]
+ },
+ {
+  "id": "WIN-63",
+  "status": "test",
+  "tests": [
+   "cmd/alice-winhelper:TestFidelityRDP",
+   "cmd/alice-winhelper:TestRealRDPListenerOnRunner",
+   "cmd/alice-winhelper:TestRealRDPDeployIsPickedUp",
+   "cmd/alice-winhelper:TestRealRDPKeyReadForNetworkService",
+   "cmd/alice-winhelper:TestRealRDPNegotiation",
+   "cmd/alice-winhelper:TestRealRDPSharedWithBinding",
+   "cmd/alice-winhelper:TestRealRunnerIsClean",
+   "internal/providers/windows/winproto:TestReleasedHelperVersion"
+  ]
+ },
+ {
+  "id": "WIN-64",
+  "status": "test",
+  "tests": [
+   "web/e2e/windows-rdp.spec.ts:see the Remote Desktop listener with its self-signed certificate, deploy to it and roll back to the previous certificate"
+  ]
+ },
+ {
   "id": "HB-01",
   "status": "test",
   "tests": [

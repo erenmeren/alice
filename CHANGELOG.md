@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — Windows servers (Remote Desktop certificate, R69)
+
+**Added**
+- The Remote Desktop listener (`RDP-Tcp`) of a Windows server is a location of its own under **Websites on this
+  server**: **Remote Desktop (RDP-Tcp)**, with its port, whether Network Level Authentication is on and its
+  certificate, at first **Self-signed by Windows**. Alice reads the listener's settings as Windows applies them
+  (Group Policy included) and never changes them: Remote Desktop off, a security layer without TLS, or no single
+  self-signed certificate to compare with make the listener not deployable, with the reason; a Group Policy that
+  autoenrols the Remote Desktop certificate is a warning.
+- A deployment to the listener imports the certificate into **Personal** (`My`), gives NETWORK SERVICE (the account
+  Remote Desktop runs as) read access to that one private key (one access entry; the key stays not exportable), and
+  points the listener to it (the registry value `SSLCertificateSHA1Hash`). The steps are **Import the chain**,
+  **Import the certificate**, **Allow NETWORK SERVICE to read the key**, **Point the listener to the certificate** and
+  **Verify**. The check speaks the Remote Desktop negotiation and a TLS handshake on the listener's port, from Alice or
+  from the server itself; it never signs in, so it leaves no failed logon. When it fails, the previous certificate is
+  put back (after a first deployment, Windows' self-signed one) and the key access Alice added is taken back. A
+  listener re-pointed outside Alice is drifted and can be repaired; ACME renewals and Key Vault versions reach it like
+  any location. Each change is event 1005 in the server's Application log.
+- Codes `ALC-WIN-0021` to `ALC-WIN-0023` (Remote Desktop off, a listener without TLS, key access that could not be
+  given; see [troubleshooting.md](docs/troubleshooting.md)). The e-mails of a failed rollback, an unknown outcome and
+  an unverified restore of the listener name it, the previous certificate and the console or SSH as the way in; the
+  other e-mails of the listener carry a Remote Desktop note. English and Turkish.
+
+**Changed**
+- `alice-helper.exe` 1.2.0 adds `rdp-dump`, `rdp-deploy` and `tls-probe --rdp` (protocol 1). Alice manages the Remote
+  Desktop certificate only with a 1.2.0 helper; an older helper keeps every other feature, is never sent an RDP
+  command, and its server shows that the helper is too old for Remote Desktop. Update the helpers first, then Alice.
+
+**Not in this release**
+- Remote Desktop listeners other than `RDP-Tcp`, RD Gateway, RD Web Access, RD Connection Broker and RemoteApp
+  certificates; changing any Remote Desktop setting.
+
+Rulings: `docs/superpowers/rulings/windows-iis.md` "W6 (R69)". Migration `00037` (the location kind `win_rdp`).
+
 ## Unreleased — Windows servers (Centralized Certificate Store, R68)
 
 **Added**

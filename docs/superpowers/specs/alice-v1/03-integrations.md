@@ -480,13 +480,14 @@ Details:
 - No API-token download of private keys.
 - No Windows or macOS targets.
 
-## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62, R68)
+## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62, R68, R69)
 
 (Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
 rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
 target, connection and discovery. Amendment R61 (phase W2): deployment, verification, rollback and recovery
 (13A.8-13A.11). Amendment R62 (phase W3): drift and cleanup (13A.12-13A.14). Amendment R68 (phase W5): the
-Centralized Certificate Store (13A.15-13A.17).
+Centralized Certificate Store (13A.15-13A.17). Amendment R69 (phase W6): the Remote Desktop certificate
+(13A.18-13A.19).
 
 ### 13A.1 Supported systems
 
@@ -548,10 +549,10 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 
 | Subcommand | Elevation | Answer |
 |---|---|---|
-| `version` | not needed | helper version (`1.1.0` since W5, `1.0.0` the first released; W3's was `0.3.0`, W2's `0.2.0`, W1's `0.1.0`), protocol 1, `MinProtocol` 1 |
+| `version` | not needed | helper version (`1.2.0` since W6, `1.1.0` W5's, `1.0.0` the first released; W3's was `0.3.0`, W2's `0.2.0`, W1's `0.1.0`), protocol 1, `MinProtocol` 1 |
 | `win-facts` | not needed | OS product, build, installation type; IIS installed and version; elevated or not; stores; OpenSSH version |
 | `iis-dump` | required (`NOT_ELEVATED`, exit 2) | http.sys SSL bindings, their certificates, IIS sites, warning facts (13A.5) |
-| `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa>` | not needed | the chain served on that address, as the Linux helper's probe |
+| `tls-probe --addr <ip> --port <port> --sni <name\|_> --key-type <any\|rsa\|ecdsa> [--rdp]` | not needed | the chain served on that address, as the Linux helper's probe; with the ninth argument `--rdp` (W6, helper 1.2.0) after the RDP security-layer negotiation (13A.19) |
 | `iis-deploy --op <uuid>` (W2) | required | `winproto.DeployInput` on standard input (at most 256 KiB): locator, expected DER SHA-256, chain PEM, key PEM, the R48 lists; answers the phase (`committed`, `unchanged`, `restored`, `restore_failed`, `restore_forbidden`), the steps, `alice_imported`, `built_chain_length` and the previous certificate (13A.8) |
 | `iis-restore --op <uuid>` (W2) | required | `winproto.RestoreInput` on standard input (both lists, at most 32 KiB); answers `restored`, `restore_failed` or `restore_forbidden` (13A.9) |
 | `iis-status --op <uuid>` (W2) | required | the operation's journal phase and whether another process holds the helper lock now |
@@ -559,13 +560,18 @@ event source `Alice Helper` and prints the host key fingerprints. It never sets 
 | `iis-cleanup --plan` / `--apply` (W3) | required | `winproto.CleanupPlanInput` / `CleanupApplyInput` on standard input (at most 64 KiB); the plan answers candidates, watched certificates, warnings and how many state files it pruned, the apply one result per item (13A.13) |
 | `ccs-dump` (W5) | required | `winproto.CCSDumpInput` (the CCS password) on standard input (at most 4 KiB); answers the store's state and its files (13A.15) |
 | `ccs-deploy --op <uuid>` (W5) | required | `winproto.CCSDeployInput` on standard input (at most 256 KiB); writes one CCS file with a backup; answers as `iis-deploy`; restore, status and fence are `iis-restore`, `iis-status` and `iis-fence` on the CCS journal (13A.17) |
+| `rdp-dump` (W6) | required | no standard input, no lock; the `RDP-Tcp` listener's effective settings and current certificate (13A.18) |
+| `rdp-deploy --op <uuid>` (W6) | required | `winproto.RDPDeployInput` on standard input (at most 256 KiB, no locator, no store); imports, grants NETWORK SERVICE read on the key and sets the listener's value; answers as `iis-deploy`; restore, status and fence are `iis-restore`, `iis-status` and `iis-fence` on the RDP journal (13A.19) |
 
 Exit codes 0, 2, 3, 4 and the JSON error shape are the Linux helper's. W2 added `iis-deploy`, `iis-restore`,
 `iis-status`, `iis-fence` to protocol 1 (helper `0.2.0`); W1's helper answers `UNKNOWN_SUBCOMMAND` for them, and Alice
 refuses before sending to a helper older than `0.2.0` (`windows.helper_outdated`). W3 added `iis-cleanup` (helper
 `0.3.0`): a `0.2.0` helper answers it `UNKNOWN_SUBCOMMAND`, and Alice refuses before sending it to a helper older than
 `0.3.0` (`windows.helper_outdated`; that helper still deploys). W5 added `ccs-dump` and `ccs-deploy` (helper `1.1.0`,
-`CCSMinVersion`): a `1.0.0` helper answers them `UNKNOWN_SUBCOMMAND`, and Alice never sends them to it. Every answer is bounded by the 50 s budget and the output caps: a read
+`CCSMinVersion`): a `1.0.0` helper answers them `UNKNOWN_SUBCOMMAND`, and Alice never sends them to it. W6 added
+`rdp-dump`, `rdp-deploy` and `tls-probe --rdp` (helper `1.2.0`, `RDPMinVersion`): a `1.1.0` helper answers the
+subcommands `UNKNOWN_SUBCOMMAND` and a nine-argument `tls-probe` `USAGE` (exit 2, nothing changed), and Alice never
+sends them to it. Every answer is bounded by the 50 s budget and the output caps: a read
 subcommand answers `IO_ERROR` when it ends; a write subcommand answers `IO_ERROR` only before its first durable write
 and `OUTCOME_UNKNOWN` (exit 4, uncertain) after it (13A.8).
 
@@ -944,3 +950,124 @@ The answer is `winproto.DeployResponse` with `Store` empty, `AliceImported` fals
 - **Explicit W5 limits.** No file creation (an IIS CCS binding without a file stays `cert_missing`); no farm layout; no
   removal of the password; a store whose password is outside the rule cannot be managed; a new host's first file may
   not be served by IIS for minutes (F17; Alice only replaces existing files, which the refresh serves at once).
+
+### 13A.18 The Remote Desktop listener and its discovery (amendment, R69)
+
+(Amendment, R69, phase W6; design §13 W6 and §21; rulings `docs/superpowers/rulings/windows-iis.md` "W6 (R69)".)
+
+- **One location per server.** The listener `RDP-Tcp` (`HKLM\SYSTEM\CurrentControlSet\Control\Terminal
+  Server\WinStations\RDP-Tcp`) is a location of kind `win_rdp`: locator `{"type":"rdp","listener":"RDP-Tcp","port":<PortNumber>}`,
+  `cert_path` the canonical text `rdp/RDP-Tcp` (the UI shows "Remote Desktop (RDP-Tcp)" and the port), `key_path`
+  empty, `servers` `[]`. Details: `store` (`MY`, or `Remote Desktop` for the self-signed certificate), `cert_sha1`,
+  `self_signed`, `enabled`, `security_layer` (0, 1 or 2), `nla`, `cert_template`. Other WinStations, RD Gateway, RD
+  Web Access, RD Connection Broker and RemoteApp certificates are not read. A server whose `RDP-Tcp` key is absent has
+  no `win_rdp` location; a port outside 1-65535 leaves the location out with `locations_dropped`.
+- **Effective settings.** `fDenyTSConnections`, `SecurityLayer` and `UserAuthentication` are read from the policy key
+  `HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services` when set there, otherwise from the listener's key
+  (`fDenyTSConnections` from `...\Control\Terminal Server`). Remote Desktop off is unsupported `win_rdp_disabled`;
+  `SecurityLayer` 0 (RDP security, no TLS) is unsupported `win_rdp_no_tls`; the policy value `CertTemplateName` set
+  (RDP certificate autoenrolment) is the location warning `win_rdp_autoenroll` (deployable, and named as the likely
+  cause of a drift of the listener). Alice never changes a Remote Desktop setting.
+- **The current certificate and the token.** When `SSLCertificateSHA1Hash` (REG_BINARY, 20 bytes) is set, the
+  current certificate is the one with that SHA-1 in `LocalMachine\My` (absent there: `cert_missing`; without a
+  usable key: `key_missing`; both unsupported). When the value is absent, Remote Desktop serves its self-signed
+  certificate, the single certificate of `LocalMachine\Remote Desktop` (F19): the location is deployable,
+  `self_signed` is true and the token is that certificate's leaf DER SHA-256. With none or several certificates there
+  while the value is absent the location is unsupported `win_rdp_cert_unknown`. The token is the leaf's DER SHA-256,
+  as for a binding.
+- **`rdp-dump`** (helper 1.2.0, elevated, no lock, no standard input) answers `present`, `enabled`, `nla`,
+  `value_set`, `port`, `security_layer`, `cert_template`, the current certificate (`winproto.StoreCertificate`) and
+  `self_signed_count`.
+- **Discovery.** `Discover` calls `iis-dump`, then `ccs-dump` (W5), then `rdp-dump`, each on a fresh connection;
+  `rdp-dump` runs whenever the helper is at least `RDPMinVersion` 1.2.0, whether or not IIS is installed. A helper
+  below 1.2.0 (1.0.0 included) is never sent it: no `win_rdp` location and the server warning
+  `win_rdp_helper_outdated`; bindings and CCS files are discovered as in W5. A failed `rdp-dump` (error, budget, an
+  undecodable answer) keeps the other results and adds `list_truncated` and `locations_dropped`: nothing is marked
+  missing (W2 Ruling 18). Network discovery does not speak the RDP negotiation, so it does not see the listener.
+
+### 13A.19 Deploying to the Remote Desktop listener, its verification and rollback (amendment, R69)
+
+`rdp-deploy --op <uuid>` (helper 1.2.0) takes `winproto.RDPDeployInput{expect_sha256, chain_pem, key_pem,
+forbidden_spki_sha256, forbidden_leaf_sha256}` on standard input (at most `MaxDeployInput`, strict decoding, the key
+redacted in `String`, `GoString` and `LogValue`). It has no locator (one listener, named in code) and no store (always
+`My`). The registry path, the value name, the SID and the store are constants in code. Order; every refusal before
+step 5 changes nothing:
+
+1. Strict decoding, elevation, the helper lock; `OPERATION_EXISTS`, `FENCED`, then `RECOVERY_PENDING` for an
+   interrupted latest operation of `rdp/RDP-Tcp`.
+2. The listener, read by the helper: key absent `BINDING_NOT_FOUND`; Remote Desktop off `RDP_DISABLED`;
+   `SecurityLayer` 0 `RDP_TLS_OFF` (exit 3).
+3. The current certificate (13A.18); its DER SHA-256 is not `expect_sha256` `HASH_MISMATCH` (also with none or
+   several self-signed certificates and the value absent); the new certificate already in `My` without a usable key
+   `KEY_UNUSABLE`. The unchanged rule: the listener names the new SHA-1, NETWORK SERVICE can read its key, no
+   intermediate was added and the binding record's chain equals the deployment's: `unchanged`, no write.
+4. Journal `prepared` with `kind` `rdp_listener`, `binding` `rdp/RDP-Tcp`, `store` `MY`, the previous leaf's SHA-1,
+   SHA-256 and SPKI SHA-256, `rdp.previous_store` (`MY` or `Remote Desktop`), `rdp.previous_absent`, the new hashes
+   and the R48 lists; the binding record names the operation.
+5. `import_chain` and `import_certificate` (W2's steps, store `My`; an existing copy with a usable key is used as it is
+   and is not Alice's).
+6. `grant_key_read`: whether NETWORK SERVICE can read the key (an allow ACE for S-1-5-20 or S-1-1-0 with `GENERIC_READ`
+   or `GENERIC_ALL`) is written to the journal (`rdp.key_read_had`), with phase `writing`, before any grant. When it
+   cannot, one access-allowed ACE for S-1-5-20, flags 0, mask `0x80120089` (the form the Microsoft Software KSP stores
+   for `GENERIC_READ`, F21) is placed before the first inherited ACE of the key's DACL through
+   `NCryptSetProperty(NCRYPT_SECURITY_DESCR_PROPERTY, DACL_SECURITY_INFORMATION)`; the owner, the group, the SACL and
+   the other ACEs are unchanged, and the key stays not exportable. The DACL is read back: a grant the KSP merged into
+   another ACE is undone and fails. A failed grant answers `restored` with `failed_step grant_key_read` and error
+   `key_acl` (the listener untouched; an ACE that was added is taken back).
+7. `set_listener`: the value set to the new SHA-1 and read back (a mismatch self-restores under the guard). When the
+   listener already names that SHA-1 (the unchanged rule did not hold), the value is deleted and set again
+   (`rdp.rebuild` journalled first): a same-value write does not make Schannel rebuild the served chain (F20), and
+   Remote Desktop serves its self-signed certificate for about 10 ms in between.
+8. Journal `committed`; the binding record keeps the deployment's chain; Application event 1005 `operation <op> rdp
+   RDP-Tcp old <sha256> new <sha256> key_read_granted <true|false>`.
+
+The answer is `winproto.DeployResponse` with `Store` `MY`, `AliceImported` and `BuiltChainLength` as W2's, and
+`rdp_key_acl_left` when a take-back left NETWORK SERVICE able to read the key. `OUTCOME_UNKNOWN` follows the first
+durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served after at most 17 ms).
+
+- **Verification.** One endpoint: the locator's port (the Administrator's port replaces it), `Addr` `127.0.0.1`, SNI
+  the Administrator's or `tlsverify.SNIFor(nil, sans)` (Remote Desktop serves one certificate whatever the SNI; the
+  name is the R51 trust check's). Alice's probe is `tlsverify.TLSProber{RDP: true}`; when Alice cannot reach the port,
+  the helper's `tls-probe --rdp` of `127.0.0.1` decides. Both first run `helperproto.RDPNegotiate`: the 19-byte X.224
+  Connection Request with `RDP_NEG_REQ` `PROTOCOL_SSL | PROTOCOL_HYBRID`, then one bounded TPKT answer (version 3,
+  length 11-64, Connection Confirm 0xD0) whose `RDP_NEG_RSP` `selectedProtocol` 1, 2 or 8 lets TLS follow; 0, no
+  negotiation data, `RDP_NEG_FAILURE` or a malformed answer fails the probe (`ErrRDPNoTLS`, `ErrRDPNegotiation`). The
+  probe stops after the TLS handshake: no CredSSP, no credentials, no application data; with NLA on it leaves no
+  Security 4625 or 4740 event (F23). The served chain is compared with the chain the helper built (`win.chain_differs`,
+  W2).
+- **Rollback.** `iis-restore` on an RDP journal checks the R48 guard on the previous leaf and SPKI hashes (a previous
+  self-signed certificate like any other). The listener must still name this operation's certificate, else
+  `SUPERSEDED` (committed) or `restore_failed` `file_changed` (interrupted), nothing written; a committed journal over
+  an absent previous value whose value a third party deleted answers `restored`. With `previous_absent` the value is
+  deleted and Remote Desktop serves its self-signed certificate (Windows makes a new one if it was removed); otherwise
+  the previous certificate must be in `previous_store` with a usable key (`BACKUP_MISSING` before any write), and the
+  value is set back and read back. Then, when `key_read_had` is false, the revoke removes only the non-inherited
+  access-allowed ACEs for S-1-5-20 with flags 0 and the exact grant mask (deny ACEs, other masks, other trustees and
+  inherited ACEs stay), the key is read again, and a key NETWORK SERVICE can still read (or that cannot be read) sets
+  `rdp_key_acl_left`, carried as the step param `rdp_key_acl_left` on the restore step (on `grant_key_read` when the
+  outcome has no restore step). Journal `restored`, event 1002. The revoke does not run on `restore_failed` `io` or
+  `read_back`, `BACKUP_MISSING` or `restore_forbidden`. A later deployment that replaces the certificate does not
+  revoke its ACE; W3's cleanup removes it with the key of a certificate Alice imported. `iis-status` answers
+  `current_cert_sha256` from the listener (the new leaf, the previous leaf, or `""`); during an interrupted rebuild an
+  absent value is read as this operation's. `iis-fence` is W2's. A kill at any journal point is recovered by these
+  three subcommands.
+- **Errors.** `RDP_DISABLED` `windows.rdp_disabled` (`ALC-WIN-0021`, 409), `RDP_TLS_OFF` `windows.rdp_tls_off`
+  (`ALC-WIN-0022`, 409), error class `key_acl` `windows.rdp_key_acl_failed` (`ALC-WIN-0023`, 409; the deployment ends
+  `rolled_back`, `failed_step` `grant_key_read`, the listener untouched); a helper below 1.2.0 is
+  `windows.helper_outdated` with `required_version 1.2.0` before sending (the backstop `UNKNOWN_SUBCOMMAND` maps to the
+  same).
+- **Engine, inventory and notices.** `newCertSHA256` uses the leaf; the rollback info is `{operation_id, store,
+  previous_sha1, previous_sha256}`; after a deployment the details set `cert_sha1`, `store` `MY` and `self_signed`
+  false; `windowsLost`, `bindingBroken`, `driftCause` and the incident cleanup include `win_rdp` (AutoCertRebind is
+  binding only). Drift is the generic rule: a listener re-pointed, or its value deleted, outside Alice is
+  `binding_repointed` and repaired by `drift_repair`, guarded by the token; a certificate removed from `My` or a broken
+  key is reported, never repaired. The `rollback_failed`, `outcome_unknown` and `restored_unverified` e-mails have
+  `_windows_rdp` texts naming the listener, the previous certificate, how to check it (Remote Desktop settings,
+  `Win32_TSGeneralSetting`) and the console or SSH as the way in; every other e-mail of a `win_rdp` location keeps the
+  Windows text with `windows_note=rdp`. W3's cleanup keeps what the listener names (`KeptRDP`, reason `rdp`) and never
+  removes the self-signed certificate. Migration `00037` widens `certificate_locations_kind_check` and
+  `deployments_location_kind_check` with `win_rdp`; its Down refuses with `Z1035` while a `win_rdp` location or
+  deployment exists.
+- **Explicit W6 limits.** Only `RDP-Tcp`; no Remote Desktop setting is changed; the NETWORK SERVICE ACE of a
+  third party's certificate stays until someone removes it; `SecurityLayer` 0's negotiation answer was not measured on
+  a runner (the emulator covers `RDP_NEG_FAILURE`); Windows Server 2019 is not measured.

@@ -1443,8 +1443,8 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 ### Windows servers
 
 A **Windows server** (Windows Server 2019, 2022 or 2025, with or without IIS) is a server Alice discovers and deploys
-certificates to (the HTTPS bindings of http.sys, which IIS uses, and the files of IIS's Centralized Certificate
-Store). Alice
+certificates to (the HTTPS bindings of http.sys, which IIS uses, the files of IIS's Centralized Certificate
+Store and the certificate of the Remote Desktop listener). Alice
 signs in over the Windows OpenSSH Server with its own key, as a local account `alice` or a domain account such as
 `CORP\alice-svc`, and sshd runs only **alice-helper.exe** for that account: Alice never gets a shell. Prepare the
 server once with the PowerShell setup script that **Add server** shows for **Windows server**; see
@@ -1517,12 +1517,47 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   cleanup removes the backup and any temporary file after at most 7 days, so a rollback is possible only within that
   time. Each write is event **1004** in the Application log (`ccs file <name> sha256 <old> -> <new> op <operation>`,
   the certificates' SHA-256, never a key or the password).
+- **Remote Desktop.** The Remote Desktop listener of the server (`RDP-Tcp`) is one location of its own under
+  **Websites on this server**: **Remote Desktop (RDP-Tcp)**, with its port and whether Network Level Authentication is
+  on. Until a certificate is deployed to it, Remote Desktop uses a certificate Windows made itself, shown as
+  **Self-signed by Windows**; Alice can replace it. Alice needs helper 1.2.0 or later (an older one keeps working for
+  bindings and CCS files, and the page says the helper is too old for Remote Desktop). Alice only reads the listener's
+  settings and never changes them: the listener is not deployable when Remote Desktop is off (`ALC-WIN-0021`), when
+  its security layer is RDP security without TLS (`ALC-WIN-0022`), or when it names no certificate and the
+  **Remote Desktop** store does not hold exactly one. Settings made by Group Policy count as Windows applies them.
+  When a Group Policy setting autoenrols the Remote Desktop certificate, the location is deployable with a warning:
+  Windows may replace the certificate Alice deployed by itself, and a drift of the listener then names autoenrolment
+  as the likely cause. Other listeners, RD Gateway, RD Web Access, RD Connection Broker and RemoteApp certificates are
+  not managed.
+- **What a deployment to the Remote Desktop listener does.** The helper imports the intermediate certificates into
+  `CA` and the certificate, with a private key that cannot be exported, into **Personal** (`My`). Remote Desktop runs
+  as NETWORK SERVICE, so the helper then gives NETWORK SERVICE read access to that one key (one entry of the key's
+  access list, nothing else changes; the key still cannot be exported) unless it can already read it. Then it points
+  the listener to the certificate (the registry value `SSLCertificateSHA1Hash` of `RDP-Tcp`, the only value it writes)
+  and reads it back. The deployment's page shows **Import the chain**, **Import the certificate**, **Allow NETWORK
+  SERVICE to read the key**, **Point the listener to the certificate** and **Verify**. Windows uses the new certificate
+  for the next connection, without a restart. When the listener already names
+  the certificate but serves an older chain, the helper removes the value and sets it again so Windows sends the new
+  chain; Remote Desktop serves its self-signed certificate for about 10 ms in between. Alice checks the listener on its
+  port with the Remote Desktop negotiation and a TLS handshake: the check never signs in and sends no credentials,
+  so with Network Level Authentication on it leaves no failed logon in the Security log and cannot lock an account.
+  When Alice cannot reach the port (a firewall that admits Remote Desktop from administrators' networks only), the
+  helper checks it from the server itself. When the check fails, the previous certificate is put back, or, after the
+  first deployment, the value is removed so Remote Desktop serves its self-signed certificate again, and the read
+  access Alice added is taken back. If it could not be taken back, the step says so: remove the NETWORK SERVICE entry
+  from the key's access list by hand (certificate's **Manage Private Keys** in the certificates console). A
+  deployment whose key access could not be given ends **Failed, restored** with the listener untouched (`ALC-WIN-0023`).
+  Each change is event **1005** in the Application log (`operation <operation> rdp RDP-Tcp old <sha256> new <sha256>
+  key_read_granted <true|false>`). If Remote Desktop stops accepting connections after a change, sign in through the
+  server's console or over SSH: see [troubleshooting.md](troubleshooting.md#deployments).
 - **Event Log.** Each change is written to the server's Application log, source **Alice Helper**: event **1001** after
-  a deployment, **1002** after a restore and **1003** after the cleanup removed a certificate, with the operation, the
+  a deployment, **1002** after a restore, **1003** after the cleanup removed a certificate, **1004** after a CCS file
+  was written and **1005** after the Remote Desktop certificate was set, with the operation, the
   binding and the old and new SHA-256, or for 1003 the store, the SHA-1 and SHA-256 and the reason (never a key). The
   helper also keeps a journal of each change under `C:\ProgramData\Alice\helper`; an interrupted deployment (Alice or
   the server restarted) is finished or undone from it automatically.
-- **Drift.** A binding bound to an ACME or Key Vault certificate is watched like a certificate file (see [Drift: what
+- **Drift.** A binding, a CCS file or the Remote Desktop listener holding an ACME or Key Vault certificate is watched
+  like a certificate file (see [Drift: what
   should be there and what is there](#drift-what-should-be-there-and-what-is-there)). When another tool points it to
   another certificate, Alice shows it as drifted (cause "binding re-pointed"); in **automatic** mode it deploys the
   right certificate again, in **approve** mode it offers **Repair**, and a binding that keeps changing back is set to
@@ -1554,8 +1589,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   store (Alice did not import it, something still uses it, or the setting is off), the server's and the certificate's
   services get one e-mail naming the store and the thumbprint, so an administrator can replace it there and delete it.
 - Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair,
-  `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it) and `ALC-WIN-0015` to `ALC-WIN-0020` the
-  Centralized Certificate Store (see
+  `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it), `ALC-WIN-0015` to `ALC-WIN-0020` the
+  Centralized Certificate Store and `ALC-WIN-0021` to `ALC-WIN-0023` the Remote Desktop listener (see
   [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
   (`ALC-WIN-0002`) before changing anything.
 - **Where the helper comes from.** Each Alice package carries the Windows helper in its `helper\` folder:
@@ -1583,8 +1618,10 @@ server once with the PowerShell setup script that **Add server** shows for **Win
 - Alice does not manage the SSH keys of a Windows server. Not deployable in this release: bindings of other
   applications or other stores, a binding whose only problem is its key, a host name written with non-ASCII letters
   (use its `xn--` form in IIS), a Centralized Certificate Store on a share of another server, a CCS file that does not
-  exist yet, and a store whose password does not follow the rule above. The CCS password cannot be removed, only
-  replaced.
+  exist yet, a store whose password does not follow the rule above, and Remote Desktop listeners other than
+  `RDP-Tcp`. The CCS password cannot be removed, only replaced. The NETWORK SERVICE read access stays on a
+  certificate's key after a later deployment replaced it (so a rollback to it works); the cleanup removes it with the
+  key when Alice imported the certificate.
 
 ## SSH keys
 

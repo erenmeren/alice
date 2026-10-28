@@ -220,7 +220,8 @@ again on the server, under the helper's lock, at the moment of the removal:
   A certificate you or another tool imported is never removed, even an identical copy of one Alice deployed.
 - **Only what nothing uses**: no http.sys binding of any application (IIS, WinRM, SSTP, any other) names it, the
   Remote Desktop listener does not use it and no WinRM HTTPS listener names it, and no unfinished change of the helper
-  names it. The helper reads these registry values and never writes them:
+  names it. The helper reads these registry values here and never writes them in a cleanup (only a deployment to the
+  Remote Desktop listener writes the first one, see [Remote Desktop](#remote-desktop)):
   - `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`, value `SSLCertificateSHA1Hash`
     (absent when Remote Desktop uses its self-signed certificate);
   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener\*+HTTPS`, value `certThumbprint`.
@@ -299,6 +300,62 @@ It lives at most 7 days: the daily cleanup removes the backups and temporary fil
 (also of the latest change of a file, whose journal it keeps), so after that Alice can no longer roll that change back.
 The cleanup removes a backup only when its bytes are still those of the previous file, and never touches another
 file of the folder.
+
+## Remote Desktop
+
+Alice can manage the certificate of the server's Remote Desktop listener (`RDP-Tcp`, helper 1.2.0 or later). The
+listener is one location of its own in Alice. Until a certificate is deployed to it, Remote Desktop uses a
+certificate Windows made itself (the single certificate of the **Remote Desktop** store, `LocalMachine\Remote
+Desktop`). Alice reads the listener's settings and never changes them, so prepare it like this:
+
+- **Remote Desktop on.** `fDenyTSConnections` 0 under `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server` (System
+  Properties, **Remote**, or the Group Policy setting). With Remote Desktop off the listener is not deployable
+  (`ALC-WIN-0021`).
+- **A security layer with TLS.** `SecurityLayer` of `RDP-Tcp` is 1 (Negotiate) or 2 (SSL, the default of Windows
+  Server 2022 and 2025). With 0 (RDP security) the listener never uses a certificate and is not deployable
+  (`ALC-WIN-0022`). A value set by Group Policy (`HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services`)
+  counts, as Windows applies it.
+- **The port reachable for the check.** Alice checks the listener on its port (`PortNumber` of `RDP-Tcp`, 3389 by
+  default) with the Remote Desktop negotiation and a TLS handshake. Allow that port from the Alice server, or leave it
+  closed: the helper then checks the listener from the server itself (`127.0.0.1`). The check stops after the TLS
+  handshake: it never signs in and sends no credentials. With Network Level Authentication on, ten such checks on
+  the test systems (Windows Server 2022 and 2025, logon auditing on) left no failed logon (Security event 4625) and no
+  account lockout (4740).
+- **No autoenrolment of the Remote Desktop certificate.** When a Group Policy setting autoenrols it (a certificate
+  template under **Remote Desktop Services**, `CertTemplateName`), Windows may replace the certificate Alice
+  deployed. Alice deploys anyway, shows a warning, and names autoenrolment as the likely cause when the listener
+  changes outside Alice. Turn autoenrolment off for servers whose Remote Desktop certificate Alice manages.
+- **One listener.** Other listeners (custom WinStations), RD Gateway, RD Web Access, RD Connection Broker and
+  RemoteApp certificates are not managed.
+
+What a deployment to the Remote Desktop listener changes:
+
+- **`LocalMachine\CA`**: the intermediate certificates, as for a binding (never replaced or removed).
+- **`LocalMachine\My`** (Personal): the certificate, with a private key that cannot be exported, as for a binding.
+  Remote Desktop certificates always go to `My`.
+- **The key's access list.** Remote Desktop runs as NETWORK SERVICE, which cannot read a key Alice imported
+  (SYSTEM and Administrators only). Unless NETWORK SERVICE can already read it, the helper adds one entry to that
+  key's access list: allow NETWORK SERVICE (S-1-5-20) to read, with no inheritance. Nothing else of the key changes,
+  and the key still cannot be exported. The helper never changes another key. A rollback takes the entry back; a
+  later deployment of another certificate leaves it, so a rollback to this certificate still works, and the cleanup
+  removes it with the key when Alice imported the certificate. On a certificate you imported yourself the entry
+  stays until you remove it (certificates console, **Manage Private Keys**).
+- **The registry value `SSLCertificateSHA1Hash`** of `HKLM\SYSTEM\CurrentControlSet\Control\Terminal
+  Server\WinStations\RDP-Tcp`: set to the certificate's SHA-1 thumbprint. It is the only registry value the helper
+  writes. Remote Desktop serves the new certificate to the next connection (on the test systems within about 20 ms),
+  without a restart. When the listener already names the certificate but serves an older chain, the helper removes
+  the value and sets it again, because only that makes Windows send the new chain: Remote Desktop serves its
+  self-signed certificate for about 10 ms in between.
+- **`C:\ProgramData\Alice\helper`**: the journal of the change, as for a binding. It records whether NETWORK SERVICE
+  could read the key before, so an interrupted change takes back only the entry it added.
+- **The Application event log**, source `Alice Helper`: event **1005** `operation <operation> rdp RDP-Tcp old
+  <sha256> new <sha256> key_read_granted <true|false>` after the change, **1002** after the previous certificate was
+  put back.
+
+When the check after the change fails, the helper points the listener back to the previous certificate, or, after
+the first deployment, removes the value so Remote Desktop uses its self-signed certificate again (Windows makes a new
+one if it was removed), and takes back the NETWORK SERVICE entry it added. A certificate Remote Desktop cannot use
+stops new Remote Desktop sessions, so keep another way in: the server's console or SSH. The account `alice` itself cannot sign in over Remote Desktop.
 
 ## Troubleshooting
 

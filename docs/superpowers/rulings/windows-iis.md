@@ -2338,10 +2338,92 @@ Added during execution:
 
 # W6 (R69)
 
+Phase W6 (Remote Desktop certificate) was built on branch `windows-w6` from the plan
+`docs/superpowers/plans/2026-10-28-windows-w6-rdp.md` (8 tasks), approved by the owner on 2026-10-28. Spec: R69 in
+`docs/superpowers/specs/alice-v1/00-decisions.md`, `03-integrations.md` §13A.18-13A.19, `04-security.md` §14.4
+(WN-23..WN-25), `06-quality.md` §24.7 (WIN-56..WIN-64), design §13 W6, §14 (F19-F23) and §21. One migration, `00037`;
+error codes `ALC-WIN-0021`..`ALC-WIN-0023`. None of the rulings below is a pricing decision; the ones the owner should
+confirm or act on are listed under [Owner items (W6)](#owner-items-w6).
+
+## The plan's rulings as built (W6)
+
+The plan's 28 rulings stand as written, except where an entry says "Amended" or "Precision".
+
+1. **Decision R69; one migration, `00037`.** As written: `00037_windows_rdp.sql` widens
+   `certificate_locations_kind_check` and `deployments_location_kind_check` with `win_rdp`; its Down restores 00036's
+   lists and refuses with SQLSTATE `Z1035` while a `win_rdp` location or deployment exists.
+2. **Helper 1.2.0, protocol 1, `RDPMinVersion` 1.2.0; two new subcommands and one flag.** As written: every site that
+   asserted the helper's own version reads `1.2.0` (Task 1), and the four tests that used `rdp-deploy` as an unknown
+   subcommand use `winrm-deploy`. Precision (Task 6): `win_rdp_helper_outdated` is added for every helper below 1.2.0,
+   1.0.0 included (Ruling 2 read literally).
+3. **One location per server: the `RDP-Tcp` listener.** As written. Precision (Task 6): a listener port outside
+   1-65535 leaves the `win_rdp` location out with `locations_dropped` (W2 Ruling 18: nothing marked missing).
+4. **The listener's current certificate and the token.** As written; F19 confirmed that the certificate served while
+   the value is absent is the single certificate of `Remote Desktop`. Precision (pre-flight): `rdp-deploy` with none
+   or two self-signed certificates and the value absent answers `HASH_MISMATCH` (no token can match).
+5. **Effective settings are read the way Windows applies them.** As written. Precision (Task 6): `win_rdp_autoenroll`
+   is stored as a location warning (Task 5's carry).
+6. **The store of an RDP import: always `LocalMachine\My`.** As written; F20 confirmed it: a certificate only in
+   `Remote Desktop` is not served when named.
+7. **W3 cleanup and RDP.** As written. `TestWindowsRDPSharedCertificateCleanup` and `TestRealRDPSharedWithBinding`
+   cover the kept certificate.
+8. **`rdp-deploy` input.** As written (`TestRDPDeployInputHasNoLocator`).
+9. **`rdp-deploy` transaction.** As written, with the order changes of the Task 2 rulings below: the journal goes
+   `writing` before the grant when `key_read_had` is false, and step 7 deletes and sets a value the listener already
+   holds (Ruling 14 amended).
+10. **The NETWORK SERVICE key grant.** **Amended (F21, Task 2 review I1, Task 4 review Minors 1, 2 and 6):** the grant
+    writes the mask the KSP stores for `GENERIC_READ`, `0x80120089`, with flags 0, before the first inherited ACE; it
+    is read back, and a grant the KSP merged into another ACE is undone and fails the grant. The revoke removes only
+    non-inherited access-allowed ACEs for S-1-5-20 with flags 0 and that exact mask (deny ACEs, other masks, other
+    trustees and inherited ACEs stay), then reads the key again: a key NETWORK SERVICE can still read, or whose read
+    fails, sets `rdp_key_acl_left`. "Can read" stays an allow ACE for S-1-5-20 or S-1-1-0 with `GENERIC_READ` or
+    `GENERIC_ALL`.
+11. **Rollback through `iis-restore` on an RDP journal.** **Amended (Task 2):** a committed journal over an absent
+    previous value answers `restored` (not `SUPERSEDED`) when a third party deleted the value. The revoke does not run
+    on `restore_failed` `io`/`read_back`, on `BACKUP_MISSING` or on `restore_forbidden`.
+12. **Recovery after a reboot or a kill.** **Amended (Task 2):** the journal goes `writing` before the grant when
+    `key_read_had` is false, so a kill after the grant is rolled back and revoked; a kill right after `prepared` answers
+    `prepared` and the engine fences it, as in W2.
+13. **Journal shape.** **Amended (Task 2, Ruling 14 fix):** `KeyReadHad` may be nil in `prepared` or `restored`;
+    `rdp.rebuild` is valid only in an RDP journal, never in `prepared`, never over an absent previous value, and only
+    when `previous_sha1` equals `new_sha1`.
+14. **Unchanged.** **Amended (F20):** the unchanged rule stands; when it does not hold and the listener already names
+    the new SHA-1, `set_listener` deletes the value and sets it again, because a same-value write does not rebuild
+    the served chain (Task 2 rulings below).
+15. **The RDP probe mode.** As written; F22 confirmed the bytes and F23 that the probe needs no credentials.
+16. **Verification endpoints of a `win_rdp` location.** As written (`TestRDPEndpoints`,
+    `TestRDPVerifyFallsBackToTheHelper`).
+17. **Pickup.** As written: `winproto.RDPPickupWait` stays 0 (F20 route (a), at most 17 ms; Task 4 ruling).
+18. **Discovery call order.** As written (`TestDiscoverWithoutRDPIsW5`, `TestConvertRDP`).
+19. **Engine and inventory sites.** As written (Task 5). Precision (Task 6): `rdp_key_acl_left` is logged as the step
+    param `rdp_key_acl_left` `"true"` on the restore step, or on `grant_key_read` when the outcome has no restore step.
+20. **Notices and e-mails.** As written (Task 5). The RDP texts name a self-signed previous certificate by its SHA-1
+    only (deferred minor, owner item).
+21. **Drift.** As written (`TestWindowsRDPDriftRepaired`, `TestDriftCauseRDP`).
+22. **Interactions, unchanged.** As written.
+23. **Emulator model.** As written (Task 3). The model keeps one "NETWORK SERVICE can read" flag per key (Ruling 23
+    allows it).
+24. **Test IDs and STRIDE.** As written: `WIN-56`..`WIN-64`, `WN-23`..`WN-25`.
+25. **e2e.** As written: `web/e2e/windows-rdp.spec.ts`, EN and TR.
+26. **Runner hygiene and budget.** As written. Precision (coordinator): the fixture may start a stopped TermService
+    and stop it again; it never restarts a running one, and it changes no firewall rule. It was not needed: both
+    images ship RDP on.
+27. **The dedicated security review.** Task 8 step 6; see [Security review (W6)](#security-review-w6).
+28. **"Deferred to W6+": settled or carried.** As written; see [Deferred to W7+](#deferred-to-w7).
+
 ## W6 facts measured on real runners
 
 Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
-2025 Datacenter). The verdicts are recorded below as Task 4 reads each run.
+2025 Datacenter). Each verdict holds on both images.
+
+- **F19: confirmed.** Runs 1-3 (<https://github.com/erenmeren/alice/actions/runs/40644188468>, <https://github.com/erenmeren/alice/actions/runs/40648774432>). Both images ship RDP on: `fDenyTSConnections` 0, TermService running (start Manual, account NetworkService), port 3389, `SecurityLayer` 2, `UserAuthentication` 1, `SSLCertificateSHA1Hash` absent, the policy key holding only `KeepAliveEnable`/`KeepAliveInterval`. The firewall is on and the Remote Desktop rules are enabled; the tests changed neither. `fDenyTSConnections` 1 stops the listener within 3-255 ms and 0 brings it back within 255 ms, with no restart. `Remote Desktop` holds one certificate, and the listener serves it while the value is absent (Ruling 4 stands). The fixture's TermService start path was not needed on either image.
+- **F20: route (a).** Runs 1-3. A raw write of the value is served at the next fresh handshake after 6-17 ms, and a delete serves the self-signed certificate again after 7-14 ms. The served chain equals `built_chain_length` (2). `Win32_TSGeneralSetting.SSLCertificateSHA1Hash` reports the named hash (`SSLCertificateSHA1HashType` 3, `CertificateName` the subject) and the self-signed one (type 1) while the value is absent. A certificate only in `Remote Desktop` is not served when named; the self-signed one stays, so Ruling 6 (always My) stands.
+- **F21: confirmed, with the measured stored mask.** Runs 1-2 (<https://github.com/erenmeren/alice/actions/runs/40644188468>, <https://github.com/erenmeren/alice/actions/runs/40646627907>). With F4's DACL (`D:P(A;OICI;0xd01f01ff;;;SY)(A;OICI;0xd01f01ff;;;BA)`, verified on both images) TermService resets the connection, and Schannel logs 36870 (0x8009030D, `svchost[TermService]`). After the grant the certificate is served within 10-12 ms, without a rewrite. `GENERIC_READ` is enough, but the Microsoft Software KSP stores it as `0x80120089` (`GENERIC_READ` plus `FILE_GENERIC_READ`). The KSP also normalises a written `0x1` to `0x80000001` and, in run 1, merged a new NETWORK SERVICE allow ACE into an existing one. The key stays not exportable.
+- **F22: confirmed.** Runs 1-3. The Connection Confirm is 19 bytes, `03 00 00 13 0e d0 00 00 12 34 00 02 <flags> 08 00 02 00 00 00`, with flags `0x1f`, `0x2f` or `0x0f` (they vary by image and NLA). It carries `RDP_NEG_RSP` with `selectedProtocol` 2 (HYBRID) for this request, with NLA on and off, and a TLS ClientHello then completes. `helperproto.RDPNegotiate` accepts every measured answer unchanged. `SecurityLayer` 0 was not measured, because the tests never write it (Global Constraints); the emulator-side tests cover `RDP_NEG_FAILURE`.
+- **F23: confirmed.** Runs 1-3. With `UserAuthentication` 1, the TLS handshake completes before CredSSP, and ten probes leave no Security 4625 or 4740 event. The Logon subcategory audits Success and Failure on both images, so the absence is meaningful.
+
+The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
+of Task 4's report (Ruling 14 amended, below).
 
 ### Runner runs used (3 of 8)
 
@@ -2351,13 +2433,49 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 2 | <https://github.com/erenmeren/alice/actions/runs/40646627907> | `2e7415c1` | fail / fail | Only `TestFidelityRDP` failed, on its own assertions (it read the error code from `error`, not `code`; it restored an older operation after a newer one, which both hosts answer `SUPERSEDED`): every answer compared equal on both hosts. F21 fixed: the grant stored as `(A;;0x80120089;;;NS)`, the revoke gives F4's DACL back byte for byte; a NETWORK SERVICE deny ACE, another trustee's allow ACE and a NETWORK SERVICE `DELETE` allow ACE survive grant and revoke (no merge with a `DELETE` ACE). F19: `fDenyTSConnections` 1 stops the listener within 3-253 ms, 0 brings it back within 255 ms, no restart. F20: a delete then set of the value rebuilds the served chain (2 after 9-10 ms); a same-value rewrite still does not (20 s) |
 | 3 | <https://github.com/erenmeren/alice/actions/runs/40648774432> | `8d668f06` | **pass / pass** | `windows-required` green; every RDP real test and `TestFidelityRDP` pass on both images; F19-F23 as in run 2 (pickups 7-15 ms) |
 
-- **F19: confirmed.** Runs 1-3 (<https://github.com/erenmeren/alice/actions/runs/40644188468>, <https://github.com/erenmeren/alice/actions/runs/40648774432>). Both images ship RDP on: `fDenyTSConnections` 0, TermService running (start Manual, account NetworkService), port 3389, `SecurityLayer` 2, `UserAuthentication` 1, `SSLCertificateSHA1Hash` absent, the policy key holding only `KeepAliveEnable`/`KeepAliveInterval`. The firewall is on and the Remote Desktop rules are enabled; the tests changed neither. `fDenyTSConnections` 1 stops the listener within 3-255 ms and 0 brings it back within 255 ms, with no restart. `Remote Desktop` holds one certificate, and the listener serves it while the value is absent (Ruling 4 stands). The fixture's TermService start path was not needed on either image.
-- **F20: route (a).** Runs 1-3. A raw write of the value is served at the next fresh handshake after 6-17 ms, and a delete serves the self-signed certificate again after 7-14 ms. The served chain equals `built_chain_length` (2). `Win32_TSGeneralSetting.SSLCertificateSHA1Hash` reports the named hash (`SSLCertificateSHA1HashType` 3, `CertificateName` the subject) and the self-signed one (type 1) while the value is absent. A certificate only in `Remote Desktop` is not served when named; the self-signed one stays, so Ruling 6 (always My) stands.
-- **F21: confirmed, with the measured stored mask.** Runs 1-2 (<https://github.com/erenmeren/alice/actions/runs/40644188468>, <https://github.com/erenmeren/alice/actions/runs/40646627907>). With F4's DACL (`D:P(A;OICI;0xd01f01ff;;;SY)(A;OICI;0xd01f01ff;;;BA)`, verified on both images) TermService resets the connection, and Schannel logs 36870 (0x8009030D, `svchost[TermService]`). After the grant the certificate is served within 10-12 ms, without a rewrite. `GENERIC_READ` is enough, but the Microsoft Software KSP stores it as `0x80120089` (`GENERIC_READ` plus `FILE_GENERIC_READ`). The KSP also normalises a written `0x1` to `0x80000001` and, in run 1, merged a new NETWORK SERVICE allow ACE into an existing one. The key stays not exportable.
-- **F22: confirmed.** Runs 1-3. The Connection Confirm is 19 bytes, `03 00 00 13 0e d0 00 00 12 34 00 02 <flags> 08 00 02 00 00 00`, with flags `0x1f`, `0x2f` or `0x0f` (they vary by image and NLA). It carries `RDP_NEG_RSP` with `selectedProtocol` 2 (HYBRID) for this request, with NLA on and off, and a TLS ClientHello then completes. `helperproto.RDPNegotiate` accepts every measured answer unchanged. `SecurityLayer` 0 was not measured, because the tests never write it (Global Constraints); the emulator-side tests cover `RDP_NEG_FAILURE`.
-- **F23: confirmed.** Runs 1-3. With `UserAuthentication` 1, the TLS handshake completes before CredSSP, and ten probes leave no Security 4625 or 4740 event. The Logon subcategory audits Success and Failure on both images, so the absence is meaningful.
-
 ## Rulings made during execution (W6)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- P1 (pre-flight): the tasks run in the order 1-8; runner run 1 was pushed during Task 4, once its real tests were
+  written, not right after Task 2 — Task 2's code alone has no real RDP test to run (cost: a little wall time).
+- P2 (pre-flight, Ruling 4): `rdp-deploy` with none or two self-signed certificates and the value absent answers
+  `HASH_MISMATCH`, as Task 2's test list says — no token can match (cost: low).
+- P3: Tasks 3, 4 and 5 ran in parallel on the coordinator's instruction (it overrides the one-implementer rule);
+  their paths are disjoint and each committed only its own paths — cost: possible transient build breaks.
+- P4: Task 6 started (base `319ff83a`) while Task 4's runner run 1 was in flight, reading `RDPPickupWait` as a
+  constant — W5 precedent; cost: a follow-up if F20 or F23 changed provider behaviour (none did).
+- P5: Task 6's commit `14ae89b1` carried the trailer "Claude Opus 5.5"; it was not yet pushed, so the controller
+  amended its message only (`3c5d2403`, same tree).
+- P6: Task 7 was split: 7a (web and e2e) ran while Task 4 ran; 7b (these documents) ran after Task 4's F19-F23
+  verdicts, in parallel with 7a's finish on disjoint paths (`docs/`, `CHANGELOG.md`, `test/matrix` against `web/`,
+  `api/openapi.yaml`, `cmd/alice-fakewindows`) — the documents need the facts (cost: two commits).
+
+### Coordinator
+
+- C1 (F19): the fixture may start a stopped TermService (recorded, stopped again in Cleanup), never restart a running
+  one; it records the firewall state and changes no rule. The F19 fallback applies only if RDP cannot answer on
+  `127.0.0.1` on both images after that.
+- C2 (F20): the test logs the pickup delay in ms, the served chain length, and whether a same-value rewrite rebuilds
+  the served chain (Ruling 14). Route (b) would have stopped for a coordinator decision.
+- C3 (F21): a handshake that works without the grant on either image would have stopped for a decision, with the
+  SDDL as imported and TermService's account.
+- C4: the review gates of Tasks 2, 4, 5 and 6 use a reviewer who is not the implementer, with the Review Focus and the
+  commit range; each finding and its fix commit are recorded here.
+- C5: each runner run is recorded in the run table as soon as it is read.
+
+### Task 1 (winproto, helperproto, tlsverify)
+
+No ruling. Two minors were deferred (see [Deferred to W7+](#deferred-to-w7)).
+
+### Review gate (Task 1)
+
+The review of `a005c6ae..87d74673` found 0 critical, 0 important and 2 minor issues; both were deferred: tlsverify's
+RDP negotiation honours the context only through the connection deadline (at most 10 s), and only `RDPFailure(2)`
+maps to `ErrRDPNoTLS` (to revisit with F22's measured codes; F22 measured no failure, because `SecurityLayer` 0 is
+never written on a runner).
 
 ### Task 2 (winhelper)
 
@@ -2371,6 +2489,11 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 - **A rebuild journal names the same certificate before and after (rebuild review Minor 1).** `valid` refuses `rdp.rebuild` unless `previous_sha1` equals `new_sha1`. Why: `runRDP` sets it only then, and a restore over an absent value must never write a certificate this operation did not find on the listener.
 - **Only an interrupted phase reads an absent value as this rebuild's (rebuild review Minor 4).** `rdpNamesNew` excludes `committed` and `restored`. Why: after either, an absent value was deleted by someone else, so `iis-status` must not name the new leaf.
 - **A revoke that leaves NETWORK SERVICE able to read the key is never silent (Task 4 review Minor 2, Ruling 27).** After the revoke (on a restore, and on the take-back of a failed grant), `revokeKeyRead` reads the key again. If `RDPKeyRead` still answers readable, or cannot answer, for a key whose journal says `key_read_had` false, `ACLLeft` is set and answered as `rdp_key_acl_left`. Why: the KSP can merge the grant into an existing NETWORK SERVICE ACE (F21). The exact-mask revoke then finishes without error but cannot take the merge apart.
+- **A restore after a kill between the rebuild's delete and set puts the previous value back (rebuild review).** The
+  value is set back, and the ACE is revoked when `key_read_had` is false. Why: that is the state before the
+  deployment (Ruling 10); intended, no cost.
+- **A failed `RDPKeyRead` after a successful revoke is reported as `rdp_key_acl_left` (fix round 3).** Why: unknown
+  counts as left, never silent. Cost: a false "left" note after a rare read failure.
 
 ### Review gate (Task 2)
 
@@ -2390,24 +2513,187 @@ The review of `d397372e` (the rebuild) found 0 critical, 0 important and 4 minor
 - Minor 3: accepted, and recorded in the Ruling 14 amendment.
 - Minor 4: `rdpNamesNew` excludes `restored`.
 
+### Review gate (Task 2 fix round 3)
+
+The re-review of `40ee756b..2cebc837` (the rebuild review's Minors 1, 2 and 4 and Task 4 review Minor 2) found every
+item addressed and none open. Two minors were deferred: one long comment line in `write.go`, and the take-back of a
+failed grant may report `rdp_key_acl_left` after a read error (the ruling above).
+
+### Task 3 (wintest and cmd/alice-fakewindows)
+
+No ruling. Task 3's commit `cb90a58e` landed after Task 4's `90c2c8cf` (parallel tasks, P3).
+
+### Review gate (Task 3)
+
+The review of `cb90a58e` approved it with 0 critical, 0 important and 5 minor issues, all deferred (see
+[Deferred to W7+](#deferred-to-w7)). `golangci-lint` of `wintest` and `cmd/alice-fakewindows` reported 0 issues at
+`319ff83a`; the forbidigo report seen during Task 5 was against files still being written.
+
 ### Task 4 (alice-winhelper, the real RDP half)
 
 - **The grant writes `0x80120089`, and a revoke removes exactly that mask (F21, applies "the measured mask is used").** Why: the KSP stores a written `GENERIC_READ` as `0x80120089`, so in run 1 (<https://github.com/erenmeren/alice/actions/runs/40644188468>) the exact-mask revoke found nothing and the ACE stayed. With the stored form written, run 2 (<https://github.com/erenmeren/alice/actions/runs/40646627907>) gives F4's DACL back byte for byte. "Can read" stays "an allow ACE for NETWORK SERVICE or Everyone with `GENERIC_READ` or `GENERIC_ALL`", which matches the stored form.
 - **A grant is read back; if the KSP does not keep it as one ACE of its own, the DACL as it was is written back and the grant fails (`errKeyMerged`, then `restored` with `key_acl`).** Why: run 1 (<https://github.com/erenmeren/alice/actions/runs/40644188468>) showed the KSP merging a new NETWORK SERVICE allow ACE into an existing one, which no revoke could take back alone. That would break Ruling 10's "only the grant's own ACE". Run 2 (<https://github.com/erenmeren/alice/actions/runs/40646627907>) shows that a deny ACE, another trustee's ACE and a NETWORK SERVICE `DELETE` allow ACE all survive grant and revoke, with no merge.
 - **The ACE is built with `windows.ACLFromEntries` alone and spliced into the DACL bytes. It is never merged by `SetEntriesInAcl`.** Why: `GRANT_ACCESS` merging would fold the grant into (or change) an ACE the trustee already has, against the contract in `write.go`. `ToAbsolute` keeps the descriptor's control bits, so the DACL stays protected (`D:P`).
 - **`winproto.RDPPickupWait` stays 0 (F20 route (a)).** Why: the measured maximum is 17 ms (runs 1-3). Its +50 % (26 ms) would not change `verifyAttempts`, because `pickupAttempts` keeps the provider's attempts. This is W5's precedent for `CCSPickupWait` (8-12 ms, kept 0), and `winproto_test.go` (Task 1) asserts 0.
-- **Coordinator to decide: Ruling 14's same-value write does not rebuild the served chain (F20).** In runs 1-3, adding the leaf's intermediate to `CA` and rewriting the same value still serves a chain of 1 after 20 s. Deleting the value and setting it again serves the full chain within 9-11 ms, with about 10 ms of self-signed fallback in between. So Ruling 14's "write even when it is the same" does not make an added intermediate reach the client. Options: (a) when an intermediate was added, `set_listener` deletes and then sets the value; (b) keep the rewrite and let the verification report `win.chain_differs`; (c) the unchanged rule ignores intermediates for RDP. Recommendation: (a).
+- **Coordinator to decide: Ruling 14's same-value write does not rebuild the served chain (F20).** In runs 1-3, adding the leaf's intermediate to `CA` and rewriting the same value still serves a chain of 1 after 20 s. Deleting the value and setting it again serves the full chain within 9-11 ms, with about 10 ms of self-signed fallback in between. So Ruling 14's "write even when it is the same" does not make an added intermediate reach the client. Options: (a) when an intermediate was added, `set_listener` deletes and then sets the value; (b) keep the rewrite and let the verification report `win.chain_differs`; (c) the unchanged rule ignores intermediates for RDP. Recommendation: (a). Decided: (a), see the Ruling 14 amendment under Task 2.
 - **`TestFidelityRDP` compares the hosts as F19 found the runner.** The model gets the runner's self-signed certificate without its key, so its dump entry is the real one once DER and hashes match. `RDP_TLS_OFF` and `BINDING_NOT_FOUND` are not produced on a runner (`SecurityLayer` and the key are never written). Run 3 (<https://github.com/erenmeren/alice/actions/runs/40648774432>) found no fidelity difference, so the emulator needed no fix.
+- **Residual, for the security review: if the KSP merges the grant and the write-back of the old DACL also fails, a
+  merged NETWORK SERVICE ACE stays and the grant fails `key_acl`.** Not observed on the runners. Since Task 2's fix
+  round 3 the take-back reads the key again and reports `rdp_key_acl_left` (`TestRDPMergedGrantIsNeverSilent`), so it
+  is never silent. Cost: a NETWORK SERVICE read ACE left on that key.
+- **Task 4 review: Minors 1, 3, 4, 5 and 6 fixed in a Task 4 fix round; Minor 2 routed to Task 2's restore code.**
+  Why: they are security-relevant and cheap.
 
 ### Review gate (Task 4)
 
 The review of `49630752..11ddde52` (Task 4 paths) found 0 critical, 0 important and 6 minor issues. The minors were fixed in `2da81ba8`, except Minor 2:
 - Minor 1: the revoke matched any non-inherited ACE. It now matches the grant's own flags (0), so an inherit-only NETWORK SERVICE ACE of the same mask is kept. The `write.go` contract says "flags 0".
 - Minor 2: if the grant's merge write-back also failed, an unrecorded NETWORK SERVICE read could remain. Not fixed here: it belongs to Task 2's restore code, and is carried to the Task 8 security review (Ruling 27).
-  Fixed in Task 2's fix round 3 (the commit after `40ee756b`): the revoke is verified by `RDPKeyRead`, and a key that is still readable sets `rdp_key_acl_left` (`TestRDPMergedGrantIsNeverSilent`).
+  Fixed in Task 2's fix round 3 (`2cebc837`): the revoke is verified by `RDPKeyRead`, and a key that is still readable sets `rdp_key_acl_left` (`TestRDPMergedGrantIsNeverSilent`).
 - Minor 3: the F21 test now asserts that a key the helper imported has F4's DACL.
 - Minor 4: `TestFidelityRDP` now also compares UNKNOWN_OP (and `iis-status` of an unknown op), SUPERSEDED asserted by code, and a deployment whose restore is `restore_forbidden`. The file comment names why the input refusals and BUSY are not compared.
 - Minor 5: the fidelity normalisation copies only the self-signed entry's key facts from the real answer. Every other field is compared, and the model is given the certificate's friendly name.
 - Minor 6: the grant goes before the first inherited ACE (canonical order), with the read-back expecting that place. The self-relative descriptor minimum is 20 bytes. `TestRealRunnerIsClean` asserts TermService as the first fixture found it.
 
 These are verified locally only (builds, vet, lint, archtest). The next runner run covers them.
+
+### Task 5 (migration, inventory, API, e-mails)
+
+No ruling. Carried to Task 6: log `rdp_key_acl_left` `"true"` on the restore step's params, and store
+`win_rdp_autoenroll` as a location warning (both done). Carried to Task 7: the web labels for `win_rdp`, the step
+names and the codes (`enums.test.ts`).
+
+### Review gate (Task 5)
+
+The review of `319ff83a` approved it with 0 critical, 0 important and 3 minor issues, all deferred (see
+[Deferred to W7+](#deferred-to-w7)); the e-mail minor is also an owner item.
+
+### Task 6 (Windows provider and engine tests)
+
+- **`TestWindowsRDPKeyACLFails` ends `rolled_back` (not `failed`, as the plan's brief said)** with reason
+  `windows.rdp_key_acl_failed`, `failed_step` `grant_key_read` and the listener untouched. Why: the helper answers
+  `restored`, and every W2 and W5 `restored` answer is `rolled_back`; a special case would break the pattern. Cost:
+  the owner reads "rolled back" for a deployment that never touched the listener.
+- **A listener port outside 1-65535 leaves the `win_rdp` location out with `locations_dropped`.** Why: W2 Ruling 18
+  (nothing marked missing). Cost: none in practice.
+- **`win_rdp_helper_outdated` for every helper below 1.2.0, 1.0.0 included.** Why: Ruling 2 read literally. Cost: one
+  more warning on very old helpers.
+- **`rdp_key_acl_left` goes on the `grant_key_read` step when the outcome has no restore step** (the take-back of a
+  failed grant). Why: that step is where the ACE was left. Cost: the UI and e-mail show it on another step row.
+
+### Review gate (Task 6)
+
+The review of `2e7415c1..3c5d2403` approved it with 0 critical, 0 important and 6 minor issues: one settled by the
+`grant_key_read` ruling above, five deferred (see [Deferred to W7+](#deferred-to-w7)).
+
+### Task 7 (web, e2e and documents)
+
+- **Every test the plan's WIN-56..WIN-64 table names exists under that exact name**, so `test/matrix/traceability.json`
+  maps each row to the plan's tests with no substitution. The short package names of the table resolve to
+  `internal/providers/windows` (`windows:`), `internal/providers/windows/winhelper` (`winhelper:`),
+  `internal/jobs/deployjobs` (`deployjobs:`), `internal/inventory`, `internal/providers/linuxssh/helperproto`,
+  `internal/providers/tlsverify`, `cmd/alice-winhelper` and `internal/providers/windows/winproto`; WIN-64 maps to the
+  journey's test title in `web/e2e/windows-rdp.spec.ts`. Why: `make matrix-check` resolves each name.
+- **The §24.7 rows keep the section's columns.** The plan's table gave the case and the tests; the rows carry the
+  case verbatim and an expected behaviour written from the rulings as built, and the tests live in the traceability
+  map. Why: §24.7's columns are the case and the expected behaviour.
+
+## Security review (W6)
+
+To be filled by Task 8 (Ruling 27).
+
+## Acceptance (design §13 W6)
+
+To be filled by Task 8.
+
+## Owner items (W6)
+
+From the plan:
+
+1. **Ruling 3:** only the `RDP-Tcp` listener is managed, one location per server; other WinStations, RD Gateway and
+   the other RDS roles are not.
+2. **Ruling 4:** an absent `SSLCertificateSHA1Hash` is a deployable location whose current certificate is Windows'
+   self-signed one from `LocalMachine\Remote Desktop`; with none or several there, the location is not deployable
+   (`win_rdp_cert_unknown`).
+3. **Ruling 5:** RDP off or RDP security (no TLS) makes the location not deployable; Alice never turns RDP on or
+   changes its security layer. An RDP autoenrolment policy is a warning, not a refusal.
+4. **Ruling 6:** RDP certificates are always imported into `LocalMachine\My`.
+5. **Ruling 10:** the exact grant: one access-allowed ACE for NETWORK SERVICE, with the mask F21 measured
+   (`0x80120089`, the KSP's form of `GENERIC_READ`), on the RDP certificate's key only, revoked by every rollback of
+   the operation that added it, removed with the key by cleanup. It is not revoked when a later deployment replaces
+   the certificate, so a third party's certificate keeps it.
+6. **Ruling 11:** a rollback of a first deployment deletes the value, and RDP goes back to its self-signed certificate
+   (Windows makes a new one if it was removed).
+7. **Ruling 2:** restore, status and fence of RDP operations reuse the `iis-*` subcommands by journal kind; `tls-probe`
+   gains `--rdp`.
+8. **Ruling 20:** three RDP e-mail texts of their own; every other RDP e-mail is the Windows text with an RDP note.
+9. **Ruling 26:** the runner tests turn RDP on (`fDenyTSConnections`) and toggle NLA on the hosted runners, and
+   restore both. They never change the port or the security layer.
+10. **The F19-F23 verdicts** ([W6 facts measured on real runners](#w6-facts-measured-on-real-runners)): F20 took route
+    (a), so no WMI route; F21 showed the grant is needed.
+11. **Ruling 2's warning:** every Windows server with a helper below 1.2.0 shows `win_rdp_helper_outdated` until its
+    helper is updated (the W4 "update the helpers first, then Alice" step applies).
+
+Added during execution:
+
+- **Ruling 10 amended:** the revoke removes only non-inherited access-allowed NETWORK SERVICE ACEs with flags 0 and
+  the exact stored grant mask; a NETWORK SERVICE ACE the operation did not add (a deny ACE, another mask, an inherited
+  one) stays. A revoke that leaves the key readable (a KSP merge) sets `rdp_key_acl_left` instead of failing the
+  restore. Confirm.
+- **Ruling 11 amended:** a committed journal over an absent previous value answers `restored` when a third party
+  deleted the value.
+- **Ruling 12 amended:** the journal goes `writing` before the grant, so a kill after the grant is rolled back and
+  revoked, and a kill right after `prepared` is fenced.
+- **Ruling 13 amended:** `KeyReadHad` may be nil in `prepared` or `restored`; `rdp.rebuild` is journalled for the
+  rebuild.
+- **Ruling 14 amended (F20):** a value the listener already holds is deleted and set again, so Remote Desktop serves
+  its self-signed certificate for about 10 ms during such a deployment. Confirm the window.
+- **A failed grant ends `rolled_back`** (`windows.rdp_key_acl_failed`) although the listener was never touched
+  (Task 6 ruling). Confirm the label.
+- **`rdp_key_acl_left` on `grant_key_read`** when the outcome has no restore step (Task 6 ruling).
+- **The RDP e-mails name a self-signed previous certificate by its SHA-1 only** and say it "stays in the store" (it is
+  in `Remote Desktop`, and the restore deletes the value instead): Task 5 review minor, for the final review to
+  triage (a one-sentence fix is the candidate).
+- **The helper-outdated warning** shows on every helper below 1.2.0, 1.0.0 included (Task 6 ruling).
+- **The manual matrix's "an RDP listener with its own certificate"** (W3, release checklist section 8, WIN-45) is now
+  covered on the runners (Ruling 26, `TestRealRDPSharedWithBinding`). The release checklist and WIN-45 still list it;
+  remove it there, or keep it as a hand check.
+- **The W4 and W5 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode, the
+  helper update procedure): a 1.2.0 helper needs the same "update the helpers first, then Alice" step.
+
+## Deferred to W7+
+
+- **W7, on demand**: the WinRM transport.
+- **Settled by W6** (Ruling 28): RDP deployment (`win_rdp`); the helper version literal sites; F12's set-value half
+  and W3's manual-matrix RDP item (measured on the runners, Ruling 26).
+- **Not in W6**: listeners other than `RDP-Tcp` (custom WinStations), RD Gateway, RD Web Access, RD Connection Broker
+  and RemoteApp certificates; changing any Remote Desktop setting; Group Policy and autoenrolment writers of the RDP
+  certificate (Alice warns); `SecurityLayer` 0's negotiation answer and Windows Server 2019 on a runner.
+- **Carried unchanged from [Deferred to W6+](#deferred-to-w6)**: W5's deferred items (the farm layout, CCS file
+  creation, removing the CCS password, a CCS password Alice's rule refuses); every "Carried from W2-W4" item; every
+  "Minor deferred during W5", including the `drift_observe.go:151` warning gap (a CCS read-only understatement the
+  coordinator assigned to the next small batch; W6's RDP endpoints do not read stored warnings).
+- **Minors deferred during W6 (known debt)**:
+  - tlsverify's RDP negotiation honours the context only through the connection deadline (at most 10 s) (Task 1).
+  - Only `RDPFailure(2)` maps to `ErrRDPNoTLS`; F22 measured no failure code (Task 1).
+  - The take-back test's grant fails before appending (the fake only); the real `RDPKeyRead` "contains the read bits"
+    and the revoke's "exact mask" must stay distinct (Task 2).
+  - One long comment line in `write.go`; the take-back may report `rdp_key_acl_left` after a read error (Task 2 fix
+    round 3).
+  - The emulator answers a Connection Request without `RDP_NEG_REQ` with a failure, not a plain confirm (Task 3).
+  - The emulator's stale pin stays nil when the certificate lookup errors (Task 3).
+  - The "closed unanswered" test also passes on a read timeout (Task 3).
+  - Re-adding an existing `My` certificate in the emulator drops its NETWORK SERVICE read flag (fidelity risk;
+    Task 3).
+  - The emulator's NETWORK SERVICE state is one bool per key (Ruling 23 allows it); NLA off selects SSL there, while
+    F22 measured HYBRID with NLA on and off (Task 3).
+  - The migration test never proves the `deployments` EXISTS of the Down on its own (Task 5).
+  - The RDP manual-action e-mails name a self-signed previous certificate by its SHA-1 only and say it "stays in the
+    store" (Task 5; owner item).
+  - `api/openapi.yaml`'s `backup_store`/`backup_sha1` descriptions still say "A Windows binding only" (Task 5).
+  - `TestRDPDeployOutcomeTable`'s refusal rows do not assert that nothing changed (the value, the imports) (Task 6).
+  - `logSteps` builds a per-step map literal; two `if`s would be simpler (Task 6).
+  - `TestConvertRDP`'s failed `rdp-dump` has no budget or undecodable rows (Task 6).
+  - `TestWindowsRDPCrashTable` runs only with the previous certificate in `My`, not a self-signed `previous_absent`
+    (Task 6).
+  - `discover.go:51` appends to a slice it may alias (harmless; Task 6).
