@@ -2499,7 +2499,8 @@
           "cause": "The Alice helper changes one place at a time on a server, and another helper process held its lock for longer than it waits. Nothing was changed."
         },
         "key_unusable": {
-          "cause": "The certificate is already in the store without a private key Windows can use. A deployment stopped by it left the Remote Desktop listener serving its previous certificate; for a rollback, the deployment's steps say what was done."
+          "cause": "The certificate is already in the store without a private key Windows can use, or with a private key that can be exported (or whose export policy Alice cannot read): Alice never gives NETWORK SERVICE access to an exportable key. A deployment stopped by it left the Remote Desktop listener serving its previous certificate; for a rollback, the deployment's steps say what was done.",
+          "action": "Remove that copy of the certificate from the Personal store in the Certificates snap-in, or import the certificate again with a key that is not marked exportable, then deploy again."
         },
         "location_unsupported": {
           "title": "Alice does not deploy to this Remote Desktop listener now.",

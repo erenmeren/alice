@@ -161,12 +161,16 @@ func cmdRDPDeploy(ctx context.Context, c *call) (any, error) {
 		return nil, mismatch
 	}
 	newSHA1, newSHA256 := sum1(in.leaf.Raw), sum256(in.leaf.Raw)
-	_, usable, exists, err := storeCert(ctx, h, defaultStore, newSHA1)
+	copyOf, exists, err := h.Certificate(ctx, defaultStore, newSHA1)
 	switch {
 	case err != nil:
 		return nil, certError(err)
-	case exists && !usable:
+	case exists && (!copyOf.HasKey || copyOf.KeyProblem != ""):
 		return nil, precondition(winproto.CodeKeyUnusable, "the certificate is in the store without a usable key")
+	case exists && (copyOf.KeyExportable || copyOf.ExportPolicyUnknown):
+		// Security review I1: NETWORK SERVICE never gets read access to a key that can be exported (WN-23).
+		return nil, precondition(winproto.CodeKeyUnusable,
+			"the certificate is in the store with a private key that is exportable or whose export policy cannot be read")
 	}
 	prevStore := defaultStore
 	if l.CertSHA1 == "" {

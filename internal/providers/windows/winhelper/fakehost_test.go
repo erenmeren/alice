@@ -312,6 +312,15 @@ func (f *fakeWriteHost) addCert(store string, der []byte, hasKey bool) (sha1Hex 
 	return sha1Hex
 }
 
+// setCert changes a certificate of a store (test set-up, not logged).
+func (f *fakeWriteHost) setCert(store, sha1Hex string, change func(*winproto.StoreCertificate)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.certs[[2]string{store, sha1Hex}]
+	change(&c)
+	f.certs[[2]string{store, sha1Hex}] = c
+}
+
 // writes is the write log so far.
 func (f *fakeWriteHost) writes() []string {
 	f.wmu.Lock()

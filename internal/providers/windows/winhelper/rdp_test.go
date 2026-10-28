@@ -363,6 +363,13 @@ func TestRDPDeployRefusesBeforeAnyWrite(t *testing.T) {
 		}, winproto.ExitPrecondition, winproto.CodeHashMismatch},
 		{"the new certificate in My without a key", func(f *rdpFixture) { f.h.addCert("MY", f.nw.Cert.Raw, false) },
 			winproto.ExitPrecondition, winproto.CodeKeyUnusable},
+		// Security review I1: NETWORK SERVICE is never given access to a copy whose key can be exported.
+		{"the new certificate in My with an exportable key", func(f *rdpFixture) {
+			f.h.setCert("MY", f.h.addCert("MY", f.nw.Cert.Raw, true), func(c *winproto.StoreCertificate) { c.KeyExportable = true })
+		}, winproto.ExitPrecondition, winproto.CodeKeyUnusable},
+		{"the new certificate in My with an unreadable export policy", func(f *rdpFixture) {
+			f.h.setCert("MY", f.h.addCert("MY", f.nw.Cert.Raw, true), func(c *winproto.StoreCertificate) { c.ExportPolicyUnknown = true })
+		}, winproto.ExitPrecondition, winproto.CodeKeyUnusable},
 		{"a known operation", func(f *rdpFixture) { f.rdpCommitted(op1, f.in()); f.setValue(f.oldSHA1) },
 			winproto.ExitPrecondition, winproto.CodeOperationExists},
 		{"a fenced operation", func(f *rdpFixture) { mustWrite(f.t, f.h, journal{Op: op1, Phase: winproto.PhaseFenced}) },

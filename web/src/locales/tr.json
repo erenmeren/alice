@@ -2499,7 +2499,8 @@
           "cause": "Alice yardımcısı bir sunucuda aynı anda tek bir yeri değiştirir ve başka bir yardımcı işlemi kilidini beklediği süreden uzun tuttu. Hiçbir şey değiştirilmedi."
         },
         "key_unusable": {
-          "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan zaten bulunuyor. Bu nedenle duran bir dağıtımda Uzak Masaüstü dinleyicisi önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları söyler."
+          "cause": "Sertifika depoda Windows'un kullanabileceği bir özel anahtar olmadan ya da dışa aktarılabilen (veya dışa aktarma ilkesini Alice'in okuyamadığı) bir özel anahtarla zaten bulunuyor: Alice, dışa aktarılabilen bir anahtar için NETWORK SERVICE'e hiçbir zaman erişim vermez. Bu nedenle duran bir dağıtımda Uzak Masaüstü dinleyicisi önceki sertifikasını sunmaya devam eder; bir geri almada ne yapıldığını dağıtımın adımları söyler.",
+          "action": "Sertifikanın bu kopyasını Sertifikalar ek bileşeninde Kişisel deposundan kaldırın ya da sertifikayı dışa aktarılabilir olarak işaretlenmemiş bir anahtarla yeniden içe aktarın, ardından yeniden dağıtın."
         },
         "location_unsupported": {
           "title": "Alice şu an bu Uzak Masaüstü dinleyicisine dağıtım yapmaz.",

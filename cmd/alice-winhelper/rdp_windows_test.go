@@ -776,6 +776,28 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 		assert.Equal(t, before, end, "F21: %s: the ACEs the grant did not add stay", c.name)
 	}
 
+	// Security review I1: a copy in My whose key can be exported. rdp-deploy refuses it before any change
+	// (KEY_UNUSABLE): NETWORK SERVICE is never given access to it, and its DACL and the listener stay.
+	ca := fixtureCA("alice-w6-exportable")
+	exp := issue(ca, "alice-w6-exportable.test")
+	expThumb := importLeafExportable(t, exp)
+	ec, found, err := f.h.Certificate(f.ctx, "MY", expThumb)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, ec.KeyExportable, "Import-PfxCertificate -Exportable")
+	expBefore, _ := keySDDL(t, "My", expThumb)
+	valueBefore, err := f.h.RDPListener(f.ctx)
+	require.NoError(t, err)
+	refused := f.call(rdpDeployInput(t, exp.FullchainPEM, exp.KeyPEM, selfSHA256), winproto.SubRDPDeploy, winproto.ArgOp, op2)
+	assert.Equal(t, false, refused["ok"], "%v", refused)
+	assert.Equal(t, winproto.CodeKeyUnusable, refused["code"], "%v", refused)
+	expAfter, _ := keySDDL(t, "My", expThumb)
+	assert.Equal(t, expBefore, expAfter, "the exportable key's DACL is unchanged")
+	valueAfter, err := f.h.RDPListener(f.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, valueBefore.CertSHA1, valueAfter.CertSHA1, "the listener is unchanged")
+	t.Logf("security review I1: an exportable copy in My: %v %v (DACL %s)", refused["code"], refused["phase"], expAfter)
+
 	// The key methods refuse another store.
 	_, err = f.h.RDPKeyRead(f.ctx, winproto.RDPStoreSelfSigned, asString(dumpCert(t, f.dump())["sha1"]))
 	assert.ErrorIs(t, err, errRDPStore)

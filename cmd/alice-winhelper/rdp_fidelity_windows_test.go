@@ -23,7 +23,9 @@ package main
 //     checks decide them before any host call, so both hosts answer alike by construction (Task 2's
 //     tests cover them);
 //   - BUSY: it needs a second process holding the lock; TestRealStateFilesLockHolder covers the real
-//     lock.
+//     lock;
+//   - KEY_UNUSABLE for a copy whose export policy cannot be read: the emulator models exportability only
+//     (an exportable copy is compared), and winhelper's TestRDPDeployRefusesBeforeAnyWrite covers it.
 // Compared, because each host's data directory or machine decides them: UNKNOWN_OP, SUPERSEDED,
 // OPERATION_EXISTS, FENCED, RECOVERY_PENDING, HASH_MISMATCH, KEY_UNUSABLE, RDP_DISABLED and a
 // restore_forbidden restore.
@@ -175,6 +177,12 @@ func TestFidelityRDP(t *testing.T) {
 	importCertificate(t, "My", b.Cert)
 	tw.model.AddCertificate("My", b.CertPEM, nil, wintest.CertOptions{})
 	assertCode(t, tw.deploy(op4, b, aSHA), winproto.CodeKeyUnusable)
+
+	// A copy in My whose key can be exported (security review I1): refused on both hosts.
+	e := issue(ca, "alice-w6-fidelity-e.test")
+	importLeafExportable(t, e)
+	tw.model.AddCertificate("My", e.CertPEM, e.KeyPEM, wintest.CertOptions{Exportable: true})
+	assertCode(t, tw.deploy(op4, e, aSHA), winproto.CodeKeyUnusable)
 
 	// Remote Desktop turned off (fDenyTSConnections, restored as found by the fixture).
 	require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(1), nil))

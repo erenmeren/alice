@@ -44,6 +44,17 @@ func importCertificate(t *testing.T, store string, c *x509.Certificate) string {
 // non-exportable, as an administrator would) and removes both when the test ends.
 func importLeafWithKey(t *testing.T, leaf pki.Leaf) string {
 	t.Helper()
+	return importPFXLeaf(t, leaf, "")
+}
+
+// importLeafExportable is importLeafWithKey with an exportable key (Import-PfxCertificate -Exportable).
+func importLeafExportable(t *testing.T, leaf pki.Leaf) string {
+	t.Helper()
+	return importPFXLeaf(t, leaf, " -Exportable")
+}
+
+func importPFXLeaf(t *testing.T, leaf pki.Leaf, flags string) string {
+	t.Helper()
 	pw := make([]byte, 16)
 	_, err := rand.Read(pw)
 	require.NoError(t, err)
@@ -56,7 +67,7 @@ func importLeafWithKey(t *testing.T, leaf pki.Leaf) string {
 	t.Cleanup(func() { removeCertificate(t, "My", thumb, true) })
 	powershellEnv(t, map[string]string{"ALICE_W1_FILE": file, "ALICE_W1_PASSWORD": password},
 		`$pw = ConvertTo-SecureString -String $env:ALICE_W1_PASSWORD -AsPlainText -Force; `+
-			`Import-PfxCertificate -FilePath $env:ALICE_W1_FILE -CertStoreLocation Cert:\LocalMachine\My -Password $pw | Out-Null`)
+			`Import-PfxCertificate -FilePath $env:ALICE_W1_FILE -CertStoreLocation Cert:\LocalMachine\My -Password $pw`+flags+` | Out-Null`)
 	return thumb
 }
 

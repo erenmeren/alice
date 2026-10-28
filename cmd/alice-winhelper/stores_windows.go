@@ -336,9 +336,9 @@ func keyFacts(ctx *windows.CertContext, c *winproto.StoreCertificate) error {
 		case hresult(e, codeNoKeyProperty, codeBadKeyset, codeNoKey, codeNteNotFound, codeFileNotFound, codeHRFileNotFound):
 			c.KeyProblem = "key_missing" // the certificate names a key that is not there
 		case hresult(e, codeAccessDenied, codeHRAccessDenied, codeNtePerm):
-			c.HasKey = true // there is a key the elevated helper may not open; SYSTEM's access is unknown
+			c.HasKey, c.ExportPolicyUnknown = true, true // there is a key the elevated helper may not open; SYSTEM's access is unknown
 		default:
-			c.HasKey = true // e.g. a legacy CSP key CNG does not open: the facts stay unknown
+			c.HasKey, c.ExportPolicyUnknown = true, true // e.g. a legacy CSP key CNG does not open: the facts stay unknown
 		}
 		return nil
 	}
@@ -348,6 +348,8 @@ func keyFacts(ctx *windows.CertContext, c *winproto.StoreCertificate) error {
 	c.HasKey = true
 	if policy, ok := keyExportPolicy(key); ok {
 		c.KeyExportable = policy&ncryptAllowExportFlags != 0
+	} else {
+		c.ExportPolicyUnknown = true
 	}
 	c.KeyUsableBySystem = systemCanRead(key)
 	if c.KeyUsableBySystem != nil && !*c.KeyUsableBySystem {

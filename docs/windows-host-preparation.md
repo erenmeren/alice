@@ -339,7 +339,10 @@ What a deployment to the Remote Desktop listener changes:
   and the key still cannot be exported. The helper never changes another key. A rollback takes the entry back; a
   later deployment of another certificate leaves it, so a rollback to this certificate still works, and the cleanup
   removes it with the key when Alice imported the certificate. On a certificate you imported yourself the entry
-  stays until you remove it (certificates console, **Manage Private Keys**).
+  stays until you remove it (certificates console, **Manage Private Keys**). The helper never gives NETWORK SERVICE
+  access to a key that can be exported: a copy of the certificate already in `My` with an exportable key (or one
+  whose export policy cannot be read) is refused before anything changes. Replace that copy, or remove it and import
+  the certificate again without marking the key exportable.
 - **The registry value `SSLCertificateSHA1Hash`** of `HKLM\SYSTEM\CurrentControlSet\Control\Terminal
   Server\WinStations\RDP-Tcp`: set to the certificate's SHA-1 thumbprint. It is the only registry value the helper
   writes. Remote Desktop serves the new certificate to the next connection (on the test systems within about 20 ms),

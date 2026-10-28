@@ -1532,7 +1532,11 @@ server once with the PowerShell setup script that **Add server** shows for **Win
 - **What a deployment to the Remote Desktop listener does.** The helper imports the intermediate certificates into
   `CA` and the certificate, with a private key that cannot be exported, into **Personal** (`My`). Remote Desktop runs
   as NETWORK SERVICE, so the helper then gives NETWORK SERVICE read access to that one key (one entry of the key's
-  access list, nothing else changes; the key still cannot be exported) unless it can already read it. Then it points
+  access list, nothing else changes; the key still cannot be exported) unless it can already read it. Alice never
+  gives NETWORK SERVICE access to a key that can be exported: when the certificate is already in **Personal** with an
+  exportable key, or one whose export policy the helper cannot read, the deployment is refused before anything
+  changes (`windows.key_unusable`). Replace that copy, or remove it and import the certificate again without marking
+  the key exportable, then deploy again. Then it points
   the listener to the certificate (the registry value `SSLCertificateSHA1Hash` of `RDP-Tcp`, the only value it writes)
   and reads it back. The deployment's page shows **Import the chain**, **Import the certificate**, **Allow NETWORK
   SERVICE to read the key**, **Point the listener to the certificate** and **Verify**. Windows uses the new certificate

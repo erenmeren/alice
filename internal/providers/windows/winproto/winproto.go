@@ -343,6 +343,9 @@ type StoreCertificate struct {
 	KeyExportable     bool     `json:"key_exportable"`
 	KeyUsableBySystem *bool    `json:"key_usable_by_system"`
 	KeyProblem        string   `json:"key_problem,omitempty"`
+	// ExportPolicyUnknown is the helper's own fact, never sent: the certificate has a key whose export policy could
+	// not be read (rdp-deploy refuses to give NETWORK SERVICE access to it, as to an exportable key).
+	ExportPolicyUnknown bool `json:"-"`
 	// AliceImported is true when the helper's journals record that Alice imported this certificate.
 	AliceImported bool `json:"alice_imported"`
 }
