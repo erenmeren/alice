@@ -13,6 +13,7 @@ package main
 //	https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-strings
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // G505: the store's thumbprint is SHA-1; it names a certificate, it secures nothing
 	"encoding/binary"
@@ -50,9 +51,11 @@ const (
 	rdpDefaultNLA   = 1
 )
 
-// rdpGrantMask is the mask of Ruling 10's one ACE (F21 measures it); a revoke removes only an
-// access-allowed NETWORK SERVICE ACE of exactly this mask.
-const rdpGrantMask = windows.GENERIC_READ
+// rdpGrantMask is the mask of Ruling 10's one ACE as the key stores it (F21, runner run 1): the
+// Microsoft Software KSP keeps a written GENERIC_READ as GENERIC_READ | FILE_GENERIC_READ (0x80120089), so
+// the helper writes that form, and a revoke removes only an access-allowed NETWORK SERVICE ACE of exactly
+// this mask.
+const rdpGrantMask uint32 = windows.GENERIC_READ | 0x00120089
 
 // aclRevision is ACL_REVISION, the lowest revision of an ACL of access-allowed and denied ACEs.
 const aclRevision byte = 2
@@ -64,6 +67,7 @@ var (
 	errNoCert    = errors.New("the store holds no such certificate")
 	errKeyACL    = errors.New("the key's security descriptor could not be read or written")
 	errNoKeyDACL = errors.New("the key's security descriptor has no DACL")
+	errKeyMerged = errors.New("the key did not keep the grant as one ACE of its own")
 )
 
 // RDPListener reads RDP-Tcp's settings as Windows applies them (Ruling 5). Present is false when the
@@ -280,6 +284,9 @@ func (host) RDPKeyRead(ctx context.Context, store, sha1Hex string) (bool, error)
 // SetRDPKeyRead appends Ruling 10's one ACE (grant) or removes the non-inherited access-allowed
 // NETWORK SERVICE ACEs of exactly rdpGrantMask (revoke) on the key of the certificate in My; the other
 // ACEs, their order and the descriptor's control bits stay. A revoke that finds nothing writes nothing.
+// A grant is read back: the key must hold its ACEs as before plus the one ACE. The KSP merges a new
+// allow ACE into an existing one of the same trustee (F21, run 1), which no revoke could take back
+// alone, so then the DACL as it was is written back and the grant fails (errKeyMerged).
 func (host) SetRDPKeyRead(ctx context.Context, store, sha1Hex string, grant bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -294,7 +301,22 @@ func (host) SetRDPKeyRead(ctx context.Context, store, sha1Hex string, grant bool
 			if err != nil {
 				return err
 			}
-			return editKeyDACL(key, nil, ace)
+			before, saved, err := keyACEs(key)
+			if err != nil {
+				return err
+			}
+			if err := editKeyDACL(key, nil, ace); err != nil {
+				return err
+			}
+			after, _, err := keyACEs(key)
+			if err == nil && bytes.Equal(after, append(before, ace...)) {
+				return nil
+			}
+			// unsafe: saved holds the self-relative descriptor read before the grant.
+			if err := setKeySecurity(key, (*windows.SECURITY_DESCRIPTOR)(unsafe.Pointer(&saved[0]))); err != nil {
+				return err
+			}
+			return errKeyMerged
 		}
 		return editKeyDACL(key, func(a *windows.ACCESS_ALLOWED_ACE, sid *windows.SID) bool {
 			return a.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && a.Header.AceFlags&windows.INHERITED_ACE == 0 &&
@@ -360,6 +382,22 @@ func keyDACL(key windows.Handle) (*windows.SECURITY_DESCRIPTOR, []uint64, error)
 	return sd, buf, nil
 }
 
+// keyACEs is a key's DACL as the bytes of its ACEs, in order, with the descriptor's buffer.
+func keyACEs(key windows.Handle) ([]byte, []uint64, error) {
+	sd, keep, err := keyDACL(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return nil, nil, errNoKeyDACL
+	}
+	var out []byte
+	err = eachACE(dacl, func(_ *windows.ACCESS_ALLOWED_ACE, _ *windows.SID, raw []byte) { out = append(out, raw...) })
+	runtime.KeepAlive(keep)
+	return out, keep, err
+}
+
 // networkServiceCanRead reports an access-allowed ACE that applies to the key itself, names NETWORK
 // SERVICE or Everyone and holds GENERIC_READ or GENERIC_ALL. A NULL DACL grants everyone.
 func networkServiceCanRead(sd *windows.SECURITY_DESCRIPTOR) (bool, error) {
@@ -381,7 +419,7 @@ func networkServiceCanRead(sd *windows.SECURITY_DESCRIPTOR) (bool, error) {
 	readable := false
 	err = eachACE(dacl, func(a *windows.ACCESS_ALLOWED_ACE, sid *windows.SID, _ []byte) {
 		if a.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && a.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0 &&
-			uint32(a.Mask)&(rdpGrantMask|windows.GENERIC_ALL) != 0 && (windows.EqualSid(sid, ns) || windows.EqualSid(sid, world)) {
+			uint32(a.Mask)&(windows.GENERIC_READ|windows.GENERIC_ALL) != 0 && (windows.EqualSid(sid, ns) || windows.EqualSid(sid, world)) {
 			readable = true
 		}
 	})

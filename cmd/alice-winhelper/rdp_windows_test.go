@@ -503,6 +503,34 @@ func TestRealRDPListenerOnRunner(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("F19: the helper reads %+v", l)
 	assert.True(t, l.Enabled, "RDP is on")
+	if f.found.Deny != nil && *f.found.Deny == 0 {
+		// The image has RDP on: turn it off and on again by the value alone (no restart), as F19 states.
+		require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(1), nil))
+		start := time.Now()
+		var nerr error
+		for time.Since(start) < rdpListenWait {
+			if _, nerr = negotiateOnly(f.addr()); nerr != nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		t.Logf("F19: fDenyTSConnections=1: the listener stops answering after %d ms (%v)", time.Since(start).Milliseconds(), nerr)
+		off, err := f.h.RDPListener(f.ctx)
+		require.NoError(t, err)
+		assert.False(t, off.Enabled)
+		offDump := f.dump()
+		t.Logf("F19: rdp-dump with RDP off: enabled %v", offDump["enabled"])
+		require.NoError(t, setRaw(keyTerminalServer, valueRDPDeny, u32(0), nil))
+		start = time.Now()
+		for time.Since(start) < rdpListenWait {
+			if _, nerr = negotiateOnly(f.addr()); nerr == nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		t.Logf("F19: fDenyTSConnections=0 again: the listener answers after %d ms (%v)", time.Since(start).Milliseconds(), nerr)
+		require.NoError(t, nerr, "F19: RDP turned on again by the value alone answers within %v", rdpListenWait)
+	}
 
 	d := f.dump()
 	t.Logf("F19: rdp-dump present %v enabled %v nla %v value_set %v port %v security_layer %v cert_template %q self_signed_count %v",
@@ -598,6 +626,11 @@ func TestRealRDPDeployIsPickedUp(t *testing.T) {
 		rebuilt, dd.Milliseconds(), len(last), err)
 	f.setValue("")
 	f.requirePickup("F20", "the self-signed certificate after the value was deleted", selfSHA256)
+	f.setValue(thumb2)
+	dd, rebuilt, last, err = rdpPickup(f.addr(), sum256hex(leaf2.Cert.Raw), 0, 20*time.Second)
+	t.Logf("F20: the value deleted and set again: the leaf served %v after %d ms with a chain of %d (%v)", rebuilt, dd.Milliseconds(), len(last), err)
+	f.setValue("")
+	f.requirePickup("F20", "the self-signed certificate after the value was deleted again", selfSHA256)
 
 	// (3) A certificate only in Remote Desktop (not My), named by the value, with NETWORK SERVICE's
 	// read access (the helper's own ACE splice: SetRDPKeyRead refuses that store).
@@ -658,7 +691,7 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	require.NoError(t, f.h.SetRDPKeyRead(f.ctx, "MY", thumb, true))
 	granted, grantedFull := keySDDL(t, "My", thumb)
 	t.Logf("F21: the key's SDDL after the grant: %s (DACL %s)", grantedFull, granted)
-	assert.Equal(t, imported+"(A;;GR;;;NS)", granted, "Ruling 10's one ACE appended")
+	assert.Equal(t, imported+"(A;;0x80120089;;;NS)", granted, "Ruling 10's one ACE appended (GENERIC_READ as the KSP stores it)")
 	readable, err = f.h.RDPKeyRead(f.ctx, "MY", thumb)
 	require.NoError(t, err)
 	assert.True(t, readable, "the helper's has-read test matches the grant")
@@ -681,23 +714,53 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	assert.False(t, readable)
 	assert.True(t, exportRefused(t, "My", thumb), "F21: the key stays not exportable")
 
-	// Coordinator precision 3: NETWORK SERVICE ACEs of another kind or mask survive a grant and revoke.
-	leaf2 := pki.SelfSigned("alice-w6-f21b.test", pki.ECDSA256, time.Now())
-	thumb2 := f.importInto("My", leaf2)
-	addACE(t, "My", thumb2, windows.DENY_ACCESS, windows.GENERIC_WRITE, windows.WinNetworkServiceSid)
-	addACE(t, "My", thumb2, windows.GRANT_ACCESS, 0x1, windows.WinNetworkServiceSid)
-	before, _ := keySDDL(t, "My", thumb2)
-	t.Logf("F21: a key with NETWORK SERVICE ACEs of its own: %s", before)
-	readable, err = f.h.RDPKeyRead(f.ctx, "MY", thumb2)
-	require.NoError(t, err)
-	assert.False(t, readable, "an allow ACE without the read bits is no read")
-	require.NoError(t, f.h.SetRDPKeyRead(f.ctx, "MY", thumb2, true))
-	mid, _ := keySDDL(t, "My", thumb2)
-	t.Logf("F21: after the grant: %s", mid)
-	require.NoError(t, f.h.SetRDPKeyRead(f.ctx, "MY", thumb2, false))
-	end, _ := keySDDL(t, "My", thumb2)
-	t.Logf("F21: after the revoke: %s", end)
-	assert.Equal(t, before, end, "F21: the revoke removes only the grant's ACE; the deny ACE and the other mask stay")
+	// Coordinator precision 3: ACEs the grant did not add survive it and the revoke. (a) A NETWORK SERVICE
+	// deny ACE and another trustee's allow ACE: the grant appends, the revoke takes back only its ACE.
+	// (b) A NETWORK SERVICE allow ACE of another mask (DELETE, no read): the KSP merges a new allow ACE of
+	// the trustee into it (run 1), so the grant reads that back, writes the DACL as it was and fails.
+	for i, c := range []struct {
+		name  string
+		aces  []func(thumb string)
+		merge bool
+	}{
+		{"a deny ACE and another trustee", []func(string){
+			func(th string) {
+				addACE(t, "My", th, windows.DENY_ACCESS, windows.GENERIC_WRITE, windows.WinNetworkServiceSid)
+			},
+			func(th string) {
+				addACE(t, "My", th, windows.GRANT_ACCESS, windows.GENERIC_READ, windows.WinLocalServiceSid)
+			},
+		}, false},
+		{"an allow ACE of another mask", []func(string){
+			func(th string) {
+				addACE(t, "My", th, windows.GRANT_ACCESS, windows.DELETE, windows.WinNetworkServiceSid)
+			},
+		}, true},
+	} {
+		other := pki.SelfSigned(fmt.Sprintf("alice-w6-f21-%d.test", i+2), pki.ECDSA256, time.Now())
+		th := f.importInto("My", other)
+		for _, add := range c.aces {
+			add(th)
+		}
+		before, _ := keySDDL(t, "My", th)
+		readable, err = f.h.RDPKeyRead(f.ctx, "MY", th)
+		require.NoError(t, err)
+		t.Logf("F21: %s: %s (NETWORK SERVICE can read: %v)", c.name, before, readable)
+		assert.False(t, readable, "%s: no read for NETWORK SERVICE", c.name)
+		gerr := f.h.SetRDPKeyRead(f.ctx, "MY", th, true)
+		mid, _ := keySDDL(t, "My", th)
+		t.Logf("F21: %s: after the grant (%v): %s", c.name, gerr, mid)
+		if c.merge && errors.Is(gerr, errKeyMerged) {
+			assert.Equal(t, before, mid, "%s: a merged grant is written back", c.name)
+		} else {
+			require.NoError(t, gerr, c.name)
+			assert.Equal(t, before+"(A;;0x80120089;;;NS)", mid, "%s: the grant appends its ACE", c.name)
+			require.NoError(t, f.h.SetRDPKeyRead(f.ctx, "MY", th, false))
+		}
+		end, _ := keySDDL(t, "My", th)
+		t.Logf("F21: %s: after the revoke: %s", c.name, end)
+		assert.Equal(t, before, end, "F21: %s: the ACEs the grant did not add stay", c.name)
+	}
 
 	// The key methods refuse another store.
 	_, err = f.h.RDPKeyRead(f.ctx, winproto.RDPStoreSelfSigned, asString(dumpCert(t, f.dump())["sha1"]))
