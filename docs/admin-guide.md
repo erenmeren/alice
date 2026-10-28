@@ -1547,13 +1547,13 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   access Alice added is taken back. If it could not be taken back, the step says so: remove the NETWORK SERVICE entry
   from the key's access list by hand (certificate's **Manage Private Keys** in the certificates console). A
   deployment whose key access could not be given ends **Failed, restored** with the listener untouched (`ALC-WIN-0023`).
-  Two keys are refused before anything changes. Alice never gives NETWORK SERVICE access to a key that can be
-  exported: when the certificate is already in **Personal** with an exportable key, or one whose export policy the
-  helper cannot read, the deployment is refused (`windows.key_unusable`); replace that copy, or remove it and import
+  Two keys are refused. Alice never gives NETWORK SERVICE access to a key that can be exported: when the certificate
+  is already in **Personal** with an exportable key, or one whose export policy the helper cannot read, the
+  deployment is refused before anything changes (`windows.key_unusable`); replace that copy, or remove it and import
   the certificate again without marking the key exportable, then deploy again. And a key whose access list already
   denies NETWORK SERVICE or Everyone the read right ends the deployment at **Allow NETWORK SERVICE to read the key**
-  with `ALC-WIN-0023`: no entry is added and the listener keeps the certificate it had; remove that deny entry
-  (**Manage Private Keys**) or deploy another certificate.
+  with **Failed, restored** (`ALC-WIN-0023`): no entry is added and the listener keeps the certificate it had;
+  remove that deny entry (**Manage Private Keys**) or deploy another certificate.
   Each deployment is event **1005** in the Application log (`operation <operation> rdp RDP-Tcp old <sha256> new
   <sha256> key_read_granted <true|false>`), a restore **1002**. If Remote Desktop stops accepting connections after a change, sign in through the
   server's console or over SSH: see [troubleshooting.md](troubleshooting.md#deployments).

@@ -343,9 +343,10 @@ What a deployment to the Remote Desktop listener changes:
   access to a key that can be exported: a copy of the certificate already in `My` with an exportable key (or one
   whose export policy cannot be read) is refused before anything changes. Replace that copy, or remove it and import
   the certificate again without marking the key exportable. A key whose access list holds an entry that denies
-  NETWORK SERVICE or Everyone the read right is refused the same way, before anything changes (`ALC-WIN-0023`): the
-  helper adds no entry and leaves the listener as it was; remove the deny entry (**Manage Private Keys**) or deploy
-  another certificate. A deny entry of another account, or one without the read right, does not refuse.
+  NETWORK SERVICE or Everyone the read right ends the deployment at the key-access step (`ALC-WIN-0023`): the
+  certificate and its chain are imported, but the helper adds no access entry and leaves the listener as it was;
+  remove the deny entry (**Manage Private Keys**) or deploy another certificate. A deny entry of another account, or
+  one without the read right, does not refuse.
 - **The registry value `SSLCertificateSHA1Hash`** of `HKLM\SYSTEM\CurrentControlSet\Control\Terminal
   Server\WinStations\RDP-Tcp`: set to the certificate's SHA-1 thumbprint. It is the only registry value the helper
   writes. Remote Desktop serves the new certificate to the next connection (on the test systems within about 20 ms),

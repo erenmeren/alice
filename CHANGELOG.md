@@ -4,8 +4,8 @@
 
 **Changed**
 - A deployment to the Remote Desktop listener whose certificate's private key denies NETWORK SERVICE or Everyone the
-  read right is refused at **Allow NETWORK SERVICE to read the key** (`ALC-WIN-0023`) before anything changes: no
-  access entry is added and the listener keeps its certificate. Before, the listener was pointed to a certificate
+  read right is refused at **Allow NETWORK SERVICE to read the key** (`ALC-WIN-0023`): no access entry is added and
+  the listener keeps its certificate. Before, the listener was pointed to a certificate
   Remote Desktop could not use and the deployment rolled back.
 - A Windows server whose helper is replaced by one below 1.2.0 keeps its Remote Desktop listener listed as the last
   1.2.0 scan left it, instead of marking it missing; a deployment to it is refused as the helper being too old.
