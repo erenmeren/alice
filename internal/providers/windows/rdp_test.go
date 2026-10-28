@@ -170,9 +170,9 @@ func TestDiscoverWithoutRDPIsW5(t *testing.T) {
 	assert.Empty(t, rdpLocations(w6.Certificates))
 	require.Equal(t, len(w5.Certificates), len(w6.Certificates))
 	for i := range w5.Certificates {
-		// Each run's demo host issues its own certificates: everything but their hashes is compared.
+		// Each run's demo host issues its own certificates and stamps its own file times (two runs can straddle a second): everything but their hashes and modified_at is compared.
 		a, b := w5.Certificates[i].Location, w6.Certificates[i].Location
-		for _, k := range []string{"cert_sha1", "file_sha256", "file_size"} {
+		for _, k := range []string{"cert_sha1", "file_sha256", "file_size", "modified_at"} {
 			delete(a.Details, k)
 			delete(b.Details, k)
 		}
