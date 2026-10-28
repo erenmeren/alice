@@ -346,9 +346,9 @@ What a deployment to the Remote Desktop listener changes:
 - **The registry value `SSLCertificateSHA1Hash`** of `HKLM\SYSTEM\CurrentControlSet\Control\Terminal
   Server\WinStations\RDP-Tcp`: set to the certificate's SHA-1 thumbprint. It is the only registry value the helper
   writes. Remote Desktop serves the new certificate to the next connection (on the test systems within about 20 ms),
-  without a restart. When the listener already names the certificate but serves an older chain, the helper removes
-  the value and sets it again, because only that makes Windows send the new chain: Remote Desktop serves its
-  self-signed certificate for about 10 ms in between.
+  without a restart. When the listener already names the certificate and the deployment changes its key access or
+  chain, the helper removes the value and sets it again, because only that makes Windows send the new chain: Remote
+  Desktop serves its self-signed certificate for about 10 ms in between.
 - **`C:\ProgramData\Alice\helper`**: the journal of the change, as for a binding. It records whether NETWORK SERVICE
   could read the key before, so an interrupted change takes back only the entry it added.
 - **The Application event log**, source `Alice Helper`: event **1005** `operation <operation> rdp RDP-Tcp old
