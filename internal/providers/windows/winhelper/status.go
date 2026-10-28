@@ -47,14 +47,22 @@ func statusOf(ctx context.Context, h WriteHost, j journal, resp winproto.StatusR
 	}
 	if j.RDP != nil {
 		// The listener names its certificate by its value (W6 Ruling 11): the new leaf, the previous one
-		// (the self-signed certificate while the value is absent, when it was), else "".
+		// (while the value is absent, when it was: the previous self-signed certificate, only while Remote
+		// Desktop still holds exactly it), else "".
 		// An interrupted rebuild's absent value names the new leaf, as the restore reads it (rdpNamesNew).
 		if l, err := h.RDPListener(ctx); err == nil && l.Present {
 			switch {
 			case rdpNamesNew(j, l.CertSHA1):
 				resp.CurrentCertSHA256 = j.NewSHA256
-			case l.CertSHA1 == rdpPreviousValue(j):
+			case l.CertSHA1 != rdpPreviousValue(j):
+			case l.CertSHA1 != "":
 				resp.CurrentCertSHA256 = j.PreviousSHA256
+			default:
+				// Final review M5: Windows may have made a new self-signed certificate since, so the store
+				// is read. CurrentCertSHA256 is informational: no recovery decision reads it.
+				if cur, _, err := rdpCurrent(ctx, h, l); err == nil && cur != nil && cur.SHA1 == j.PreviousSHA1 {
+					resp.CurrentCertSHA256 = j.PreviousSHA256
+				}
 			}
 		}
 		return resp

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/testutil/pki"
 )
 
 func TestStatusAndFence(t *testing.T) {
@@ -132,4 +133,31 @@ func TestStatusAndFence(t *testing.T) {
 			t.Fatal(r)
 		}
 	})
+}
+
+// TestRDPStatusAbsentValueChecksTheStore (W6 final review M5, R70): a restored RDP operation whose
+// previous value was absent names the previous self-signed certificate only while Remote Desktop holds
+// exactly it; another self-signed certificate (Windows made a new one), or two, is "".
+func TestRDPStatusAbsentValueChecksTheStore(t *testing.T) {
+	f := newRDPFixture(t, true)
+	f.rdpCommitted(op1, f.in())
+	if _, r, raw := f.restore(op1, []string{}, []string{}); r.Phase != winproto.PhaseRestored {
+		t.Fatalf("%s", raw)
+	}
+	if j := f.journal(op1); !j.RDP.PreviousAbsent || j.PreviousSHA1 != f.selfSHA1 || f.value() != "" {
+		t.Fatalf("%+v %+v value %q", j, j.RDP, f.value())
+	}
+	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != f.selfSHA256 {
+		t.Fatalf("the previous self-signed certificate: %s", raw)
+	}
+	other := pki.SelfSigned("WIN-RDP-NEW", pki.ECDSA256, testNow)
+	delete(f.h.certs, [2]string{winproto.RDPStoreSelfSigned, f.selfSHA1})
+	f.h.addCert(winproto.RDPStoreSelfSigned, other.Cert.Raw, true)
+	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
+		t.Fatalf("another self-signed certificate: %s", raw)
+	}
+	f.h.addCert(winproto.RDPStoreSelfSigned, f.self.Cert.Raw, true)
+	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
+		t.Fatalf("two self-signed certificates: %s", raw)
+	}
 }
