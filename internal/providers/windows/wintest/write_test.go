@@ -9,14 +9,19 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/testutil/pki"
@@ -840,6 +845,7 @@ func TestModelCleanupKeepsListeners(t *testing.T) {
 			t.Fatal("A was removed")
 		}
 	}
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, Port: 3389, SecurityLayer: 2})
 	f.m.SetRDPThumbprint(aSHA)
 	keptBy(winproto.KeptRDP)
 	f.m.SetRDPThumbprint("")
@@ -981,6 +987,10 @@ func TestModelRemoveCertificateWholeAndOutside(t *testing.T) {
 	}
 	f.m.SetRDPThumbprint("ABCD")
 	f.m.SetWinRMThumbprints("EF", "01")
+	if p, _ := h.ProtectedThumbprints(ctx); len(p.RDP) != 0 {
+		t.Fatalf("without the RDP-Tcp key the value protects nothing: %+v", p)
+	}
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, Port: 3389, SecurityLayer: 2})
 	if p, _ := h.ProtectedThumbprints(ctx); !slices.Equal(p.RDP, []string{"abcd"}) || !slices.Equal(p.WinRM, []string{"ef", "01"}) {
 		t.Fatalf("%+v", p)
 	}
@@ -1565,5 +1575,343 @@ func TestModelCCSCorruptPFXIsAPasswordMismatch(t *testing.T) {
 	}
 	if mismatch < len(pfx)/2 {
 		t.Fatalf("only %d of %d corruptions read as a mismatch", mismatch, len(pfx))
+	}
+}
+
+// rfix is a model with the RDP-Tcp listener (enabled, security layer 2, NLA on, the value absent) and its
+// self-signed certificate in Remote Desktop, served on a random port (W6 Ruling 23).
+type rfix struct {
+	m    *Model
+	ca   *pki.CA
+	self pki.Leaf
+}
+
+func newRDPFixture(t *testing.T) *rfix {
+	t.Helper()
+	f := &rfix{m: NewModel(), ca: pki.NewCA("RDP", pki.ECDSA256, now), self: pki.SelfSigned("win-rdp01", pki.ECDSA256, now)}
+	f.m.AddIntermediate(f.ca.IntermediatePEM)
+	f.m.AddCertificate(winproto.RDPStoreSelfSigned, f.self.CertPEM, f.self.KeyPEM, CertOptions{})
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, NLA: true, Port: 3389, SecurityLayer: 2})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := f.m.Serve(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); f.m.serving.Wait() })
+	return f
+}
+
+// probe is Alice's RDP probe of the listener: the served leaf's SHA-256, or the error.
+func (f *rfix) probe(t *testing.T) (string, error) {
+	t.Helper()
+	h, p, err := net.SplitHostPort(f.m.Endpoint(3389))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(p)
+	got, err := tlsverify.TLSProber{RDP: true}.Probe(context.Background(), h, port, "", helperproto.ProbeAny)
+	return got.LeafSHA256, err
+}
+
+func (f *rfix) served(t *testing.T) string {
+	t.Helper()
+	got, err := f.probe(t)
+	if err != nil {
+		t.Fatalf("the RDP probe fails: %v", err)
+	}
+	return got
+}
+
+func (f *rfix) dump(t *testing.T) winproto.RDPDumpResponse {
+	t.Helper()
+	var d winproto.RDPDumpResponse
+	if r := run(t, f.m, winproto.SubRDPDump, nil, &d); r.Exit != 0 || !d.OK {
+		t.Fatalf("rdp-dump: %d %s", r.Exit, r.Stdout)
+	}
+	return d
+}
+
+func rdpDeployInput(t *testing.T, expect string, l pki.Leaf) []byte {
+	t.Helper()
+	in, err := json.Marshal(winproto.RDPDeployInput{ExpectSHA256: expect, ChainPEM: string(l.FullchainPEM), KeyPEM: string(l.KeyPEM),
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+func (f *rfix) deploy(t *testing.T, op, expect string, l pki.Leaf) (linuxsshtest.Response, winproto.DeployResponse) {
+	t.Helper()
+	var d winproto.DeployResponse
+	r := run(t, f.m, winproto.SubRDPDeploy+" --op "+op, rdpDeployInput(t, expect, l), &d)
+	return r, d
+}
+
+func (f *rfix) issue() pki.Leaf {
+	return f.ca.Issue(pki.Opts{CommonName: "rdp.example.test", SANs: []string{"rdp.example.test"}}, now)
+}
+
+func TestModelRDPDeployAndServe(t *testing.T) {
+	f := newRDPFixture(t)
+	selfSHA := sum256(f.self.Cert.Raw)
+	d := f.dump(t)
+	if !d.Present || !d.Enabled || !d.NLA || d.ValueSet || d.Port != 3389 || d.SecurityLayer != 2 || d.SelfSignedCount != 1 ||
+		d.Certificate == nil || d.Certificate.SHA256 != selfSHA || d.Certificate.Store != winproto.RDPStoreSelfSigned {
+		t.Fatalf("%+v", d)
+	}
+	if got := f.served(t); got != selfSHA {
+		t.Fatalf("before: %s", got)
+	}
+
+	b := f.issue()
+	bSHA1 := thumbprint(b.Cert.Raw)
+	r, dr := f.deploy(t, opID(1), selfSHA, b)
+	if r.Exit != 0 || dr.Phase != winproto.PhaseCommitted || dr.NewSHA256 != sum256(b.Cert.Raw) || dr.BuiltChainLength != 2 {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if f.m.RDPThumbprint() != bSHA1 || !f.m.KeyReadableByNetworkService("My", bSHA1) {
+		t.Fatalf("value %q, readable %v", f.m.RDPThumbprint(), f.m.KeyReadableByNetworkService("My", bSHA1))
+	}
+	if got := f.served(t); got != sum256(b.Cert.Raw) {
+		t.Fatalf("a fresh handshake serves %s, not B", got)
+	}
+	// The helper's own probe reaches the listener too (tls-probe --rdp).
+	if r, v := call(t, f.m, "tls-probe --addr 127.0.0.1 --port 3389 --sni _ --key-type any --rdp"); r.Exit != 0 ||
+		v["leaf_sha256"] != sum256(b.Cert.Raw) || v["chain_length"] != float64(2) {
+		t.Fatalf("%d %v", r.Exit, v)
+	}
+	if d := f.dump(t); !d.ValueSet || d.Certificate == nil || d.Certificate.SHA1 != bSHA1 || d.SelfSignedCount != 0 {
+		t.Fatalf("%+v", d)
+	}
+	if ev := f.m.Events(); len(ev) != 1 || ev[0].ID != 1005 {
+		t.Fatalf("events %+v", ev)
+	}
+	if s := status(t, f.m, opID(1)); s.CurrentCertSHA256 != sum256(b.Cert.Raw) {
+		t.Fatalf("status %+v", s)
+	}
+	// The same certificate again: the listener names it and NETWORK SERVICE reads its key: unchanged.
+	if r, dr := f.deploy(t, opID(2), sum256(b.Cert.Raw), b); r.Exit != 0 || dr.Phase != winproto.PhaseUnchanged {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+
+	var rs winproto.RestoreResponse
+	if r := run(t, f.m, "iis-restore --op "+opID(1), restoreInput(), &rs); r.Exit != 0 || rs.Phase != winproto.PhaseRestored {
+		t.Fatalf("restore: %d %s", r.Exit, r.Stdout)
+	}
+	if f.m.RDPThumbprint() != "" || f.m.KeyReadableByNetworkService("My", bSHA1) {
+		t.Fatalf("the value %q is not absent again, or the grant stays", f.m.RDPThumbprint())
+	}
+	if got := f.served(t); got != selfSHA {
+		t.Fatalf("after the restore: %s", got)
+	}
+}
+
+func TestModelRDPNeedsKeyRead(t *testing.T) {
+	f := newRDPFixture(t)
+	c := f.issue()
+	sha := f.m.AddCertificate("My", c.CertPEM, c.KeyPEM, CertOptions{})
+	f.m.SetRDPThumbprint(strings.Map(func(r rune) rune { // upper-case hex
+		if r >= 'a' && r <= 'f' {
+			return r - 'a' + 'A'
+		}
+		return r
+	}, sha))
+	if f.m.RDPThumbprint() != sha {
+		t.Fatalf("value %q", f.m.RDPThumbprint())
+	}
+	if _, err := f.probe(t); !errors.Is(err, tlsverify.ErrProbeFailed) {
+		t.Fatalf("a key NETWORK SERVICE cannot read fails the handshake (F21): %v", err)
+	}
+	h, ctx := f.m.Host(), context.Background()
+	if ok, err := h.RDPKeyRead(ctx, "MY", sha); ok || err != nil {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := h.SetRDPKeyRead(ctx, "MY", sha, true); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := h.RDPKeyRead(ctx, "My", sha); !ok || err != nil {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if got := f.served(t); got != sum256(c.Cert.Raw) {
+		t.Fatalf("after the grant: %s", got)
+	}
+	// The key methods refuse every store but My, and a certificate the store does not hold.
+	selfSHA1 := thumbprint(f.self.Cert.Raw)
+	if _, err := h.RDPKeyRead(ctx, winproto.RDPStoreSelfSigned, selfSHA1); err == nil {
+		t.Fatal("Remote Desktop is refused")
+	}
+	if err := h.SetRDPKeyRead(ctx, "WebHosting", sha, true); err == nil {
+		t.Fatal("WebHosting is refused")
+	}
+	if _, err := h.RDPKeyRead(ctx, "MY", strings.Repeat("0", 40)); err == nil {
+		t.Fatal("an absent certificate is refused")
+	}
+	if !f.m.KeyReadableByNetworkService(winproto.RDPStoreSelfSigned, selfSHA1) {
+		t.Fatal("TermService's own certificate is readable by NETWORK SERVICE")
+	}
+	// Removed with its certificate, the flag goes too.
+	f.m.RemoveCertificate("My", sha)
+	if f.m.KeyReadableByNetworkService("My", sha) {
+		t.Fatal("the flag outlives the key")
+	}
+	// The value is 20 bytes or nothing; the RDP-Tcp key must exist.
+	if err := h.SetRDPCertificate(ctx, "abcd"); err == nil {
+		t.Fatal("a value that is not 20 bytes")
+	}
+	f.m.SetRDP(RDPConfig{})
+	if err := h.SetRDPCertificate(ctx, sha); err == nil {
+		t.Fatal("no RDP-Tcp key")
+	}
+	if l, err := h.RDPListener(ctx); err != nil || l.Present || l.CertSHA1 != "" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	if p, _ := h.ProtectedThumbprints(ctx); len(p.RDP) != 0 {
+		t.Fatalf("without the listener no value protects: %+v", p)
+	}
+}
+
+// rdpConfirm sends a Connection Request with requestedProtocols to addr and returns what the listener
+// answers in its first 19 bytes (fewer when it closes first).
+func rdpConfirm(t *testing.T, addr string, requested byte) []byte {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	req := slices.Clone(helperproto.RDPConnectionRequest)
+	req[len(req)-4] = requested
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 19)
+	n, _ := io.ReadFull(c, b)
+	return b[:n]
+}
+
+func TestModelRDPSecurityLayer(t *testing.T) {
+	f := newRDPFixture(t)
+	addr := f.m.Endpoint(3389)
+	// NLA on: HYBRID when asked for, HYBRID_REQUIRED_BY_SERVER otherwise (F22 as modelled).
+	if got := rdpConfirm(t, addr, 3); !slices.Equal(got, helperproto.RDPConfirm(helperproto.RDPProtocolHybrid)) {
+		t.Fatalf("% x", got)
+	}
+	if got := rdpConfirm(t, addr, 1); !slices.Equal(got, helperproto.RDPFailure(5)) {
+		t.Fatalf("% x", got)
+	}
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, Port: 3389, SecurityLayer: 2})
+	if got := rdpConfirm(t, addr, 3); !slices.Equal(got, helperproto.RDPConfirm(helperproto.RDPProtocolSSL)) {
+		t.Fatalf("% x", got)
+	}
+	if got := rdpConfirm(t, addr, 0); !slices.Equal(got, helperproto.RDPFailure(1)) {
+		t.Fatalf("% x", got)
+	}
+	if got := f.served(t); got != sum256(f.self.Cert.Raw) {
+		t.Fatalf("NLA off: %s", got)
+	}
+
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, NLA: true, Port: 3389, SecurityLayer: 0})
+	if _, err := f.probe(t); !errors.Is(err, tlsverify.ErrProbeFailed) || !errors.Is(err, helperproto.ErrRDPNoTLS) {
+		t.Fatalf("layer 0: %v", err)
+	}
+	if got := rdpConfirm(t, addr, 3); !slices.Equal(got, helperproto.RDPFailure(2)) {
+		t.Fatalf("% x", got)
+	}
+	if d := f.dump(t); d.SecurityLayer != 0 {
+		t.Fatalf("%+v", d)
+	}
+	var e winproto.ErrorResponse
+	if r := run(t, f.m, winproto.SubRDPDeploy+" --op "+opID(1), rdpDeployInput(t, sum256(f.self.Cert.Raw), f.issue()), &e); r.Exit == 0 ||
+		e.Code != winproto.CodeRDPTLSOff {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+
+	// RDP turned off: nothing answers the negotiation.
+	f.m.SetRDP(RDPConfig{Present: true, Port: 3389, SecurityLayer: 2})
+	if got := rdpConfirm(t, addr, 3); len(got) != 0 {
+		t.Fatalf("% x", got)
+	}
+	if _, err := f.probe(t); !errors.Is(err, helperproto.ErrRDPNegotiation) {
+		t.Fatalf("disabled: %v", err)
+	}
+	// Bytes that are no Connection Request are not answered.
+	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, Port: 3389, SecurityLayer: 2})
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = c.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x05, 0, 0, 0, 0, 0})
+	if n, _ := c.Read(make([]byte, 1)); n != 0 {
+		t.Fatal("a TLS ClientHello without the negotiation is answered")
+	}
+}
+
+func TestModelRDPFailKeyACL(t *testing.T) {
+	f := newRDPFixture(t)
+	b := f.issue()
+	f.m.FailKeyACL(true)
+	r, dr := f.deploy(t, opID(1), sum256(f.self.Cert.Raw), b)
+	if r.Exit != 0 || dr.Phase != winproto.PhaseRestored || dr.FailedStep != winproto.StepGrantKeyRead || dr.RDPKeyACLLeft {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if f.m.RDPThumbprint() != "" || f.m.KeyReadableByNetworkService("My", thumbprint(b.Cert.Raw)) {
+		t.Fatal("something is left changed")
+	}
+	if got := f.served(t); got != sum256(f.self.Cert.Raw) {
+		t.Fatalf("%s", got)
+	}
+	// Once: the next deployment grants.
+	if r, dr := f.deploy(t, opID(2), sum256(f.self.Cert.Raw), b); r.Exit != 0 || dr.Phase != winproto.PhaseCommitted {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+}
+
+// ServeStaleRDP is StaleTLS's RDP half: from the next write of the value on, the listener keeps serving
+// what it served before, until ServeStaleRDP(false) or a reboot.
+func TestModelServeStaleRDP(t *testing.T) {
+	f := newRDPFixture(t)
+	selfSHA := sum256(f.self.Cert.Raw)
+	b := f.issue()
+	f.m.ServeStaleRDP(true)
+	if r, dr := f.deploy(t, opID(1), selfSHA, b); r.Exit != 0 || dr.Phase != winproto.PhaseCommitted {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if got := f.served(t); got != selfSHA {
+		t.Fatalf("a stale listener keeps the self-signed certificate: %s", got)
+	}
+	f.m.ServeStaleRDP(false)
+	if got := f.served(t); got != sum256(b.Cert.Raw) {
+		t.Fatalf("with stale off: %s", got)
+	}
+	f.m.ServeStaleRDP(true)
+	f.m.SetRDPThumbprint("")
+	if got := f.served(t); got != sum256(b.Cert.Raw) {
+		t.Fatalf("stale across an outside write: %s", got)
+	}
+	f.m.Reboot()
+	if got := f.served(t); got != selfSHA {
+		t.Fatalf("a reboot ends the stale listener: %s", got)
+	}
+}
+
+func TestDemoHostHasRDP(t *testing.T) {
+	m, err := Demo(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d winproto.RDPDumpResponse
+	if r := run(t, m, winproto.SubRDPDump, nil, &d); r.Exit != 0 || !d.Present || !d.Enabled || !d.NLA || d.ValueSet || d.Port != 3389 ||
+		d.SecurityLayer != 2 || d.SelfSignedCount != 1 || d.Certificate == nil || d.Certificate.Store != winproto.RDPStoreSelfSigned {
+		t.Fatalf("%d %s", r.Exit, r.Stdout)
+	}
+	if !m.KeyReadableByNetworkService(winproto.RDPStoreSelfSigned, d.Certificate.SHA1) {
+		t.Fatal("NETWORK SERVICE reads the self-signed certificate's key")
+	}
+	// The real helper names four stores in win-facts; Remote Desktop is not one of them.
+	if _, v := call(t, m, "win-facts"); fmt.Sprint(v["stores"]) != "[My WebHosting CA Root]" {
+		t.Fatalf("stores %v", v["stores"])
 	}
 }

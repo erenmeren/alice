@@ -106,6 +106,7 @@ func (m *Model) Reboot() {
 	m.lockGen++
 	m.served = map[string]*servedEntry{}
 	clear(m.ccsPinned)
+	m.rdpPinned = nil
 	m.corruptNext = false
 }
 
@@ -461,13 +462,6 @@ func (m *Model) Advance(d time.Duration) {
 	m.clockFixed = m.clockFixed.Add(d)
 }
 
-// SetRDPThumbprint sets the certificate the RDP listener names ("" none).
-func (m *Model) SetRDPThumbprint(sha1 string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.rdp = fold(sha1)
-}
-
 // SetWinRMThumbprints sets the certificates the WinRM HTTPS listeners name.
 func (m *Model) SetWinRMThumbprints(sha1s ...string) {
 	m.mu.Lock()
@@ -577,6 +571,7 @@ func (h host) RemoveCertificate(_ context.Context, storeName, sha1 string) (bool
 		return false, nil
 	}
 	delete(m.keys, keyID(storeName, sha1))
+	delete(m.nsRead, keyID(storeName, sha1))
 	e.key = nil
 	if m.failAfterKey {
 		m.failAfterKey = false
@@ -595,7 +590,7 @@ func (h host) ProtectedThumbprints(context.Context) (winhelper.Protected, error)
 		return winhelper.Protected{}, errCannotRead
 	}
 	var p winhelper.Protected
-	if h.m.rdp != "" {
+	if h.m.rdpCfg.Present && h.m.rdp != "" { // the value lives in the RDP-Tcp key
 		p.RDP = []string{h.m.rdp}
 	}
 	p.WinRM = slices.Clone(h.m.winrm)
@@ -947,26 +942,157 @@ func (h host) Point(name string) error {
 	return nil
 }
 
-// errRDPNotModelled is what the RDP methods answer until the emulator models the listener (W6 Task 3).
-var errRDPNotModelled = errors.New("wintest: the RDP listener is not modelled")
+// The RDP half of the model (W6, R69; Ruling 23): the RDP-Tcp listener's effective settings (RDPConfig),
+// its value SSLCertificateSHA1Hash (rdp), the Remote Desktop store and a per-key "NETWORK SERVICE can
+// read" flag. The listener itself is in tls.go.
 
-// RDPListener is not modelled yet (W6 Task 3).
-func (host) RDPListener(context.Context) (winhelper.RDPListener, error) {
-	return winhelper.RDPListener{}, errRDPNotModelled
+// RDPConfig is the RDP-Tcp listener as Windows applies it (Ruling 5): Present is the RDP-Tcp key, Enabled
+// fDenyTSConnections 0, NLA UserAuthentication 1, SecurityLayer 0 (RDP security), 1 (negotiate) or 2
+// (TLS), Port the listener's port, CertTemplate the policy's CertTemplateName ("" unset).
+type RDPConfig struct {
+	Present, Enabled, NLA bool
+	Port, SecurityLayer   int
+	CertTemplate          string
 }
 
-// SetRDPCertificate is not modelled yet (W6 Task 3).
-func (host) SetRDPCertificate(context.Context, string) error { return errRDPNotModelled }
+var (
+	errNoRDPKey   = errors.New("wintest: the RDP-Tcp key does not exist")
+	errKeyStore   = errors.New("wintest: the key of a certificate outside My")
+	errKeyMissing = errors.New("wintest: the certificate or its key does not exist")
+	errKeyACL     = errors.New("wintest: the key's security descriptor could not be written")
+)
 
-// StoreCertificates is not modelled yet (W6 Task 3).
-func (host) StoreCertificates(context.Context, string, int) ([]winproto.StoreCertificate, error) {
-	return nil, errRDPNotModelled
+// SetRDP replaces the listener's settings; the value (SetRDPThumbprint) stays. A listener present at
+// Serve listens on its port.
+func (m *Model) SetRDP(l RDPConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rdpCfg = l
 }
 
-// RDPKeyRead is not modelled yet (W6 Task 3).
-func (host) RDPKeyRead(context.Context, string, string) (bool, error) {
-	return false, errRDPNotModelled
+// SetRDPThumbprint sets the listener's value as someone outside Alice would ("" absent).
+func (m *Model) SetRDPThumbprint(sha1 string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setRDPLocked(sha1)
 }
 
-// SetRDPKeyRead is not modelled yet (W6 Task 3).
-func (host) SetRDPKeyRead(context.Context, string, string, bool) error { return errRDPNotModelled }
+// setRDPLocked writes the value; a stale listener keeps what it served before (ServeStaleRDP).
+func (m *Model) setRDPLocked(sha1 string) {
+	if m.rdpStale && m.rdpPinned == nil {
+		m.rdpPinned, _ = m.rdpCertLocked()
+	}
+	m.rdp = fold(sha1)
+}
+
+// RDPThumbprint is the listener's value, lower case ("" absent).
+func (m *Model) RDPThumbprint() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rdp
+}
+
+// KeyReadableByNetworkService reports whether NETWORK SERVICE can read the key of the store's
+// certificate.
+func (m *Model) KeyReadableByNetworkService(storeName, sha1 string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nsRead[keyID(storeName, sha1)]
+}
+
+// FailKeyACL(true) makes the next SetRDPKeyRead fail, changing nothing (once).
+func (m *Model) FailKeyACL(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failKeyACL = on
+}
+
+// ServeStaleRDP(true) is a listener that does not take a change (StaleTLS's RDP half): from the next
+// write of the value on, it keeps serving what it served before. ServeStaleRDP(false) or a reboot ends it.
+func (m *Model) ServeStaleRDP(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rdpStale = on
+	if !on {
+		m.rdpPinned = nil
+	}
+}
+
+// RDPListener reads the listener's settings and value; the zero listener when the RDP-Tcp key is absent.
+func (h host) RDPListener(context.Context) (winhelper.RDPListener, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	c := h.m.rdpCfg
+	if !c.Present {
+		return winhelper.RDPListener{}, nil
+	}
+	return winhelper.RDPListener{Present: true, Enabled: c.Enabled, NLA: c.NLA, Port: c.Port, SecurityLayer: c.SecurityLayer,
+		CertSHA1: h.m.rdp, CertTemplate: c.CertTemplate}, nil
+}
+
+// SetRDPCertificate writes the value as 20 bytes, or deletes it for "".
+func (h host) SetRDPCertificate(_ context.Context, sha1 string) error {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.m.rdpCfg.Present {
+		return errNoRDPKey
+	}
+	if raw, err := hex.DecodeString(sha1); err != nil || (sha1 != "" && len(raw) != 20) {
+		return errNoHash
+	}
+	h.m.setRDPLocked(sha1)
+	return nil
+}
+
+// StoreCertificates lists a store's certificates in the order they were added, at most limit; a store
+// the model does not hold lists nothing.
+func (h host) StoreCertificates(_ context.Context, storeName string, limit int) ([]winproto.StoreCertificate, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	out := []winproto.StoreCertificate{}
+	if s, ok := h.m.stores[fold(orMy(storeName))]; ok {
+		for _, e := range s.certs[:min(len(s.certs), max(limit, 0))] {
+			out = append(out, h.m.storeCertLocked(storeName, e))
+		}
+	}
+	return out, nil
+}
+
+// rdpKeyLocked is the key of a certificate of My that has one; any other store is refused (WN-24).
+func (m *Model) rdpKeyLocked(storeName, sha1 string) (string, error) {
+	if fold(storeName) != "my" {
+		return "", errKeyStore
+	}
+	if e := m.certLocked(storeName, sha1); e == nil || e.key == nil {
+		return "", errKeyMissing
+	}
+	return keyID(storeName, sha1), nil
+}
+
+// RDPKeyRead reports the key's NETWORK SERVICE flag.
+func (h host) RDPKeyRead(_ context.Context, storeName, sha1 string) (bool, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	k, err := h.m.rdpKeyLocked(storeName, sha1)
+	if err != nil {
+		return false, err
+	}
+	return h.m.nsRead[k], nil
+}
+
+// SetRDPKeyRead sets the key's NETWORK SERVICE flag (a grant) or clears it (a revoke: the helper revokes
+// only what it granted, key_read_had false). FailKeyACL fails it once.
+func (h host) SetRDPKeyRead(_ context.Context, storeName, sha1 string, grant bool) error {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if h.m.failKeyACL {
+		h.m.failKeyACL = false
+		return errKeyACL
+	}
+	k, err := h.m.rdpKeyLocked(storeName, sha1)
+	if err != nil {
+		return err
+	}
+	h.m.nsRead[k] = grant
+	return nil
+}

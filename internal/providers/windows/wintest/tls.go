@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/testutil/pki"
 )
@@ -195,6 +198,11 @@ func (m *Model) Serve(ctx context.Context, bind string) error {
 			ports = append(ports, b.Port)
 		}
 	}
+	rdpPort := 0 // a binding on the listener's port wins: http.sys holds it
+	if c := m.rdpCfg; c.Present && c.Port > 0 && !slices.Contains(ports, c.Port) {
+		rdpPort = c.Port
+		ports = append(ports, rdpPort)
+	}
 	m.mu.Unlock()
 	slices.Sort(ports)
 
@@ -221,13 +229,14 @@ func (m *Model) Serve(ctx context.Context, bind string) error {
 	}
 	for i, ln := range lns {
 		m.serving.Add(1)
-		go m.accept(ctx, ln, ports[i])
+		go m.accept(ctx, ln, ports[i], ports[i] == rdpPort)
 	}
 	return nil
 }
 
-// accept serves one listener until ctx ends.
-func (m *Model) accept(ctx context.Context, ln net.Listener, port int) {
+// accept serves one listener until ctx ends: http.sys's TLS, or with rdp the RDP listener's negotiation
+// before its TLS.
+func (m *Model) accept(ctx context.Context, ln net.Listener, port int, rdp bool) {
 	defer m.serving.Done()
 	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
 	defer stop()
@@ -236,6 +245,9 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int) {
 		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
+			if rdp {
+				return m.rdpCertLocked()
+			}
 			ip := ""
 			if a, ok := hi.Conn.LocalAddr().(*net.TCPAddr); ok {
 				ip = a.IP.String()
@@ -257,7 +269,94 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int) {
 			defer func() { _ = c.Close() }()
 			hctx, stop := context.WithTimeout(ctx, handshakeTimeout)
 			defer stop()
+			if dl, _ := hctx.Deadline(); rdp && !m.rdpNegotiate(c, dl) {
+				return
+			}
 			_ = tls.Server(c, cfg).HandshakeContext(hctx)
 		}()
 	}
+}
+
+// maxRDPRequest bounds the client's Connection Request TPKT (a cookie included).
+const maxRDPRequest = 256
+
+// rdpNegotiate reads the client's X.224 Connection Request and answers the listener's Connection
+// Confirm (rdpConfirmLocked); true when TLS follows. A listener turned off, or bytes that are no
+// Connection Request, are closed unanswered. The negotiation shares the handshake's deadline.
+func (m *Model) rdpNegotiate(c net.Conn, deadline time.Time) bool {
+	_ = c.SetDeadline(deadline)
+	defer func() { _ = c.SetDeadline(time.Time{}) }()
+	m.mu.Lock()
+	on := m.rdpCfg.Present && m.rdpCfg.Enabled
+	m.mu.Unlock()
+	if !on {
+		return false
+	}
+	var hdr [4]byte
+	if _, err := io.ReadFull(c, hdr[:]); err != nil {
+		return false
+	}
+	n := int(binary.BigEndian.Uint16(hdr[2:]))
+	if hdr[0] != 3 || n < 11 || n > maxRDPRequest {
+		return false
+	}
+	body := make([]byte, n-4)
+	if _, err := io.ReadFull(c, body); err != nil || body[1] != 0xe0 { // X.224 CR
+		return false
+	}
+	var requested uint32
+	if len(body) >= 7+8 && body[len(body)-8] == 0x01 { // RDP_NEG_REQ ends the request
+		requested = binary.LittleEndian.Uint32(body[len(body)-4:])
+	}
+	m.mu.Lock()
+	answer, tlsNext := m.rdpConfirmLocked(requested)
+	m.mu.Unlock()
+	_, err := c.Write(answer)
+	return err == nil && tlsNext
+}
+
+// rdpConfirmLocked is the listener's answer to requestedProtocols (F22 as modelled, mirroring Windows):
+// security layer 0 is SSL_NOT_ALLOWED_BY_SERVER (2); with NLA on, HYBRID when asked for, else
+// HYBRID_REQUIRED_BY_SERVER (5); without, SSL when asked for, else SSL_REQUIRED_BY_SERVER (1).
+// shortcut: layer 1 with a client that asks for standard RDP security only is answered as layer 2 (no
+// client of Alice's asks so); model it when a test needs it.
+func (m *Model) rdpConfirmLocked(requested uint32) (answer []byte, tlsNext bool) {
+	c := m.rdpCfg
+	switch {
+	case c.SecurityLayer == 0:
+		return helperproto.RDPFailure(2), false
+	case c.NLA && requested&helperproto.RDPProtocolHybrid != 0:
+		return helperproto.RDPConfirm(helperproto.RDPProtocolHybrid), true
+	case c.NLA:
+		return helperproto.RDPFailure(5), false
+	case requested&helperproto.RDPProtocolSSL != 0:
+		return helperproto.RDPConfirm(helperproto.RDPProtocolSSL), true
+	}
+	return helperproto.RDPFailure(1), false
+}
+
+// rdpCertLocked is what the RDP listener's TLS presents (Ruling 4): what a stale listener kept, else the
+// certificate the value names in My, or while it is absent the single certificate of Remote Desktop,
+// with the chain Windows builds. A certificate without its key, or whose key NETWORK SERVICE cannot read,
+// fails the handshake (F21 modelled).
+// shortcut: Windows makes a new self-signed certificate when Remote Desktop holds none; the model fails.
+func (m *Model) rdpCertLocked() (*tls.Certificate, error) {
+	if m.rdpPinned != nil {
+		return m.rdpPinned, nil
+	}
+	storeName := "My"
+	var e *certEntry
+	if m.rdp != "" {
+		e = m.certLocked(storeName, m.rdp)
+	} else if s := m.stores[fold(winproto.RDPStoreSelfSigned)]; s != nil && len(s.certs) == 1 {
+		storeName, e = winproto.RDPStoreSelfSigned, s.certs[0]
+	}
+	if e == nil || e.key == nil || !m.nsRead[keyID(storeName, e.sha1)] {
+		return nil, errNoCertificate
+	}
+	c := &tls.Certificate{Certificate: [][]byte{e.leaf.Raw}, PrivateKey: e.key}
+	for _, x := range m.chainLocked(e.leaf) {
+		c.Certificate = append(c.Certificate, x.Raw)
+	}
+	return c, nil
 }

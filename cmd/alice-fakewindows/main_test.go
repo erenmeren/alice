@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/testutil/pki"
@@ -281,7 +283,7 @@ func TestFakeWindowsServesTheDemoBindingsOverTLS(t *testing.T) {
 	require.Equal(t, 0, code, errOut)
 	var eps map[string]string
 	require.NoError(t, json.Unmarshal([]byte(out), &eps))
-	require.Len(t, eps, 3, "443, 8443 and 5986")
+	require.Len(t, eps, 4, "443, 8443, 5986 and RDP's 3389")
 	conn, err := tls.Dial("tcp", eps["443"], &tls.Config{ServerName: "www.win.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
 	require.NoError(t, err)
 	assert.Equal(t, "www.win.example.test", conn.ConnectionState().PeerCertificates[0].Subject.CommonName)
@@ -597,4 +599,63 @@ func TestCtlCCSPasswordOpensTheDemoFiles(t *testing.T) {
 	code, _, errOut = st.ctlRun(t, "", "stale-tls-off")
 	require.Equal(t, 0, code, errOut)
 	assert.Equal(t, sha256Hex(leaf.Cert.Raw), served(), "with stale TLS off the new file is served")
+}
+
+// The demo host's RDP listener (W6 Ruling 25): ctl endpoints names its port, it answers Alice's RDP probe with the
+// self-signed certificate rdp-dump shows, and ctl stale-tls-on keeps it on that certificate across an rdp-deploy until
+// stale-tls-off.
+func TestDemoHostHasRDP(t *testing.T) {
+	st := startStack(t)
+	key := clientKey(t)
+	code, _, errOut := st.ctlRun(t, setupScriptFor(t, key), "prepare")
+	require.Equal(t, 0, code, errOut)
+	code, out, errOut := st.ctlRun(t, "", "endpoints")
+	require.Equal(t, 0, code, errOut)
+	var eps map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &eps))
+	host, portText, err := net.SplitHostPort(eps["3389"])
+	require.NoError(t, err, "ctl endpoints names the RDP port: %v", eps)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	served := func() string {
+		t.Helper()
+		p, err := tlsverify.TLSProber{RDP: true}.Probe(context.Background(), host, port, "", helperproto.ProbeAny)
+		require.NoError(t, err)
+		return p.LeafSHA256
+	}
+	helper := func(line string, stdin []byte, v any) {
+		t.Helper()
+		c, err := dial(st.ssh, key, ssh.FingerprintSHA256(st.hostKey))
+		require.NoError(t, err)
+		defer func() { _ = c.Close() }()
+		s, err := c.NewSession()
+		require.NoError(t, err)
+		defer func() { _ = s.Close() }()
+		s.Stdin = bytes.NewReader(stdin)
+		raw, err := s.Output(line)
+		require.NoError(t, err, string(raw))
+		require.NoError(t, json.Unmarshal(raw, v), string(raw))
+	}
+
+	var d winproto.RDPDumpResponse
+	helper(winproto.SubRDPDump, nil, &d)
+	require.True(t, d.Present && d.Enabled && d.NLA && !d.ValueSet && d.Port == 3389 && d.SecurityLayer == 2, "%+v", d)
+	require.NotNil(t, d.Certificate)
+	selfSHA := d.Certificate.SHA256
+	assert.Equal(t, selfSHA, served(), "the listener serves the self-signed certificate")
+
+	code, _, errOut = st.ctlRun(t, "", "stale-tls-on")
+	require.Equal(t, 0, code, errOut)
+	now := time.Now()
+	leaf := pki.NewCA("Fake Windows RDP CA", pki.ECDSA256, now).Issue(pki.Opts{CommonName: "win-demo01.example.test"}, now)
+	in, err := json.Marshal(winproto.RDPDeployInput{ExpectSHA256: selfSHA, ChainPEM: string(leaf.FullchainPEM), KeyPEM: string(leaf.KeyPEM),
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
+	require.NoError(t, err)
+	var resp winproto.DeployResponse
+	helper(winproto.SubRDPDeploy+" --op 6f1c3a52-7f3b-4c55-9a51-0d6c2b1e8f04", in, &resp)
+	require.Equal(t, winproto.PhaseCommitted, resp.Phase, "%+v", resp)
+	assert.Equal(t, selfSHA, served(), "while stale TLS is on the listener keeps the self-signed certificate")
+	code, _, errOut = st.ctlRun(t, "", "stale-tls-off")
+	require.Equal(t, 0, code, errOut)
+	assert.Equal(t, sha256Hex(leaf.Cert.Raw), served(), "with stale TLS off the listener serves the new certificate")
 }

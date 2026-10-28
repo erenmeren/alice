@@ -105,7 +105,7 @@ type Model struct {
 	clockSkew    time.Duration        // Advance, on the system clock
 	stateTimes   map[string]time.Time // the modification time of each state file
 	keys         map[string]bool      // the machine key store: "<store>/<sha1>"
-	rdp          string
+	rdp          string               // SSLCertificateSHA1Hash of RDP-Tcp, lower case ("" absent)
 	winrm        []string
 	failProtect  bool
 	failAfterKey bool
@@ -119,6 +119,13 @@ type Model struct {
 	ccsPinned   map[string][]byte // what IIS keeps serving for a file name until a refresh (F15), by folded file name
 	failRefresh bool              // FailCCSRefresh
 	ccsReparse  map[string]bool   // SetCCSReparse: the folders and files that are reparse points, by folderKey
+
+	// The RDP half (W6 Task 3, write.go and tls.go; Ruling 23). The value is rdp above.
+	rdpCfg     RDPConfig
+	nsRead     map[string]bool  // the keys NETWORK SERVICE can read, by keyID
+	failKeyACL bool             // FailKeyACL
+	rdpStale   bool             // ServeStaleRDP
+	rdpPinned  *tls.Certificate // what a stale listener keeps serving
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -142,6 +149,7 @@ func NewModel() *Model {
 		ccsReparse: map[string]bool{},
 		stateTimes: map[string]time.Time{},
 		keys:       map[string]bool{},
+		nsRead:     map[string]bool{},
 		lockWait:   winproto.LockWait,
 	}
 	for _, s := range []string{"My", "WebHosting", "CA", "Root"} {
@@ -231,6 +239,8 @@ func (m *Model) AddCertificate(store string, chainPEM, keyPEM []byte, o CertOpti
 	s := m.storeLocked(store)
 	if keyPEM != nil {
 		m.keys[keyID(store, e.sha1)] = true
+		// TermService makes the certificates of Remote Desktop itself, with a key it can read.
+		m.nsRead[keyID(store, e.sha1)] = fold(store) == fold(winproto.RDPStoreSelfSigned)
 	}
 	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == e.sha1 })
 	s.certs = append(s.certs, e)
@@ -266,6 +276,7 @@ func (m *Model) RemoveCertificate(storeName, sha1 string) {
 	s := m.storeLocked(storeName)
 	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == sha1 })
 	delete(m.keys, keyID(storeName, sha1))
+	delete(m.nsRead, keyID(storeName, sha1))
 }
 
 // keyID names a key of the machine key store by its certificate.
@@ -371,7 +382,8 @@ var helperStores = []string{"My", "WebHosting", "CA", "Root"}
 
 // Stores answers as the real helper does: My, WebHosting, CA and Root in that order, those the model
 // holds, under the spelling of their first use. The real helper names no other store; a store a test
-// created beyond these four follows them, sorted, so that it stays visible to the test.
+// created beyond these four follows them, sorted, so that it stays visible to the test. Remote Desktop,
+// which every real host has (W6), is never named.
 func (h host) Stores(context.Context) ([]string, error) {
 	h.m.mu.Lock()
 	defer h.m.mu.Unlock()
@@ -383,7 +395,7 @@ func (h host) Stores(context.Context) ([]string, error) {
 	}
 	var others []string
 	for k, s := range h.m.stores {
-		if !slices.ContainsFunc(helperStores, func(n string) bool { return fold(n) == k }) {
+		if k != fold(winproto.RDPStoreSelfSigned) && !slices.ContainsFunc(helperStores, func(n string) bool { return fold(n) == k }) {
 			others = append(others, s.name)
 		}
 	}
@@ -410,12 +422,17 @@ func (h host) Certificate(_ context.Context, storeName, sha1 string) (winproto.S
 	if e == nil {
 		return winproto.StoreCertificate{}, false, nil
 	}
+	return h.m.storeCertLocked(storeName, e), true, nil
+}
+
+// storeCertLocked is a certificate of a store as the helper reads it.
+func (m *Model) storeCertLocked(storeName string, e *certEntry) winproto.StoreCertificate {
 	sum := sha256.Sum256(e.leaf.Raw)
 	c := winproto.StoreCertificate{Store: storeName, SHA1: e.sha1, SHA256: hex.EncodeToString(sum[:]),
 		DER: base64.StdEncoding.EncodeToString(e.leaf.Raw), Chain: []string{}, FriendlyName: e.friendly,
 		NotAfter: e.leaf.NotAfter.UTC().Format(time.RFC3339), HasKey: e.key != nil, KeyProvider: e.provider,
 		KeyExportable: e.export, KeyUsableBySystem: e.usable}
-	for _, x := range h.m.chainLocked(e.leaf) {
+	for _, x := range m.chainLocked(e.leaf) {
 		c.Chain = append(c.Chain, base64.StdEncoding.EncodeToString(x.Raw))
 	}
 	switch {
@@ -424,7 +441,7 @@ func (h host) Certificate(_ context.Context, storeName, sha1 string) (winproto.S
 	case e.usable != nil && !*e.usable:
 		c.KeyProblem = "key_inaccessible"
 	}
-	return c, true, nil
+	return c
 }
 
 func (h host) ExpiredInStore(_ context.Context, storeName string) (int, error) {

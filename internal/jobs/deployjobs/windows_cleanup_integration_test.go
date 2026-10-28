@@ -113,7 +113,10 @@ func TestWindowsCleanupKeepsRows(t *testing.T) {
 		reason string
 	}{
 		{"bound by another application's record", func(_ *env, s *winServer, c2 string) { foreign(s, c2) }, false, winproto.KeptBound},
-		{"named by the RDP listener", func(_ *env, s *winServer, c2 string) { s.model.SetRDPThumbprint(c2) }, false, winproto.KeptRDP},
+		{"named by the RDP listener", func(_ *env, s *winServer, c2 string) {
+			s.model.SetRDP(wintest.RDPConfig{Present: true, Enabled: true, NLA: true, Port: 3389, SecurityLayer: 2})
+			s.model.SetRDPThumbprint(c2)
+		}, false, winproto.KeptRDP},
 		{"named by a WinRM listener", func(_ *env, s *winServer, c2 string) { s.model.SetWinRMThumbprints(c2) }, false, winproto.KeptWinRM},
 		{"named by a writing journal", func(e *env, s *winServer, _ string) {
 			s.model.KillAt("deploy.writing")

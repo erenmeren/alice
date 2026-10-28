@@ -2,8 +2,8 @@
 // internal backend network) for the Windows journey (web/e2e/windows.spec.ts, R60). It is a test tool: it is built
 // into the e2e fake Windows image only and never ships (internal/archtest lists it in testOnlyDirs). It wraps
 // internal/providers/windows/wintest: the fixed demo host of wintest.Demo (Windows Server 2022 Datacenter with IIS
-// 10.0, three IIS sites, four http.sys entries, a CCS folder), whose helper answers run the helper's own code
-// (winhelper), behind an SSH server that behaves like Windows OpenSSH (every session after the first on one
+// 10.0, three IIS sites, four http.sys entries, a CCS folder, an RDP listener), whose helper answers run the helper's
+// own code (winhelper), behind an SSH server that behaves like Windows OpenSSH (every session after the first on one
 // connection sees the first session's command, design 2026-10-21 §8).
 //
 //	alice-fakewindows serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
@@ -11,14 +11,15 @@
 //
 // serve generates a fresh Ed25519 host key and the demo host's test CA and certificates when it starts (nothing is
 // stored in the repository or the image), listens for SSH on --listen and serves the demo's TLS bindings on --tls-bind
-// at their own ports (443, 8443, 5986; "IP:0" gives random ports, for tests). No client key is authorized until
+// at their own ports (443, 8443, 5986) and its RDP listener at 3389 (the RDP negotiation, then TLS; W6 Ruling 25);
+// "IP:0" gives random ports, for tests. No client key is authorized until
 // "ctl prepare" reads the Windows setup script Alice shows on its standard input and authorizes the key of its one
 // $AuthorizedKey = '...' line (the counterpart of the SSH target's alice-e2e-prepare); a later prepare replaces it.
 // The helper's write subcommands (iis-deploy, iis-restore, iis-status, iis-fence; R61) run on the model too, its state
 // files (journal, binding records, imports) in memory: a restart is a fresh demo host. "ctl stale-tls-on" makes every
 // listener keep serving what it served before the next bind (a website that did not take the change, W2 Ruling 23)
 // until "ctl stale-tls-off", so a deployment's verification fails and is rolled back; the demo's CCS files (W5) go
-// stale with them. The demo's Centralized Certificate Store (C:\CCS, two files) is encrypted with a password made at
+// stale with them, and so does its RDP listener (W6). The demo's Centralized Certificate Store (C:\CCS, two files) is encrypted with a password made at
 // start, which "ctl ccs-password" prints on its standard output (never logged).
 // The control API has no authentication beyond its address: it listens on loopback only (serve refuses any other
 // address), ctl talks to loopback only, and it runs inside the container ("docker compose exec -T fakewindows
@@ -78,14 +79,14 @@ const usage = `Usage: alice-fakewindows <command>
 
 Commands:
   serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
-        Run the emulated Windows server: SSH on --listen (default :22), the demo's TLS bindings on --tls-bind
-        (default 0.0.0.0, at their own ports; IP:0 for random ports), the control API on --ctl (default
-        127.0.0.1:9093, loopback only).
+        Run the emulated Windows server: SSH on --listen (default :22), the demo's TLS bindings and RDP listener
+        on --tls-bind (default 0.0.0.0, at their own ports; IP:0 for random ports), the control API on --ctl
+        (default 127.0.0.1:9093, loopback only).
   ctl [--ctl ADDR] <command>
         Drive a running server (answer on stdout, errors on stderr, exit 1 on failure):
-        ping | hostkey (the SHA256 fingerprint of the host key) | endpoints (the TLS listeners) |
+        ping | hostkey (the SHA256 fingerprint of the host key) | endpoints (the TLS and RDP listeners) |
         prepare (stdin: Alice's Windows setup script; authorizes the key of its $AuthorizedKey line) |
-        stale-tls-on (the listeners keep serving what they served before the next bind or CCS file write) |
+        stale-tls-on (the listeners keep serving what they served before the next bind, CCS file or RDP write) |
         stale-tls-off | ccs-password (the demo's CCS private-key password)
 `
 
@@ -253,15 +254,18 @@ func (c *control) handler() http.Handler {
 	})
 	// A website that does not take a change (Ruling 23): while on, every listener keeps serving what it served before
 	// the next bind, so a deployment's verification fails and the provider's iis-restore rolls it back.
-	// The CCS files go stale with them (F15 route (b) modelled), so a CCS deployment is rolled back to its backup.
+	// The CCS files go stale with them (F15 route (b) modelled), so a CCS deployment is rolled back to its backup, and
+	// so does the RDP listener (W6 Ruling 25): an RDP deployment is rolled back to the previous certificate.
 	mux.HandleFunc("POST /stale-tls-on", func(w http.ResponseWriter, _ *http.Request) {
 		c.model.StaleTLS(true)
 		c.model.ServeStaleCCS(true)
+		c.model.ServeStaleRDP(true)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /stale-tls-off", func(w http.ResponseWriter, _ *http.Request) {
 		c.model.StaleTLS(false)
 		c.model.ServeStaleCCS(false)
+		c.model.ServeStaleRDP(false)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	// The demo's CCS password (W5 Ruling 25), made at start: the answer only, never logged.
@@ -273,13 +277,20 @@ func (c *control) handler() http.Handler {
 	return mux
 }
 
-// endpoints maps each TLS binding port of the demo host to the address its listener has.
+// endpoints maps each TLS binding port of the demo host, and the RDP listener's port, to the address its listener has.
 func (c *control) endpoints(ctx context.Context) map[string]string {
 	bindings, _ := c.model.Host().SSLBindings(ctx)
-	out := map[string]string{}
+	ports := make([]int, 0, len(bindings)+1)
 	for _, b := range bindings {
-		if ep := c.model.Endpoint(b.Port); ep != "" {
-			out[strconv.Itoa(b.Port)] = ep
+		ports = append(ports, b.Port)
+	}
+	if l, _ := c.model.Host().RDPListener(ctx); l.Present {
+		ports = append(ports, l.Port)
+	}
+	out := map[string]string{}
+	for _, p := range ports {
+		if ep := c.model.Endpoint(p); ep != "" {
+			out[strconv.Itoa(p)] = ep
 		}
 	}
 	return out

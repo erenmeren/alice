@@ -227,8 +227,9 @@ func TestModelFactsAndStores(t *testing.T) {
 		t.Fatalf("%v", v)
 	}
 	m.AddCertificate("Remote Desktop", pki.SelfSigned("rdp", pki.ECDSA256, now).CertPEM, nil, CertOptions{})
-	if _, v = call(t, m, "win-facts"); fmt.Sprint(v["stores"]) != "[My WebHosting CA Root Remote Desktop]" {
-		t.Fatalf("a new store is listed after the helper's four: %v", v["stores"])
+	m.AddCertificate("Test Store", pki.SelfSigned("x", pki.ECDSA256, now).CertPEM, nil, CertOptions{})
+	if _, v = call(t, m, "win-facts"); fmt.Sprint(v["stores"]) != "[My WebHosting CA Root Test Store]" {
+		t.Fatalf("a new store is listed after the helper's four, Remote Desktop never (the real helper's): %v", v["stores"])
 	}
 	// IIS missing: the dump still lists the http.sys entries, with no sites, and appcmd is never run.
 	m.AddBinding(winproto.SSLBinding{Type: "ccs", IP: "0.0.0.0", Port: 443, AppID: winproto.AppIDIIS})
