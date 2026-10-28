@@ -1801,9 +1801,14 @@ func TestModelRDPSecurityLayer(t *testing.T) {
 	if got := rdpConfirm(t, addr, 1); !slices.Equal(got, helperproto.RDPFailure(5)) {
 		t.Fatalf("% x", got)
 	}
+	// NLA off: HYBRID still whenever asked for (F22 measured HYBRID with NLA on and off), SSL when asked
+	// for SSL alone, SSL_REQUIRED_BY_SERVER otherwise.
 	f.m.SetRDP(RDPConfig{Present: true, Enabled: true, Port: 3389, SecurityLayer: 2})
-	if got := rdpConfirm(t, addr, 3); !slices.Equal(got, helperproto.RDPConfirm(helperproto.RDPProtocolSSL)) {
-		t.Fatalf("% x", got)
+	if got := rdpConfirm(t, addr, 3); !slices.Equal(got, helperproto.RDPConfirm(helperproto.RDPProtocolHybrid)) {
+		t.Fatalf("NLA off, SSL|HYBRID asked: % x", got)
+	}
+	if got := rdpConfirm(t, addr, 1); !slices.Equal(got, helperproto.RDPConfirm(helperproto.RDPProtocolSSL)) {
+		t.Fatalf("NLA off, SSL asked: % x", got)
 	}
 	if got := rdpConfirm(t, addr, 0); !slices.Equal(got, helperproto.RDPFailure(1)) {
 		t.Fatalf("% x", got)
@@ -1896,6 +1901,57 @@ func TestModelServeStaleRDP(t *testing.T) {
 	f.m.Reboot()
 	if got := f.served(t); got != selfSHA {
 		t.Fatalf("a reboot ends the stale listener: %s", got)
+	}
+}
+
+// W6-6: a stale listener pinned while it had no usable certificate keeps that failure through later
+// writes of the value; it never serves the certificate a later write named.
+func TestModelRDPStalePinKeepsAFailure(t *testing.T) {
+	f := newRDPFixture(t)
+	f.m.RemoveCertificate(winproto.RDPStoreSelfSigned, thumbprint(f.self.Cert.Raw))
+	if got, err := f.probe(t); err == nil {
+		t.Fatalf("Remote Desktop empty: the handshake fails, served %s", got)
+	}
+	f.m.ServeStaleRDP(true)
+	ctx := context.Background()
+	var last string
+	for i := range 2 {
+		l := f.issue()
+		last = sum256(l.Cert.Raw)
+		sha := f.m.AddCertificate("My", l.CertPEM, l.KeyPEM, CertOptions{})
+		if err := f.m.Host().SetRDPKeyRead(ctx, "My", sha, true); err != nil {
+			t.Fatal(err)
+		}
+		f.m.SetRDPThumbprint(sha)
+		if got, err := f.probe(t); err == nil {
+			t.Fatalf("write %d: a stale listener keeps its failure, served %s", i+1, got)
+		}
+	}
+	f.m.ServeStaleRDP(false)
+	if got := f.served(t); got != last {
+		t.Fatalf("with stale off the value's certificate is served: %s", got)
+	}
+}
+
+// W6-8: adding a certificate that My holds already keeps the NETWORK SERVICE grant of its key; a first
+// add into My grants nothing, into Remote Desktop everything (TermService made it).
+func TestModelReAddKeepsTheNetworkServiceGrant(t *testing.T) {
+	m := NewModel()
+	l := pki.SelfSigned("re-add", pki.ECDSA256, now)
+	sha := m.AddCertificate("My", l.CertPEM, l.KeyPEM, CertOptions{})
+	if m.KeyReadableByNetworkService("My", sha) {
+		t.Fatal("a first add into My grants NETWORK SERVICE nothing")
+	}
+	if err := m.Host().SetRDPKeyRead(context.Background(), "My", sha, true); err != nil {
+		t.Fatal(err)
+	}
+	m.AddCertificate("My", l.CertPEM, l.KeyPEM, CertOptions{})
+	if !m.KeyReadableByNetworkService("My", sha) {
+		t.Fatal("re-adding the certificate dropped the NETWORK SERVICE grant")
+	}
+	self := pki.SelfSigned("win-rdp01", pki.ECDSA256, now)
+	if !m.KeyReadableByNetworkService(winproto.RDPStoreSelfSigned, m.AddCertificate(winproto.RDPStoreSelfSigned, self.CertPEM, self.KeyPEM, CertOptions{})) {
+		t.Fatal("Remote Desktop's own certificate is readable")
 	}
 }
 

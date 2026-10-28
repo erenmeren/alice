@@ -106,7 +106,7 @@ func (m *Model) Reboot() {
 	m.lockGen++
 	m.served = map[string]*servedEntry{}
 	clear(m.ccsPinned)
-	m.rdpPinned = nil
+	m.rdpPinned, m.rdpPinSet = nil, false
 	m.corruptNext = false
 }
 
@@ -979,8 +979,9 @@ func (m *Model) SetRDPThumbprint(sha1 string) {
 
 // setRDPLocked writes the value; a stale listener keeps what it served before (ServeStaleRDP).
 func (m *Model) setRDPLocked(sha1 string) {
-	if m.rdpStale && m.rdpPinned == nil {
+	if m.rdpStale && !m.rdpPinSet { // once per stale period, a failed lookup included (W6-6)
 		m.rdpPinned, _ = m.rdpCertLocked()
+		m.rdpPinSet = true
 	}
 	m.rdp = fold(sha1)
 }
@@ -1014,7 +1015,7 @@ func (m *Model) ServeStaleRDP(on bool) {
 	defer m.mu.Unlock()
 	m.rdpStale = on
 	if !on {
-		m.rdpPinned = nil
+		m.rdpPinned, m.rdpPinSet = nil, false
 	}
 }
 

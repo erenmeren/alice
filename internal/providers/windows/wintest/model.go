@@ -125,7 +125,8 @@ type Model struct {
 	nsRead     map[string]bool  // the keys NETWORK SERVICE can read, by keyID
 	failKeyACL bool             // FailKeyACL
 	rdpStale   bool             // ServeStaleRDP
-	rdpPinned  *tls.Certificate // what a stale listener keeps serving
+	rdpPinned  *tls.Certificate // what a stale listener keeps serving (nil with rdpPinSet: its failure)
+	rdpPinSet  bool             // the stale listener took its pin at the first write of the value
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -238,9 +239,13 @@ func (m *Model) AddCertificate(store string, chainPEM, keyPEM []byte, o CertOpti
 	defer m.mu.Unlock()
 	s := m.storeLocked(store)
 	if keyPEM != nil {
-		m.keys[keyID(store, e.sha1)] = true
-		// TermService makes the certificates of Remote Desktop itself, with a key it can read.
-		m.nsRead[keyID(store, e.sha1)] = fold(store) == fold(winproto.RDPStoreSelfSigned)
+		k := keyID(store, e.sha1)
+		m.keys[k] = true
+		// TermService makes the certificates of Remote Desktop itself, with a key it can read. A key the
+		// store holds already keeps its grant (W6-8).
+		if _, held := m.nsRead[k]; !held {
+			m.nsRead[k] = fold(store) == fold(winproto.RDPStoreSelfSigned)
+		}
 	}
 	s.certs = slices.DeleteFunc(s.certs, func(c *certEntry) bool { return c.sha1 == e.sha1 })
 	s.certs = append(s.certs, e)

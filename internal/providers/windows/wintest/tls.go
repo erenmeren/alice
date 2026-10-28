@@ -305,6 +305,8 @@ func (m *Model) rdpNegotiate(c net.Conn, deadline time.Time) bool {
 		return false
 	}
 	var requested uint32
+	// shortcut: a Connection Request without RDP_NEG_REQ is answered as requested=0 (a failure), where
+	// Windows answers a plain confirm; no Alice client sends one, model it when a test needs it.
 	if len(body) >= 7+8 && body[len(body)-8] == 0x01 { // RDP_NEG_REQ ends the request
 		requested = binary.LittleEndian.Uint32(body[len(body)-4:])
 	}
@@ -315,9 +317,9 @@ func (m *Model) rdpNegotiate(c net.Conn, deadline time.Time) bool {
 	return err == nil && tlsNext
 }
 
-// rdpConfirmLocked is the listener's answer to requestedProtocols (F22 as modelled, mirroring Windows):
-// security layer 0 is SSL_NOT_ALLOWED_BY_SERVER (2); with NLA on, HYBRID when asked for, else
-// HYBRID_REQUIRED_BY_SERVER (5); without, SSL when asked for, else SSL_REQUIRED_BY_SERVER (1).
+// rdpConfirmLocked is the listener's answer to requestedProtocols (F22 as measured, mirroring Windows):
+// security layer 0 is SSL_NOT_ALLOWED_BY_SERVER (2); HYBRID whenever asked for, with NLA on or off; else
+// with NLA on HYBRID_REQUIRED_BY_SERVER (5), without SSL when asked for, else SSL_REQUIRED_BY_SERVER (1).
 // shortcut: layer 1 with a client that asks for standard RDP security only is answered as layer 2 (no
 // client of Alice's asks so); model it when a test needs it.
 func (m *Model) rdpConfirmLocked(requested uint32) (answer []byte, tlsNext bool) {
@@ -325,7 +327,7 @@ func (m *Model) rdpConfirmLocked(requested uint32) (answer []byte, tlsNext bool)
 	switch {
 	case c.SecurityLayer == 0:
 		return helperproto.RDPFailure(2), false
-	case c.NLA && requested&helperproto.RDPProtocolHybrid != 0:
+	case requested&helperproto.RDPProtocolHybrid != 0:
 		return helperproto.RDPConfirm(helperproto.RDPProtocolHybrid), true
 	case c.NLA:
 		return helperproto.RDPFailure(5), false
@@ -335,13 +337,17 @@ func (m *Model) rdpConfirmLocked(requested uint32) (answer []byte, tlsNext bool)
 	return helperproto.RDPFailure(1), false
 }
 
-// rdpCertLocked is what the RDP listener's TLS presents (Ruling 4): what a stale listener kept, else the
+// rdpCertLocked is what the RDP listener's TLS presents (Ruling 4): what a stale listener kept (a
+// certificate, or the failure it had), else the
 // certificate the value names in My, or while it is absent the single certificate of Remote Desktop,
 // with the chain Windows builds. A certificate without its key, or whose key NETWORK SERVICE cannot read,
 // fails the handshake (F21 modelled).
 // shortcut: Windows makes a new self-signed certificate when Remote Desktop holds none; the model fails.
 func (m *Model) rdpCertLocked() (*tls.Certificate, error) {
-	if m.rdpPinned != nil {
+	if m.rdpPinSet {
+		if m.rdpPinned == nil {
+			return nil, errNoCertificate
+		}
 		return m.rdpPinned, nil
 	}
 	storeName := "My"
