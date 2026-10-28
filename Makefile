@@ -356,7 +356,7 @@ test-backup-cycle: ## F-85 full cycle with a test license (integration, testlice
 .PHONY: secrets-scan
 secrets-scan: ## Scan git history for committed secrets (a worktree's git directory is mounted too; no commit scanned fails)
 	out=$$(mktemp); trap 'rm -f "$$out"' EXIT; set -o pipefail; \
-	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" -v "$(GIT_COMMON_DIR):$(GIT_COMMON_DIR):ro" $(GITLEAKS_IMAGE) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact --no-color 2>&1 | tee "$$out"; \
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" -v "$(GIT_COMMON_DIR):$(GIT_COMMON_DIR):ro" $(GITLEAKS_IMAGE) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact --no-color 2>&1 | tee "$$out" || exit; \
 	grep -Eq '(^|[^0-9])[1-9][0-9]* commits scanned' "$$out" || { echo 'secrets-scan: gitleaks scanned no commits (a worktree whose git directory is not mounted?)' >&2; exit 1; }
 
 .PHONY: fs-scan
