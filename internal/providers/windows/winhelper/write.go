@@ -45,7 +45,8 @@ type WriteHost interface {
 	// (CERT_STORE_ADD_NEW met it): the existing copy is left as it is (its friendly name and key
 	// untouched) and the import is not Alice's (W3 Ruling 5). The caller clears pfx and password
 	// afterwards.
-	ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (sha1 string, existed bool, err error)
+	ImportPFX(ctx context.Context, store string, pfx, password []byte, friendlyName string) (sha1 string,
+		existed bool, err error)
 	// Event writes an Application event of source "Alice Helper", best effort.
 	Event(id uint32, text string)
 	// Point is a crash point between journal phases: a non-nil answer kills the operation there (tests
