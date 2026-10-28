@@ -494,6 +494,9 @@ func (p TLSProber) Probe(ctx context.Context, host string, port int, sni, keyTyp
 	if p.RDP {
 		dl, _ := hctx.Deadline() // always set: a timeout context
 		_ = conn.SetDeadline(dl) // the negotiation and the handshake share the handshake bound
+		// The negotiation ends with the context too, not only with the deadline (W6 Task 1 minor, R70).
+		stop := context.AfterFunc(hctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+		defer stop()
 		if _, err := helperproto.RDPNegotiate(conn); err != nil {
 			return Probe{}, fmt.Errorf("%w: %w", ErrProbeFailed, err)
 		}

@@ -924,3 +924,39 @@ func TestTLSProberRDP(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProbeFailed)
 	assert.ErrorIs(t, err, helperproto.ErrRDPNegotiation)
 }
+
+// TestProbeRDPNegotiationHonoursTheContext (W6 Task 1 minor, R70): a listener that accepts and never
+// answers the Connection Request; the probe ends with its context, not only with the handshake deadline.
+func TestProbeRDPNegotiationHonoursTheContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held <- c
+		}
+	}()
+	t.Cleanup(func() {
+		for {
+			select {
+			case c := <-held:
+				_ = c.Close()
+			default:
+				return
+			}
+		}
+	})
+	// A cancel, not a deadline: a deadline the handshake context would inherit already bounds the read.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = TLSProber{RDP: true}.Probe(ctx, "127.0.0.1", ln.Addr().(*net.TCPAddr).Port, "", helperproto.ProbeAny)
+	assert.ErrorIs(t, err, ErrProbeFailed)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
