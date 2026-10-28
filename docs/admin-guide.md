@@ -1547,8 +1547,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   access Alice added is taken back. If it could not be taken back, the step says so: remove the NETWORK SERVICE entry
   from the key's access list by hand (certificate's **Manage Private Keys** in the certificates console). A
   deployment whose key access could not be given ends **Failed, restored** with the listener untouched (`ALC-WIN-0023`).
-  Each change is event **1005** in the Application log (`operation <operation> rdp RDP-Tcp old <sha256> new <sha256>
-  key_read_granted <true|false>`). If Remote Desktop stops accepting connections after a change, sign in through the
+  Each deployment is event **1005** in the Application log (`operation <operation> rdp RDP-Tcp old <sha256> new
+  <sha256> key_read_granted <true|false>`), a restore **1002**. If Remote Desktop stops accepting connections after a change, sign in through the
   server's console or over SSH: see [troubleshooting.md](troubleshooting.md#deployments).
 - **Event Log.** Each change is written to the server's Application log, source **Alice Helper**: event **1001** after
   a deployment, **1002** after a restore, **1003** after the cleanup removed a certificate, **1004** after a CCS file
@@ -1610,9 +1610,11 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   release run the helper's real-host tests (discovery, deployment, restore, cleanup, the setup script) on Windows
   Server 2022 and 2025 (Desktop Experience). Each run builds the helper the package ships on both images and compares
   it byte for byte with the Linux release build; the setup script test installs those bytes and calls the helper over
-  SSH, while the discovery, deployment, restore and cleanup tests run the same source built by the test. Windows
-  Server 2019, Server Core, a domain-joined server under the Microsoft security baseline, Defender or another EDR
-  switched on and a Remote Desktop listener with its own certificate are checked by hand before each release, AD FS
+  SSH, while the discovery, deployment, restore and cleanup tests run the same source built by the test. The Remote
+  Desktop listener (discovery, deployment, the NETWORK SERVICE key access, the check and a certificate shared with a
+  binding) is tested on both images too. Windows
+  Server 2019, Server Core, a domain-joined server under the Microsoft security baseline and Defender or another EDR
+  switched on are checked by hand before each release, AD FS
   and ARM64 servers when available, otherwise the release notes say so (the release checklist's section "Windows
   servers before release").
 - Alice does not manage the SSH keys of a Windows server. Not deployable in this release: bindings of other

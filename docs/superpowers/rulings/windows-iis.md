@@ -2588,6 +2588,10 @@ The review of `2e7415c1..3c5d2403` approved it with 0 critical, 0 important and 
 
 ### Task 7 (web, e2e and documents)
 
+- **The manual matrix no longer lists "an RDP listener with its own certificate"** (W3's item; release checklist row
+  8.5, WIN-45, the admin guide's "What is tested on real Windows"). Why: Ruling 26 settles it on the runners
+  (`TestRealRDPSharedWithBinding`, WIN-63, both images). Row 8.5 stays numbered, marked as no longer a hand check.
+
 - **Every test the plan's WIN-56..WIN-64 table names exists under that exact name**, so `test/matrix/traceability.json`
   maps each row to the plan's tests with no substitution. The short package names of the table resolve to
   `internal/providers/windows` (`windows:`), `internal/providers/windows/winhelper` (`winhelper:`),
@@ -2597,6 +2601,19 @@ The review of `2e7415c1..3c5d2403` approved it with 0 critical, 0 important and 
 - **The §24.7 rows keep the section's columns.** The plan's table gave the case and the tests; the rows carry the
   case verbatim and an expected behaviour written from the rulings as built, and the tests live in the traceability
   map. Why: §24.7's columns are the case and the expected behaviour.
+
+### Review gate (Task 7b)
+
+The review of `2cebc837..afbef83f` (the documents) approved it with 0 critical, 0 important and 6 minor issues.
+Minors 1-5 were fixed in the next docs commit:
+- Minor 1: 13A.19 put the unchanged rule among the refusals; it now follows `grant_key_read` and says the listener
+  and the key do not change, while the journal and the binding record are written.
+- Minor 2: the admin guide says each deployment is event 1005 and a restore 1002.
+- Minor 3: the troubleshooting entry uses the status label **Succeeded**.
+- Minor 4: "Windows makes a new one if it was removed" is marked as not measured in 13A.19 and the host guide (owner
+  item 6 keeps it).
+- Minor 5: the manual matrix's RDP item is removed (the Task 7 ruling above).
+- Minor 6: `docs/security/traceability.md` is the generator's output; no change.
 
 ## Security review (W6)
 
@@ -2655,9 +2672,6 @@ Added during execution:
   in `Remote Desktop`, and the restore deletes the value instead): Task 5 review minor, for the final review to
   triage (a one-sentence fix is the candidate).
 - **The helper-outdated warning** shows on every helper below 1.2.0, 1.0.0 included (Task 6 ruling).
-- **The manual matrix's "an RDP listener with its own certificate"** (W3, release checklist section 8, WIN-45) is now
-  covered on the runners (Ruling 26, `TestRealRDPSharedWithBinding`). The release checklist and WIN-45 still list it;
-  remove it there, or keep it as a hand check.
 - **The W4 and W5 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode, the
   helper update procedure): a 1.2.0 helper needs the same "update the helpers first, then Alice" step.
 

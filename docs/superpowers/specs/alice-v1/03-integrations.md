@@ -999,8 +999,7 @@ step 5 changes nothing:
    `SecurityLayer` 0 `RDP_TLS_OFF` (exit 3).
 3. The current certificate (13A.18); its DER SHA-256 is not `expect_sha256` `HASH_MISMATCH` (also with none or
    several self-signed certificates and the value absent); the new certificate already in `My` without a usable key
-   `KEY_UNUSABLE`. The unchanged rule: the listener names the new SHA-1, NETWORK SERVICE can read its key, no
-   intermediate was added and the binding record's chain equals the deployment's: `unchanged`, no write.
+   `KEY_UNUSABLE`.
 4. Journal `prepared` with `kind` `rdp_listener`, `binding` `rdp/RDP-Tcp`, `store` `MY`, the previous leaf's SHA-1,
    SHA-256 and SPKI SHA-256, `rdp.previous_store` (`MY` or `Remote Desktop`), `rdp.previous_absent`, the new hashes
    and the R48 lists; the binding record names the operation.
@@ -1014,6 +1013,10 @@ step 5 changes nothing:
    the other ACEs are unchanged, and the key stays not exportable. The DACL is read back: a grant the KSP merged into
    another ACE is undone and fails. A failed grant answers `restored` with `failed_step grant_key_read` and error
    `key_acl` (the listener untouched; an ACE that was added is taken back).
+
+   The unchanged rule, after this step: when the listener names the new SHA-1, NETWORK SERVICE could already read its
+   key (so no grant was made), no intermediate was added and the binding record's chain equals the deployment's, the
+   answer is `unchanged`: no change to the listener or the key; the journal and the binding record are written.
 7. `set_listener`: the value set to the new SHA-1 and read back (a mismatch self-restores under the guard). When the
    listener already names that SHA-1 (the unchanged rule did not hold), the value is deleted and set again
    (`rdp.rebuild` journalled first): a same-value write does not make Schannel rebuild the served chain (F20), and
@@ -1039,7 +1042,8 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
   self-signed certificate like any other). The listener must still name this operation's certificate, else
   `SUPERSEDED` (committed) or `restore_failed` `file_changed` (interrupted), nothing written; a committed journal over
   an absent previous value whose value a third party deleted answers `restored`. With `previous_absent` the value is
-  deleted and Remote Desktop serves its self-signed certificate (Windows makes a new one if it was removed); otherwise
+  deleted and Remote Desktop serves its self-signed certificate (Windows makes a new one if it was removed; not
+  measured); otherwise
   the previous certificate must be in `previous_store` with a usable key (`BACKUP_MISSING` before any write), and the
   value is set back and read back. Then, when `key_read_had` is false, the revoke removes only the non-inherited
   access-allowed ACEs for S-1-5-20 with flags 0 and the exact grant mask (deny ACEs, other masks, other trustees and

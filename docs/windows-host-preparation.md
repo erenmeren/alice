@@ -353,8 +353,8 @@ What a deployment to the Remote Desktop listener changes:
   put back.
 
 When the check after the change fails, the helper points the listener back to the previous certificate, or, after
-the first deployment, removes the value so Remote Desktop uses its self-signed certificate again (Windows makes a new
-one if it was removed), and takes back the NETWORK SERVICE entry it added. A certificate Remote Desktop cannot use
+the first deployment, removes the value so Remote Desktop uses its self-signed certificate again (Windows should make
+a new one if it was removed; this was not measured), and takes back the NETWORK SERVICE entry it added. A certificate Remote Desktop cannot use
 stops new Remote Desktop sessions, so keep another way in: the server's console or SSH. The account `alice` itself cannot sign in over Remote Desktop.
 
 ## Troubleshooting

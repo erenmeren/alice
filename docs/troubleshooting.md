@@ -314,7 +314,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
     certificate, delete the value `SSLCertificateSHA1Hash` under
     `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`; Remote Desktop uses it for the
     next connection. Then choose **Discover** in Alice.
-  - **Verified**, but the clients warn about the certificate: the clients connect with a name the certificate does
+  - **Succeeded**, but the clients warn about the certificate: the clients connect with a name the certificate does
     not hold, or do not trust its issuer. Deploy a certificate for the name the clients use.
 
   A step note "Alice could not take back NETWORK SERVICE's read access" means the entry Alice added to the key's
