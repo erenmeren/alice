@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/windows/winproto"
@@ -687,7 +689,7 @@ func TestCCSFileNameRule(t *testing.T) {
 		t.Errorf("folded: %q %v", h, ok)
 	}
 	// The Kelvin sign folds to k under Unicode lower-casing; only ASCII folds.
-	for _, n := range []string{"x.pfx.bak", ".alice-" + strings.Repeat("0", 8) + ".tmp", "_..pfx", ".pfx", "pfx", "a.pf\u212a", "www.\u212a.pfx", "bücher.pfx"} {
+	for _, n := range []string{"x.pfx.bak", ".alice-" + uuid.NewString() + ".tmp", "_..pfx", ".pfx", "pfx", "a.pf\u212a", "www.\u212a.pfx", "bücher.pfx"} {
 		if h, ok := winproto.CCSHost(n); ok {
 			t.Errorf("CCSHost(%q) = %q", n, h)
 		}
