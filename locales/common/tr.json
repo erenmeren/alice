@@ -1190,6 +1190,21 @@
         "title": "Sertifika dosyası artık deponun klasöründe değil.",
         "cause": "Dosya son taramadan sonra silinmiş ya da adı değiştirilmiş. Alice yalnızca var olan dosyaları değiştirir, yeni dosya oluşturmaz. Hiçbir şey değiştirilmedi.",
         "action": "Dosyayı klasöre geri koyun (bilerek silindiyse sunucuyu yeniden tarayın), ardından yeniden dağıtın."
+      },
+      "rdp_disabled": {
+        "title": "Sunucuda Uzak Masaüstü kapalı.",
+        "cause": "Sunucuda Uzak Masaüstü artık bağlantı kabul etmiyor; bu yüzden sertifikayı sunacak bir şey yok. Alice dinleyiciyi değiştirmedi. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucu Uzak Masaüstü'nü kullanacaksa onu sunucuda yeniden açın, ardından sunucuyu Alice'te yeniden tarayın."
+      },
+      "rdp_tls_off": {
+        "title": "Uzak Masaüstü dinleyicisi TLS kullanmıyor.",
+        "cause": "Uzak Masaüstü dinleyicisi RDP-Tcp'nin güvenlik katmanı RDP güvenliği; bu katman hiçbir zaman sertifika kullanmaz. Alice dinleyiciyi değiştirmedi. Hiçbir şey değiştirilmedi.",
+        "action": "Uzak Masaüstü sertifikayı kullanacaksa sunucuda dinleyicinin güvenlik katmanını Anlaş (Negotiate) ya da SSL (TLS) yapın, ardından sunucuyu Alice'te yeniden tarayın."
+      },
+      "rdp_key_acl_failed": {
+        "title": "Alice, Uzak Masaüstü'nün sertifikanın özel anahtarını kullanmasına izin veremedi.",
+        "cause": "Uzak Masaüstü NETWORK SERVICE olarak çalışır ve özel anahtarı okuyabilmesi gerekir. Bu erişim verilemedi; bu yüzden Alice dinleyiciyi yeni sertifikaya yöneltmedi. Dinleyici değiştirilmedi.",
+        "action": "Sunucunun Uygulama olay günlüğünü ve makine anahtar deposunu denetleyin, ardından yeniden dağıtın. Alice'teki dağıtım geçmişi her adımı gösterir."
       }
     },
     "certificate": {
@@ -2137,6 +2152,9 @@
     "license_note": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}",
     "license_note_kv": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}\nLisansın süresi dolmuşken Key Vault verileri güncel olmayabilir.",
     "windows_note_autocertrebind": "Not: bu sunucuda AutoCertRebind görevi açık. Otomatik kayıt bir sertifikayı yenilediğinde Windows yenilenen sertifikayı kendiliğinden bağlar ve bu, bağlamayı Alice dışında değiştirir. Bu bağlamayı Alice yönetiyorsa görevi kapatın (Görev Zamanlayıcı, Microsoft\\Windows\\CertificateServicesClient\\AutoCertRebind).",
+    "windows_note_rdp": "Bu konum, sunucunun bir IIS bağlaması değil, Uzak Masaüstü (RDP-Tcp) dinleyicisidir. Özel anahtarı NETWORK SERVICE tarafından okunabilmelidir.",
+    "windows_note_rdp_autoenroll": "Bu sunucudaki bir Grup İlkesi ayarı Uzak Masaüstü sertifikasını otomatik kayıtla alır; bu yüzden Windows dinleyicinin sertifikasını Alice dışında kendiliğinden değiştirebilir.",
+    "windows_note_rdp_key_acl_left": "Not: Alice, NETWORK SERVICE'e verdiği yeni sertifikanın özel anahtarını okuma erişimini geri alamadı. Erişim yerinde bırakıldı; başka bir şey gerekmiyorsa sunucuda kaldırın.",
     "backup": {
       "failed": {
         "subject": "Alice günlük yedeğini alamadı",
@@ -2294,13 +2312,25 @@
         "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
         "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (Merkezi Sertifika Deposu dosyası: {{cert_path}}). Değişiklik başarısız oldu ve önceki dosyanın geri konması da başarısız oldu.\n\nÖnceki dosya aynı klasörde, adı .alice-<id>.bak ile biten bir yedek olarak durur (<id>: dağıtım geçmişindeki işlemin son 8 karakteri). Önceki sertifika: {{previous_certificate}}. Web sitesini hemen denetleyin, sonra IIS Yöneticisi'nde bu dosyayı kullanan siteleri denetleyin. Dosyada yanlış sertifika varsa dosyayı yedekle değiştirin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
+      "rollback_failed_windows_rdp": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusunda sertifika geri yüklenemedi",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıttı (Uzak Masaüstü dinleyicisi: {{cert_path}}). Değişiklik başarısız oldu ve dinleyicinin önceki sertifikaya geri yöneltilmesi de başarısız oldu.\n\nÖnceki sertifika sunucunun sertifika deposunda kalır. Önceki sertifika: {{previous_certificate}}. Uzak Masaüstü'nün kullanamadığı bir sertifika yeni Uzak Masaüstü oturumlarını engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin ve önceki sertifikayla karşılaştırın. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
       "outcome_unknown_windows_ccs": {
         "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını doğrulayamadı",
         "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (Merkezi Sertifika Deposu dosyası: {{cert_path}}), ancak nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nWeb sitesini hemen denetleyin, IIS Yöneticisi'nde de bu dosyayı kullanan siteleri denetleyin. Değişiklik sunucuya ulaştıysa önceki dosya aynı klasörde, adı .alice-<id>.bak ile biten bir yedek olarak durur (<id>: dağıtım geçmişindeki işlemin son 8 karakteri). Önceki sertifika: {{previous_certificate}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       },
+      "outcome_unknown_windows_rdp": {
+        "subject": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımını doğrulayamadı",
+        "body": "Alice {{target_name}} sunucusunda bir sertifika dağıtmaya başladı (Uzak Masaüstü dinleyicisi: {{cert_path}}), ancak nasıl sonuçlandığını doğrulayamadı ve denemeyi bıraktı.\n\nSunucuya yeni Uzak Masaüstü oturumlarının açılabildiğini hemen denetleyin. Uzak Masaüstü'nün kullanamadığı bir sertifika bu oturumları engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin. Değişiklik sunucuya ulaştıysa önceki sertifika hâlâ sertifika deposundadır. Önceki sertifika: {{previous_certificate}}. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
       "restored_unverified_windows_ccs": {
         "subject": "{{target_name}} sunucusunda önceki sertifika dosyası geri kondu, ancak Alice web sitesinin onu sunduğunu doğrulayamadı",
         "body": "{{target_name}} sunucusunda bir sertifika dağıtımı başarısız oldu (Merkezi Sertifika Deposu dosyası: {{cert_path}}) ve Alice önceki dosyayı geri koydu. Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı; örneğin sunucunun önündeki bir yük dengeleyici yanıt veriyor ya da denetim bağlanamadı.\n\nWeb sitesini hemen denetleyin. Yanlışsa IIS Yöneticisi'nde bu dosyayı kullanan siteleri denetleyin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
+      },
+      "restored_unverified_windows_rdp": {
+        "subject": "{{target_name}} sunucusunun Uzak Masaüstü dinleyicisinde önceki sertifika yeniden ayarlandı, ancak Alice sunulduğunu doğrulayamadı",
+        "body": "{{target_name}} sunucusunda bir sertifika dağıtımı başarısız oldu (Uzak Masaüstü dinleyicisi: {{cert_path}}) ve Alice dinleyiciyi önceki sertifikaya geri yöneltti. Önceki sertifika: {{previous_certificate}}. Alice dinleyicinin onu sunduğunu doğrulayamadı; örneğin denetim bağlanamadı.\n\nSunucuya yeni Uzak Masaüstü oturumlarının açılabildiğini hemen denetleyin. Uzak Masaüstü'nün kullanamadığı bir sertifika bu oturumları engeller; oturum açmak için sunucunun konsolunu ya da SSH'yi kullanın. Dinleyicinin sertifikasını Uzak Masaüstü ayarlarında ya da Win32_TSGeneralSetting (SSLCertificateSHA1Hash) ile denetleyin. Alice'teki dağıtım geçmişi her adımı gösterir. Dağıtım: {{deployment_id}}"
       }
     },
     "location": {

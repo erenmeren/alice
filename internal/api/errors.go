@@ -323,6 +323,13 @@ var (
 	ErrWINCCSPasswordInvalid  = ErrorCode{Code: "ALC-WIN-0019", Reason: "windows.ccs_password_invalid", Status: http.StatusUnprocessableEntity}
 	ErrWINCCSFileNotFound     = ErrorCode{Code: "ALC-WIN-0020", Reason: "windows.ccs_file_not_found", Status: http.StatusConflict}
 
+	// R69 (W6): the Remote Desktop certificate. A deployment to the RDP listener is refused, nothing changed, when Remote
+	// Desktop is off or its security layer offers no TLS (Ruling 5); it is restored, the listener untouched, when the
+	// helper could not let NETWORK SERVICE read the new certificate's key (Ruling 9 step 6).
+	ErrWINRDPDisabled     = ErrorCode{Code: "ALC-WIN-0021", Reason: "windows.rdp_disabled", Status: http.StatusConflict}
+	ErrWINRDPTLSOff       = ErrorCode{Code: "ALC-WIN-0022", Reason: "windows.rdp_tls_off", Status: http.StatusConflict}
+	ErrWINRDPKeyACLFailed = ErrorCode{Code: "ALC-WIN-0023", Reason: "windows.rdp_key_acl_failed", Status: http.StatusConflict}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -677,7 +684,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrWINHelperMissing, ErrWINHelperOutdated, ErrWINNotElevated, ErrWINBindingChanged, ErrWINBindingNotFound, ErrWINBusy,
 		ErrWINIOError, ErrWINStoreError, ErrWINKeyUnusable, ErrWINBackupMissing, ErrWINLocationUnsupported, ErrWINHelperRefused,
 		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown, ErrWINCCSDisabled, ErrWINCCSPathChanged, ErrWINCCSPasswordMismatch,
-		ErrWINCCSPasswordMissing, ErrWINCCSPasswordInvalid, ErrWINCCSFileNotFound,
+		ErrWINCCSPasswordMissing, ErrWINCCSPasswordInvalid, ErrWINCCSFileNotFound, ErrWINRDPDisabled, ErrWINRDPTLSOff, ErrWINRDPKeyACLFailed,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,

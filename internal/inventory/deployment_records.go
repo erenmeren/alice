@@ -245,7 +245,8 @@ func sha256Hex(b []byte) string {
 // is not a CERTIFICATE gives "", which no binding's token equals: the next deployment is then refused (HASH_MISMATCH,
 // nothing changed) until a discovery reads the binding's token again; it never names a wrong certificate.
 func newCertSHA256(kind providers.LocationKind, certPEM []byte) string {
-	if kind != providers.LocationWinSSLBinding && kind != providers.LocationWinCCSFile { // a CCS file's token is its leaf too (W5 Ruling 13)
+	// A CCS file's token is its leaf too (W5 Ruling 13), and so is the RDP listener's (W6 Ruling 4).
+	if kind != providers.LocationWinSSLBinding && kind != providers.LocationWinCCSFile && kind != providers.LocationWinRDP {
 		return sha256Hex(certPEM)
 	}
 	b, _ := pem.Decode(certPEM)
@@ -721,7 +722,7 @@ FROM deployments d LEFT JOIN certificate_locations l ON l.id = d.location_id WHE
 		// The helper's journal names the CCS file's backup (W5 Ruling 21); a binding's store and thumbprint do not apply.
 		return providers.BackupRef{OperationID: id, PreviousSHA256: token}, nil
 	}
-	if kind != providers.LocationWinSSLBinding {
+	if kind != providers.LocationWinSSLBinding && kind != providers.LocationWinRDP { // the RDP listener's is a binding's (W6 Ruling 19)
 		return providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()}, nil
 	}
 	ref := providers.BackupRef{OperationID: id, PreviousSHA256: token}
@@ -797,9 +798,10 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 // failed verification's reason code, which a recovery reads back after a crash; chain_differs,
 // deployed_chain and built_chain: Windows serves a chain other than the one Alice deployed, W2 Ruling 16;
 // ccs_unlinked: a CCS file no IIS binding uses, verified by the helper's read-back only, W5 Ruling 8;
-// ccs_refresh_failed: the helper's refresh of the http.sys ccs records after a CCS write or restore failed, W5 F15).
+// ccs_refresh_failed: the helper's refresh of the http.sys ccs records after a CCS write or restore failed, W5 F15;
+// rdp_key_acl_left: an RDP restore could not take back NETWORK SERVICE's read access to the key, W6 Ruling 10).
 var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error",
-	"chain_differs", "deployed_chain", "built_chain", "ccs_unlinked", "ccs_refresh_failed"}
+	"chain_differs", "deployed_chain", "built_chain", "ccs_unlinked", "ccs_refresh_failed", "rdp_key_acl_left"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
@@ -1142,7 +1144,8 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		// An http.sys binding now names the deployed leaf: its thumbprint replaces the one the last discovery read, so
 		// the next deployment's rollback info (W2 Ruling 17) names this certificate as the previous one (R61 Task 14).
 		// A thumbprint that cannot be derived removes the old one: nothing is named rather than a wrong certificate
-		// next to the new token (the next discovery records the binding's own).
+		// next to the new token (the next discovery records the binding's own). The RDP listener's also names the store My
+		// and no longer the self-signed certificate (W6 Ruling 19), so the next rollback info names the deployed one.
 		thumb, err := deployedThumbprint(ctx, tx, d.certificate, fileSHA)
 		if err != nil {
 			return err
@@ -1150,8 +1153,9 @@ WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.R
 		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET deployed_fingerprint = $2, changed_outside_at = NULL, certificate_id = $3,
     key_type = (SELECT CASE WHEN key_algorithm IN ('rsa', 'ecdsa') THEN key_algorithm ELSE '' END FROM certificates WHERE id = $3),
     cert_file_sha256 = $4, version = version + 1,
-    details = CASE WHEN kind <> 'win_sslbinding' THEN details
+    details = CASE WHEN kind NOT IN ('win_sslbinding', 'win_rdp') THEN details
                    WHEN $5::text <> '' THEN jsonb_set(details, '{cert_sha1}', to_jsonb($5::text)) ELSE details - 'cert_sha1' END
+              || CASE WHEN kind = 'win_rdp' THEN '{"store": "MY", "self_signed": false}'::jsonb ELSE '{}'::jsonb END
 WHERE id = $1`, d.location, d.newFingerprint, d.certificate, fileSHA, thumb); err != nil {
 			return fmt.Errorf("inventory: record the deployed certificate: %w", err)
 		}
@@ -1321,7 +1325,7 @@ ORDER BY created_at DESC, id DESC LIMIT 1), $2), (SELECT location_kind FROM depl
 	if err != nil {
 		return "", fmt.Errorf("inventory: read the recovery's cause: %w", err)
 	}
-	windowsLost := (kind == providers.LocationWinSSLBinding || kind == providers.LocationWinCCSFile) &&
+	windowsLost := (kind == providers.LocationWinSSLBinding || kind == providers.LocationWinCCSFile || kind == providers.LocationWinRDP) &&
 		(cause == interruptedCode || cause == windowsHelperMissing)
 	if strings.HasPrefix(cause, "ssh.") || windowsLost {
 		return TemplateDeploymentNeedsAttention, nil

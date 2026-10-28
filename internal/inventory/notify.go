@@ -273,6 +273,28 @@ func WindowsCCSDeploymentTemplates() []string {
 // ccsDeploymentTemplates are the deployment e-mails a CCS file gets a text of its own for.
 var ccsDeploymentTemplates = []string{TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified}
 
+// windowsRDPTemplateSuffix makes the RDP text of a deployment e-mail (WindowsRDPTemplate).
+const windowsRDPTemplateSuffix = "_windows_rdp"
+
+// WindowsRDPTemplate is the text of the deployment e-mail template for the Remote Desktop listener of a Windows server
+// (W6 Ruling 20), for the manual-action templates (rdpDeploymentTemplates). It names the listener (cert_path), the
+// previous certificate (previous_certificate), how to check it on the server (the Remote Desktop settings,
+// Win32_TSGeneralSetting) and that a broken RDP certificate blocks new Remote Desktop sessions, so the server's console
+// or SSH is the way in. The listener's other deployment e-mails are the Windows texts with windows_note=rdp.
+func WindowsRDPTemplate(template string) string { return template + windowsRDPTemplateSuffix }
+
+// WindowsRDPDeploymentTemplates lists the RDP texts of the deployment e-mails (render tests).
+func WindowsRDPDeploymentTemplates() []string {
+	out := make([]string, 0, len(rdpDeploymentTemplates))
+	for _, t := range rdpDeploymentTemplates {
+		out = append(out, WindowsRDPTemplate(t))
+	}
+	return out
+}
+
+// rdpDeploymentTemplates are the deployment e-mails the RDP listener gets a text of its own for.
+var rdpDeploymentTemplates = []string{TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified}
+
 // deploymentTemplates are the deployment e-mails (deployment.*), each with a Windows text.
 var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentRollbackFailed, TemplateDeploymentOutcomeUnknown,
 	TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
@@ -283,7 +305,10 @@ var deploymentTemplates = []string{TemplateDeploymentFailed, TemplateDeploymentR
 // (WindowsTemplate) and, in place of backup_dir (a Linux folder; a binding has none), previous_certificate on the texts
 // that named it: what the start record wrote of the certificate the binding named before the change
 // (previousCertificate). A CCS file's is the file text, except for ccsDeploymentTemplates: the CCS text
-// (WindowsCCSTemplate), without backup_dir, with previous_certificate where the binding's text has it (W5-5).
+// (WindowsCCSTemplate), without backup_dir, with previous_certificate where the binding's text has it (W5-5). The RDP
+// listener's (W6 Ruling 20) is a binding's with windows_note=rdp, except for rdpDeploymentTemplates: the RDP text
+// (WindowsRDPTemplate), without backup_dir, with previous_certificate on all three; and rdp_key_acl_left=true when a
+// step of the deployment says a restore left NETWORK SERVICE's read access to the key in place (Ruling 10).
 func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID, template string,
 	params map[string]string) (string, map[string]string, error) {
 	var (
@@ -295,7 +320,8 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 		return "", nil, fmt.Errorf("inventory: read the deployment's location kind: %w", err)
 	}
 	ccs := kind == providers.LocationWinCCSFile && slices.Contains(ccsDeploymentTemplates, template)
-	if !ccs && (kind != providers.LocationWinSSLBinding || !slices.Contains(deploymentTemplates, template)) {
+	rdp := kind == providers.LocationWinRDP && slices.Contains(deploymentTemplates, template)
+	if !ccs && !rdp && (kind != providers.LocationWinSSLBinding || !slices.Contains(deploymentTemplates, template)) {
 		return template, params, nil
 	}
 	out := make(map[string]string, len(params))
@@ -304,7 +330,8 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 			out[k] = v
 		}
 	}
-	if template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown {
+	rdpOwn := rdp && slices.Contains(rdpDeploymentTemplates, template)
+	if template == TemplateDeploymentRollbackFailed || template == TemplateDeploymentOutcomeUnknown || rdpOwn {
 		var ref *providers.BackupRef
 		if len(raw) > 0 {
 			ref = &providers.BackupRef{}
@@ -317,6 +344,21 @@ func windowsDeploymentMail(ctx context.Context, tx pgx.Tx, deployment uuid.UUID,
 	if ccs {
 		return WindowsCCSTemplate(template), out, nil
 	}
+	if !rdp {
+		return WindowsTemplate(template), out, nil
+	}
+	var aclLeft bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployment_steps WHERE deployment_id = $1 AND params->>'rdp_key_acl_left' = 'true')`,
+		deployment).Scan(&aclLeft); err != nil {
+		return "", nil, fmt.Errorf("inventory: read the deployment's steps: %w", err)
+	}
+	if aclLeft {
+		out["rdp_key_acl_left"] = "true"
+	}
+	if rdpOwn {
+		return WindowsRDPTemplate(template), out, nil
+	}
+	out["windows_note"] = windowsNoteRDP
 	return WindowsTemplate(template), out, nil
 }
 

@@ -20,7 +20,7 @@ import (
 )
 
 // windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012, R62 0013-0014, R68
-// 0015-0020).
+// 0015-0020, R69 0021-0023).
 var windowsTable = []struct {
 	code, reason string
 	status       int
@@ -46,6 +46,9 @@ var windowsTable = []struct {
 	{"ALC-WIN-0018", "windows.ccs_password_missing", 409, false},
 	{"ALC-WIN-0019", "windows.ccs_password_invalid", 422, false},
 	{"ALC-WIN-0020", "windows.ccs_file_not_found", 409, false},
+	{"ALC-WIN-0021", "windows.rdp_disabled", 409, false},
+	{"ALC-WIN-0022", "windows.rdp_tls_off", 409, false},
+	{"ALC-WIN-0023", "windows.rdp_key_acl_failed", 409, false},
 }
 
 // Each Windows code is registered as the table says, has EN and TR texts without placeholders (the provider sends

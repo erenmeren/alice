@@ -2290,6 +2290,30 @@ None of these files holds key material.
 
 **What to do.** Put the file back in the folder, or scan the server again if it was removed on purpose. Then deploy again. IIS may take several minutes to serve a file for a host it has not served before (see [windows-host-preparation.md](windows-host-preparation.md#centralized-certificate-store)).
 
+## ALC-WIN-0021: Remote Desktop is turned off on the server
+
+**Meaning.** A deployment to the Remote Desktop listener (RDP-Tcp) was refused because Remote Desktop is turned off on the server, so nothing would serve the certificate. The helper read this from the registry before it changed anything; nothing was changed. (HTTP 409, reason `windows.rdp_disabled`.)
+
+**Likely cause.** Remote Desktop was turned off on the server (or by a Group Policy setting) after Alice's last scan.
+
+**What to do.** If the server should accept Remote Desktop sessions, turn Remote Desktop on again, then scan the server again in Alice and deploy again. Otherwise leave the listener out of the deployment.
+
+## ALC-WIN-0022: The Remote Desktop listener does not use TLS
+
+**Meaning.** A deployment to the Remote Desktop listener (RDP-Tcp) was refused because its security layer is RDP security, which never uses a certificate. Nothing was changed. (HTTP 409, reason `windows.rdp_tls_off`.)
+
+**Likely cause.** The listener's security layer (`SecurityLayer` 0, set on the listener or by a Group Policy setting) was changed after Alice's last scan.
+
+**What to do.** If Remote Desktop should use the certificate, set the security layer to Negotiate or SSL (TLS) on the server, then scan the server again in Alice and deploy again. Alice never changes this setting.
+
+## ALC-WIN-0023: Alice could not let Remote Desktop use the certificate's private key
+
+**Meaning.** Remote Desktop runs as NETWORK SERVICE, which must be able to read the certificate's private key. The helper could not give it that access, so it did not point the listener to the new certificate; the listener was not changed, and any access it had added was taken back. (HTTP 409, reason `windows.rdp_key_acl_failed`.)
+
+**Likely cause.** The key's security settings could not be read or written in the server's machine key store, for example because another program holds or protects the key.
+
+**What to do.** Check the server's Application event log and its machine key store, then deploy again. The deployment history in Alice shows each step.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

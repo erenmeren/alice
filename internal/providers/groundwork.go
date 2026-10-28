@@ -48,9 +48,11 @@ const (
 	LocationF5ClientSSL   LocationKind = "f5_clientssl"   // one certKeyChain entry of a BIG-IP client SSL profile
 	LocationK8sTLSSecret  LocationKind = "k8s_tls_secret" //nolint:gosec // G101 false positive: a location kind (a Kubernetes Secret of type kubernetes.io/tls)
 	LocationWinCCSFile    LocationKind = "win_ccs_file"   // a PFX file of a Windows server's Centralized Certificate Store (W5, migration 00036)
+	LocationWinRDP        LocationKind = "win_rdp"        // the Remote Desktop listener RDP-Tcp of a Windows server (W6, migration 00037)
 )
 
-var locationKinds = []LocationKind{LocationServerFile, LocationWinSSLBinding, LocationF5ClientSSL, LocationK8sTLSSecret, LocationWinCCSFile}
+var locationKinds = []LocationKind{LocationServerFile, LocationWinSSLBinding, LocationF5ClientSSL, LocationK8sTLSSecret, LocationWinCCSFile,
+	LocationWinRDP}
 
 // Known reports a kind the schema takes.
 func (k LocationKind) Known() bool {
@@ -206,7 +208,8 @@ func CanonicalDetails(d map[string]any) ([]byte, error) {
 
 // Deployment step names of the new targets (G1), reported to the StepLogger like the helper's: a Windows server imports
 // the intermediates and the certificate into its stores and re-points the http.sys binding (or, for a CCS file, writes
-// the file: StepNameWriteFile, W5); a BIG-IP uploads a PKCS #12,
+// the file: StepNameWriteFile, W5; for the Remote Desktop listener, lets NETWORK SERVICE read the key and sets the
+// listener: StepNameGrantKeyRead, StepNameSetListener, W6); a BIG-IP uploads a PKCS #12,
 // installs its objects, commits one transaction, synchronises its device group and saves its configuration; a Kubernetes
 // cluster backs the Secret up into Alice (StepNameBackup) and writes it. Each target's steps end with the engine's own
 // verify, restore and verify_old.
@@ -221,6 +224,8 @@ const (
 	StepNameSave              = "save"
 	StepNameWriteSecret       = "write_secret"
 	StepNameWriteFile         = "write_file"
+	StepNameGrantKeyRead      = "grant_key_read"
+	StepNameSetListener       = "set_listener"
 )
 
 // BackupModel says where the previous content of a location stays while a rollback may need it (G5).

@@ -231,8 +231,17 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	}
 	// A Windows server's AutoCertRebind task (R62 Ruling 16): the sentence that it may have re-pointed the binding; the
 	// param that asks for it is not rendered.
-	if params["windows_note"] == "autocertrebind" {
+	switch params["windows_note"] {
+	case "autocertrebind":
 		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_autocertrebind", nil)
+	case "rdp": // the Remote Desktop listener (W6 Ruling 20)
+		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_rdp", nil)
+	case "rdp_autoenroll": // the listener, whose certificate a policy autoenrols
+		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_rdp", nil) + " " + s.Catalog.T(locale, "email.windows_note_rdp_autoenroll", nil)
+	}
+	// An RDP restore that left NETWORK SERVICE's read access to the key in place (W6 Ruling 10).
+	if params["rdp_key_acl_left"] == "true" {
+		body += "\n\n" + s.Catalog.T(locale, "email.windows_note_rdp_key_acl_left", nil)
 	}
 	body += "\n\n" + s.Catalog.T(locale, "email.footer", nil)
 	return Message{To: to, Subject: subject, Body: body}

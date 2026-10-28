@@ -381,7 +381,7 @@ ORDER BY t.id LIMIT $6 FOR UPDATE OF t SKIP LOCKED`, TypeWindows, StatusOK, stri
 }
 
 // queueIncidentCleanupTx queues, in the caller's transaction, the windows.cleanup of the server of an incident's place
-// that has just settled, when the place is an http.sys binding on a server with the cleanup capability (Ruling 9; as
+// that has just settled, when the place is an http.sys binding or the RDP listener on a server with the cleanup capability (Ruling 9; as
 // ScheduleWindowsCleanup): payload incident_id. The dedupe key names the place
 // (windows.cleanup:<target>:incident:<incident>:<location>), so a job already running for an earlier place of the server
 // never absorbs a later place's: the job queued after the last settlement sees every place settled.
@@ -393,7 +393,7 @@ func (s *Service) queueIncidentCleanupTx(ctx context.Context, tx pgx.Tx, inciden
 JOIN targets t ON t.id = l.target_id WHERE l.id = $1`, location, string(providers.CapCleanupCertificates)).Scan(&target, &kind, &capable); err != nil {
 		return fmt.Errorf("inventory: read the incident's place: %w", err)
 	}
-	if kind != providers.LocationWinSSLBinding || !capable {
+	if (kind != providers.LocationWinSSLBinding && kind != providers.LocationWinRDP) || !capable { // W6 Ruling 7: the RDP listener too
 		return nil
 	}
 	_, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobWindowsCleanup, TargetID: target, Payload: map[string]string{"incident_id": incident.String()},

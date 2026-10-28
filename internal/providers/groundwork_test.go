@@ -21,12 +21,16 @@ import (
 
 func TestLocationKinds(t *testing.T) {
 	for _, k := range []providers.LocationKind{providers.LocationServerFile, providers.LocationWinSSLBinding, providers.LocationF5ClientSSL,
-		providers.LocationK8sTLSSecret, providers.LocationWinCCSFile} {
+		providers.LocationK8sTLSSecret, providers.LocationWinCCSFile, providers.LocationWinRDP} {
 		assert.True(t, k.Known(), k)
 	}
 	assert.Equal(t, providers.LocationKind("win_ccs_file"), providers.LocationWinCCSFile)
 	assert.False(t, providers.LocationWinCCSFile.IsFile(), "a CCS file has a locator and no key path (W5 Ruling 21)")
 	assert.Equal(t, "write_file", providers.StepNameWriteFile)
+	assert.Equal(t, providers.LocationKind("win_rdp"), providers.LocationWinRDP)
+	assert.False(t, providers.LocationWinRDP.IsFile(), "the RDP listener has a locator and no key path (W6 Ruling 3)")
+	assert.Equal(t, "grant_key_read", providers.StepNameGrantKeyRead)
+	assert.Equal(t, "set_listener", providers.StepNameSetListener)
 	for _, k := range []providers.LocationKind{"", "nginx_file", "SERVER_FILE"} {
 		assert.False(t, k.Known(), k)
 	}

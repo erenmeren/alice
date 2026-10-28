@@ -308,3 +308,6 @@ var ErrForeignCredential = errForeignCredential
 
 // ValidCCSPassword exposes validCCSPassword to the test that compares it with winproto.ValidCCSPassword.
 func ValidCCSPassword(pw []byte) bool { return validCCSPassword(pw) }
+
+// RDPAutoenroll exposes whether the observation read the location warning win_rdp_autoenroll (W6 Ruling 20).
+func (o LocationObservation) RDPAutoenroll() bool { return o.rdpAutoenroll }

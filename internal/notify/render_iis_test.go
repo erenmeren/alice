@@ -194,3 +194,62 @@ func TestWindowsCCSDeploymentTemplatesRenderInBothLanguages(t *testing.T) {
 		}
 	}
 }
+
+// W6 Ruling 20 (R69): the RDP listener's rollback_failed, outcome_unknown and restored_unverified e-mails have texts of
+// their own that name the listener, the previous certificate, how to check it on the server and that the console or SSH
+// is the way in, never a file, Nginx or netsh. The note windows_note rdp (rdp_autoenroll: also RDP autoenrolment) and
+// rdp_key_acl_left (Ruling 10) are added before the footer, in English and Turkish.
+func TestWindowsRDPTemplatesAndNotesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"target_name": "iis-01 (İzmir)", "cert_path": "rdp/RDP-Tcp",
+		"deployment_id": "0190f5a0-0000-7000-8000-00000000abcd", "previous_certificate": `MY \ ` + strings.Repeat("ab", 20)}
+	want := []string{inventory.WindowsRDPTemplate(inventory.TemplateDeploymentRollbackFailed),
+		inventory.WindowsRDPTemplate(inventory.TemplateDeploymentOutcomeUnknown),
+		inventory.WindowsRDPTemplate(inventory.TemplateDeploymentRestoredUnverified)}
+	require.Equal(t, want, inventory.WindowsRDPDeploymentTemplates())
+	notRDP := regexp.MustCompile(`(?i)nginx|/var/lib|/usr/local|alice-helper|systemctl|netsh|reload|\bfiles?\b|dosya`)
+	for _, tpl := range want {
+		assert.NotContains(t, inventory.Templates(), tpl, "the RDP texts are their own keys")
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			text := m.Subject + "\n" + m.Body
+			assert.NotContains(t, text, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, m.Subject, "email.", "%s %s", tpl, lang)
+			assert.Contains(t, m.Subject, "iis-01 (İzmir)", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "rdp/RDP-Tcp", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, params["previous_certificate"], "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "0190f5a0-0000-7000-8000-00000000abcd", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "Win32_TSGeneralSetting", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "SSH", "%s %s", tpl, lang)
+			assert.NotRegexp(t, notRDP, text, "%s %s", tpl, lang)
+		}
+	}
+
+	notes := map[string]string{"rdp": "email.windows_note_rdp", "autoenroll": "email.windows_note_rdp_autoenroll",
+		"acl": "email.windows_note_rdp_key_acl_left"}
+	for _, lang := range []string{"en", "tr"} {
+		text := map[string]string{}
+		for k, key := range notes {
+			text[k] = cat.T(lang, key, nil)
+			require.NotEqual(t, key, text[k], lang)
+		}
+		assert.Contains(t, text["rdp"], "NETWORK SERVICE", lang)
+		assert.Contains(t, text["rdp"], "RDP-Tcp", lang)
+		assert.Contains(t, text["acl"], "NETWORK SERVICE", lang)
+		footer := "\n\n" + cat.T(lang, "email.footer", nil)
+		render := func(extra map[string]string) string {
+			p := map[string]string{"target_name": "iis-01", "cert_path": "rdp/RDP-Tcp", "deployment_id": "d"}
+			maps.Copy(p, extra)
+			return s.Render("ada@example.com", "deployment.failed_windows", lang, p).Body
+		}
+		assert.NotContains(t, render(nil), text["rdp"], lang)
+		assert.True(t, strings.HasSuffix(render(map[string]string{"windows_note": "rdp"}), "\n\n"+text["rdp"]+footer), lang)
+		assert.True(t, strings.HasSuffix(render(map[string]string{"windows_note": "rdp_autoenroll"}),
+			"\n\n"+text["rdp"]+" "+text["autoenroll"]+footer), lang)
+		assert.True(t, strings.HasSuffix(render(map[string]string{"windows_note": "rdp", "rdp_key_acl_left": "true"}),
+			"\n\n"+text["rdp"]+"\n\n"+text["acl"]+footer), lang)
+		assert.NotContains(t, render(map[string]string{"rdp_key_acl_left": "yes"}), text["acl"], "%s: only true asks for it", lang)
+	}
+}

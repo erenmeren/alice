@@ -253,6 +253,8 @@ func TestStepsEqualTheProviders(t *testing.T) {
 		{winproto.StepBind, providers.StepNameBind},
 		{winproto.StepJournal, providers.StepNameJournal},
 		{winproto.StepRestore, providers.StepNameRestore},
+		{winproto.StepGrantKeyRead, providers.StepNameGrantKeyRead},
+		{winproto.StepSetListener, providers.StepNameSetListener},
 		{winproto.ErrForbidden, providers.DeployErrForbidden},
 		{winproto.ErrFileChanged, providers.DeployErrFileChanged},
 	} {

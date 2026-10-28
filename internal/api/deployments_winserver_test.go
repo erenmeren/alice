@@ -116,6 +116,19 @@ func TestCCSStepParams(t *testing.T) {
 	assert.Equal(t, map[string]string{}, out.Steps[2].Params)
 }
 
+// W6 (R69) Ruling 10: an RDP restore step shows rdp_key_acl_left (NETWORK SERVICE's read access to the key was left in
+// place); a value other than "true" is dropped.
+func TestRDPStepParams(t *testing.T) {
+	d := inventory.Deployment{ID: uuid.New(), Steps: []inventory.DeploymentStep{
+		{N: 1, Name: "restore", Status: "ok", Params: map[string]string{"rdp_key_acl_left": "true"}},
+		{N: 2, Name: "restore", Status: "ok", Params: map[string]string{"rdp_key_acl_left": "yes"}},
+	}}
+	out := deploymentDetailJSON(d)
+	require.Len(t, out.Steps, 2)
+	assert.Equal(t, map[string]string{"rdp_key_acl_left": "true"}, out.Steps[0].Params)
+	assert.Equal(t, map[string]string{}, out.Steps[1].Params)
+}
+
 // R62 Ruling 18: a deployment always names the kind of its location: win_sslbinding for an IIS binding, server_file
 // for a certificate file (and for a record that names none).
 func TestDeploymentDTOHasLocationKind(t *testing.T) {

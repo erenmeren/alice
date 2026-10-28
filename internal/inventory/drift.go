@@ -114,18 +114,30 @@ const (
 // on a renewal by autoenrolment Windows re-points the bindings itself, design §6.2 item 4, §11).
 const warnAutoCertRebind = "win_autocertrebind"
 
+// warnRDPAutoenroll is the RDP listener's location warning that a policy autoenrols its certificate
+// (winproto.WarnRDPAutoenroll, W6 Ruling 5): the likely cause when the listener drifts.
+const warnRDPAutoenroll = "win_rdp_autoenroll"
+
+// windowsBinding reports a kind the drift rules treat as an http.sys binding: the binding, and the RDP listener (W6
+// Ruling 21: its certificate lives in My and its key must be usable, as a binding's).
+func windowsBinding(kind providers.LocationKind) bool {
+	return kind == providers.LocationWinSSLBinding || kind == providers.LocationWinRDP
+}
+
 // bindingBroken reports whether a location of kind with these problems is a Windows binding whose certificate left its
-// store or whose key http.sys cannot use (R62 Ruling 14). Never true for any other kind.
+// store or whose key http.sys cannot use (R62 Ruling 14), or such an RDP listener (W6 Ruling 21). Never true for any
+// other kind.
 func bindingBroken(kind providers.LocationKind, problem, keyProblem string) bool {
-	return kind == providers.LocationWinSSLBinding &&
+	return windowsBinding(kind) &&
 		(problem == problemCertMissing || keyProblem == problemKeyMissing || keyProblem == problemKeyInaccessible)
 }
 
 // driftCause is the cause of a drifted Windows binding (R62 Ruling 15): cert_removed (problem cert_missing),
-// key_unusable (any key problem), else binding_repointed; "" for a location that is not drifted or not a Windows binding.
+// key_unusable (any key problem), else binding_repointed; "" for a location that is not drifted or not a Windows binding
+// (the RDP listener is one, W6 Ruling 21).
 func driftCause(kind providers.LocationKind, health, problem, keyProblem string) string {
 	switch {
-	case kind != providers.LocationWinSSLBinding || health != HealthDrifted:
+	case !windowsBinding(kind) || health != HealthDrifted:
 		return ""
 	case problem == problemCertMissing:
 		return DriftCauseCertRemoved
@@ -237,6 +249,8 @@ type LocationObservation struct {
 	deployedAt *time.Time // the desired certificate's newest successful deployment to the location
 	certPath   string
 	kind       providers.LocationKind
+	// rdpAutoenroll: the location has the warning win_rdp_autoenroll (read for every kind, used for win_rdp only).
+	rdpAutoenroll bool
 }
 
 // healthInput is what locationHealth decides from.
@@ -338,7 +352,8 @@ const observationSelect = `SELECT l.id, l.target_id, l.cert_path, l.file_observe
     (SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1),
     l.kind, l.problem, l.key_problem,
     coalesce((SELECT t.facts->'warnings' @> jsonb_build_array(jsonb_build_object('Code', '` + warnAutoCertRebind + `'))
-              FROM targets t WHERE t.id = l.target_id), false)
+              FROM targets t WHERE t.id = l.target_id), false),
+    '` + warnRDPAutoenroll + `' = ANY (l.warnings)
 FROM certificate_locations l
 LEFT JOIN certificates fc ON fc.id = l.certificate_id
 ` + driftSourceJoin + `
@@ -377,7 +392,7 @@ func scanObservation(row pgx.Row, now time.Time) (LocationObservation, error) {
 		&modeSetting, &next, &attAt, &attemptErr, &tlsAt, &tlsFP, &probe, &level, &trust, &trustErr, &tlsCert, &tlsNA,
 		&inSyncFP, &driftSince, &driftFP, &driftSource, &backoff, &backedOff,
 		&o.deployedAt, &lastID, &lastFP, &lastAt, &lastVerified, &lastTrust, &active,
-		&o.kind, &problem, &keyProblem, &autoCertRebind)
+		&o.kind, &problem, &keyProblem, &autoCertRebind, &o.rdpAutoenroll)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return LocationObservation{}, ErrNotFound
 	}
@@ -771,12 +786,21 @@ func WindowsDriftTemplates() []string {
 // windowsNoteAutoCertRebind is the value of param windows_note that asks for the AutoCertRebind sentence.
 const windowsNoteAutoCertRebind = "autocertrebind"
 
+// The values of param windows_note that ask for the RDP listener's sentence (email.windows_note_rdp), and for it with
+// the RDP autoenrolment sentence (email.windows_note_rdp_autoenroll), W6 Ruling 20.
+const (
+	windowsNoteRDP           = "rdp"
+	windowsNoteRDPAutoenroll = "rdp_autoenroll"
+)
+
 // windowsLocationMail is the template and params of a drift e-mail about o as queued (mirror of windowsDeploymentMail).
 // Anything but a Windows binding keeps both as given, byte for byte. A Windows binding's is the Windows text: of its
 // cause for a detected drift, the detected text of its cause for a prepared repair that cannot be made, else the
-// Windows text of the template; with windows_note=autocertrebind when its server's AutoCertRebind task is on.
+// Windows text of the template; with windows_note=autocertrebind when its server's AutoCertRebind task is on. The RDP
+// listener's is a binding's with windows_note=rdp, or rdp_autoenroll when a policy autoenrols its certificate (W6
+// Ruling 20); AutoCertRebind re-points bindings only.
 func windowsLocationMail(o LocationObservation, template string, params map[string]string) (string, map[string]string) {
-	if o.kind != providers.LocationWinSSLBinding || !slices.Contains(DriftTemplates(), template) {
+	if !windowsBinding(o.kind) || !slices.Contains(DriftTemplates(), template) {
 		return template, params
 	}
 	detected := map[string]string{DriftCauseCertRemoved: TemplateDriftDetectedWindowsCertRemoved,
@@ -788,7 +812,12 @@ func windowsLocationMail(o LocationObservation, template string, params map[stri
 	}
 	out := make(map[string]string, len(params)+1)
 	maps.Copy(out, params)
-	if o.AutoCertRebind {
+	switch {
+	case o.kind == providers.LocationWinRDP && o.rdpAutoenroll:
+		out["windows_note"] = windowsNoteRDPAutoenroll
+	case o.kind == providers.LocationWinRDP:
+		out["windows_note"] = windowsNoteRDP
+	case o.AutoCertRebind:
 		out["windows_note"] = windowsNoteAutoCertRebind
 	}
 	return template, out

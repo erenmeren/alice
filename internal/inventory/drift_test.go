@@ -188,6 +188,39 @@ func TestWindowsLocationMail(t *testing.T) {
 	assert.Equal(t, params, p)
 }
 
+// W6 Ruling 21 (R69): the RDP listener's drift causes are a binding's: a certificate removed from My or a broken key is
+// reported and never repaired; a re-point (also a value deleted outside Alice) is repairable.
+func TestDriftCauseRDP(t *testing.T) {
+	rdp := providers.LocationWinRDP
+	assert.Equal(t, DriftCauseCertRemoved, driftCause(rdp, HealthDrifted, "cert_missing", ""))
+	assert.False(t, driftRepairable(driftCause(rdp, HealthDrifted, "cert_missing", "")), "never repaired")
+	assert.Equal(t, DriftCauseKeyUnusable, driftCause(rdp, HealthDrifted, "", "key_missing"))
+	assert.Equal(t, DriftCauseRepointed, driftCause(rdp, HealthDrifted, "", ""))
+	assert.True(t, driftRepairable(DriftCauseRepointed))
+	assert.Empty(t, driftCause(rdp, HealthInSync, "cert_missing", ""))
+	assert.True(t, bindingBroken(rdp, "cert_missing", ""))
+	assert.True(t, bindingBroken(rdp, "", "key_inaccessible"))
+	assert.False(t, bindingBroken(rdp, "", ""))
+}
+
+// W6 Ruling 20 (R69): a drift e-mail of the RDP listener is the Windows text of its cause with windows_note rdp, or
+// rdp_autoenroll when the listener has the warning win_rdp_autoenroll; AutoCertRebind is a binding's only.
+func TestWindowsLocationMailRDP(t *testing.T) {
+	params := map[string]string{"target_name": "t", "cert_path": "rdp/RDP-Tcp", "certificate_name": "c", "observed_name": "o"}
+	o := LocationObservation{kind: providers.LocationWinRDP, Cause: DriftCauseRepointed, AutoCertRebind: true}
+	got, p := windowsLocationMail(o, TemplateDriftDetected, params)
+	assert.Equal(t, TemplateDriftDetectedWindows, got)
+	assert.Equal(t, "rdp", p["windows_note"], "never autocertrebind")
+	o.Cause = DriftCauseCertRemoved
+	got, _ = windowsLocationMail(o, TemplateDriftRepairReady, params)
+	assert.Equal(t, TemplateDriftDetectedWindowsCertRemoved, got)
+	o.rdpAutoenroll = true
+	got, p = windowsLocationMail(o, TemplateDriftFlapping, params)
+	assert.Equal(t, TemplateDriftFlappingWindows, got)
+	assert.Equal(t, "rdp_autoenroll", p["windows_note"])
+	assert.NotContains(t, params, "windows_note", "the caller's params are not changed")
+}
+
 // What one verification of the desired certificate says about the website (R52 item 1): where it was probed from, what
 // it served, its trust; a probe that reached nothing is a failure with its closed reason.
 func TestDriftResultOf(t *testing.T) {
