@@ -58,9 +58,6 @@ func validCCSPassword(pw []byte) bool {
 // without the secret.
 func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (Target, error) {
 	defer pw.Zero()
-	if !validCCSPassword(pw.Bytes()) {
-		return Target{}, ErrCCSPasswordInvalid
-	}
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return Target{}, err
 	}
@@ -77,6 +74,9 @@ func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID,
 		}
 		if cur.Type != TypeWindows {
 			return ErrNotWindowsTarget
+		}
+		if !validCCSPassword(pw.Bytes()) { // after the target's type (W5-5, Ruling 9): the seal of an invalid password is discarded with the transaction
+			return ErrCCSPasswordInvalid
 		}
 		if cur.Version != ifVersion {
 			return ErrVersionMismatch

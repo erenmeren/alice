@@ -372,3 +372,17 @@ func TestCCSSkipNeedsAnUncutFile(t *testing.T) {
 	assert.Equal(t, inventory.DeployStateRecovering, d.State, "an unrequested skip is not a success")
 	assert.Equal(t, "uncertain", d.Result)
 }
+
+// W5-5 (fixes batch 3, Ruling 9; WIN-47): the target's type is checked before the password rule, so a server that is
+// not Windows answers the conflict whatever the password; nothing is stored or audited.
+func TestSetCCSPasswordOnANonWindowsTargetIsAConflict(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.h
+	web, err := h.svc.GetTarget(h.ctx, f.web)
+	require.NoError(t, err)
+	_, err = setCCS(t, h, f.admin, web, []byte("short"))
+	require.ErrorIs(t, err, inventory.ErrNotWindowsTarget)
+	assert.NotErrorIs(t, err, inventory.ErrCCSPasswordInvalid)
+	assert.Zero(t, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", f.web), "nothing stored")
+	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'target.ccs_password_set'"))
+}
