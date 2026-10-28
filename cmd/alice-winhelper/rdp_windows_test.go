@@ -176,6 +176,18 @@ func restoreRDPValues(logf func(string, ...any), v rdpValues) {
 
 func u32(v uint32) *uint32 { return &v }
 
+// rdpTermServiceFound is TermService's state ("<Status> <StartType>") as the first RDP fixture of this
+// binary found it (the clean check compares with it).
+var (
+	rdpTermServiceOnce  sync.Once
+	rdpTermServiceFound string
+)
+
+func termServiceState(t *testing.T) string {
+	t.Helper()
+	return strings.TrimSpace(string(powershell(t, `$s = Get-Service -Name TermService; "$($s.Status) $($s.StartType)"`)))
+}
+
 // ---- the fixture ----------------------------------------------------------------------------------
 
 // rdpFixture is the real listener turned on, with a helper host on a private data directory.
@@ -202,7 +214,8 @@ func newRDPFixture(t *testing.T) *rdpFixture {
 	f := &rdpFixture{t: t, ctx: context.Background(), found: found, start: time.Now()}
 	f.h = newHost(newTestDataDir(t))
 
-	state := strings.TrimSpace(string(powershell(t, `$s = Get-Service -Name TermService; "$($s.Status) $($s.StartType)"`)))
+	state := termServiceState(t)
+	rdpTermServiceOnce.Do(func() { rdpTermServiceFound = state })
 	t.Logf("F19: TermService found %s", state)
 	if strings.HasPrefix(state, "Stopped") {
 		t.Cleanup(func() {
@@ -667,6 +680,7 @@ func TestRealRDPKeyReadForNetworkService(t *testing.T) {
 	thumb := f.importInto("My", leaf)
 	imported, full := keySDDL(t, "My", thumb)
 	t.Logf("F21: the key's SDDL as imported: %s (DACL %s; F4's DACL: %v)", full, imported, imported == f4DACL)
+	assert.Equal(t, f4DACL, imported, "F21: a key the helper imported has F4's DACL")
 	readable, err := f.h.RDPKeyRead(f.ctx, "MY", thumb)
 	require.NoError(t, err)
 	assert.False(t, readable, "F4's DACL gives NETWORK SERVICE no read")

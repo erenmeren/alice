@@ -106,7 +106,8 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
 	assert.Equal(t, "none", strings.TrimSpace(string(users)), "the CCS fixture account alice-w5-ccs is left")
 
 	// W6: the RDP values as the first RDP fixture found them (fDenyTSConnections, UserAuthentication and
-	// SSLCertificateSHA1Hash, absent on the images, F12). The fixture stops a TermService it started.
+	// SSLCertificateSHA1Hash, absent on the images, F12), and TermService's state as found (the fixture
+	// stops a TermService it started).
 	now, err := readRDPValues()
 	require.NoError(t, err)
 	if rdpAsFoundSet {
@@ -115,4 +116,7 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
 		t.Logf("no RDP fixture ran; the RDP values are %s", now)
 	}
 	assert.Nil(t, now.Hash, "SSLCertificateSHA1Hash is absent, as on the runner images (F12)")
+	if rdpTermServiceFound != "" {
+		assert.Equal(t, rdpTermServiceFound, termServiceState(t), "TermService is as the first RDP fixture found it")
+	}
 }

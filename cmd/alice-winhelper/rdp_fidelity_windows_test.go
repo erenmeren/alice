@@ -11,15 +11,27 @@ package main
 // inventory, the value afterwards and the chain a fresh handshake is served. The helper is the
 // specification: a difference means the emulator is wrong.
 //
-// Normalised, because it is the machine's: the self-signed certificate's entry in a dump is the real
-// one's in both answers once its DER and hashes are checked equal (the model has no key for it), and
-// the listener's port is the runner's on both. Not produced on a runner, so not compared here:
-// RDP_TLS_OFF (SecurityLayer is never written) and BINDING_NOT_FOUND (the RDP-Tcp key is never
-// removed); Task 2's emulator-side tests cover them.
+// Normalised, because it is the machine's: the key facts of the self-signed certificate's entry in a
+// dump (has_key, key_provider, key_exportable, key_usable_by_system, key_problem) are copied from the
+// real answer, since the model holds that certificate without its key; every other field is compared.
+// The model is given the runner's port and the certificate's friendly name.
+//
+// Not compared here:
+//   - RDP_TLS_OFF and BINDING_NOT_FOUND: not produced on a runner (SecurityLayer and the RDP-Tcp key are
+//     never written);
+//   - BAD_CONTENT, INVALID_ARGUMENT, TOO_LARGE and USAGE beyond one case: winhelper's shared input
+//     checks decide them before any host call, so both hosts answer alike by construction (Task 2's
+//     tests cover them);
+//   - BUSY: it needs a second process holding the lock; TestRealStateFilesLockHolder covers the real
+//     lock.
+// Compared, because each host's data directory or machine decides them: UNKNOWN_OP, SUPERSEDED,
+// OPERATION_EXISTS, FENCED, RECOVERY_PENDING, HASH_MISMATCH, KEY_UNUSABLE, RDP_DISABLED and a
+// restore_forbidden restore.
 
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"testing"
 
@@ -50,7 +62,7 @@ func newRDPTwin(t *testing.T) *rdpTwin {
 	der, err := base64.StdEncoding.DecodeString(asString(dumpCert(t, d)["der"]))
 	require.NoError(t, err)
 	m.AddCertificate(winproto.RDPStoreSelfSigned, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil,
-		wintest.CertOptions{})
+		wintest.CertOptions{FriendlyName: asString(dumpCert(t, d)["friendly_name"])})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, m.Serve(ctx, "127.0.0.1:0"))
@@ -69,10 +81,13 @@ func (tw *rdpTwin) both(stdin []byte, args ...string) map[string]any {
 		rc, _ := real["certificate"].(map[string]any)
 		mc, _ := model["certificate"].(map[string]any)
 		if rc != nil && mc != nil && rc["store"] == winproto.RDPStoreSelfSigned {
-			for _, k := range []string{"store", "sha1", "sha256", "der"} {
-				require.Equal(tw.t, rc[k], mc[k], "the self-signed certificate's %s", k)
+			for _, k := range []string{"has_key", "key_provider", "key_exportable", "key_usable_by_system", "key_problem"} {
+				if v, ok := rc[k]; ok {
+					mc[k] = v
+				} else {
+					delete(mc, k)
+				}
 			}
-			model["certificate"] = rc
 		}
 	}
 	require.Equal(tw.t, ro.Exit, mo.Exit, "exit status of %v (real %v, model %v)", args, real, model)
@@ -191,9 +206,22 @@ func TestFidelityRDP(t *testing.T) {
 	assert.False(t, readable, "the restore took the grant on the killed operation's key back")
 	assert.Equal(t, readable, tw.model.KeyReadableByNetworkService("MY", thumbprint(c.Cert)))
 
-	// An older operation's restore after newer ones, and the latest one's.
+	// An unknown operation; a restored one again; an older committed one after newer ones.
+	const unknownOp = "a8888888-8888-4888-8888-888888888888"
+	assertCode(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, unknownOp), winproto.CodeUnknownOp)
+	assert.Equal(t, winproto.PhaseNone, tw.both(nil, winproto.SubIISStatus, winproto.ArgOp, unknownOp)["phase"])
 	tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op1)
-	tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op2)
+	assertCode(t, tw.both(restoreInput(t), winproto.SubIISRestore, winproto.ArgOp, op2), winproto.CodeSuperseded)
 	tw.sameState(op2, "")
+
+	// A deployment that forbids the leaf it replaces: its restore is forbidden and changes nothing.
+	forbid, err := json.Marshal(winproto.RDPDeployInput{ExpectSHA256: aSHA, ChainPEM: string(c.FullchainPEM), KeyPEM: string(c.KeyPEM),
+		ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{aSHA}})
+	require.NoError(t, err)
+	assertPhase(t, tw.both(forbid, winproto.SubRDPDeploy, winproto.ArgOp, op7), winproto.PhaseCommitted)
+	tw.sameState(op7, sum256hex(c.Cert.Raw))
+	got := tw.both(restoreInput(t, aSHA), winproto.SubIISRestore, winproto.ArgOp, op7)
+	assert.Equal(t, winproto.PhaseRestoreForbidden, got["phase"], "%v", got)
+	tw.sameState(op7, sum256hex(c.Cert.Raw))
 	tw.both(nil, winproto.SubRDPDump)
 }

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -56,6 +57,9 @@ const (
 // the helper writes that form, and a revoke removes only an access-allowed NETWORK SERVICE ACE of exactly
 // this mask.
 const rdpGrantMask uint32 = windows.GENERIC_READ | 0x00120089
+
+// minRelativeSD is the size of SECURITY_DESCRIPTOR_RELATIVE, the header of a self-relative descriptor.
+const minRelativeSD = 20
 
 // aclRevision is ACL_REVISION, the lowest revision of an ACL of access-allowed and denied ACEs.
 const aclRevision byte = 2
@@ -281,10 +285,11 @@ func (host) RDPKeyRead(ctx context.Context, store, sha1Hex string) (bool, error)
 	return readable, err
 }
 
-// SetRDPKeyRead appends Ruling 10's one ACE (grant) or removes the non-inherited access-allowed
-// NETWORK SERVICE ACEs of exactly rdpGrantMask (revoke) on the key of the certificate in My; the other
-// ACEs, their order and the descriptor's control bits stay. A revoke that finds nothing writes nothing.
-// A grant is read back: the key must hold its ACEs as before plus the one ACE. The KSP merges a new
+// SetRDPKeyRead adds Ruling 10's one ACE (grant; before the first inherited ACE, the canonical place of
+// an explicit one) or removes the access-allowed NETWORK SERVICE ACEs with flags 0 and exactly
+// rdpGrantMask, the grant's own form (revoke), on the key of the certificate in My; the other ACEs,
+// their order and the descriptor's control bits stay. A revoke that finds nothing writes nothing. A
+// grant is read back: the key must hold its ACEs as before plus the one ACE in its place. The KSP merges a new
 // allow ACE into an existing one of the same trustee (F21, run 1), which no revoke could take back
 // alone, so then the DACL as it was is written back and the grant fails (errKeyMerged).
 func (host) SetRDPKeyRead(ctx context.Context, store, sha1Hex string, grant bool) error {
@@ -309,7 +314,7 @@ func (host) SetRDPKeyRead(ctx context.Context, store, sha1Hex string, grant bool
 				return err
 			}
 			after, _, err := keyACEs(key)
-			if err == nil && bytes.Equal(after, append(before, ace...)) {
+			if err == nil && slices.EqualFunc(after, insertGrant(before, ace), bytes.Equal) {
 				return nil
 			}
 			// unsafe: saved holds the self-relative descriptor read before the grant.
@@ -319,7 +324,7 @@ func (host) SetRDPKeyRead(ctx context.Context, store, sha1Hex string, grant bool
 			return errKeyMerged
 		}
 		return editKeyDACL(key, func(a *windows.ACCESS_ALLOWED_ACE, sid *windows.SID) bool {
-			return a.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && a.Header.AceFlags&windows.INHERITED_ACE == 0 &&
+			return a.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && a.Header.AceFlags == 0 &&
 				uint32(a.Mask) == rdpGrantMask && windows.EqualSid(sid, ns)
 		}, nil)
 	})
@@ -371,7 +376,7 @@ func withStoreKey(store, sha1Hex string, f func(windows.Handle) error) error {
 // buffer the descriptor lives in.
 func keyDACL(key windows.Handle) (*windows.SECURITY_DESCRIPTOR, []uint64, error) {
 	buf, n, ok := ncryptProperty(key, ncryptSecurityDescrProp, daclSecurityInformation)
-	if !ok || uintptr(n) < unsafe.Sizeof(windows.SECURITY_DESCRIPTOR{}) {
+	if !ok || n < minRelativeSD {
 		return nil, nil, errKeyACL
 	}
 	// unsafe: buf holds the self-relative descriptor NCryptGetProperty wrote.
@@ -382,8 +387,8 @@ func keyDACL(key windows.Handle) (*windows.SECURITY_DESCRIPTOR, []uint64, error)
 	return sd, buf, nil
 }
 
-// keyACEs is a key's DACL as the bytes of its ACEs, in order, with the descriptor's buffer.
-func keyACEs(key windows.Handle) ([]byte, []uint64, error) {
+// keyACEs is a key's DACL as a copy of each ACE's bytes, in order, with the descriptor's buffer.
+func keyACEs(key windows.Handle) ([][]byte, []uint64, error) {
 	sd, keep, err := keyDACL(key)
 	if err != nil {
 		return nil, nil, err
@@ -392,10 +397,20 @@ func keyACEs(key windows.Handle) ([]byte, []uint64, error) {
 	if err != nil || dacl == nil {
 		return nil, nil, errNoKeyDACL
 	}
-	var out []byte
-	err = eachACE(dacl, func(_ *windows.ACCESS_ALLOWED_ACE, _ *windows.SID, raw []byte) { out = append(out, raw...) })
+	var out [][]byte
+	err = eachACE(dacl, func(_ *windows.ACCESS_ALLOWED_ACE, _ *windows.SID, raw []byte) { out = append(out, bytes.Clone(raw)) })
 	runtime.KeepAlive(keep)
 	return out, keep, err
+}
+
+// insertGrant places one ACE before the first inherited ACE (explicit ACEs come first in a canonical
+// DACL; byte 1 of an ACE is its flags), or last when none is inherited.
+func insertGrant(aces [][]byte, add []byte) [][]byte {
+	i := slices.IndexFunc(aces, func(r []byte) bool { return r[1]&windows.INHERITED_ACE != 0 })
+	if i < 0 {
+		i = len(aces)
+	}
+	return slices.Insert(slices.Clone(aces), i, add)
 }
 
 // networkServiceCanRead reports an access-allowed ACE that applies to the key itself, names NETWORK
@@ -471,7 +486,7 @@ func explicitACE(mode windows.ACCESS_MODE, mask uint32, sid *windows.SID) ([]byt
 }
 
 // editKeyDACL rewrites a key's DACL: the ACEs drop selects are left out, add (one ACE's bytes) is
-// appended after the rest. Nothing is written when nothing changes. The descriptor keeps its control
+// placed before the first inherited ACE (insertGrant). Nothing is written when nothing changes. The descriptor keeps its control
 // bits (a protected DACL stays protected) through ToAbsolute.
 func editKeyDACL(key windows.Handle, drop func(*windows.ACCESS_ALLOWED_ACE, *windows.SID) bool, add []byte) error {
 	sd, keep, err := keyDACL(key)
@@ -484,23 +499,22 @@ func editKeyDACL(key windows.Handle, drop func(*windows.ACCESS_ALLOWED_ACE, *win
 	}
 	// unsafe: the ACL header's first byte is its revision.
 	revision := *(*byte)(unsafe.Pointer(dacl))
-	var aces []byte
-	count, dropped := 0, false
+	var kept [][]byte
+	dropped := false
 	err = eachACE(dacl, func(a *windows.ACCESS_ALLOWED_ACE, sid *windows.SID, raw []byte) {
 		if drop != nil && sid != nil && drop(a, sid) {
 			dropped = true
 			return
 		}
-		aces = append(aces, raw...)
-		count++
+		kept = append(kept, bytes.Clone(raw))
 	})
 	if err != nil {
 		return err
 	}
 	if add != nil {
-		aces = append(aces, add...)
-		count++
+		kept = insertGrant(kept, add)
 	}
+	aces, count := bytes.Join(kept, nil), len(kept)
 	if !dropped && add == nil {
 		runtime.KeepAlive(keep)
 		return nil

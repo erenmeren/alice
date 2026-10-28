@@ -123,8 +123,8 @@ type WriteHost interface {
 	RDPKeyRead(ctx context.Context, store, sha1 string) (readable bool, err error)
 	// SetRDPKeyRead changes that key's DACL, refusing any store other than My as RDPKeyRead does.
 	// grant appends Ruling 10's one ACE: access-allowed, S-1-5-20, mask GENERIC_READ (or the mask F21
-	// measures), no inheritance flags. A revoke (grant false) removes only the non-inherited
-	// access-allowed ACEs for S-1-5-20 whose mask equals that grant mask exactly: every deny ACE, every
+	// measures), no inheritance flags. A revoke (grant false) removes only the access-allowed ACEs for
+	// S-1-5-20 with flags 0 whose mask equals that grant mask exactly: every deny ACE, every
 	// other mask, every other trustee, the owner, the group and the SACL stay as they are (W6 Task 2
 	// review I1). Removing an ACE that is not there changes nothing.
 	SetRDPKeyRead(ctx context.Context, store, sha1 string, grant bool) error
