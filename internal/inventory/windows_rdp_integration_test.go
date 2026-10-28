@@ -13,6 +13,7 @@ import (
 
 	"alice/internal/inventory"
 	"alice/internal/providers"
+	"alice/internal/providers/windows/winproto"
 	"alice/internal/testutil/pki"
 )
 
@@ -236,6 +237,28 @@ func TestRDPDeploymentMail(t *testing.T) {
 		ErrorCode: "windows.binding_changed"}))
 	assert.Equal(t, []queuedMail{{inventory.WindowsTemplate(inventory.TemplateDeploymentFailed), map[string]string{"target_name": "iis-01",
 		"cert_path": "http.sys/ipport/0.0.0.0:443", "deployment_id": b.ID.String()}}}, f.deploymentMails(b.ID), "a binding's params")
+}
+
+// W6 final review M3 (fixes batch 3 Ruling 5, WIN-66): a discovery by a helper below 1.2.0 (the server warning
+// win_rdp_helper_outdated) lists no listener; the stored one keeps its last known state instead of going missing, until
+// a 1.2.0 helper scans again. A discovery without the warning that lists no listener marks it missing (control).
+func TestRDPHelperDowngradeKeepsTheListener(t *testing.T) {
+	assert.Equal(t, winproto.WarnRDPHelperOutdated, inventory.WarnRDPHelperOutdated, "the inventory's copy of the code (archtest: no provider import)")
+	f := newRDPFixture(t)
+	h := f.h
+	missing := func() bool {
+		var m *time.Time
+		require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT missing_since FROM certificate_locations WHERE id = $1", f.rdp).Scan(&m))
+		return m != nil
+	}
+	_, err := h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK,
+		Warnings: []providers.Warning{{Code: winproto.WarnRDPHelperOutdated, Params: map[string]string{}}}})
+	require.NoError(t, err)
+	assert.False(t, missing(), "the listener keeps its last known state until a 1.2.0 helper scans again")
+
+	_, err = h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK})
+	require.NoError(t, err)
+	assert.True(t, missing(), "without the warning, a listener not listed is missing")
 }
 
 // Ruling 7 (Q7): an incident's place on the RDP listener queues the incident cleanup of its server once it settles.

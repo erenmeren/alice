@@ -311,3 +311,6 @@ func ValidCCSPassword(pw []byte) bool { return validCCSPassword(pw) }
 
 // RDPAutoenroll exposes whether the observation read the location warning win_rdp_autoenroll (W6 Ruling 20).
 func (o LocationObservation) RDPAutoenroll() bool { return o.rdpAutoenroll }
+
+// WarnRDPHelperOutdated exposes the inventory's copy of winproto.WarnRDPHelperOutdated to the test that pins the two.
+const WarnRDPHelperOutdated = warnRDPHelperOutdated

@@ -240,7 +240,8 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 		if res.WebServer != nil {
 			f.WebServer = mergeWebServerFacts(f.WebServer, *res.WebServer)
 			if configUsable(res.WebServer) {
-				cs, events, err := s.reconcileLocations(ctx, tx, t, scan, listsEveryLocation(res), now)
+				keepRDP := slices.ContainsFunc(res.Warnings, func(w providers.Warning) bool { return w.Code == warnRDPHelperOutdated })
+				cs, events, err := s.reconcileLocations(ctx, tx, t, scan, listsEveryLocation(res), keepRDP, now)
 				if err != nil {
 					return err
 				}

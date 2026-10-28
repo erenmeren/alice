@@ -371,6 +371,11 @@ func listsEveryLocation(res providers.DiscoveryResult) bool {
 // softwareIIS is the software a Windows server's facts name (the Windows provider's WebServerFacts.Software).
 const softwareIIS = "iis"
 
+// warnRDPHelperOutdated is the server warning of a Windows discovery whose helper is below 1.2.0
+// (winproto.WarnRDPHelperOutdated; inventory may not import the provider, TestRDPHelperDowngradeKeepsTheListener pins
+// the two): it reports no RDP listener, so a stored one is not marked missing (W6 final review M3).
+const warnRDPHelperOutdated = "win_rdp_helper_outdated"
+
 // problemCertMissing is a Windows binding whose store does not hold the certificate it names (windows.ProblemCertMissing;
 // inventory may not import the provider): the location has no certificate (R60 Ruling 9).
 const problemCertMissing = "cert_missing"
@@ -578,7 +583,11 @@ func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredC
 //   - a new location is inserted, a known one is updated with everything reported (missing_since
 //     cleared; see updateLocation), whether or not the list is whole;
 //   - when markMissing (listsEveryLocation), the known locations not reported are marked missing
-//     (never deleted); otherwise nothing is marked missing.
+//     (never deleted); otherwise nothing is marked missing. With keepRDP (the result carries the
+//     server warning warnRDPHelperOutdated: a helper below 1.2.0 reports no listener) a stored
+//     win_rdp location is not marked missing either (W6 final review M3): it keeps its last known
+//     state until a 1.2.0 helper scans again, and a deployment to it is refused
+//     windows.helper_outdated before anything is sent (the provider's rdpReady).
 //
 // A location whose file now holds another certificate moves to it; when the old one was known and
 // the new one is not Alice's (deployed_fingerprint, or what a deployment of the location can have
@@ -586,7 +595,7 @@ func (s *Service) prepareScan(ctx context.Context, found []providers.DiscoveredC
 // caller to append last. So too, Windows only (R62 Ruling 14), when a bound Windows binding stored
 // with no problem is found with its certificate gone from the store or its key unusable: Alice never
 // removes a bound certificate nor changes a key's access (newlyBroken; the event names the problems).
-func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, scan preparedScan, markMissing bool,
+func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, scan preparedScan, markMissing, keepRDP bool,
 	now time.Time) (certSummary, []audit.Event, error) {
 	sum := certSummary{Skipped: scan.skipped, Certificates: len(scan.read)}
 	items := scan.items
@@ -656,7 +665,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 	if markMissing {
 		// Every kind of the target: one provider reports all of a target's locations (a web server's are all files).
 		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET missing_since = $2, version = version + 1
-WHERE target_id = $1 AND missing_since IS NULL AND NOT (id = ANY($3))`, t.ID, now, seen)
+WHERE target_id = $1 AND missing_since IS NULL AND NOT (id = ANY($3)) AND NOT ($4 AND kind = 'win_rdp')`, t.ID, now, seen, keepRDP)
 		if err != nil {
 			return certSummary{}, nil, fmt.Errorf("inventory: mark missing certificate locations: %w", err)
 		}
