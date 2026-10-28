@@ -204,13 +204,17 @@ func TestDriftCauseRDP(t *testing.T) {
 }
 
 // W6 Ruling 20 (R69): a drift e-mail of the RDP listener is the Windows text of its cause with windows_note rdp, or
-// rdp_autoenroll when the listener has the warning win_rdp_autoenroll; AutoCertRebind is a binding's only.
+// rdp_autoenroll when the listener has the warning win_rdp_autoenroll; AutoCertRebind is a binding's only. Its params
+// carry reason_variant=rdp (final review M2, fixes batch 3 Minor 3); a binding's do not.
 func TestWindowsLocationMailRDP(t *testing.T) {
 	params := map[string]string{"target_name": "t", "cert_path": "rdp/RDP-Tcp", "certificate_name": "c", "observed_name": "o"}
 	o := LocationObservation{kind: providers.LocationWinRDP, Cause: DriftCauseRepointed, AutoCertRebind: true}
 	got, p := windowsLocationMail(o, TemplateDriftDetected, params)
 	assert.Equal(t, TemplateDriftDetectedWindows, got)
 	assert.Equal(t, "rdp", p["windows_note"], "never autocertrebind")
+	assert.Equal(t, "rdp", p["reason_variant"], "the listener's reason titles")
+	_, q := windowsLocationMail(LocationObservation{kind: providers.LocationWinSSLBinding, Cause: DriftCauseRepointed}, TemplateDriftDetected, params)
+	assert.NotContains(t, q, "reason_variant", "a binding's params carry no variant")
 	o.Cause = DriftCauseCertRemoved
 	got, _ = windowsLocationMail(o, TemplateDriftRepairReady, params)
 	assert.Equal(t, TemplateDriftDetectedWindowsCertRemoved, got)

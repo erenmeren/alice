@@ -210,7 +210,9 @@ func backoff(attempt int) time.Duration {
 // parameter is flattened to one line, so a value can never add a header or a paragraph. A param
 // error_reason (a closed error code such as acme.ca_rate_limited) is rendered as param reason: the
 // plain title of that code in the reader's language (errors.<code>.title; an unknown code reads as
-// internal.unexpected's title), so no raw code reaches the reader.
+// internal.unexpected's title), so no raw code reaches the reader. A param reason_variant selects
+// errors.<code>.title_<variant> where that key exists (else the plain title) and is dropped from the
+// rendered params.
 func (s *Sender) Render(to, template, locale string, params map[string]string) Message {
 	clean := make(map[string]string, len(params))
 	for k, v := range params {
