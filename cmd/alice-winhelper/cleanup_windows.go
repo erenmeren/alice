@@ -133,19 +133,37 @@ func deleteCertificateKey(c *windows.CertContext) error {
 // ProtectedThumbprints reads the RDP listener's and every WinRM HTTPS listener's certificate (F12,
 // W3 Ruling 6) as lower-case SHA-1 hex. A key or value that does not exist names no certificate; one
 // that exists but cannot be read, or holds no SHA-1, is an error (the cleanup then removes nothing).
-func (h host) ProtectedThumbprints(ctx context.Context) (winhelper.Protected, error) {
+func (host) ProtectedThumbprints(ctx context.Context) (winhelper.Protected, error) {
+	if err := ctx.Err(); err != nil {
+		return winhelper.Protected{}, err
+	}
 	var p winhelper.Protected
-	rdp, err := h.RDPListener(ctx) // a missing RDP-Tcp key or value names none
+	// Only the hash (final review M4): an odd type on another listener or policy value never stops the cleanup.
+	rdp, err := rdpThumbprint()
 	if err != nil {
 		return winhelper.Protected{}, err
 	}
-	if rdp.CertSHA1 != "" {
-		p.RDP = []string{rdp.CertSHA1}
+	if rdp != "" {
+		p.RDP = []string{rdp}
 	}
 	if p.WinRM, err = winRMThumbprints(); err != nil {
 		return winhelper.Protected{}, err
 	}
 	return p, nil
+}
+
+// rdpThumbprint is RDP-Tcp's SSLCertificateSHA1Hash, "" when the key or the value is absent; a value
+// that is not 20 bytes of REG_BINARY is an error.
+func rdpThumbprint() (string, error) {
+	k, err := openKey(keyRDPTcp)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = k.Close() }()
+	return binarySHA1(k, valueRDPHash)
 }
 
 // winRMThumbprints is the certThumbprint of every WinRM listener key ending in +HTTPS, folded to
