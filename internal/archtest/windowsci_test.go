@@ -174,16 +174,39 @@ func windowsTestDeps(t *testing.T, tags string) []string {
 	require.NoError(t, err, stderr.String())
 	var dirs []string
 	for _, line := range strings.Split(string(out), "\n") {
-		pkg, _, _ := strings.Cut(strings.TrimSpace(line), " ") // "alice/x [alice/x.test]" is alice/x built for its tests
-		if strings.HasSuffix(pkg, ".test") {
-			continue // the generated test main
-		}
-		pkg = strings.TrimSuffix(pkg, "_test") // an external test package lives in the directory of the package it tests
-		if dir, ok := strings.CutPrefix(pkg, "alice/"); ok && !slices.Contains(dirs, dir) {
+		if dir, ok := testedPackageDir(line); ok && !slices.Contains(dirs, dir) {
 			dirs = append(dirs, dir)
 		}
 	}
 	return dirs
+}
+
+// testedPackageDir maps one `go list -deps -test` line to its directory under alice/: "alice/x [alice/x.test]"
+// is alice/x built for its tests, "alice/x_test [alice/x.test]" its external test package (the same
+// directory), "alice/x.test" the generated test main (false). _test is stripped only when the bracket
+// names the package without it, so a real directory ending in _test keeps its name.
+func testedPackageDir(line string) (string, bool) {
+	pkg, forTest, _ := strings.Cut(strings.TrimSpace(line), " ")
+	if strings.HasSuffix(pkg, ".test") {
+		return "", false
+	}
+	if tested := strings.TrimSuffix(pkg, "_test"); forTest == "["+tested+".test]" {
+		pkg = tested
+	}
+	return strings.CutPrefix(pkg, "alice/")
+}
+
+func TestTestedPackageDir(t *testing.T) {
+	for line, want := range map[string]string{
+		"alice/a_test [alice/a.test]": "a",      // the external test package of alice/a
+		"alice/b_test":                "b_test", // a real package whose directory ends in _test
+		"alice/c [alice/c.test]":      "c",      // alice/c built for its tests
+		"alice/c.test":                "",       // the generated test main
+	} {
+		dir, ok := testedPackageDir(line)
+		assert.Equal(t, want, dir, line)
+		assert.Equal(t, want != "", ok, line)
+	}
 }
 
 func trackedFiles(t *testing.T) string {
@@ -588,7 +611,7 @@ func TestWindowsHelperBuildFlagsAgree(t *testing.T) {
 		for _, f := range append([]string{"CGO_ENABLED=0", "GOARCH=$arch", "GOAMD64=v1", "GOARM64=v8.0"}, common...) {
 			assert.Contains(t, builds[0], f)
 		}
-		assert.Contains(t, text, "RUN for arch in amd64 arm64; do \\\n      CGO_ENABLED=0 GOOS=windows", "the loop covers both architectures")
+		assert.Regexp(t, `RUN for arch in amd64 arm64; do \\\n\s+CGO_ENABLED=0 GOOS=windows`, text, "the loop covers both architectures")
 	})
 
 	t.Run("windows.yml", func(t *testing.T) {
