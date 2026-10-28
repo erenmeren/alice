@@ -296,6 +296,8 @@ ACTIONLINT_VERSION    ?= v1.7.12
 GITLEAKS_IMAGE        ?= ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 TRIVY_IMAGE           ?= aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
 SHELLCHECK_IMAGE      ?= koalaman/shellcheck:v0.11.0@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+# The git directory the history lives in: $(CURDIR)/.git in a plain checkout, outside the checkout in a worktree (secrets-scan mounts it).
+GIT_COMMON_DIR        := $(shell git rev-parse --path-format=absolute --git-common-dir)
 # Every shell script of the repository that is not named *.sh as well (tracked files only).
 SHELL_SCRIPTS         := $(shell git ls-files -- '*.sh' deploy/release/alicectl 'deploy/release/testdata/stubs/*' deploy/release/testdata/swap-openssl/openssl test/images/e2e-target/systemctl test/images/e2e-target/nginx-wrapper test/images/openldap/alice-fakeldap-start test/images/openldap/alice-fakeldap-ctl)
 # How long each fuzz target runs; fuzz-nightly and fuzz-release raise it.
@@ -352,8 +354,10 @@ test-backup-cycle: ## F-85 full cycle with a test license (integration, testlice
 	grep -q -- '^--- PASS: TestF85' "$$out" || { echo 'test-backup-cycle: no TestF85 test passed (does it exist?)' >&2; exit 1; }
 
 .PHONY: secrets-scan
-secrets-scan: ## Scan git history for committed secrets
-	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" $(GITLEAKS_IMAGE) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact
+secrets-scan: ## Scan git history for committed secrets (a worktree's git directory is mounted too; no commit scanned fails)
+	out=$$(mktemp); trap 'rm -f "$$out"' EXIT; set -o pipefail; \
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR):/repo" -v "$(GIT_COMMON_DIR):$(GIT_COMMON_DIR):ro" $(GITLEAKS_IMAGE) git /repo --config /repo/.gitleaks.toml --gitleaks-ignore-path /repo/.gitleaksignore --redact --no-color 2>&1 | tee "$$out"; \
+	grep -Eq '(^|[^0-9])[1-9][0-9]* commits scanned' "$$out" || { echo 'secrets-scan: gitleaks scanned no commits (a worktree whose git directory is not mounted?)' >&2; exit 1; }
 
 .PHONY: fs-scan
 fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (trivy fs)
