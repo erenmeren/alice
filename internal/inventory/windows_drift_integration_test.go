@@ -433,3 +433,29 @@ func TestLinuxNeedsAttentionUnchanged(t *testing.T) {
 		h.clock.Advance(time.Minute)
 	}
 }
+
+// W5 final review I1 (fixes batch 3 C1, WIN-67): the drift probe of a Windows location carries the location's stored
+// warnings, as the deployment's material does, so a cut CCS file (list_truncated) is never observed as skipped; a file's
+// request keeps none.
+func TestDriftProbeCarriesTheStoredWarnings(t *testing.T) {
+	f := newWinDriftFixture(t, true)
+	h := f.h
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE certificate_locations SET warnings = ARRAY['list_truncated'] WHERE id = $1", f.bound)
+	require.NoError(t, err)
+	probes, err := h.svc.DriftProbes(h.ctx, f.win)
+	require.NoError(t, err)
+	var bound *inventory.DriftProbe
+	for i := range probes {
+		if probes[i].LocationID == f.bound {
+			bound = &probes[i]
+		}
+	}
+	require.NotNil(t, bound, "the bound binding is probed")
+	assert.Contains(t, bound.Request.Location.Warnings, "list_truncated")
+
+	probes, err = h.svc.DriftProbes(h.ctx, f.web)
+	require.NoError(t, err)
+	require.Len(t, probes, 1)
+	assert.Equal(t, f.file, probes[0].LocationID)
+	assert.Nil(t, probes[0].Request.Location.Warnings, "a file's request is unchanged")
+}

@@ -114,7 +114,7 @@ func (s *Service) DriftProbes(ctx context.Context, target uuid.UUID) ([]DriftPro
     dc.fingerprint_sha256, dc.sans, dc.key_algorithm, dc.pem_chain,
     (SELECT p.ca_bundle_pem FROM acme_orders ao JOIN acme_certificates ac ON ac.id = ao.acme_certificate_id
      JOIN acme_providers p ON p.id = ac.provider_id WHERE ao.certificate_id = dc.id ORDER BY ao.finished_at DESC NULLS LAST LIMIT 1),
-    l.kind, l.locator, l.details, coalesce(l.verify_address, '')
+    l.kind, l.locator, l.details, coalesce(l.verify_address, ''), l.warnings
 FROM certificate_locations l
 `+driftSourceJoin+`
 JOIN certificates dc ON dc.id = src.cert_id
@@ -141,13 +141,15 @@ ORDER BY o.tls_attempted_at NULLS FIRST, l.id LIMIT $2`, target, driftProbesPerT
 			kind         providers.LocationKind
 			locator      []byte
 			details      []byte
+			warnings     []string
 		)
 		if err := rows.Scan(&p.LocationID, &loc.CertPath, &loc.KeyPath, &servers, &port, &req.Verify.SNI, &req.Verify.Skip, &fingerprints,
-			&req.SANs, &alg, &chain, &bundle, &kind, &locator, &details, &req.Verify.Address); err != nil {
+			&req.SANs, &alg, &chain, &bundle, &kind, &locator, &details, &req.Verify.Address, &warnings); err != nil {
 			return nil, fmt.Errorf("inventory: read a location to probe: %w", err)
 		}
 		if !kind.IsFile() { // R59 G1: as the deployment engine's requests (Material)
 			loc.Kind = kind
+			loc.Warnings = warnings // a cut CCS file (list_truncated) is never verified as unlinked (W5 final review I1)
 			if loc.Locator, loc.Details, err = decodeKind(locator, details); err != nil {
 				return nil, err
 			}
