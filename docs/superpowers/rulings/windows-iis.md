@@ -2435,7 +2435,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 The coordinator accepted F19, F21, F22 and F23, and F20 route (a); for F20's same-value rewrite it chose option (a)
 of Task 4's report (Ruling 14 amended, below).
 
-### Runner runs used (5 of 8)
+### Runner runs used (6 of 8)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -2444,6 +2444,7 @@ of Task 4's report (Ruling 14 amended, below).
 | 3 | <https://github.com/erenmeren/alice/actions/runs/40648774432> | `8d668f06` | **pass / pass** | `windows-required` green; every RDP real test and `TestFidelityRDP` pass on both images; F19-F23 as in run 2 (pickups 7-15 ms) |
 | 4 | <https://github.com/erenmeren/alice/actions/runs/40667566229> | `98e265c5` | **pass / pass** | The code head after the final review fixes. `windows-required` green; every RDP real test (with the exportable-key refusal in `TestRealRDPKeyReadForNetworkService`), the DACL bounds test, `TestFidelityRDP` and `TestRealRunnerIsClean` pass on both images |
 | 5 | <https://github.com/erenmeren/alice/actions/runs/40671263696> | `ad9b7ee4` | **pass / pass** | After the flaky-test fix `f229223e` (a Windows-paths change): `windows-required` green, every RDP real test and `TestFidelityRDP` pass on both images |
+| 6 | <https://github.com/erenmeren/alice/actions/runs/40673844653> | `5a1b0a59` | **pass / pass** | After the go-jose bump `e656143d` (`go.mod` is a Windows path): `windows-required` green on both images |
 
 ## Rulings made during execution (W6)
 
