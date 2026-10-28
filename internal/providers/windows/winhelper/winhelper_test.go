@@ -60,7 +60,7 @@ func wantError(t *testing.T, code int, out []byte, wantExit int, wantCode string
 func TestRunVersion(t *testing.T) {
 	h := &fakeHost{}
 	code, out := run(t, h, "version")
-	if code != 0 || string(out) != `{"ok":true,"helper":"1.1.0","protocol":1}`+"\n" {
+	if code != 0 || string(out) != `{"ok":true,"helper":"1.2.0","protocol":1}`+"\n" {
 		t.Fatalf("got %d %q", code, out)
 	}
 	code, out = run(t, h, "version", "x")
@@ -71,7 +71,7 @@ func TestRunRefusesUnknownAndEmpty(t *testing.T) {
 	h := &fakeHost{}
 	code, out := run(t, h)
 	wantError(t, code, out, 2, "USAGE")
-	for _, sub := range []string{"rdp-deploy", "ssh", "nope"} {
+	for _, sub := range []string{"winrm-deploy", "ssh", "nope"} {
 		code, out = run(t, h, sub)
 		wantError(t, code, out, 2, "UNKNOWN_SUBCOMMAND")
 	}

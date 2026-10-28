@@ -464,8 +464,8 @@ func TestFidelityVersionAndRefusals(t *testing.T) {
 		{[]string{winproto.SubVersion}, ""},
 		{[]string{winproto.SubVersion, "x"}, winproto.CodeUsage},
 		// W2: iis-deploy is known (USAGE without --op, on both: the model is a WriteHost); W3: so is
-		// iis-cleanup (USAGE without --plan or --apply). rdp-deploy is W6's and stays unknown (W3 Ruling 2).
-		{[]string{"rdp-deploy"}, winproto.CodeUnknownSubcommand},
+		// iis-cleanup (USAGE without --plan or --apply). winrm-deploy is W7's and stays unknown (W3 Ruling 2).
+		{[]string{"winrm-deploy"}, winproto.CodeUnknownSubcommand},
 		{[]string{winproto.SubIISCleanup}, winproto.CodeUsage},
 		{[]string{winproto.SubIISDeploy}, winproto.CodeUsage},
 		{[]string{winproto.SubTLSProbe, "--addr"}, winproto.CodeUsage},

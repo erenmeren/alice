@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -870,4 +871,56 @@ func TestTLSProberRefusesAnAddressAliceNeverConnectsTo(t *testing.T) {
 		_, err = TLSProber{}.Probe(context.Background(), h, port, "", helperproto.ProbeAny)
 		assert.ErrorIs(t, err, ErrProbeNotAllowed, h)
 	}
+}
+
+// rdpServer answers the RDP negotiation with answer, then (when withTLS) the TLS handshake with leaf, as RDP-Tcp does.
+func rdpServer(t *testing.T, leaf pki.Leaf, answer []byte, withTLS bool) int {
+	t.Helper()
+	pair, err := tls.X509KeyPair(leaf.FullchainPEM, leaf.KeyPEM)
+	require.NoError(t, err)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				req := make([]byte, len(helperproto.RDPConnectionRequest))
+				if _, err := io.ReadFull(c, req); err != nil || !bytes.Equal(req, helperproto.RDPConnectionRequest) {
+					return
+				}
+				if _, err := c.Write(answer); err != nil || !withTLS {
+					return
+				}
+				_ = tls.Server(c, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}).Handshake()
+			}()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// Ruling 15: TLSProber{RDP: true} negotiates the security layer before the handshake; a failed negotiation is
+// ErrProbeFailed.
+func TestTLSProberRDP(t *testing.T) {
+	ca := pki.NewCA("Probe", pki.ECDSA256, time.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "rdp.example.test", SANs: []string{"rdp.example.test"}}, time.Now())
+	p := TLSProber{RDP: true}
+
+	got, err := p.Probe(context.Background(), "127.0.0.1", rdpServer(t, leaf, helperproto.RDPConfirm(helperproto.RDPProtocolHybrid), true), "rdp.example.test", helperproto.ProbeAny)
+	require.NoError(t, err)
+	assert.Equal(t, pki.Fingerprint(leaf.Cert), got.LeafSHA256)
+	assert.Equal(t, [][]byte{leaf.Cert.Raw, ca.Intermediate.Raw}, got.Chain)
+
+	_, err = p.Probe(context.Background(), "127.0.0.1", rdpServer(t, leaf, helperproto.RDPFailure(2), false), "", helperproto.ProbeAny)
+	assert.ErrorIs(t, err, ErrProbeFailed)
+	assert.ErrorIs(t, err, helperproto.ErrRDPNoTLS)
+
+	// A plain TLS listener: what comes back where the Connection Confirm belongs is TLS.
+	_, err = p.Probe(context.Background(), "127.0.0.1", tlsServer(t, leaf, tls.VersionTLS12), "", helperproto.ProbeAny)
+	assert.ErrorIs(t, err, ErrProbeFailed)
+	assert.ErrorIs(t, err, helperproto.ErrRDPNegotiation)
 }

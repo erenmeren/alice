@@ -262,7 +262,8 @@ func TestStepsEqualTheProviders(t *testing.T) {
 	}
 	for got, want := range map[string]string{
 		winproto.ErrKeyUnusable: "key_unusable", winproto.ErrReadBack: "read_back", winproto.ErrStore: "store_error",
-		winproto.ErrBackupMissing: "backup_missing", winproto.ErrIO: "io_error",
+		winproto.ErrBackupMissing: "backup_missing", winproto.ErrIO: "io_error", winproto.ErrKeyACL: "key_acl",
+		winproto.StepWriteFile: "write_file", winproto.StepGrantKeyRead: "grant_key_read", winproto.StepSetListener: "set_listener",
 	} {
 		if got != want {
 			t.Errorf("%q != %q", got, want)
@@ -292,7 +293,7 @@ func TestWriteSubcommandsAndCodes(t *testing.T) {
 			t.Errorf("%q != %q", c[0], c[1])
 		}
 	}
-	if winproto.Version != "1.1.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
+	if winproto.Version != "1.2.0" || winproto.WriteMinVersion != "0.2.0" || winproto.Protocol != 1 || winproto.MinProtocol != 1 {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.WriteMinVersion) {
@@ -586,7 +587,7 @@ func TestValidCleanupItem(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
-	if winproto.Version != "1.1.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
+	if winproto.Version != "1.2.0" || winproto.CleanupMinVersion != "0.3.0" || winproto.WriteMinVersion != "0.2.0" {
 		t.Error("versions")
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.CleanupMinVersion) {
@@ -612,15 +613,24 @@ func TestCleanupBoundsAreConsistent(t *testing.T) {
 	}
 }
 
-// TestReleasedHelperVersion: 1.1.0 adds the CCS subcommands (R68) to the first released helper 1.0.0
-// (R63); the minimums stay, so a W3 0.3.0 helper still cleans, and versions compare numerically, not
-// as text.
+// TestReleasedHelperVersion: 1.2.0 adds the RDP subcommands (R69) and 1.1.0 the CCS subcommands (R68)
+// to the first released helper 1.0.0 (R63); the minimums stay, so a W3 0.3.0 helper still cleans and
+// a 1.1.0 helper still manages CCS files, and versions compare numerically, not as text.
 func TestReleasedHelperVersion(t *testing.T) {
-	if winproto.Version != "1.1.0" || winproto.CCSMinVersion != "1.1.0" {
-		t.Fatalf("Version = %q, CCSMinVersion = %q", winproto.Version, winproto.CCSMinVersion)
+	if winproto.Version != "1.2.0" || winproto.CCSMinVersion != "1.1.0" || winproto.RDPMinVersion != "1.2.0" {
+		t.Fatalf("Version = %q, CCSMinVersion = %q, RDPMinVersion = %q", winproto.Version, winproto.CCSMinVersion, winproto.RDPMinVersion)
 	}
 	if !winproto.VersionAtLeast(winproto.Version, winproto.CCSMinVersion) {
 		t.Error("Version below CCSMinVersion")
+	}
+	if !winproto.VersionAtLeast(winproto.Version, winproto.RDPMinVersion) {
+		t.Error("Version below RDPMinVersion")
+	}
+	if winproto.VersionAtLeast("1.1.0", winproto.RDPMinVersion) {
+		t.Error("a 1.1.0 helper has no RDP subcommands")
+	}
+	if !winproto.VersionAtLeast("1.1.0", winproto.CCSMinVersion) {
+		t.Error("a 1.1.0 helper still manages CCS files")
 	}
 	if winproto.VersionAtLeast("1.0.0", winproto.CCSMinVersion) {
 		t.Error("a 1.0.0 helper has no CCS subcommands")
@@ -765,5 +775,58 @@ func TestCCSConstants(t *testing.T) {
 		if got != want {
 			t.Errorf("%q, want %q", got, want)
 		}
+	}
+}
+
+func TestRDPInputRedacts(t *testing.T) {
+	const key = "-----BEGIN PRIVATE KEY-----\nRDPSECRETKEYMATERIAL\n-----END PRIVATE KEY-----\n"
+	in := winproto.RDPDeployInput{ExpectSHA256: strings.Repeat("a", 64), ChainPEM: "x", KeyPEM: key}
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, v := range []any{in, &in, []winproto.RDPDeployInput{in}, struct{ In winproto.RDPDeployInput }{in}} {
+			if out := fmt.Sprintf(f, v); strings.Contains(out, "RDPSECRETKEYMATERIAL") || strings.Contains(out, "PRIVATE KEY") {
+				t.Errorf("%s printed the key: %s", f, out)
+			}
+		}
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "in", in, "ptr", &in)
+	if strings.Contains(buf.String(), "RDPSECRETKEYMATERIAL") {
+		t.Errorf("slog printed the key: %s", buf.String())
+	}
+	if b, err := json.Marshal(in); err != nil || !strings.Contains(string(b), "RDPSECRETKEYMATERIAL") {
+		t.Errorf("wire form: %s %v", b, err)
+	}
+}
+
+func TestRDPShapesJSON(t *testing.T) {
+	want := func(s string) []string { f := strings.Fields(s); sort.Strings(f); return f }
+	check := func(name string, got, exp []string) {
+		if !reflect.DeepEqual(got, exp) {
+			t.Errorf("%s keys: %v, want %v", name, got, exp)
+		}
+	}
+	check("dump", keys(t, winproto.RDPDumpResponse{}), want("ok present enabled nla value_set port security_layer cert_template certificate self_signed_count"))
+	check("deploy input", keys(t, winproto.RDPDeployInput{}), want("expect_sha256 chain_pem key_pem forbidden_spki_sha256 forbidden_leaf_sha256"))
+}
+
+func TestRDPConstants(t *testing.T) {
+	if winproto.RDPPickupWait != 0 {
+		t.Error("RDPPickupWait")
+	}
+	for got, want := range map[string]string{
+		winproto.SubRDPDump: "rdp-dump", winproto.SubRDPDeploy: "rdp-deploy", winproto.ArgRDP: "--rdp",
+		winproto.CodeRDPDisabled: "RDP_DISABLED", winproto.CodeRDPTLSOff: "RDP_TLS_OFF",
+		winproto.JournalKindRDP: "rdp_listener", winproto.LocatorRDP: "rdp", winproto.RDPListenerName: "RDP-Tcp",
+		winproto.RDPCanonical: "rdp/RDP-Tcp", winproto.RDPStoreSelfSigned: "Remote Desktop",
+		winproto.UnsupportedRDPDisabled: "win_rdp_disabled", winproto.UnsupportedRDPNoTLS: "win_rdp_no_tls",
+		winproto.UnsupportedRDPCertUnknown: "win_rdp_cert_unknown", winproto.WarnRDPAutoenroll: "win_rdp_autoenroll",
+		winproto.WarnRDPHelperOutdated: "win_rdp_helper_outdated",
+	} {
+		if got != want {
+			t.Errorf("%q, want %q", got, want)
+		}
+	}
+	if !winproto.ValidToken(winproto.SubRDPDump) || !winproto.ValidToken(winproto.SubRDPDeploy) || !winproto.ValidToken(winproto.ArgRDP) {
+		t.Error("an RDP command-line token is not a ValidToken")
 	}
 }

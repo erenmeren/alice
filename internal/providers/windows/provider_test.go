@@ -120,7 +120,7 @@ func TestTestConnectionReport(t *testing.T) {
 	rep, err := e.open(t).TestConnection(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, ssh.FingerprintSHA256(e.srv.HostKey()), rep.HostKey.Fingerprint)
-	assert.Equal(t, "1.1.0", rep.HelperVersion)
+	assert.Equal(t, "1.2.0", rep.HelperVersion)
 	assert.Equal(t, 1, rep.HelperProtocol)
 	assert.Equal(t, providers.OSRelease{ID: "windows", VersionID: "10.0.20348.2700", PrettyName: "Windows Server 2022 Datacenter"}, rep.OS)
 	assert.Equal(t, &providers.WindowsFacts{Build: "10.0.20348.2700", Product: "Windows Server 2022 Datacenter", InstallationType: "Server",
@@ -352,7 +352,7 @@ func TestCommandsAreForcedLines(t *testing.T) {
 	assert.Equal(t, budget{linuxssh.DefaultCommandTimeout, 128 << 10}, budgets[winproto.SubTLSProbe])
 	assert.Equal(t, budget{linuxssh.LongCommandTimeout, 1 << 20}, budgets[winproto.SubIISCleanup])
 	assert.Less(t, winproto.HelperBudget, linuxssh.LongCommandTimeout, "the helper gives up before Alice cuts the connection")
-	for _, bad := range [][]string{{"rdp-deploy"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
+	for _, bad := range [][]string{{"winrm-deploy"}, {"version", "a b"}, {"version", "%x%"}, {"ssh"}} {
 		_, err := cmd(bad[0], nil, bad[1:]...)
 		assert.ErrorIs(t, err, linuxssh.ErrInvalidArgument, "%q", bad)
 	}

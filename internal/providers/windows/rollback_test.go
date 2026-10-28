@@ -646,7 +646,7 @@ func TestRollbackAnswersOutsideTheContract(t *testing.T) {
 func TestRunWriteRefusesAnInvalidCommand(t *testing.T) {
 	w := newWEnv(t)
 	s := w.session(t)
-	c := runWrite[winproto.RestoreResponse](context.Background(), s, "rdp-deploy", nil, restoreRefusals)
+	c := runWrite[winproto.RestoreResponse](context.Background(), s, "winrm-deploy", nil, restoreRefusals)
 	require.NotNil(t, c.refusal)
 	assert.Equal(t, "internal.unexpected", c.refusal.Code)
 	assert.Nil(t, c.uncertain)

@@ -447,6 +447,10 @@ type TLSProber struct {
 	HandshakeTimeout time.Duration
 	// Resolver resolves host names (nil = the system's); tests set it. The target rule applies to whatever it answers.
 	Resolver *net.Resolver
+	// RDP negotiates the RDP security layer (helperproto.RDPNegotiate) before the handshake, for a Remote Desktop
+	// listener (Windows W6 Ruling 15); a failed negotiation wraps ErrProbeFailed. The probe still stops after the
+	// handshake: no CredSSP, no credentials.
+	RDP bool
 }
 
 var _ Prober = TLSProber{}
@@ -487,6 +491,13 @@ func (p TLSProber) Probe(ctx context.Context, host string, port int, sni, keyTyp
 	defer func() { _ = conn.Close() }()
 	hctx, cancel := context.WithTimeout(ctx, handshake)
 	defer cancel()
+	if p.RDP {
+		dl, _ := hctx.Deadline() // always set: a timeout context
+		_ = conn.SetDeadline(dl) // the negotiation and the handshake share the handshake bound
+		if _, err := helperproto.RDPNegotiate(conn); err != nil {
+			return Probe{}, fmt.Errorf("%w: %w", ErrProbeFailed, err)
+		}
+	}
 	tc := tls.Client(conn, p.config(sni, keyType))
 	if err := tc.HandshakeContext(hctx); err != nil {
 		return Probe{}, fmt.Errorf("%w: %w", ErrProbeFailed, err)

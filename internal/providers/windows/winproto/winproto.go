@@ -19,17 +19,20 @@ import (
 // Protocol and locations. Protocol 1 spans every helper version (W1 Ruling 2: nothing was released
 // before W4): W2 added iis-deploy, iis-restore, iis-status and iis-fence to it, W3 iis-cleanup. Version
 // is the helper's version string: 0.1.0 was W1's read-only helper, 0.2.0 W2's (W2 Ruling 2), 0.3.0
-// W3's, 1.0.0 the first released helper (W4, R63) and 1.1.0 adds the CCS subcommands ccs-dump and
-// ccs-deploy (W5, R68), protocol 1 throughout. WriteMinVersion is the oldest helper Alice sends a write
+// W3's, 1.0.0 the first released helper (W4, R63), 1.1.0 adds the CCS subcommands ccs-dump and
+// ccs-deploy (W5, R68) and 1.2.0 the RDP subcommands rdp-dump and rdp-deploy and tls-probe's --rdp
+// (W6, R69), protocol 1 throughout. WriteMinVersion is the oldest helper Alice sends a write
 // subcommand to (W2 Ruling 3); CleanupMinVersion the oldest it sends iis-cleanup to; CCSMinVersion the
-// oldest it sends a CCS subcommand to.
+// oldest it sends a CCS subcommand to; RDPMinVersion the oldest it sends an RDP subcommand or
+// tls-probe --rdp to.
 const (
 	Protocol          = 1
 	MinProtocol       = 1
-	Version           = "1.1.0"
+	Version           = "1.2.0"
 	WriteMinVersion   = "0.2.0"
 	CleanupMinVersion = "0.3.0"
 	CCSMinVersion     = "1.1.0"
+	RDPMinVersion     = "1.2.0"
 
 	HelperPath   = `C:\Program Files\Alice\alice-helper.exe`
 	DataDir      = `C:\ProgramData\Alice\helper`
@@ -63,6 +66,12 @@ const (
 	// ccs-deploy a CCSDeployInput from stdin; their command line is the subcommand and ArgOp only.
 	SubCCSDump   = "ccs-dump"
 	SubCCSDeploy = "ccs-deploy"
+
+	// The Remote Desktop subcommands (W6, R69): rdp-dump takes no stdin, rdp-deploy --op reads an
+	// RDPDeployInput. ArgRDP is tls-probe's ninth argument: negotiate the RDP security layer first.
+	SubRDPDump   = "rdp-dump"
+	SubRDPDeploy = "rdp-deploy"
+	ArgRDP       = "--rdp"
 )
 
 // Exit codes equal helperproto's.
@@ -108,6 +117,10 @@ const (
 	CodeCCSPathUnsupported  = "CCS_PATH_UNSUPPORTED"  // the folder is remote or not a supported local path
 	CodeCCSPasswordMismatch = "CCS_PASSWORD_MISMATCH" // the private key password opens none of the files
 	CodeCCSFileNotFound     = "CCS_FILE_NOT_FOUND"    // ccs-deploy of a file the folder does not hold
+
+	// The RDP codes (W6, R69), exit 3 with nothing changed.
+	CodeRDPDisabled = "RDP_DISABLED" // Remote Desktop is off (fDenyTSConnections)
+	CodeRDPTLSOff   = "RDP_TLS_OFF"  // the listener's security layer offers no TLS
 )
 
 // Binding types of SSLBinding.Type.
@@ -181,7 +194,9 @@ const (
 	StepBind              = "bind"
 	StepJournal           = "journal"
 	StepRestore           = "restore"
-	StepWriteFile         = "write_file" // ccs-deploy (W5)
+	StepWriteFile         = "write_file"     // ccs-deploy (W5)
+	StepGrantKeyRead      = "grant_key_read" // rdp-deploy (W6): NETWORK SERVICE may read the key
+	StepSetListener       = "set_listener"   // rdp-deploy (W6): the listener's SSLCertificateSHA1Hash
 )
 
 // JournalKindCCS is the journal kind of a CCS file operation; LocatorCCSFile the locator type of a CCS
@@ -208,6 +223,8 @@ const (
 	ErrBackupMissing = "backup_missing"
 	// ErrIO: a host call failed in a way no other class names (an I/O or httpapi failure).
 	ErrIO = "io_error"
+	// ErrKeyACL: the private key's security descriptor could not be read or written (W6 grant_key_read).
+	ErrKeyACL = "key_acl"
 )
 
 // Bounds of the write subcommands. MaxExtendedBytes bounds each extended parameter's raw bytes.
@@ -908,3 +925,65 @@ func (CCSDeployInput) GoString() string { return "winproto.CCSDeployInput{redact
 
 // LogValue redacts the key material and password for log/slog handlers.
 func (CCSDeployInput) LogValue() slog.Value { return slog.StringValue("redacted") }
+
+// The Remote Desktop listener (W6, R69). One location per server: the RDP-Tcp listener, locator type
+// LocatorRDP, canonical text RDPCanonical, journal kind JournalKindRDP. RDPStoreSelfSigned is the store
+// of the certificate RDP serves while the listener names none. RDPPickupWait is how long rdp-deploy
+// waits for the listener to pick the new certificate up; zero until a live run shows it is needed (F20).
+const (
+	JournalKindRDP     = "rdp_listener"
+	LocatorRDP         = "rdp"
+	RDPListenerName    = "RDP-Tcp"
+	RDPCanonical       = "rdp/RDP-Tcp"
+	RDPStoreSelfSigned = "Remote Desktop"
+
+	RDPPickupWait time.Duration = 0
+)
+
+// RDP unsupported reasons (location level) and warnings.
+const (
+	UnsupportedRDPDisabled    = "win_rdp_disabled"
+	UnsupportedRDPNoTLS       = "win_rdp_no_tls"
+	UnsupportedRDPCertUnknown = "win_rdp_cert_unknown"
+	WarnRDPAutoenroll         = "win_rdp_autoenroll"
+	WarnRDPHelperOutdated     = "win_rdp_helper_outdated"
+)
+
+// RDPDumpResponse answers rdp-dump. Present is false when the RDP-Tcp key is absent (no location).
+// Enabled, NLA and SecurityLayer are the effective settings (policy before the listener's own, W6
+// Ruling 5); ValueSet tells whether SSLCertificateSHA1Hash is present. Certificate is the current
+// certificate (W6 Ruling 4: the one the value names in My, or the single certificate of Remote Desktop
+// while the value is absent), nil when there is none; SelfSignedCount counts Remote Desktop's
+// certificates.
+type RDPDumpResponse struct {
+	OK              bool              `json:"ok"`
+	Present         bool              `json:"present"`
+	Enabled         bool              `json:"enabled"`
+	NLA             bool              `json:"nla"`
+	ValueSet        bool              `json:"value_set"`
+	Port            int               `json:"port"`
+	SecurityLayer   int               `json:"security_layer"`
+	CertTemplate    string            `json:"cert_template"`
+	Certificate     *StoreCertificate `json:"certificate"`
+	SelfSignedCount int               `json:"self_signed_count"`
+}
+
+// RDPDeployInput is the JSON on rdp-deploy's stdin (W6 Ruling 8), at most MaxDeployInput bytes: the
+// fields of DeployInput without a locator (one listener, named in code) and without a store (always My,
+// W6 Ruling 6). It carries a private key: String, GoString and LogValue redact it, as DeployInput's.
+type RDPDeployInput struct {
+	ExpectSHA256  string   `json:"expect_sha256"`
+	ChainPEM      string   `json:"chain_pem"`
+	KeyPEM        string   `json:"key_pem"`
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+}
+
+// String redacts the key material so %v and %+v never print it.
+func (RDPDeployInput) String() string { return "winproto.RDPDeployInput{redacted}" }
+
+// GoString redacts the key material so %#v never prints it.
+func (RDPDeployInput) GoString() string { return "winproto.RDPDeployInput{redacted}" }
+
+// LogValue redacts the key material for log/slog handlers.
+func (RDPDeployInput) LogValue() slog.Value { return slog.StringValue("redacted") }
