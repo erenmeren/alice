@@ -164,7 +164,7 @@ Reviewing a Dependabot pull request: read the release notes; for an image, compa
 | `make shellcheck` | every shell script (`SHELL_SCRIPTS` in the Makefile) with `-x -P SCRIPTDIR`, so `# shellcheck source=` lines resolve next to the script | `SHELLCHECK_IMAGE` (pinned) |
 | `make lockcheck` | `web/package-lock.json` and `go.sum` hold package data only: no extra field, only registry.npmjs.org downloads, only `sha512-` integrity values (a secret-scan substitute for files too large to review) | `tools/lockcheck` |
 | `make docs-check` | commands, flags and `make` targets named in the guides exist; relative links and heading anchors resolve; the sentences of `tools/docscheck/required.txt` are still in their files | `tools/docscheck` |
-| `make actionlint` | the GitHub workflows | `actionlint` (`ACTIONLINT_VERSION`, installed by `make tools`) |
+| `make actionlint` | the GitHub workflows; their `run:` scripts go through ShellCheck (`deploy/dev/shellcheck.sh` runs the pinned image on standard input; its default is the Makefile's `SHELLCHECK_IMAGE`, update both) | `actionlint` (`ACTIONLINT_VERSION`, installed by `make tools`), `SHELLCHECK_IMAGE` (pinned) |
 | `make osv` (in `make vuln`) | `go.mod` and `web/package-lock.json` against the OSV database; any finding fails | `osv-scanner` (`OSV_SCANNER_VERSION`) |
 
 An `osv-scanner` finding is fixed (for npm, `npm update <package> --package-lock-only` in `web/` when the

@@ -344,8 +344,8 @@ matrix-check: ## Every ID of the sections 23-25 matrices maps to existing tests,
 	go run ./tools/matrixcheck -spec docs/superpowers/specs/alice-v1/06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md $(MATRIXCHECK_FLAGS)
 docs-check: ## Commands named in the guides exist; relative links resolve; required sentences are present
 	go run ./tools/docscheck
-actionlint: ## Lint the GitHub workflows
-	actionlint .github/workflows/*.yml
+actionlint: ## Lint the GitHub workflows; their run: scripts go through the pinned shellcheck image (deploy/dev/shellcheck.sh)
+	SHELLCHECK_IMAGE=$(SHELLCHECK_IMAGE) actionlint -shellcheck="$(CURDIR)/deploy/dev/shellcheck.sh" .github/workflows/*.yml
 osv: ## osv-scanner over go.mod and the npm lockfile (any finding fails; ignores need id, reason and ignoreUntil)
 	osv-scanner scan source --config osv-scanner.toml -L go.mod -L web/package-lock.json
 test-backup-cycle: ## F-85 full cycle with a test license (integration, testlicense; needs Docker)
