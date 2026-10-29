@@ -612,7 +612,7 @@ func TestWindowsHelperBuildFlagsAgree(t *testing.T) {
 		for _, f := range append([]string{"CGO_ENABLED=0", "GOARCH=$arch", "GOAMD64=v1", "GOARM64=v8.0"}, common...) {
 			assert.Contains(t, builds[0], f)
 		}
-		assert.Regexp(t, `RUN for arch in amd64 arm64; do \\\n\s+CGO_ENABLED=0 GOOS=windows`, text, "the loop covers both architectures")
+		assert.Regexp(t, `RUN for arch in amd64 arm64; do \\\n[ \t]+CGO_ENABLED=0 GOOS=windows`, text, "the loop covers both architectures")
 	})
 
 	t.Run("windows.yml", func(t *testing.T) {
