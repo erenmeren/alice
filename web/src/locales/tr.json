@@ -1107,7 +1107,7 @@
     "win_shared_config": "Bu sunucudaki IIS paylaşılan yapılandırma kullanıyor. Siteleri paylaşılan konumdan gelir.",
     "win_autocertrebind": "http.sys içinde yenilenen sertifikaların otomatik yeniden bağlanması açık. Alice’in dağıttığı bir sertifikayı değiştirebilir.",
     "win_ccs_enabled": "Bu sunucudaki IIS Merkezi Sertifika Deposu kullanıyor. Bir Yönetici bu sayfada CCS parolasını ayarladığında Alice deponun dosyalarını listeler ve onlara dağıtım yapar.",
-    "win_ccs_enabled_set": "Bu sunucudaki IIS Merkezi Sertifika Deposu kullanıyor. Alice CCS parolasını saklıyor, deponun dosyalarını listeler ve onlara dağıtım yapar.",
+    "win_ccs_enabled_set": "Bu sunucudaki IIS Merkezi Sertifika Deposu'nu kullanıyor. Alice CCS parolasını saklıyor, deponun dosyalarını listeliyor ve onlara dağıtım yapıyor.",
     "win_expired_in_store": "Bu sunucunun sertifika deposunda süresi dolmuş sertifikalar duruyor: {{count}}.",
     "win_ccs_remote": "Bu sunucunun Merkezi Sertifika Deposu başka bir bilgisayarın paylaşılan klasöründe. Alice yalnızca sunucunun yerel klasöründeki bir depoyu yönetir, bu yüzden dosyaları listelenmez.",
     "win_ccs_path_unsupported": "Bu sunucunun Merkezi Sertifika Deposu klasörü düz bir yerel klasör değil (örneğin bir bağlantı veya aygıt yolu), bu yüzden Alice dosyalarını listelemez.",
@@ -2506,7 +2506,7 @@
           "action": "Sertifikanın bu kopyasını Sertifikalar ek bileşeninde Kişisel deposundan kaldırın ya da sertifikayı dışa aktarılabilir olarak işaretlenmemiş bir anahtarla yeniden içe aktarın, ardından yeniden dağıtın."
         },
         "location_unsupported": {
-          "title": "Alice şu an bu Uzak Masaüstü dinleyicisine dağıtım yapmaz.",
+          "title": "Alice bu Uzak Masaüstü dinleyicisine şu anda dağıtım yapmıyor.",
           "cause": "Uzak Masaüstü kapalı, dinleyici TLS kullanmıyor ya da Alice hangi sertifikayı sunduğunu bilemiyor.",
           "action": "Sunucu sayfasının dinleyici için gösterdiği nedeni giderin, sunucuyu yeniden tarayın ve ona dağıtın."
         },

@@ -1145,7 +1145,7 @@
       },
       "location_unsupported": {
         "title": "Alice bu Windows bağlamasına dağıtım yapmaz.",
-        "title_rdp": "Alice şu an bu Uzak Masaüstü dinleyicisine dağıtım yapmaz.",
+        "title_rdp": "Alice bu Uzak Masaüstü dinleyicisine şu anda dağıtım yapmıyor.",
         "cause": "Alice bir http.sys bağlamasına IP adresi ve bağlantı noktasıyla ya da ana bilgisayar adı ve bağlantı noktasıyla, ASCII bir ana bilgisayar adıyla (uluslararası alan adını xn-- biçimiyle) dağıtım yapar. Merkezi sertifika deposunun bir bağlaması ya da başka biçimde bir ana bilgisayar adı veya adresi olan bir bağlama listelenir ama değiştirilmez. Hiçbir şey gönderilmedi.",
         "action": "ASCII ana bilgisayar adı (ya da IP adresi) olan bir IIS bağlaması kullanın, sunucuyu yeniden tarayın ve o bağlamaya dağıtın."
       },
@@ -1156,7 +1156,7 @@
       },
       "drift_not_repairable": {
         "title": "Alice bu bağlamayı onaramaz: sertifikası ya da anahtarı sunucuda yok.",
-        "title_rdp": "Alice Uzak Masaüstü dinleyicisini onaramaz: sertifikası ya da anahtarı sunucuda yok.",
+        "title_rdp": "Alice Uzak Masaüstü dinleyicisini onaramıyor: sertifikası ya da anahtarı sunucuda yok.",
         "cause": "Bağlama, deposunun artık barındırmadığı bir sertifikayı ya da özel anahtarını http.sys'in kullanamadığı bir sertifikayı gösteriyor. Alice bu durumdaki bir bağlamaya dağıtım yapmaz ve bir bağlamanın kullandığı sertifikayı hiçbir zaman silmez.",
         "action": "Sertifikayı neyin kaldırdığını ya da anahtarı neyin değiştirdiğini bulun, sertifikayı sunucuya yeniden aktarın (ya da başka bir sertifika bağlayın), ardından sunucuyu Alice'te yeniden tarayın."
       },
