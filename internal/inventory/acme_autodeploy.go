@@ -295,11 +295,17 @@ FROM certificates x WHERE x.id = $1`, c.id, id).Scan(&c.notBefore, &c.notAfter, 
 	sn.current = &c
 
 	// untrusted (R49): the server's service is not the certificate's and does not accept its keys.
+	// A win_rdp listener kept through a scan by a helper below 1.2.0 (the server warning warnRDPHelperOutdated, fixes
+	// batch 3 Ruling 5) is left out, as in DriftProbes: a deployment to it would fail windows.helper_outdated, which is
+	// not a neutral reason, and AutoDeployMaxFailed of them would stop the certificate's automatic deployment.
 	rows, err := tx.Query(ctx, `SELECT b.location_id, b.auto_deploy, b.created_at, l.certificate_id, b.attention_code,
     t.service_id <> $2 AND NOT EXISTS (SELECT 1 FROM service_trusts st WHERE st.source_service_id = $2 AND st.target_service_id = t.service_id)
 FROM acme_bindings b JOIN certificate_locations l ON l.id = b.location_id
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
-WHERE b.acme_certificate_id = $1 ORDER BY b.location_id`, id, sn.service)
+WHERE b.acme_certificate_id = $1
+  AND NOT (l.kind = 'win_rdp' AND EXISTS (SELECT 1 FROM targets t WHERE t.id = l.target_id
+                                         AND t.facts->'warnings' @> jsonb_build_array(jsonb_build_object('Code', $3::text))))
+ORDER BY b.location_id`, id, sn.service, warnRDPHelperOutdated)
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the bindings: %w", err)
 	}

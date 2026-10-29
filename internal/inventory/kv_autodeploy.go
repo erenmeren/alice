@@ -594,10 +594,16 @@ WHERE v.kv_certificate_id = $1 AND (v.version = $2 OR v.detected_at > $3) ORDER 
 	}
 	rows.Close()
 
+	// A win_rdp listener kept through a scan by a helper below 1.2.0 (the server warning warnRDPHelperOutdated, fixes
+	// batch 3 Ruling 5) is left out, as in DriftProbes: a deployment to it would fail windows.helper_outdated, which is
+	// not a neutral reason, and AutoDeployMaxFailed of them would stop the version's wave.
 	rows, err = tx.Query(ctx, `SELECT l.id, l.certificate_id, c.not_after FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 LEFT JOIN certificates c ON c.id = l.certificate_id
-WHERE l.binding_id = $1 ORDER BY l.id`, binding)
+WHERE l.binding_id = $1
+  AND NOT (l.kind = 'win_rdp' AND EXISTS (SELECT 1 FROM targets t WHERE t.id = l.target_id
+                                         AND t.facts->'warnings' @> jsonb_build_array(jsonb_build_object('Code', $2::text))))
+ORDER BY l.id`, binding, warnRDPHelperOutdated)
 	if err != nil {
 		return fmt.Errorf("inventory: read the websites: %w", err)
 	}

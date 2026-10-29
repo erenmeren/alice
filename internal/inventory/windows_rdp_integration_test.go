@@ -305,6 +305,110 @@ func TestDriftProbeSkipsTheListenerOfAnOutdatedHelper(t *testing.T) {
 	assert.ElementsMatch(t, []uuid.UUID{f.rdp, binding}, probed(), "a 1.2.0 helper's scan resumes the observation")
 }
 
+// Final review I2 (fixes batch 3, M3's side effect): while a server's last scan carried win_rdp_helper_outdated, the ACME
+// automatic deployment leaves its kept listener out (a deployment to it would fail windows.helper_outdated, which is not
+// a neutral reason, and three of them would stop the certificate's automatic deployment) and still deploys to the
+// server's binding. A 1.2.0 helper's scan makes the listener a candidate again.
+func TestACMEAutoDeployLeavesOutTheListenerOfAnOutdatedHelper(t *testing.T) {
+	d := newWinDriftFixture(t, false)
+	f := &rdpFixture{winDeployFixture: d.winDeployFixture}
+	h := f.h
+	f.server = winTarget(t, h, f.admin, "iis-02").ID
+	b := winBinding(443, "Default Web Site", &f.old)
+	b.Location.Details["cert_sha1"] = thumbprint(f.old)
+	f.scan(3389, b)
+	locs := byPath(t, h, f.server, false)
+	f.rdp = locs["rdp/RDP-Tcp"].ID
+	binding := locs["http.sys/ipport/0.0.0.0:443"].ID
+	d.w.bind(d.acme, true, f.rdp, binding)
+
+	_, err := h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK, Certificates: []providers.DiscoveredCertificate{b},
+		Warnings: []providers.Warning{{Code: winproto.WarnRDPHelperOutdated, Params: map[string]string{}}}})
+	require.NoError(t, err)
+	mine := func() (ids []uuid.UUID, open []uuid.UUID) { // iis-02's deployments (the fixture deployed to iis-01 and the file already)
+		t.Helper()
+		for _, dep := range d.w.deps(d.cur) {
+			if dep.Location == f.rdp || dep.Location == binding {
+				ids = append(ids, dep.Location)
+				if dep.State != inventory.DeployStateDone {
+					open = append(open, dep.ID)
+				}
+			}
+		}
+		return ids, open
+	}
+	d.w.plan()
+	ids, open := mine()
+	assert.Equal(t, []uuid.UUID{binding}, ids, "the kept listener gets no deployment; the binding does")
+	for _, id := range open {
+		d.w.finish(id, inventory.DeployStatusSucceeded, "")
+	}
+
+	f.scan(3389, b)
+	d.w.plan()
+	ids, _ = mine()
+	assert.Equal(t, []uuid.UUID{binding, f.rdp}, ids, "a 1.2.0 helper's scan makes the listener a candidate again")
+}
+
+// The same for the Key Vault automatic deployment (I2's KV half).
+func TestKVAutoDeployLeavesOutTheListenerOfAnOutdatedHelper(t *testing.T) {
+	f := &rdpFixture{winDeployFixture: newWinDeployFixture(t)}
+	h := f.h
+	h.installLicense("LIC-RDP-KV", 5, 3650)
+	require.NoError(t, h.lic.Tick(h.ctx))
+	f.server = winTarget(t, h, f.admin, "iis-02").ID
+	b := winBinding(443, "Default Web Site", &f.old)
+	b.Location.Details["cert_sha1"] = thumbprint(f.old)
+	f.scan(3389, b)
+	locs := byPath(t, h, f.server, false)
+	f.rdp = locs["rdp/RDP-Tcp"].ID
+	binding := locs["http.sys/ipport/0.0.0.0:443"].ID
+	vault := h.vault("prod")
+	h.reconcile(vault, kvResult(h.kvc("web-cert", f.old, ver(1), h.clock.Now(), true)))
+	bind, err := h.svc.CreateBinding(h.ctx, f.admin, inventory.BindingInput{KVCertificateID: h.certRow(vault, "web-cert").ID, LocationIDs: []uuid.UUID{f.rdp, binding}})
+	require.NoError(t, err)
+	_, err = h.svc.SetAutoDeploy(h.ctx, f.admin, bind.ID, bind.Version, true)
+	require.NoError(t, err)
+	h.clock.Advance(time.Minute)
+	h.reconcile(vault, kvResult(h.kvc("web-cert", f.nw, ver(2), h.clock.Now(), true))) // the renewal the binding deploys
+	deployed := func() (locs, open []uuid.UUID) {
+		t.Helper()
+		rows, err := h.db.Owner.Query(h.ctx, "SELECT id, location_id, state FROM deployments WHERE binding_id = $1 ORDER BY created_at, id", bind.ID)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var id, loc uuid.UUID
+			var state string
+			require.NoError(t, rows.Scan(&id, &loc, &state))
+			locs = append(locs, loc)
+			if state != inventory.DeployStateDone {
+				open = append(open, id)
+			}
+		}
+		require.NoError(t, rows.Err())
+		return locs, open
+	}
+
+	_, err = h.svc.Reconcile(h.ctx, f.server, providers.DiscoveryResult{WebServer: iisOK, Certificates: []providers.DiscoveredCertificate{b},
+		Warnings: []providers.Warning{{Code: winproto.WarnRDPHelperOutdated, Params: map[string]string{}}}})
+	require.NoError(t, err)
+	_, err = h.svc.PlanKVAutoDeploy(h.ctx)
+	require.NoError(t, err)
+	locs2, open := deployed()
+	assert.Equal(t, []uuid.UUID{binding}, locs2, "the kept listener gets no deployment; the binding does")
+	for _, id := range open { // the engine's path to a success is not what this test is about
+		_, err = h.db.Owner.Exec(h.ctx, `UPDATE deployments SET state = 'done', status = 'succeeded', result = 'committed', phase = 'committed',
+verified = 'remote', finished_at = $2 WHERE id = $1`, id, h.clock.Now())
+		require.NoError(t, err)
+	}
+
+	f.scan(3389, b)
+	_, err = h.svc.PlanKVAutoDeploy(h.ctx)
+	require.NoError(t, err)
+	locs2, _ = deployed()
+	assert.Equal(t, []uuid.UUID{binding, f.rdp}, locs2, "a 1.2.0 helper's scan makes the listener a candidate again")
+}
+
 // Ruling 7 (Q7): an incident's place on the RDP listener queues the incident cleanup of its server once it settles.
 func TestRDPIncidentQueuesCleanup(t *testing.T) {
 	f := newRDPFixture(t)
