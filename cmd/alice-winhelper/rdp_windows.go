@@ -79,7 +79,7 @@ var (
 	errNoKeyDACL = errors.New("the key's security descriptor has no DACL")
 	errKeyMerged = errors.New("the key did not keep the grant as one ACE of its own")
 	// errKeyReadDenied is residual risk 7's deny half (R70): an explicit deny wins over the ACE the grant
-	// would add, so the deployment ends at grant_key_read before any change.
+	// would add, so the deployment ends at grant_key_read before any ACE or listener change.
 	errKeyReadDenied = errors.New("alice-winhelper: NETWORK SERVICE or Everyone is denied read on the key")
 )
 
@@ -469,7 +469,7 @@ func insertGrant(aces [][]byte, add []byte) [][]byte {
 // SERVICE or Everyone and holds GENERIC_READ or GENERIC_ALL. A NULL DACL grants everyone. An
 // access-denied ACE that applies to the key, names one of them and holds a bit of rdpDenyReadMask is
 // errKeyReadDenied (residual risk 7's deny half, R70): an explicit deny wins over the ACE the grant
-// would add, so the caller ends before any change. Group membership is still not evaluated.
+// would add, so the caller ends before any ACE or listener change. Group membership is still not evaluated.
 func networkServiceCanRead(sd *windows.SECURITY_DESCRIPTOR) (bool, error) {
 	dacl, _, err := sd.DACL()
 	if err != nil {
