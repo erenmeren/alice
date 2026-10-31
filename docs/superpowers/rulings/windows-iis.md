@@ -3881,3 +3881,8 @@ emulator's 413.
   removal ends both, names both ids in the audit's `credential_id` and the source answers `ErrNoCCSPassword`; on a
   second server a set leaves exactly one live row, the new one. It passed at once: the behaviour was already right.
 - Neither fix is pushed (the branch's runner budget stays at 2 runs; `main`'s `windows.yml` checks the merge).
+- The merge: `main` fast-forwarded `fa182290..ce3b9642` on 2026-10-31 after `go test -race -tags integration
+  ./internal/inventory/ ./migrations/`, `make docs-check` and `make matrix-check MATRIXCHECK_FLAGS=-strict` (382 IDs,
+  0 gaps) passed locally. On `main` at `ce3b9642`: `windows.yml` run 41238778647 green on both images with
+  `windows-required`; `ci.yml` run 41238778595 green in every job after one rerun of `coverage`, whose first attempt
+  ended with "The hosted runner lost communication with the server" (a runner failure, no test ran red).
