@@ -126,13 +126,14 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
 	}
 
 	// W7 (internal/providers/windows/winrs and the WinRM setup script's tests in internal/providers/windows, earlier
-	// go test runs of the job): no alice-w7 account, no WinRM listener on 45520-45539, no firewall rule Alice WinRM
+	// go test runs of the job): no alice-w7-<n> account, no WinRM listener on 45520-45539, no firewall rule Alice WinRM
 	// (Alice-WinRM-In, which the setup script's tests remove), no test program directory, and the WinRM and LSA
 	// values as the first WinRS fixture found them (it wrote them to the temporary directory, read with the
 	// same script).
 	left = strings.Fields(string(powershell(t, `Import-Module Microsoft.WSMan.Management
-# [ADSI]::Exists throws for an absent account (runner run 1 of W7); Win32_UserAccount answers nothing.
-if (@(Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='alice-w7'").Count -gt 0) { 'account' }
+# [ADSI]::Exists throws for an absent account (runner run 1 of W7); Win32_UserAccount answers nothing. The WinRS
+# tests name their accounts alice-w7-<n>.
+foreach ($u in @(Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name LIKE 'alice-w7%'")) { "account:$($u.Name)" }
 $n = 0
 # Get-WSManInstance is WinRM's own client (Negotiate to the local service): access denied means a W7 test left
 # the service refusing it (runner run 2: Negotiate left off).

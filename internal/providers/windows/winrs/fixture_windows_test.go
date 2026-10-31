@@ -51,8 +51,16 @@ import (
 	"alice/internal/providers/windows/winrs"
 )
 
+// account is the current test's account: alice-w7-<n>, a new name for every test of the package. Runner runs 3
+// and 4 refused every Create (0x80070005) for several seconds after an account named like the one the test before
+// had just deleted was created again (a new SID under the old name); a new name has no such history. The tests run
+// one after another, so one variable is enough.
+var (
+	account      = "alice-w7"
+	accountCount int
+)
+
 const (
-	account   = "alice-w7"
 	imageAddr = "127.0.0.1:5986" // the image's 0.0.0.0:5986 listener (F8), never changed
 	// The renewal test listener (F28), on the fixture ports 45520-45539.
 	renewPort     = "45520"
@@ -477,8 +485,10 @@ func winrmFixture(t *testing.T) *fx {
 		goBuild(t, f.helper, "alice/cmd/alice-winhelper")
 	}
 
+	accountCount++
+	account = fmt.Sprintf("alice-w7-%d", accountCount)
 	left, err := deleteAccount()
-	require.NoError(t, err, "deleting an alice-w7 account left by an earlier run")
+	require.NoError(t, err, "deleting an %s account left by an earlier run", account)
 	if left != "" {
 		t.Logf("an earlier %s was deleted; its %s", account, left)
 	}
@@ -500,10 +510,24 @@ $u.Put('Description', 'Alice W7 WinRS test (removed by the test)')
 $u.Put('UserFlags', ([int]$u.Get('UserFlags')) -bor 0x10000)
 $u.SetInfo()`)
 	require.NoError(t, administrators(t, true))
+	sid, _, _, err := windows.LookupSID("", account)
+	require.NoError(t, err)
+	t.Logf("the test account is %s, SID %s", account, sid)
+	logLATFP(t)
 
 	f.spki = waitLeaf(t, imageAddr, nil, 30*time.Second).RawSubjectPublicKeyInfo
 	fact(t, "F28", "the image listener %s presents SPKI %s", imageAddr, fingerprint(f.spki))
 	return f
+}
+
+// logLATFP logs LocalAccountTokenFilterPolicy's value and registry type at a test's start.
+func logLATFP(t *testing.T) {
+	t.Helper()
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, latfpKey, registry.QUERY_VALUE)
+	require.NoError(t, err)
+	defer func() { _ = k.Close() }()
+	v, typ, err := k.GetIntegerValue("LocalAccountTokenFilterPolicy")
+	t.Logf("LocalAccountTokenFilterPolicy at the test's start: %d, registry type %d (REG_DWORD is %d), err %v", v, typ, registry.DWORD, err)
 }
 
 func goBuild(t *testing.T, out, pkg string) {

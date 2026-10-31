@@ -63,6 +63,9 @@ func checkDials(t *testing.T, what string, n int32) {
 
 func TestRealWinRMNTLMAuth(t *testing.T) {
 	f := winrmFixture(t)
+	// Runner runs 3 and 4: every program exited 1 with no stdout; the matrix runs first, before any setting changes
+	// (logged only).
+	diagnoseCommands(t, f)
 	t0 := time.Now()
 
 	// The exchange on the wire first (F24 (c), (d)): the client below refuses a second dial, so this is what
@@ -130,9 +133,6 @@ func TestRealWinRMNTLMAuth(t *testing.T) {
 func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
-	// Runner run 3: every program exited 1 with no output, and this test's first Create was refused (0x80070005) on
-	// both legs. The matrix runs before the audit settings change, so a refusal after it points at them (logged only).
-	diagnoseCommands(t, f)
 	auditProcessCreation(t)
 	t0 := time.Now()
 
