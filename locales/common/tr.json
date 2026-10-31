@@ -1217,7 +1217,7 @@
       },
       "winrm_auth_refused": {
         "title": "Windows sunucusu Alice'in WinRM oturum açmasını reddetti.",
-        "cause": "Alice'te girilen parola sunucudaki hesabın parolasından farklı, hesap Administrators grubunun üyesi değil ya da sunucu NTLM'i reddediyor (Negotiate kimlik doğrulaması kapalı, CbtHardeningLevel Strict ya da bir ilke NTLM'i kısıtlıyor). Yardımcı programa hiçbir şey gönderilmedi.",
+        "cause": "Alice'te girilen parola sunucudaki hesabın parolasından farklı, hesap Administrators grubunun üyesi değil ya da sunucu NTLM'i reddediyor (Negotiate kimlik doğrulaması kapalı, CbtHardeningLevel Strict ya da bir ilke NTLM'i kısıtlıyor). Oturum açılırken gelen bir ret yardımcı programa hiçbir şey göndermez; çağrının ilerleyen bir aşamasında gelen ret ise bir yazma işleminin sonucunu belirsiz bırakır ve Alice karar vermeden önce sunucuyu denetler.",
         "action": "Sunucudaki hesabı ve parolasını kontrol edin, aynı parolayı Alice'te sunucunun sayfasında girin ve sunucunun WinRM kimlik doğrulama ayarlarını kontrol edin. Ardından bağlantıyı yeniden sınayın."
       },
       "winrm_password_missing": {

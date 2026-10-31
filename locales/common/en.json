@@ -1217,7 +1217,7 @@
       },
       "winrm_auth_refused": {
         "title": "The Windows server refused Alice's WinRM sign-in.",
-        "cause": "The password set in Alice differs from the account's password on the server, the account is not a member of Administrators, or the server refuses NTLM (Negotiate authentication is off, CbtHardeningLevel is Strict, or a policy restricts NTLM). Nothing was sent to the helper.",
+        "cause": "The password set in Alice differs from the account's password on the server, the account is not a member of Administrators, or the server refuses NTLM (Negotiate authentication is off, CbtHardeningLevel is Strict, or a policy restricts NTLM). A refusal at sign-in sends nothing to the helper; a refusal later in the call leaves a write uncertain, and Alice checks the server before it decides.",
         "action": "Check the account and its password on the server, set the same password in Alice on the server's page, and check the server's WinRM authentication settings. Then test the connection again."
       },
       "winrm_password_missing": {
