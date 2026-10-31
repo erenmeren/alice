@@ -2847,3 +2847,519 @@ Added during execution:
     (Task 6).
   - `discover.go:51` appends to a slice it may alias (harmless; Task 6).
 - **Minors and residual 7 settled in R70** (`docs/superpowers/rulings/fixes-2026-10-28.md`).
+
+# W7 (R71)
+
+Phase W7 (the WinRM transport) was built on branch `windows-w7` from the plan
+`docs/superpowers/plans/2026-10-28-windows-w7-winrm.md` (10 tasks), approved by the owner on 2026-10-28; the owner
+delegated its open decisions to competitor parity on 2026-10-29. Spec: R71 in
+`docs/superpowers/specs/alice-v1/00-decisions.md`, `03-integrations.md` §13A.20-13A.21, `04-security.md` §14.4
+(WN-26..WN-30), `06-quality.md` §24.7 (WIN-68..WIN-75), design §4.1, §4.2, §8, §9, §13 W7, §14 (F24-F32) and §22. One
+migration, `00038`; error codes `ALC-WIN-0024`..`ALC-WIN-0028`. The helper stays `1.2.0`. None of the rulings below is
+a pricing decision; the ones the owner should confirm or act on are listed under [Owner items (W7)](#owner-items-w7).
+
+## The owner's delegation and the competitor research (W7)
+
+**The delegation (2026-10-29).** The owner wrote: "sorularin cevaplarini bilmiyorum. rakipler nasil yapmissa sende ole
+yap. w7 ye basla" ("I do not know the answers to the questions. Do it the way the competitors did. Start W7."). The
+open rulings of the 2026-10-28 draft were therefore decided by competitor parity.
+
+**The competitor research (coordinator, 2026-10-29).** Keyfactor's IIS Universal Orchestrator, Venafi TLS Protect's
+agentless IIS driver and AppViewX CERT+ for IIS all reach IIS servers over WinRM with a stored username and password of
+a local administrator or a domain service account: Keyfactor defaults to Kerberos; Venafi's examples use HTTPS with
+NTLM and offer a `WinRMSkipCACheck` option; AppViewX takes a username and password or a vault reference. None uses
+client-certificate mapping, and all accept full-administrator accounts. Hence R71: username and password over HTTPS
+with NTLMv2; Kerberos, certificate mapping, PSRP/JEA and CredSSP deferred; Basic, 5985 and `AllowUnencrypted` refused
+by construction; WN-26's residual accepted. Alice keeps a stricter server-identity rule than the `SkipCACheck` style:
+the listener's SPKI pinned with an Administrator's confirmation (Ruling 9).
+
+## The plan's rulings as built (W7)
+
+The plan's 31 rulings stand as written, except where an entry says "Amended", "Precision" or "Confirmed".
+
+1. **The client library: an in-house WinRS subset with go-ntlmssp for NTLMSSP only.** As written:
+   `internal/providers/windows/winrs` (`wsman.go`, `client.go`), go-ntlmssp v0.1.1 direct; masterzen/winrm not used.
+2. **The transport is a target setting.** As written. Precision (Task 5): only `transport: winrm` is stored in
+   `targets.config` (an SSH server's config JSON stays W6's byte for byte); `Target.Transport` reads `ssh` or `winrm`
+   for a Windows server and `""` for any other type; the API carries `transport` at the top level of the target and of
+   the create body. `ConfigSchema`'s port default stays 22 (the form sets 5986 under WinRM; deferred minor).
+3. **The transport is fixed when the target is created.** As written. Precision (Task 5 review): a patch whose only
+   member is another transport is `ALC-WIN-0027`; a patch with the target's own transport alone is the empty-patch
+   answer (422, version unchanged); a `transport` value other than `ssh` or `winrm` is the field error `transport`
+   `one_of` before any read; a `transport` on a non-Windows target is the field error `transport` `pattern`.
+4. **The helper does not change; the line reaches it through `SSH_ORIGINAL_COMMAND`.** **Amended (F25, runs 5 and 6;
+   Needs coordinator):** the environment variable reaches the helper's forced entry, and the helper stays `1.2.0` with
+   no `WinRMMinVersion`. But WinRS starts the program through `cmd.exe` even with `WINRS_SKIP_CMD_SHELL` TRUE: the
+   helper's parent is `cmd.exe`, whose command line is `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh`, and
+   the helper's own command line is the program path without its quotes. `cmd.exe` parses only that constant line;
+   the subcommand line stays in the environment, never on a command line. The plan's fallback (helper 1.3.0 with a
+   `winrs` entry) would not remove `cmd.exe`, which WinRS inserts itself, so it was not taken. The Command element
+   carries the program's quotes raw: element text escapes only `&`, `<` and `>`, because Windows does not decode
+   `&#34;` in `rsp:Command` (run 5: the escaped form reached `cmd.exe` as `&`).
+5. **One migration, `00038`.** As written (`TestMigration00038WindowsWinRM`, `TestMigration00038Down`; Down `Z1036`).
+6. **The accounts and their username forms.** As written. F24 (run 6, both images): `alice-w7-1`, `HOST\alice-w7-1`
+   and `.\alice-w7-1` sent raw all sign in; Alice still strips `.\`. Precision (Task 7): the setup script treats
+   `HOST\name`, where HOST is the computer's name, as the local account `name` (Go cannot tell a computer name from a
+   domain name).
+7. **The WinRM password.** As written. Precision (Task 5 review): the CCS and WinRM password code is one
+   implementation (`targetPasswordSpec`, `setTargetPassword`, `targetPassword` in inventory; one API helper), so the
+   seal, zeroing, foreign-row and order rules cannot drift apart; every refusal zeroes the given `Plaintext`.
+8. **The credential source.** As written (`providers.WinRMPasswordSource`; `winrmPassword` released by `defer`
+   before the slot, so it is zeroed first on every path, the output overflow included).
+9. **The listener is pinned by its SPKI, with the existing flow.** As written; F28 confirmed (runs 2, 3, 6).
+10. **The transport seam.** As written. Precision (Task 6): `sshRun` marks a connection it could not open (or a
+    context ended before `Run`) with `winrs.ErrNotSent` on top of the same `*providers.Error`, so `runWrite`'s refusal
+    rule is one test, `errors.Is(err, winrs.ErrNotSent)`, for both transports; `sshRun` checks the context after the
+    acquire for all three call sites.
+11. **The WinRM listener's own binding is never deployable.** As written (`TestWinRMListenerBindingStaysUnsupported`;
+    `TestRealWinRMProvider` lists the `0.0.0.0:5986` record as `win_foreign_app`).
+12. **The WinRS client's rules.** **Amended:**
+    - **Dials (F24 (d), run 2):** Windows closes the connection after the anonymous 401, so the sign-in needs a second
+      connection. `maxDialsPerCall` is 2, and the second dial is allowed only while the Create request (the sign-in)
+      is in flight; after Create's answer any dial is refused (`ErrUnreachable`), so Send still goes only on the
+      connection that authenticated.
+    - **Credentials only on Create (Ruling 28 amended):** `req.SetBasicAuth` is set on the Create request only; later
+      requests carry none, so a 401 after Create ends the call (`ErrAuthRefused`, no new exchange, stdin never sent
+      again) and the cleanup is tried once, best effort. F24 measured that the connection stays authenticated (later
+      requests take one round trip each).
+    - **Port 5985 is refused** (`ErrBadConfig`, before any dial), so "Alice never dials 5985" holds by construction.
+    - **Bounds:** `MaxResponseHeaderBytes` 64 KiB on the call's transport (the Negotiator drains a 401's body).
+    - **Receive:** `OperationTimeout` is min(20 s, the call's remaining budget), at least 1 s, so the timeout path can
+      still Signal and Delete on the one connection; a `w:TimedOut` fault (2150858793) at Receive is asked again.
+    - Requests run detached from the call's context and the caller stops waiting at its end, so Signal and Delete
+      queue on the same connection with their own 5 s budgets.
+    - F26 (run 6): `MaxSendChunk` 96 KiB stays; the listener's `MaxEnvelopeSizekb` is 500, and a Send of about 615 KB
+      is answered HTTP 413, not a WS-Man fault.
+13. **Error mapping under WinRM.** **Amended:**
+    - `winrs.FaultError` carries `Action`, the request the fault answered (set by the client, never by the parser), so
+      the code-2 row is exact: code 2 maps to `ssh.helper_missing` only at Command; any other fault after Create is
+      `windows.winrm_fault` with `wsman_code`.
+    - **F29 (run 6; confirmation in run 7 pending):** a missing program is not a WS-Man fault: WinRS's `cmd.exe`
+      answers "is not recognized" and the command finishes with exit code 9009 and no output. `winrmRun` maps exit 9009
+      with an empty stdout to `ssh.helper_missing` (then `windows.helper_missing`, as over SSH); the Command was sent,
+      so a write stays uncertain. The emulator answers a missing helper the same way.
+    - F31 (run 3): an account removed from Administrators is refused with a 401 (`ErrAuthRefused`), not an
+      access-denied fault, so no fault code is mapped to `winrm_auth_refused`. An access-denied fault (5) after Create
+      is `windows.winrm_fault` with `wsman_code` 5; a 401 or 403 after Create is `windows.winrm_auth_refused` and
+      uncertain for a write. `ErrBadConfig` (Alice's own construction error) is `internal.unexpected`.
+    - The params `transport` (`^(ssh|winrm)$`) and `wsman_code` (`^[0-9]{1,10}$`) pass the allow-lists of the API, the
+      inventory's deployment records and the deployment jobs, so the e-mail variant and the record keep them.
+    - The e-mail variant lookup (`reasonTitle` in `internal/notify/sender.go`) takes `reason_variant` first, then the
+      param `transport`; `title_winrm` exists for `ssh.unreachable`, `ssh.timeout`, `ssh.output_too_large` and
+      `ssh.protocol_error`; `transport` is never rendered.
+14. **Slots.** As written (`Pool.Slot`, `TestPoolSlot`).
+15. **`HelperCommand` accessors.** As written.
+16. **What Windows logs under WinRM.** **Amended (F25, F31):** no PowerShell runs. Security 4688 (with command lines)
+    records `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh` and the helper's own line (the same constant
+    path, unquoted, and `ssh`): never the subcommand, which stays in the environment. Security 4624 of a call is logon
+    type 3, package NTLM, `LmPackageName` `NTLM V2`, elevated; a wrong password is 4625 (status `0xc000006d`,
+    sub-status `0xc000006a`). `Microsoft-Windows-WinRM/Operational` records each shell's creation (event 91 names the
+    user), never the streams.
+17. **Discovery, deployment, verification, rollback, drift and cleanup are unchanged.** As written.
+18. **The WinRM setup script.** **Amended (Task 7, its review and runs 4-6):**
+    - Negotiate is read from the registry (`HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service`, value
+      `auth_negotiate`; absent means on) right after the checks, before any change or WinRM call; off stops the
+      script. Measured: with Negotiate off WinRM refuses even its own local client, so the `WSMan:` drive cannot read it.
+    - The helper's install, data directory and event source run after the account (the ACL names the account's SID).
+    - A domain account is never added to Administrators by this script; it warns when the account is not a direct
+      member. The SSH script still adds it.
+    - A password outside Alice's rule, or two entries that differ, stop the script ("run again") instead of asking
+      again.
+    - `LocalAccountTokenFilterPolicy` is set to 1 for a local account when it is 0 or absent; both images ship 1
+      (the script prints `LocalAccountTokenFilterPolicy found: 1; not changed.`).
+    - The firewall rule is `Alice-WinRM-In`, display name `Alice WinRM (TCP 5986)`, from `$AliceAddress`.
+    - The script prints every HTTPS listener (address, port, SPKI fingerprint, SHA-1 thumbprint), not one.
+    - The shared deny-rights fragment compares secedit's export, which names a resolvable account by name, with the
+      account's `*SID`, so every run sets the two rights again and prints "Denying ...": the result is the same
+      right (W1 code, shared with the SSH script; fixing it changes the SSH script's golden; deferred).
+19. **The setup endpoint.** **Amended (Task 7 review):** `GET /api/v1/targets/{id}/winrm-setup` takes the optional
+    query parameter `from`, validated as the SSH guide's (one shared check; a zone or 4in6 address is the field error
+    `from`), and passes it to the firewall rule. The API reaches the script through `providers.WinRMSetupGuide`
+    (inventory resolves the provider), not an import, because the archtest rule forbids `api` to import
+    `providers/windows`. The web passes no `from` yet (owner item).
+20. **Emulator model.** As written. Precisions (Task 3): the demo host's computer name is `WIN-DEMO01`; the demo
+    binding `0.0.0.0:9444` (site "WinRM Journey") is the journey's; the fault codes the runners did not measure stay
+    placeholders (bad request 87, unknown shell 2150858843, `MaxShellsPerUser` 2150859173, envelope too large
+    2150858817); a missing helper is exit 9009 (F29), not fault 2.
+21. **Security analysis and STRIDE `WN-26`..`WN-30`.** As written, with WN-28 amended for the `cmd.exe` that WinRS
+    inserts (Ruling 16) and WN-30 for F24's verdict.
+22. **UI.** As written. Precisions (Task 8): the "(WinRM)" note is the catalogue's `title_winrm` variant, chosen when
+    `params.transport` is `winrm`; after a WinRM create the dialog shows the script, then the password panel, and runs
+    the connection test when the password is saved; the client refuses a username outside the rule (a UPN too) under
+    WinRM only.
+23. **e2e.** As written (`web/e2e/windows-winrm.spec.ts`, EN and TR). Precision: `test/images/fakewindows/Dockerfile`
+    copies the packages the emulator now links (`winrs`, `netaddr` and others).
+24. **Real-runner tests and hygiene.** **Amended (runs 3-4):** each real test signs in as its own account
+    `alice-w7-<n>`; a name created again right after its deletion was refused at Create (`E_ACCESSDENIED`,
+    2147942405) for seconds. `TestRealRunnerIsClean` checks that no local account named like `alice-w7%` is left. A
+    WinRM setting the `WSMan:` drive cannot restore (Negotiate off) is restored through a registry export of
+    `WSMAN\Service` and a WinRM restart. The providers test line runs with `-p 1` and `-timeout 30m`.
+25. **Test IDs.** As written: `WIN-68`..`WIN-75`.
+26. **The dedicated security review of the transport.** Task 10 step 6; see [Security review (W7)](#security-review-w7).
+27. **"Deferred to W7+": settled or carried.** As written; see [Deferred to W8+](#deferred-to-w8).
+28. **The Negotiator wrapping.** **Amended (Task 2 review):** the credentials go in through `req.SetBasicAuth` on the
+    Create request only (Ruling 12); the Negotiator removes that header before the anonymous first try, so Basic never
+    leaves the process (`TestWinRSNeverSendsBasic`, `TestWinRSSignsInOnCreateOnly`).
+29. **The direct-module rule.** As written.
+30. **The username is configuration, not a secret.** As written.
+31. **NTLM channel binding is not available.** **Confirmed (F30, run 3):** with `CbtHardeningLevel` Strict the sign-in
+    is refused; the image ships Relaxed.
+
+## W7 facts measured on real runners
+
+Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Datacenter, windows-2025 = Windows Server
+2025 Datacenter). Each verdict holds on both images unless stated.
+
+- **F24: confirmed, with (d).** Runs 2, 3 and 6 (<https://github.com/erenmeren/alice/actions/runs/41182325826>,
+  <https://github.com/erenmeren/alice/actions/runs/41183745215>, <https://github.com/erenmeren/alice/actions/runs/41187834322>).
+  A local administrator signs in with NTLMv2 to the image's `0.0.0.0:5986` listener: the first request of a call
+  takes 3 requests (anonymous 401 offering `Negotiate` and `Basic realm="WSMAN"`, type 1, type 3), later requests one
+  each without credentials (the connection stays authenticated). Windows closes the connection after the anonymous
+  401, so a call takes 2 dials: (d) applies, `maxDialsPerCall` = 2 (Ruling 12). `version` answers and the token is
+  elevated with `LocalAccountTokenFilterPolicy` 1 as the images ship it; (a) did not apply. The forms `alice-w7-1`,
+  `HOST\alice-w7-1` and `.\alice-w7-1` (raw) all sign in. The result with the policy set to 0 is logged by
+  `TestRealWinRMNTLMAuth` and not yet read into this record (run 7+, pending).
+- **F25: the forced entry works; `cmd.exe` is inserted (Needs coordinator).** Runs 5 and 6
+  (<https://github.com/erenmeren/alice/actions/runs/41186388742>, <https://github.com/erenmeren/alice/actions/runs/41187834322>).
+  `SSH_ORIGINAL_COMMAND` reaches the helper (`version` answers `{"ok":true,"helper":"1.2.0","protocol":1}`), but WinRS
+  runs the program through `cmd.exe` despite `WINRS_SKIP_CMD_SHELL` TRUE (parent `cmd.exe /C "<program>" ssh`; the
+  child's command line unquoted). The escaped `&#34;` form of the quotes reached `cmd.exe` as `&` (run 5); raw quotes
+  work. Ruling 4 amended; the helper stays 1.2.0.
+- **F26: confirmed.** Run 6. 1 byte, 96 KiB, 96 KiB + 1 and 256 KiB of stdin arrive with equal SHA-256;
+  `MaxEnvelopeSizekb` 500; a Send of about 615 KB is answered HTTP 413 (no WS-Man fault). `MaxSendChunk` stays 96 KiB.
+- **F27: confirmed for the cost; the reaping not measured.** Runs 4 and 6. 20 sequential `version` calls: p50 49-67 ms,
+  maximum 54-114 ms (run 4: p50 57 ms, maximum 64 ms), far under the 3 s threshold, so no budget changes.
+  `MaxShellsPerUser` 2147483647. Enumerating shells as the test account was refused ("A security error occurred"), so
+  the `IdleTimeOut` clamp and the reaping of an undeleted shell were not measured (Alice deletes every shell it
+  creates).
+- **F28: confirmed.** Runs 2, 3 and 6. The image's 5986 SPKI is unchanged after `Restart-Service WinRM`; a test listener
+  renewed with a new key is refused at the handshake before any HTTP request (no 4624 or 4625, no WinRM Operational
+  event); renewed with the same key it is accepted; an expired certificate with the pinned key is accepted.
+- **F29: confirmed for exit codes; a missing program is cmd.exe's exit 9009 (confirmation in run 7 pending).** Run 6.
+  Exits 0, 2, 3 and 4 pass through as Receive's `ExitCode`; `iis-status` with a bad `--op` answers exit 2 with its JSON.
+  A program path that does not exist is not a WS-Man fault at Command: the command finishes with `cmd.exe`'s exit
+  code, 9009 (Ruling 13 amended). The `alicetest` kill at `deploy.prepared` is logged only (not yet read into this
+  record).
+- **F30: confirmed.** Runs 2-4. The image offers `Negotiate` and `Basic realm="WSMAN"`; it has an HTTP listener on 5985
+  (enabled), `Service\Auth` Basic true, Kerberos true, Negotiate true, Certificate false, CredSSP false,
+  `CbtHardeningLevel` Relaxed, `AllowUnencrypted` false, `LmCompatibilityLevel` absent. (a) Negotiate off and Basic on:
+  only Basic is offered, Alice's client sends one request without `Authorization` and fails `ErrAuthRefused` after one
+  dial. (b) A wrong password fails after 3 requests. (c) `LmCompatibilityLevel` 5 works. `CbtHardeningLevel` Strict
+  refuses (Ruling 31 confirmed). The registry value WinRM reads for Negotiate is `auth_negotiate` under
+  `WSMAN\Service`.
+- **F31: confirmed.** Runs 3 and 6. With "Deny log on locally", "Deny log on through Remote Desktop Services" and
+  `PasswordNeverExpires`, the call signs in: 4624 logon type 3, package NTLM, `LmPackageName` `NTLM V2`, elevated. A wrong
+  password is 4625 (`0xc000006d`, `0xc000006a`). After a password change the old password is refused and the new one
+  works. "Deny access to this computer from the network" holding S-1-5-114 refuses a local account. An account removed
+  from Administrators is refused with a 401.
+- **F32: confirmed.** Runs 4 and 6. The script's printed SPKI fingerprint equals `providers.TLSIdentity` of the
+  certificate Alice's client sees, for the image's RSA listener on 5986 and an ECDSA P-256 listener on 45521.
+
+### Runner runs used (6 of 10 so far)
+
+| Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
+|---|---|---|---|---|
+| 1 | <https://github.com/erenmeren/alice/actions/runs/41181076117> | `978935d3` | fail / fail | No fact measured: `[ADSI]::Exists` throws for an absent account (fixture and clean test). The as-found settings were read: `LocalAccountTokenFilterPolicy` 1, `LmCompatibilityLevel` absent, Basic, Kerberos and Negotiate true, `CbtHardeningLevel` Relaxed, `AllowUnencrypted` false, S-1-5-114 not denied network logon |
+| 2 | <https://github.com/erenmeren/alice/actions/runs/41182325826> | `8c191ae8` | fail / fail | F24 (d): Windows closes the connection after the anonymous 401 (2 dials; Create 3 requests, later requests 1 each); most calls failed on the one-dial rule. F28: SPKI unchanged after a restart. F30: the offer, the 5985 listener and the `Service\Auth` values; (a) passed. Negotiate left off by a failed restore broke the later tests |
+| 3 | <https://github.com/erenmeren/alice/actions/runs/41183745215> | `3095a34e` | fail / fail | The sign-in works (2 dials, 4624 `NTLM V2`, elevated); F28, F30 (wrong password, Strict refused) and F31 (4625, password change, S-1-5-114, out of Administrators) measured. Every program exited 1 with no output; some Creates faulted `E_ACCESSDENIED` after an account was created again under the same name. `TestRealRunnerIsClean` passed |
+| 4 | <https://github.com/erenmeren/alice/actions/runs/41184960052> | `0c108a36` | fail / fail | The diagnostic matrix: every Create right after a same-name recreate faulted `E_ACCESSDENIED`; programs still exited 1. F27 cost, F30 and F28 passed; the setup script ran cleanly (refusals, policy found 1, firewall rule, ECDSA listener printed) |
+| 5 | <https://github.com/erenmeren/alice/actions/runs/41186388742> | `b8820bc1` | fail / fail | Decisive: the escaped `&#34;` around the program reached `cmd.exe` as `&`; unquoted and raw-quote forms work, `SSH_ORIGINAL_COMMAND` is delivered and the helper answers `version` |
+| 6 | <https://github.com/erenmeren/alice/actions/runs/41187834322> | `a594ffec` | fail / fail | Nearly every fact measured: F24 forms, F25 (`cmd.exe` inserted), F26, F27, F28, F29 (exits; a missing program is not a fault), F32. Left failing: F25's `cmd.exe` assertions, F29's missing program, the fidelity fault at Command, and a leftover `C:\ProgramData\alice-w7-<n>` |
+| 7 | pending | pending | pending | pending |
+| 8 | pending | pending | pending | pending |
+| 9 | pending | pending | pending | pending |
+| 10 | pending | pending | pending | pending |
+
+## Rulings made during execution (W7)
+
+One line each: the ruling, then why (and the cost if wrong where it is not obvious).
+
+### Controller (order and process)
+
+- P1: the execution workspace was outside `.superpowers/` (the coordinator forbids touching it) — costs nothing.
+- P2 (pre-flight): Task 5 took the config half of Task 6 (`windows.Config`, `TransportSSH`/`TransportWinRM`,
+  `DefaultWinRMPort`, the `transport` enum, the port default, the `.\` form, `TestWinRMConfig`) — Task 5's inventory
+  tests need a WinRM target to exist; cost if wrong: Task 6 touches `config.go` again.
+- P3 (pre-flight): Task 5 added `SetupScriptWinRM` as a minimal function and Task 7 completed it — the endpoint test
+  needs a script; costs nothing.
+- P4: Tasks 3, 4 and 5 ran in parallel in one worktree on disjoint paths (the coordinator allowed it).
+- P5: Task 6 started before run 1 measured F25 — the environment variable is the documented sshd contract the helper
+  already uses; cost if wrong: Task 6's seam reworked for helper 1.3.0 (it was not).
+- P6: Task 8 (web and e2e) ran early, in parallel with Task 4's fixes and Task 6's minors — it needed only Tasks 3 and
+  5.
+- P7: `docs_setup_test.go`'s WinRM lines moved from Task 7 to Task 9, which writes the host guide.
+- P8: only the controller pushed the branch for runner runs; Task 4 did not push.
+
+### Task 1-2 (winrs codec and client, the emulator's NTLMv2 check, linuxssh)
+
+- The Command element carries the program quoted and `ParseRequest` strips the quotes; each argument is its own
+  `rsp:Arguments` element (pywinrm's form); programs and arguments holding `"` are refused, at most 16 arguments.
+- The Create body is InputStreams, OutputStreams, IdleTimeOut, then Environment (pywinrm's order); the shell ID is read
+  from the ResourceCreated selector and `rsp:Shell/rsp:ShellId`, which must agree.
+- `ParseReceived` is strict (any other element, a second `CommandState` or another `CommandId` is `ErrProtocol`); the
+  runners did not need it loosened.
+- `winrs.DefaultDialTimeout` (10 s) and `winrs.DefaultHandshakeTimeout` (15 s) are exported, so a test in
+  `internal/providers/windows` can compare them with linuxssh's values.
+- `Client.check` also refuses a nil TLS config, a TLS `MaxVersion` below 1.2, a user holding `:`, a non-positive
+  timeout or output limit, an address without a port, and anything the codec would refuse (`ErrBadConfig`).
+- A 401 or 403 after the dialer refused a dial is `ErrUnreachable`, not `ErrAuthRefused` — go-ntlmssp returns the first
+  401 when its handshake round trip fails, which would otherwise read as a wrong password.
+- A non-200 answer that is neither 401/403 nor a SOAP fault (a 302, a bare 500) is `ErrProtocol`.
+- The emulator's NTLM server keeps a fresh state per request without its `ConnContext` (it never authenticates then);
+  its domain is the account's, or the computer name in a workgroup.
+- Port 5985 refused, credentials only on Create, `MaxResponseHeaderBytes` 64 KiB, `maxDialsPerCall` = 2: see Ruling 12.
+- Element text escapes only `&`, `<` and `>`; attribute values keep `xml.EscapeText` (run 5, Ruling 4).
+
+### Review gate (Task 1-2)
+
+The review of `8475ecf8..b20f3d69` found 1 important issue (the proxy test could not fail: Go never proxies loopback;
+fixed in `83b7b161` with a non-loopback name and a recording proxy) and minors: 5985 not refused (`bb9be052`), the Send
+body resent in a re-authentication (`ca650e12`, credentials on Create only), header and 401-drain bounds (`5031b126`),
+a test comment (`8f96aea5`), a constant assertion (`9a3ece4c`). Declined: `ntlm.go`'s `int(uint32)` on 32-bit (test-only
+emulator, CI is 64-bit).
+
+### Task 3 (wintest and cmd/alice-fakewindows)
+
+- The fault codes the runners did not measure are placeholders, none 5 or 2, so Ruling 13's auth and helper rows are
+  never hit by accident (Ruling 20).
+- Create faults unless its environment is exactly `SSH_ORIGINAL_COMMAND` (a stricter emulator catches client drift).
+- A Receive waits up to its `OperationTimeout`, then answers `w:TimedOut`, so `Model.Delay` drives the client's timeout
+  path as on Windows.
+- With no account set the NTLM exchange still runs and ends in 401, so the request count matches a wrong password.
+- The demo binding `0.0.0.0:9444` has an IIS site "WinRM Journey", so discovery lists it as deployable; four
+  assertions in `internal/providers/windows` tests and two e2e counts changed with it.
+
+The review approved it; three minors were fixed in `b817d610` (sorted environment names in the log, the package
+comment's counts, a comment on the shared context key).
+
+### Task 4 (real-runner facts F24-F31)
+
+- Request counts are measured on a hand-driven connection that wraps go-ntlmssp's Negotiator as `winrs` does — the
+  client builds its transport inside `Run`.
+- The password change of F31 uses ADSI `SetPassword` with the password on standard input, not `net user` — no password
+  on a command line.
+- Account rights are changed through the LSA API, atomic per SID and right, so the setup script test's concurrent
+  `secedit` is never clobbered.
+- The as-found settings cross to `TestRealRunnerIsClean` through `%TEMP%\alice-w7-settings-as-found.txt`, read with one
+  script on both sides.
+- F29's kill is a real `alicetest` helper killed at `deploy.prepared` over a hand-built shell (two variables), logged
+  only.
+- `-p 1` and `-timeout 30m` on the workflow's providers line.
+- Each test signs in as a new account `alice-w7-<n>` (Ruling 24 amended).
+- A WinRM setting the drive cannot restore is restored through a registry export of `WSMAN\Service` and a WinRM restart;
+  a value that differs afterwards fails loudly.
+
+### Review gate (Task 4)
+
+The review found 2 important issues (F29's kill was a program exiting 137, a tautology: replaced by the real kill in
+`faf27bf6`; `deleteAccount` could strand the account: rewritten in `c812a371`) and minors fixed in `4fa92cab`,
+`762bcd3d`, `818a3ab9`, `faddd75d`, `8c191ae8`.
+
+### Task 5 (migration, inventory, API, error codes)
+
+- Only `transport: winrm` is stored; `Target.Transport` reads `ssh`, `winrm` or `""` (Ruling 2).
+- A `transport` member on a non-Windows target is the field error `transport` `pattern`; another transport on a Windows
+  server is `ErrTransportImmutable` (Ruling 3).
+- `ConfigSchema`'s username pattern stays the SSH rule; the `.\` form under WinRM is `ParseConfig`'s alone.
+- The setup script reaches the API through `providers.WinRMSetupGuide` (Ruling 19).
+- `reasonTitle` takes `reason_variant`, then `transport` (Ruling 13); `title_winrm` for the four reused `ssh.*` reasons.
+- `SetWinRMPassword` wraps `ErrNotWindowsTarget` with ": its transport is not winrm" for an SSH Windows server (still
+  409 `ALC-WIN-0011`).
+- The shared A06 session test expects 409 for `GET .../winrm-setup` (its fixture target is an SSH server).
+
+### Review gate (Task 5)
+
+The review found 2 important issues: a transport-only patch answered 422 (fixed in `9657952d`, Ruling 3) and the
+password code copied the CCS code (shared in `e895fd03`, Ruling 7). Minors fixed: a bad transport value is a field
+error (`57904f95`), `transport` is never rendered (`0d9205e1`), zeroing on every refusal (`921e081d`, `f3b8124b`).
+Deferred: `ConfigSchema`'s port default.
+
+### Task 6 (the provider's transport seam)
+
+- `ErrBadConfig` maps to `internal.unexpected`, not retryable, not sent.
+- An access-denied fault after Create is `windows.winrm_fault`; a 401 or 403 after Create is `winrm_auth_refused` and
+  uncertain (Ruling 13).
+- The `transport` and `wsman_code` allow-lists also go into the inventory's and the deployment jobs' param lists.
+- `internal/providers/tlspin/**` is a Windows path (`.github/windows-paths.txt`): the provider now imports it.
+
+### Review gate (Task 6)
+
+Approved; minors fixed: `FaultError.Action` (`e8c97911`), the slot and `tlspin.New` errors carry the params
+(`e72f309e`), the password released by `defer` (`cefca020`). Deferred: `sshRun`'s context-after-acquire branch
+untested; the crash table does not assert "sent once"; a WinRM error returns an empty `HostKey`.
+
+### Task 7 (the setup script, its real tests, fidelity)
+
+- The helper's install runs after the account; the account's creation is not shared with the SSH script (a prompted
+  password and the domain branch); a domain account is never added to Administrators (Ruling 18).
+- `HOST\name` with HOST the computer's name is the local account (Ruling 6).
+- A bad password or two different entries stop the script.
+- `TestSetupScriptWinRMDomainAccount` is structural: every `Read-Host`, `Create('User')` and `SetPassword` sits in the
+  functions only the local branch calls.
+- The script prints every HTTPS listener.
+- The four real tests need `ALICE_WIN_SETUP=1` and live in `setup_winrm_windows_test.go`.
+- `TestFidelityWinRM` compares `win-facts` and `iis-dump` by field names, `ok` and `elevated`.
+- The firewall rule is `Alice-WinRM-In` / `Alice WinRM (TCP 5986)`, mirroring `Alice-SSH-In`.
+
+### Review gate (Task 7)
+
+The review found 3 important issues: the Negotiate stop was unreachable (moved to a registry read before any change,
+`22355fce`); the product script opened 5986 from any address (the endpoint's `from`, Ruling 19); the docs test had no
+owner (moved to Task 9, P7). Minors fixed: the OID shortcut comment (`b44326e2`), the netsh cleanup failure
+(`57ce0e1b`). From run 4: the deny-rights check takes a holder by name or SID, and F32 is compared before the first
+WinRS call (`3c376783`).
+
+### Task 8 (web and e2e)
+
+- The "(WinRM)" note is the `title_winrm` variant (Ruling 22).
+- After a WinRM create the dialog does not wait for the first connection job; the test runs when the password is saved.
+- The client refuses a username outside the rule under WinRM only.
+- `test/images/fakewindows/Dockerfile` gains the COPY lines the emulator needs.
+- `deployments.rdpErrors.ssh.output_too_large` gets its own RDP text: the source-scanning test now sees the reason in
+  `winrm.go`.
+
+The review approved it. Deferred: no hint after a failed connection test after the password; leaving the WinRM phase
+leaves the password missing; the RDP text added for a source-scanning test is a brittle coupling; the web passes no
+`from` (owner item).
+
+### Task 9 (documents)
+
+- `docs_setup_test.go` checks that the host guide quotes the WinRM script's `$AliceUser`, `$AliceAddress`, listener and
+  firewall lines as the script writes them for `alice` without an address
+  (`TestPreparationGuideQuotesTheWinRMScript`).
+- The traceability map names the migration tests by their full names (`TestMigration00038WindowsWinRM`,
+  `TestMigration00038Down`); the plan's table wrote `TestMigration00038`.
+
+## Needs coordinator (W7)
+
+- **F25, `cmd.exe` under WinRS.** WinRS starts the helper through `cmd.exe /C "<program>" ssh` although Alice sends
+  `WINRS_SKIP_CMD_SHELL` TRUE. The controller ruled that the helper stays 1.2.0: the forced entry works, `cmd.exe`
+  parses only the constant quoted program line, and the plan's fallback (helper 1.3.0 with a `winrs` entry) would not
+  remove `cmd.exe`. Ruling 16 and WN-28 say so. Confirm, or order the fallback task. Cost if wrong: one helper task.
+- **F29, exit 9009.** A missing helper is `cmd.exe`'s exit 9009 with no output, mapped to `windows.helper_missing`;
+  confirmation in run 7 pending.
+
+## Security review (W7)
+
+Pending: Task 10 step 6 (Ruling 26).
+
+## Acceptance (design §13 W7)
+
+Pending: Task 10 step 7.
+
+## Owner items (W7)
+
+From the plan (decided by the delegation, recorded, no further action): Ruling 1 (the in-house client), Rulings 6-8
+(username and password over NTLMv2, the sealed per-target password), Ruling 4 (the helper stays 1.2.0), Rulings 21 and
+31 (WN-26 accepted, no channel binding), Ruling 29 (go-ntlmssp direct).
+
+Still for the owner to confirm:
+
+1. **The Turkish texts** below (the WN-26 caution, the transport choice, the username help, the password dialog and
+   the five error reasons).
+2. **Ruling 18, the password prompt:** the script asks the operator for the password (an empty answer keeps the
+   current one) instead of generating one, so the operator types it twice: on the server and in Alice.
+3. **Ruling 18's server changes:** `LocalAccountTokenFilterPolicy` = 1 for a local account when it is 0 or absent
+   (both images ship 1, so the runners never exercised the change); the script never changes Negotiate, Basic,
+   `CbtHardeningLevel`, `AllowUnencrypted` or the 5985 listener: it warns, or stops when Negotiate is off. A domain
+   account is never added to Administrators by the WinRM script (the SSH script still adds it).
+4. **Ruling 3's gap:** W7 does not refuse a second live Windows target for the same host on the other transport; the
+   licence counts it twice.
+5. **Ruling 5:** a WinRM target's `targets.credential_id` still names the platform key, unused.
+6. **Ruling 24:** the runner tests change WinRM and LSA settings on the hosted runners and create local accounts
+   `alice-w7-<n>`, test listeners on 45520-45539 and `C:\ProgramData\alice-w7-<n>`, and restore everything as found.
+7. **The F24-F32 verdicts** ([W7 facts measured on real runners](#w7-facts-measured-on-real-runners)): F24 (a) did not
+   apply; F25 inserts `cmd.exe` (Needs coordinator); F30 Strict refuses.
+8. **A domain account over WinRM** is accepted by syntax and by the emulator only; the first real test is on a
+   customer's or the owner's domain (manual matrix).
+
+Added during execution:
+
+- **Ruling 4 and 16 amended (F25):** Windows' process-creation log shows `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh`
+  and the helper's own line for every WinRM call; never the subcommand or key material. Confirm.
+- **Ruling 12 amended (F24 (d)):** a call may open a second connection during its sign-in, never after.
+- **Ruling 19 amended:** the setup endpoint takes Alice's address (`from`), but the web does not pass it yet, so the
+  script shown in the web opens 5986 from any address with a warning to edit `$AliceAddress`. Decide whether the web
+  asks for the address.
+- **The deny-rights fragment is not idempotent** (Ruling 18): every run of either script sets the two deny rights
+  again and prints "Denying ...". Harmless; fixing it changes the SSH script's text.
+- **The WN-26..WN-30 residuals** ([Security review (W7)](#security-review-w7), once written): WN-26 High accepted as
+  competitor parity.
+- **The W4, W5 and W6 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode,
+  the helper update procedure).
+
+The new Turkish texts (EN/TR pairs as shipped; the coordinator checks them, R70's C6):
+
+| key | EN | TR |
+|---|---|---|
+| `targets.form.transport` (web) | Connection | Bağlantı |
+| `targets.form.transportHelp` (web) | OpenSSH is recommended. Choose WinRM only when the server cannot run OpenSSH. | OpenSSH önerilir. WinRM'yi yalnızca sunucuda OpenSSH çalıştırılamıyorsa seçin. |
+| `targets.form.transportSsh` (web) | OpenSSH (recommended) | OpenSSH (önerilen) |
+| `targets.form.transportWinrm` (web) | WinRM over HTTPS | HTTPS üzerinden WinRM |
+| `targets.form.portWinrm` (web) | WinRM HTTPS port | WinRM HTTPS bağlantı noktası |
+| `targets.form.winrmWarning` (web, WN-26) | Under WinRM, anyone with this account's password can run any command on the server as an administrator. With OpenSSH, Alice's key can run only alice-helper.exe. | WinRM'de bu hesabın parolasını bilen herkes sunucuda yönetici olarak her komutu çalıştırabilir. OpenSSH'de Alice'in anahtarı yalnızca alice-helper.exe'yi çalıştırabilir. |
+| `targets.form.usernameWinrmHelp` (web) | alice, .\alice, SERVER\alice or DOMAIN\alice. The account must be a member of Administrators. | alice, .\alice, SUNUCU\alice ya da ALANADI\alice. Hesap Administrators grubunun üyesi olmalıdır. |
+| `targets.form.usernameWinrmInvalid` (web) | Write the account as alice, .\alice, SERVER\alice or DOMAIN\alice. Over WinRM, Alice cannot sign in with an e-mail-style name such as alice@corp.example. | Hesabı alice, .\alice, SUNUCU\alice ya da ALANADI\alice biçiminde yazın. Alice, WinRM üzerinden alice@corp.example gibi e-posta biçimindeki bir adla oturum açamaz. |
+| `targets.form.winrmScriptLater` (web) | After you add the server, Alice shows its WinRM setup script and asks for the account's password. | Sunucuyu ekledikten sonra Alice, WinRM kurulum betiğini gösterir ve hesabın parolasını ister. |
+| `targets.winrm.setupTitle` (web) | WinRM setup script | WinRM kurulum betiği |
+| `targets.winrm.setupHelp` (web) | Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, lets Alice's address through the firewall, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step. | Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, güvenlik duvarında Alice'in adresine izin verir ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız. |
+| `targets.winrm.passwordStep` (web) | Then enter the same password here. Alice tests the connection as soon as the password is saved. | Ardından aynı parolayı buraya girin. Parola kaydedilir kaydedilmez Alice bağlantıyı sınar. |
+| `targets.winrm.showScript` (web) | Show setup script again | Kurulum betiğini yeniden göster |
+| `targets.page.facts.transport` (web) | Transport | Bağlantı yöntemi |
+| `targets.page.facts.transportWinrm` (web) | WinRM (HTTPS, NTLM) | WinRM (HTTPS, NTLM) (identical, allow-listed) |
+| `hostKeys.tlsLabel` (web) | TLS certificate key (SPKI SHA-256) | TLS sertifika anahtarı (SPKI SHA-256) |
+| `hostKeys.tlsHelp` (web) | Alice received this fingerprint of a TLS certificate key from {{host}}. Compare it with the listener fingerprint the WinRM setup script printed on the server (the value that starts with SHA256:). You can also run the command below, with the server's address and port, from a machine that reaches the server. | Alice, bir TLS sertifika anahtarının bu parmak izini {{host}} adresinden aldı. Bunu, WinRM kurulum betiğinin sunucuda yazdırdığı dinleyici parmak iziyle (SHA256: ile başlayan değer) karşılaştırın. Aşağıdaki komutu, sunucunun adresi ve bağlantı noktasıyla, sunucuya erişebilen bir makinede de çalıştırabilirsiniz. |
+| `hostKeys.tlsCommandLabel` (web) | Command to run from a machine that reaches the server | Sunucuya erişebilen bir makinede çalıştırılacak komut |
+| `winrm.title` (web) | WinRM password | WinRM parolası |
+| `winrm.help` (web, the password dialog) | Alice signs in to this server over WinRM with the password of its account. The password stays sealed on the Alice server, is used only while Alice is connected, and is never shown again. Enter the password the setup script set on the server, and use a different password on every server. | Alice bu sunucuda WinRM üzerinden hesabın parolasıyla oturum açar. Parola Alice sunucusunda mühürlü saklanır, yalnızca Alice bağlıyken kullanılır ve bir daha gösterilmez. Kurulum betiğinin sunucuda ayarladığı parolayı girin ve her sunucuda farklı bir parola kullanın. |
+| `winrm.field` (web) | WinRM password | WinRM parolası |
+| `winrm.fieldHelp` (web) | The password of the account on the server: 12 to 128 characters of printable ASCII, no spaces. | Sunucudaki hesabın parolası: boşluksuz, yazdırılabilir ASCII karakterlerden oluşan 12 ile 128 karakter. |
+| `winrm.saved` (web) | Saved. Use Test connection to check it. | Kaydedildi. Denetlemek için Bağlantıyı sına'yı kullanın. |
+| `audit.actions.target_winrm_password_set` (web) | WinRM password of a Windows server set | Bir Windows sunucusunun WinRM parolası ayarlandı |
+| `deployments.rdpErrors.ssh.output_too_large.action` (web) | Check the server for unusually large content in what Alice reads there: the Remote Desktop listener's settings or the certificate stores. | Sunucuda Alice'in okuduklarında olağandışı büyük içerik olup olmadığını denetleyin: Uzak Masaüstü dinleyicisinin ayarları ya da sertifika depoları. |
+| `provider.windows.fields.transport.label` | Connection | Bağlantı |
+| `provider.windows.fields.transport.help` | OpenSSH (recommended), or WinRM over HTTPS with the account's password. | OpenSSH (önerilir) ya da hesabın parolasıyla HTTPS üzerinden WinRM. |
+| `errors.windows.winrm_auth_refused.title` | The Windows server refused Alice's WinRM sign-in. | Windows sunucusu Alice'in WinRM oturum açmasını reddetti. |
+| `errors.windows.winrm_auth_refused.cause` | The password set in Alice differs from the account's password on the server, the account is not a member of Administrators, or the server refuses NTLM (Negotiate authentication is off, CbtHardeningLevel is Strict, or a policy restricts NTLM). Nothing was sent to the helper. | Alice'te girilen parola sunucudaki hesabın parolasından farklı, hesap Administrators grubunun üyesi değil ya da sunucu NTLM'i reddediyor (Negotiate kimlik doğrulaması kapalı, CbtHardeningLevel Strict ya da bir ilke NTLM'i kısıtlıyor). Yardımcı programa hiçbir şey gönderilmedi. |
+| `errors.windows.winrm_auth_refused.action` | Check the account and its password on the server, set the same password in Alice on the server's page, and check the server's WinRM authentication settings. Then test the connection again. | Sunucudaki hesabı ve parolasını kontrol edin, aynı parolayı Alice'te sunucunun sayfasında girin ve sunucunun WinRM kimlik doğrulama ayarlarını kontrol edin. Ardından bağlantıyı yeniden sınayın. |
+| `errors.windows.winrm_password_missing.title` | Alice has no WinRM password for this server. | Alice'te bu sunucu için WinRM parolası yok. |
+| `errors.windows.winrm_password_missing.cause` | This server is reached over WinRM, which signs in with the account's password, and no password was set in Alice. Alice did not connect. | Bu sunucuya, hesabın parolasıyla oturum açan WinRM üzerinden ulaşılıyor ve Alice'te parola girilmemiş. Alice bağlanmadı. |
+| `errors.windows.winrm_password_missing.action` | An Administrator sets the password on the server's page in Alice (the one the WinRM setup script set on the server). Then test the connection again. | Bir Yönetici parolayı Alice'te sunucunun sayfasında girer (WinRM kurulum betiğinin sunucuda belirlediği parola). Ardından bağlantıyı yeniden sınayın. |
+| `errors.windows.winrm_fault.title` | The server's WinRM service refused the request. | Sunucunun WinRM hizmeti isteği reddetti. |
+| `errors.windows.winrm_fault.cause` | The WinRM service on the server answered with a fault, for example because of a quota, a WinRM setting or a policy. The fault's code is in the details. | Sunucudaki WinRM hizmeti bir hatayla yanıt verdi; örneğin bir kota, bir WinRM ayarı ya da bir ilke nedeniyle. Hatanın kodu ayrıntılarda yer alır. |
+| `errors.windows.winrm_fault.action` | Check the server's WinRM settings and the Microsoft-Windows-WinRM/Operational event log, then try again. | Sunucunun WinRM ayarlarını ve Microsoft-Windows-WinRM/Operational olay günlüğünü kontrol edin, ardından yeniden deneyin. |
+| `errors.windows.transport_immutable.title` | The connection type of a server cannot be changed. | Bir sunucunun bağlantı türü değiştirilemez. |
+| `errors.windows.transport_immutable.cause` | A server's connection (OpenSSH or WinRM) is chosen when it is added, because the pinned server identity and the credential differ between the two. Nothing was changed. | Sunucunun bağlantısı (OpenSSH ya da WinRM) sunucu eklenirken seçilir; çünkü sabitlenen sunucu kimliği ve kimlik bilgisi ikisinde farklıdır. Hiçbir şey değiştirilmedi. |
+| `errors.windows.transport_immutable.action` | To use the other connection, add the server again with it, then remove the old entry. | Diğer bağlantıyı kullanmak için sunucuyu o bağlantıyla yeniden ekleyin, ardından eski kaydı kaldırın. |
+| `errors.windows.winrm_password_invalid.title` | This WinRM password cannot be used. | Bu WinRM parolası kullanılamaz. |
+| `errors.windows.winrm_password_invalid.cause` | Alice accepts a WinRM password of 12 to 128 characters of printable ASCII without spaces. The password was not stored. | Alice, boşluksuz ve yazdırılabilir ASCII karakterlerden oluşan, 12 ile 128 karakter arasında bir WinRM parolası kabul eder. Parola saklanmadı. |
+| `errors.windows.winrm_password_invalid.action` | Set a password that follows this rule for the account on the server (the WinRM setup script asks for it), then enter the same password here. | Sunucudaki hesap için bu kurala uyan bir parola belirleyin (WinRM kurulum betiği bunu sorar), ardından aynı parolayı buraya girin. |
+| `errors.ssh.unreachable.title_winrm` | Alice cannot reach the server's WinRM HTTPS listener. | Alice sunucunun WinRM HTTPS dinleyicisine ulaşamıyor. |
+| `errors.ssh.timeout.title_winrm` | The server took too long to answer over WinRM. | Sunucunun WinRM üzerinden yanıt vermesi çok uzun sürdü. |
+| `errors.ssh.output_too_large.title_winrm` | The server sent more data over WinRM than Alice accepts. | Sunucu WinRM üzerinden Alice'in kabul ettiğinden fazla veri gönderdi. |
+| `errors.ssh.protocol_error.title_winrm` | Alice could not understand the server's WinRM answer. | Alice sunucunun WinRM yanıtını anlayamadı. |
+
+## Deferred to W8+
+
+- **Settled by W7** (Ruling 27): the WinRM transport (§13 W7), with username and password over NTLMv2.
+- **New in W7's deferred list:** PSRP and a JEA endpoint (the only way to limit the WinRM account); Kerberos (and UPN
+  usernames); CredSSP; client-certificate mapping; NTLM channel binding (`CbtHardeningLevel` Strict); tlspin's
+  CA-bundle mode for a WinRM listener; Alice rotating the Windows password; removing a WinRM password; changing a
+  target's transport; refusing a second target for one host across transports; a domain account tested on a runner;
+  Server Core and Windows Server 2019 over WinRM (manual matrix); the reaping of an undeleted shell and the
+  `IdleTimeOut` clamp (F27, not measurable as the test account).
+- **Carried unchanged from [Deferred to W7+](#deferred-to-w7):** everything under "Not in W6"; W5's deferred items;
+  R70's "Not in this batch" boundary (class B and C); the items R70 declined; the W6 owner items and W6 residual risks
+  1-6, 8 and 9.
+- **Minors deferred during W7 (known debt):**
+  - `ConfigSchema`'s port default is 22 under WinRM too; the form sets 5986 (Task 5).
+  - `ntlm.go`'s `field()` converts a `uint32` to `int` (32-bit only; test-only emulator; Task 1-2).
+  - `sshRun`'s context-ended-after-acquire branch is untested; the WinRM crash table does not assert "sent once"; a
+    WinRM error returns an empty `HostKey` (Task 6).
+  - The emulator answers an oversized Send with a WS-Man fault; Windows answers HTTP 413 (F26); the other emulator
+    fault codes are placeholders (Task 3).
+  - The shared deny-rights fragment is not idempotent (Ruling 18; W1 code).
+  - No hint after a failed connection test that follows the password; leaving the WinRM phase of the dialog leaves
+    the password missing; the RDP `output_too_large` text was added for a source-scanning test; the web passes no
+    `from` (Task 8).
+  - `WinRMSetupScript`'s doc comment still says "without an address restriction" although it takes `from` (Task 7).

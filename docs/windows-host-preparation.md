@@ -14,7 +14,8 @@ only when it imported it itself and nothing has used it for 7 days ([What the cl
 Alice signs in over SSH (the OpenSSH Server of Windows) with its own key. It never gets a shell: sshd runs
 **alice-helper.exe** for every sign-in of Alice's account, and the helper does only a fixed list of things. This
 guide prepares a server once; you can undo it completely (see [Removing Alice from a Windows server](#removing-alice-from-a-windows-server)).
-Alice does not manage the SSH keys of a Windows server.
+Alice does not manage the SSH keys of a Windows server. For a server that cannot run OpenSSH, Alice can sign in over
+WinRM instead, with a password and without the helper-only limit; see [WinRM transport](#winrm-transport).
 
 Supported systems: Windows Server 2019, 2022 and 2025, with Desktop Experience or Server Core, on x64 (AMD64) or
 ARM64, with IIS 10 when the server runs IIS. Alice is tested on Windows Server 2022 and 2025 with Desktop
@@ -363,6 +364,151 @@ When the check after the change fails, the helper points the listener back to th
 the first deployment, removes the value so Remote Desktop uses its self-signed certificate again (Windows should make
 a new one if it was removed; this was not measured), and takes back the NETWORK SERVICE entry it added. A certificate Remote Desktop cannot use
 stops new Remote Desktop sessions, so keep another way in: the server's console or SSH. The account `alice` itself cannot sign in over Remote Desktop.
+
+## WinRM transport
+
+Use this only when the server cannot run OpenSSH. OpenSSH stays the recommended connection.
+
+**Under WinRM, anyone with this account's password can run any command on the server as an administrator. With
+OpenSSH, Alice's key can run only alice-helper.exe.** The password is an ordinary Windows password: it also signs in to
+the server's other network services that accept the account (file sharing, remote management), not only WinRM. Use a
+dedicated account, a different password on every server, and keep port 5986 open to the Alice server only.
+
+Over WinRM Alice runs the same `alice-helper.exe`, with the same subcommands, journal and rollback as over SSH. It
+connects to the server's WinRM HTTPS listener (TLS 1.2 or later, port 5986), signs in with the account's name and
+password using NTLMv2, and checks the listener's certificate key against the one an administrator confirmed in Alice.
+Each call is one connection and one WinRS shell, which runs `"C:\Program Files\Alice\alice-helper.exe" ssh` with
+Alice's subcommand in the shell's environment variable `SSH_ORIGINAL_COMMAND`; certificates and keys travel only on
+the helper's standard input. Alice never uses Basic authentication, unencrypted HTTP (port 5985), Kerberos, CredSSP
+or client certificates, and sends no PowerShell.
+
+### The account
+
+- **A local account** (`alice`, `.\alice`, or `SERVER\alice` with the computer's name): the WinRM setup script creates
+  it, or sets the password of an existing one (for example the account the OpenSSH script made), adds it to
+  Administrators and sets **Password never expires**. Enter the name in Alice as you would on the server.
+- **A domain account** (`DOMAIN\alice`): create it in the domain and make it a member of the server's Administrators
+  group (directly or through a group, as in [the domain setup](#two-ways-to-set-up-the-account)). The script only
+  checks that it exists and warns when it is not a direct member of Administrators; it never creates it, changes its
+  password or adds it to a group. A domain account over WinRM is not tested automatically: check it by hand.
+- **Hardened baselines.** Where "Deny access to this computer from the network" holds *Local account and member of
+  Administrators group* (S-1-5-114), a local account cannot sign in over WinRM (measured on Windows Server 2022 and
+  2025): use a domain account.
+- A name such as `alice@corp.example` is not accepted.
+
+On Windows Server 2022 and 2025 as shipped, `LocalAccountTokenFilterPolicy` is 1, and the WinRM sign-in of a local
+administrator gets an elevated token (Security event 4624: logon type 3, package NTLM, `NTLM V2`). For a local account
+the script sets the value to 1 when it finds 0 or no value, because remote UAC would otherwise give the account a
+filtered token over WinRM; it prints the value it found (`LocalAccountTokenFilterPolicy found: ...`). This lifts remote
+UAC filtering for every local administrator's network sign-in, so weigh it with your security team. A domain account
+needs no change.
+
+### What the WinRM setup script changes
+
+Get the script from Alice (**Add server** with **WinRM over HTTPS**, or **Show setup script again** on the server's
+page). Run it once in an elevated PowerShell (Windows PowerShell 5.1 or PowerShell 7) in the folder that holds
+`alice-helper.exe`; running it again is safe. It holds no secret. It names the account and Alice's address at the top:
+
+```powershell
+$AliceUser = 'alice'
+$AliceAddress = 'Any'
+```
+
+(Alice fills in the server's account, and Alice's address when it is known; with `'Any'` the script warns that port
+5986 is open to every address: set `$AliceAddress` to the Alice server's address.) In order, it:
+
+1. Checks that it runs elevated, the account name, and that WinRM's Negotiate authentication is on (read from
+   `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service`, value `auth_negotiate`). With Negotiate off it
+   stops before any change: Alice signs in with NTLM through Negotiate. It never changes the setting.
+2. Checks the SHA-256 checksum of `.\alice-helper.exe` as the OpenSSH script does.
+3. Prepares the account. For a local account it asks for the password twice (`Read-Host -AsSecureString`: nothing is
+   shown, printed, logged or written to a file) and refuses a password outside Alice's rule (12 to 128 printable ASCII
+   characters, no spaces) or two entries that differ; for an existing account an empty answer keeps its password. It
+   adds a local account to Administrators and denies the account "Log on locally" and "Log on through Remote Desktop
+   Services", as the OpenSSH script does; these rights do not block a network sign-in such as WinRM's (measured). It
+   never sets "Deny access to this computer from the network".
+4. Installs the helper in `C:\Program Files\Alice`, the data folder `C:\ProgramData\Alice\helper` and the event source
+   `Alice Helper`, exactly as the OpenSSH script does (both scripts may run on one server, in either order).
+5. For a local account, sets `LocalAccountTokenFilterPolicy` to 1 when it finds 0 or no value (above).
+6. Sets the WinRM service to start automatically and starts it. If the server has no WinRM HTTPS listener, it creates a
+   self-signed certificate for the computer's names (key not exportable, valid 10 years, friendly name
+   `Alice WinRM listener`) and a listener on port 5986 of every address:
+
+   ```powershell
+   New-WSManInstance -ResourceURI winrm/config/Listener -SelectorSet @{ Address = '*'; Transport = 'HTTPS' } -ValueSet @{ Hostname = $names[0]; CertificateThumbprint = $listenerCert.Thumbprint } | Out-Null
+   ```
+
+   An existing HTTPS listener and its certificate are kept.
+7. Adds the firewall rule `Alice-WinRM-In`, replacing an earlier one:
+
+   ```powershell
+   New-NetFirewallRule -Name 'Alice-WinRM-In' -DisplayName 'Alice WinRM (TCP 5986)' -Description 'Alice runs alice-helper.exe over WinRM (HTTPS).' -Direction Inbound -Protocol TCP -LocalPort 5986 -RemoteAddress $AliceAddress -Action Allow -Profile Any | Out-Null
+   ```
+
+8. Prints each HTTPS listener as `Listener <address> port <port>: SPKI SHA256:... (SHA-1 thumbprint ...)`, and the
+   settings it never changes: Basic, Kerberos, Negotiate, Certificate, CredSSP, `CbtHardeningLevel`,
+   `AllowUnencrypted` and the number of HTTP listeners. It warns when Basic or `AllowUnencrypted` is on or an HTTP
+   (port 5985) listener exists (Alice never uses them; Windows Server 2022 and 2025 ship Basic on and a 5985 listener),
+   and when `CbtHardeningLevel` is `Strict`.
+
+It never installs or changes OpenSSH, never changes Basic, Negotiate, Kerberos, CredSSP, `CbtHardeningLevel`,
+`AllowUnencrypted` or the 5985 listener, maps no client certificate and never runs `Enable-PSRemoting`.
+
+Then enter the same password in Alice (**WinRM password** on the server's page; an Administrator with a fresh
+authenticator code). Alice tests the connection as soon as it is saved.
+
+### The settings Alice needs
+
+Alice needs, and never changes:
+
+- **Negotiate on** (`Service\Auth\Negotiate`, on by default).
+- **`CbtHardeningLevel` not `Strict`** (`Relaxed`, the default, works). Alice sends no channel binding, so `Strict`
+  refuses its sign-in (measured); supporting it needs a later Alice version.
+- **NTLM not restricted**: `LmCompatibilityLevel` 5 (NTLMv2 only) works; a policy that denies NTLM to the server
+  (Network security: Restrict NTLM) refuses Alice.
+- **The account in Administrators** and not in "Deny access to this computer from the network".
+
+A refused sign-in is `ALC-WIN-0024` ([troubleshooting.md](troubleshooting.md)).
+
+### The password
+
+- Alice keeps it sealed, uses it only during each call to the server and never shows it again. It never leaves the
+  Alice server: NTLMv2 sends a proof, not the password.
+- The account's password never expires (the script sets that for a local account). When you change it on the server
+  (run the script again, or `net user`), set the same password in Alice: until then every call is refused
+  (`ALC-WIN-0024`), and the password Alice still holds no longer works (measured).
+- Use a different password on every server, so one password opens one server.
+
+### Checking the listener's fingerprint
+
+At the first connection Alice shows the fingerprint of the listener's certificate key as **TLS certificate key (SPKI
+SHA-256)**. Compare it with the line the setup script printed for port 5986 (`SPKI SHA256:...`); run the script again
+to print it again. The fingerprint is the SHA-256 of the certificate's public key (its SubjectPublicKeyInfo), so it
+differs from the certificate's thumbprint, which `Get-ChildItem WSMan:\localhost\Listener` shows. A certificate renewed
+with the same key, a WinRM service restart and an expired listener certificate change nothing (Alice checks the key
+only). A certificate with a new key blocks the server in Alice until an administrator compares and accepts the new
+fingerprint. Alice never deploys to the WinRM listener's own binding (`0.0.0.0:5986`, listed as another
+application's), so it never replaces the key it pinned.
+
+### What Windows logs
+
+- No PowerShell runs for Alice, so PowerShell script block logging (event 4104) and transcription record nothing.
+- WinRS starts the helper through `cmd.exe` (measured: also when Alice asks it not to), so process creation auditing
+  with command lines (Security event 4688) records `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh` and the
+  helper's own line. Alice's subcommand is in the environment, not on a command line, and key material is only on the
+  helper's standard input.
+- Security event 4624 records one network sign-in per call (logon type 3, package NTLM, `NTLM V2`); a refused one is
+  4625 with the account name. A domain account's sign-in is also checked by a domain controller (4776 there).
+- `Microsoft-Windows-WinRM/Operational` records each shell and its user, never what it carries.
+- The helper's Application events (source `Alice Helper`) are the same as over SSH.
+
+### Revoking Alice's access
+
+Disable the account or change its password on the server: Alice's next call is refused. To remove the WinRM setup,
+remove the firewall rule (`Remove-NetFirewallRule -Name Alice-WinRM-In`), and, if nothing else uses them, the listener
+the script created (its certificate's friendly name is `Alice WinRM listener`) and the `LocalAccountTokenFilterPolicy`
+value it set (the script printed the value it found). Then follow [Removing Alice from a Windows server](#removing-alice-from-a-windows-server)
+for the helper, its folders, the event source and the account.
 
 ## Troubleshooting
 

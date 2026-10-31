@@ -1450,6 +1450,36 @@ signs in over the Windows OpenSSH Server with its own key, as a local account `a
 server once with the PowerShell setup script that **Add server** shows for **Windows server**; see
 [windows-host-preparation.md](windows-host-preparation.md).
 
+- **OpenSSH or WinRM.** **Add server** asks for the **Connection** of a Windows server: **OpenSSH (recommended)** or
+  **WinRM over HTTPS**. Choose WinRM only when the server cannot run OpenSSH. The choice is fixed when the server is
+  added (`ALC-WIN-0027`); to change it, add the server again with the other connection, confirm its identity, then
+  remove the old entry. Everything below (discovery, deployment, verification, rollback, drift, cleanup) works the
+  same over both, with the same `alice-helper.exe`.
+- **The WinRM caution.** Under WinRM, anyone with this account's password can run any command on the server as an
+  administrator. With OpenSSH, Alice's key can run only alice-helper.exe. The password also signs in to the server's
+  other network services (file sharing, remote management). Use a dedicated account and a different password on every
+  server, and keep port 5986 open to Alice's address only (the setup script does).
+- **The WinRM account.** Enter it as `alice` or `.\alice` (a local account), `SERVER\alice` (a local account named with
+  the computer's name) or `DOMAIN\alice` (a domain account); a name such as `alice@corp.example` is refused. It must be
+  a member of the server's Administrators group. Choosing WinRM sets the port to 5986.
+- **The WinRM setup script and the password.** After **Add server**, Alice shows the WinRM setup script: run it once
+  on the server in an elevated PowerShell, next to `alice-helper.exe`. For a local account it asks for the account's
+  password twice (it never prints it); a domain account's password is never changed. Then enter the same password in
+  the **WinRM password** dialog. Setting or changing it needs an Administrator and a fresh authenticator code (step-up).
+  Alice keeps it sealed, uses it only during each call to the server and never shows it again; the server's page shows
+  **Password set** with the date, or that it is not set (until then Alice does not connect, `ALC-WIN-0025`). To change
+  the password, change it on the server first (run the script again, or `net user`), then set the same one in Alice:
+  the call after a change on the server alone is refused (`ALC-WIN-0024`). **Show setup script again** on the server's
+  page shows the script again.
+- **The WinRM identity.** At the first connection Alice shows the fingerprint of the WinRM listener's certificate key
+  (**TLS certificate key (SPKI SHA-256)**). Compare it with the line `Listener ... port 5986: SPKI SHA256:...` the setup
+  script printed on the server, then confirm it, as for an SSH host key. A listener whose certificate was renewed with
+  the same key changes nothing, and an expired listener certificate is still accepted (Alice checks the key only). A
+  renewal with a new key blocks the server (`ALC-TGT-0004`): run the setup script again (it prints the new
+  fingerprint), compare, and choose **Review the new fingerprint** on the server's page. Alice never deploys to the
+  WinRM listener's own binding (`0.0.0.0:5986`, listed as another application's), so it can never replace the key it
+  pinned.
+
 - **Test connection** checks the helper and its version and that the account gets an administrator token, and shows
   the Windows and IIS facts. A missing, outdated or not elevated helper is named (`ALC-WIN-0001`, `ALC-WIN-0002`,
   `ALC-WIN-0003`, see [troubleshooting.md](troubleshooting.md)).
@@ -1597,7 +1627,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   services get one e-mail naming the store and the thumbprint, so an administrator can replace it there and delete it.
 - Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair,
   `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it), `ALC-WIN-0015` to `ALC-WIN-0020` the
-  Centralized Certificate Store and `ALC-WIN-0021` to `ALC-WIN-0023` the Remote Desktop listener (see
+  Centralized Certificate Store, `ALC-WIN-0021` to `ALC-WIN-0023` the Remote Desktop listener and `ALC-WIN-0024` to
+  `ALC-WIN-0028` the WinRM connection (see
   [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
   (`ALC-WIN-0002`) before changing anything.
 - **Where the helper comes from.** Each Alice package carries the Windows helper in its `helper\` folder:
@@ -1622,7 +1653,9 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   it byte for byte with the Linux release build; the setup script test installs those bytes and calls the helper over
   SSH, while the discovery, deployment, restore and cleanup tests run the same source built by the test. The Remote
   Desktop listener (discovery, deployment, the NETWORK SERVICE key access, the check and a certificate shared with a
-  binding) is tested on both images too. Windows
+  binding) is tested on both images too, and so is the WinRM connection (the sign-in, the helper over WinRS, the
+  pinned listener, the setup script, and a discovery, deployment and rollback over WinRM). A domain account over
+  WinRM is not tested automatically. Windows
   Server 2019, Server Core, a domain-joined server under the Microsoft security baseline and Defender or another EDR
   switched on are checked by hand before each release, AD FS
   and ARM64 servers when available, otherwise the release notes say so (the release checklist's section "Windows

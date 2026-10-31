@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — Windows servers (WinRM transport, R71)
+
+**Added**
+- A Windows server can be reached over WinRM (HTTPS, port 5986) instead of OpenSSH, for servers that cannot run
+  OpenSSH. **Add server** offers **OpenSSH (recommended)** and **WinRM over HTTPS**; the choice is made when the server
+  is added and cannot be changed (`ALC-WIN-0027`). Choosing WinRM shows the caution in plain words: under WinRM anyone
+  with the account's password can run any command on the server as an administrator, while Alice's OpenSSH key can run
+  only `alice-helper.exe`.
+- Alice runs the same `alice-helper.exe` (1.2.0, unchanged) with the same subcommands, journal, fence and rollback
+  guard through WinRS: one HTTPS connection and one shell per call, the subcommand in the shell's environment, key
+  material only on the helper's standard input. Discovery, deployment, verification, rollback, drift and cleanup work
+  as over OpenSSH.
+- Alice signs in with the server's account (`alice`, `.\alice`, `SERVER\alice` or `DOMAIN\alice`) and its password,
+  with NTLMv2 only. An Administrator sets the password on the server's page (**WinRM password**, with step-up): it is
+  sealed, used only for each call and never shown again; the page shows when it was set. Until it is set, Alice does
+  not connect (`ALC-WIN-0025`).
+- The WinRM listener's certificate key is pinned the way SSH host keys are: Alice shows its fingerprint
+  (**TLS certificate key (SPKI SHA-256)**) at the first connection for an Administrator to confirm, and blocks the server
+  when the key changes. Alice refuses Basic authentication, unencrypted HTTP (port 5985), redirects and proxies.
+- A WinRM setup script (**Show setup script again** on the server's page) installs the helper, prepares the account and
+  asks for its password, creates an HTTPS listener when there is none, adds the firewall rule `Alice WinRM (TCP 5986)`
+  and prints the listener's fingerprint. It never changes WinRM's authentication settings; it warns about the weak ones.
+- Error codes `ALC-WIN-0024` (sign-in refused), `ALC-WIN-0025` (no password), `ALC-WIN-0026` (a WinRM fault),
+  `ALC-WIN-0027` (the connection cannot change) and `ALC-WIN-0028` (a password outside the rule); connection errors
+  over WinRM name WinRM in their text.
+
+**Changed**
+- `github.com/Azure/go-ntlmssp` (v0.1.1, already linked through the LDAP client) is now a direct module of Alice: the
+  WinRM client uses it for NTLMv2. No module was added and `go.sum` is unchanged.
+
+Rulings: `docs/superpowers/rulings/windows-iis.md` "W7 (R71)". Migration `00038` (the WinRM password credential).
+
 ## Unreleased — Fixes batch 3 (R70)
 
 **Changed**

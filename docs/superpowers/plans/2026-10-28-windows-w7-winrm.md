@@ -894,14 +894,14 @@ Expected: PASS; the whole e2e suite green.
 | WIN-74 | Real Windows: F24-F31, the provider over real WinRS, fidelity, the runner left clean | `winrs:TestRealWinRMNTLMAuth`, `TestRealWinRMRunsTheForcedEntry`, `TestRealWinRMStdin`, `TestRealWinRMCost`, `TestRealWinRMListenerIdentity`, `TestRealWinRMExitCodes`, `TestRealWinRMAuthOffer`, `TestRealWinRMAccountRights`; `windows:TestRealWinRMProvider`, `TestFidelityWinRM`; `cmd/alice-winhelper:TestRealRunnerIsClean` |
 | WIN-75 | The WinRM journey in the browser, in English and Turkish | `web/e2e/windows-winrm.spec.ts` |
 
-- [ ] **Step 1: Write the failing check**: add the rows above to `06-quality.md` §24.7.
+- [x] **Step 1: Write the failing check**: add the rows above to `06-quality.md` §24.7.
 Run: `make matrix-check MATRIXCHECK_FLAGS=-strict`
 Expected: FAIL only on rows whose tests are missing from `traceability.json`.
-- [ ] **Step 2: Write the documents** and `traceability.json`, then regenerate: `go run ./tools/matrixcheck -spec docs/superpowers/specs/alice-v1/06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md -update`.
-- [ ] **Step 3: Run**
+- [x] **Step 2: Write the documents** and `traceability.json`, then regenerate: `go run ./tools/matrixcheck -spec docs/superpowers/specs/alice-v1/06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md -update`.
+- [x] **Step 3: Run**
 Run: `make matrix-check MATRIXCHECK_FLAGS=-strict && make docs-check && make i18n-check && go test -count=1 ./internal/providers/windows/ -run 'Docs|Preparation'`
 Expected: PASS; 0 gaps, 0 pending.
-- [ ] **Step 4: Commit**: `docs: Windows servers phase W7 (R71): decision, rulings, design as built, security and quality amendments, WIN-68..WIN-75, admin and host guides, troubleshooting, changelog`.
+- [x] **Step 4: Commit**: `docs: Windows servers phase W7 (R71): decision, rulings, design as built, security and quality amendments, WIN-68..WIN-75, admin and host guides, troubleshooting, changelog`.
 
 ---
 

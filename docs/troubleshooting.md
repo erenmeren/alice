@@ -83,6 +83,32 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   the server, fix what it reports, choose **Scan for SSH keys**, then try again.
 - **"Alice needs this key to connect to this server and will not remove it." (`ALC-KEY-0001`).** This is Alice's
   own key; it is protected on purpose.
+- **The connection test says the TLS identity changed (a Windows server over WinRM, `ALC-TGT-0004`).** The WinRM
+  listener now presents a certificate with another key than the one confirmed in Alice: its certificate was replaced
+  with a new key, a new HTTPS listener was made, or someone is intercepting the connection. A renewal with the same
+  key, a WinRM restart or an expired certificate do not cause it. On the server, run the WinRM setup script again (it
+  prints `Listener ... port 5986: SPKI SHA256:...` and changes nothing that is already set up) and compare that value
+  with the new fingerprint Alice shows under **Review the new fingerprint**; accept it only when they are equal. See
+  [windows-host-preparation.md](windows-host-preparation.md#checking-the-listeners-fingerprint).
+- **WinRM: the sign-in is refused (401, `ALC-WIN-0024`) right after the setup script.** Check, in this order:
+  - the password in Alice: set it again on the server's page (**WinRM password**), exactly as you typed it in the
+    script; a password changed on the server later must be set in Alice too;
+  - the account's membership: `net localgroup` with the name of the Administrators group (S-1-5-32-544) lists the
+    account, or a group that holds it; a domain account is not added by the script;
+  - Negotiate: `Get-Item WSMan:\localhost\Service\Auth\Negotiate` is `true` (the script stops when it is off);
+  - `CbtHardeningLevel`: `Get-Item WSMan:\localhost\Service\Auth\CbtHardeningLevel` is not `Strict` (Alice sends no
+    channel binding);
+  - for a local account, `LocalAccountTokenFilterPolicy` under
+    `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System` is 1 (the script sets it; a group policy may set
+    it back), and "Deny access to this computer from the network" does not hold the account or S-1-5-114 (then use a
+    domain account);
+  - an NTLM restriction policy (Network security: Restrict NTLM) that denies the server.
+  Security event 4625 on the server names the account and the reason of each refused sign-in. Then choose **Test
+  connection**.
+- **WinRM: password not set (`ALC-WIN-0025`).** The server was added with **WinRM over HTTPS** and its password was not
+  saved (for example the dialog was closed after the setup script). An Administrator opens the server's page, chooses
+  **Show setup script again** if the script has not run yet, and sets the account's password in **WinRM password**
+  (with a fresh authenticator code). Alice tests the connection when it is saved.
 
 ## SSH key rotation
 

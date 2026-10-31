@@ -2786,6 +2786,116 @@
   ]
  },
  {
+  "id": "WIN-68",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winrs:TestRequestsRoundTrip",
+   "internal/providers/windows/winrs:TestRequestsCarryTheFixedOptions",
+   "internal/providers/windows/winrs:TestRequestsRefuseBadInput",
+   "internal/providers/windows/winrs:TestParseReceived",
+   "internal/providers/windows/winrs:TestParseFault",
+   "internal/providers/windows/winrs:TestParseRejectsHostileXML"
+  ]
+ },
+ {
+  "id": "WIN-69",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winrs:TestWinRSRefusesEverythingButNTLMOverTLS",
+   "internal/providers/windows/winrs:TestWinRSNeverSendsBasic",
+   "internal/providers/windows/winrs:TestWinRSPinBeforeAnyRequest",
+   "internal/providers/windows/winrs:TestWinRSKeyOnlyInSend",
+   "internal/providers/windows/winrs:TestWinRSSendsOnlyTheHelper",
+   "internal/providers/windows/wintest:TestNTLMv2Vector",
+   "internal/providers/windows/wintest:TestNTLMServerAccepts",
+   "internal/providers/windows/wintest:TestNTLMServerRefuses",
+   "internal/archtest:TestOnlyWinRSImportsNTLMSSP",
+   "internal/archtest:TestNoCodeAllowsBasicAuth",
+   "internal/providers/windows:TestWinRMCallShape"
+  ]
+ },
+ {
+  "id": "WIN-70",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winrs:TestWinRSRunsOneShellPerCall",
+   "internal/providers/windows/winrs:TestWinRSNotSentStages",
+   "internal/providers/windows/winrs:TestWinRSAlwaysDeletesTheShell",
+   "internal/providers/windows/winrs:TestWinRSBounds",
+   "internal/providers/windows/winrs:TestWinRSShellIdle",
+   "internal/providers/linuxssh:TestPoolSlot"
+  ]
+ },
+ {
+  "id": "WIN-71",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestWinRMPasswordRuleIsTheCCSRule",
+   "internal/inventory:TestSetWinRMPassword",
+   "internal/inventory:TestSetWinRMPasswordRefuses",
+   "internal/inventory:TestWinRMPasswordForeign",
+   "internal/inventory:TestWinRMTargetWithoutPassword",
+   "internal/inventory:TestTransportImmutable",
+   "internal/providers/windows:TestWinRMConfig",
+   "internal/providers/windows:TestWinRMPasswordMissing",
+   "migrations:TestMigration00038WindowsWinRM",
+   "migrations:TestMigration00038Down"
+  ]
+ },
+ {
+  "id": "WIN-72",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestSSHTransportIsW6",
+   "internal/providers/windows:TestWinRMIdentityFlow",
+   "internal/providers/windows:TestWinRMErrorTable",
+   "internal/providers/windows:TestWinRMWriteOutcomeTable",
+   "internal/providers/windows:TestWinRMReleasesThePassword",
+   "internal/providers/windows:TestWinRMListenerBindingStaysUnsupported",
+   "internal/jobs/deployjobs:TestWindowsWinRMDeployAndRollback",
+   "internal/jobs/deployjobs:TestWindowsWinRMCrashTable",
+   "internal/jobs/deployjobs:TestWindowsWinRMIdentityChangeBlocks",
+   "internal/jobs/deployjobs:TestWindowsWinRMAuthRefused",
+   "internal/jobs/deployjobs:TestWindowsWinRMPasswordMissing"
+  ]
+ },
+ {
+  "id": "WIN-73",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows:TestSetupScriptWinRMSteps",
+   "internal/providers/windows:TestSetupScriptWinRMNeverPrintsThePassword",
+   "internal/providers/windows:TestSetupScriptWinRMDomainAccount",
+   "internal/providers/windows:TestSetupScriptUnchangedByTheRefactor",
+   "internal/providers/windows:TestRealWinRMSetupScript",
+   "internal/providers/windows:TestRealBothTransportsShareTheHelper"
+  ]
+ },
+ {
+  "id": "WIN-74",
+  "status": "test",
+  "tests": [
+   "internal/providers/windows/winrs:TestRealWinRMNTLMAuth",
+   "internal/providers/windows/winrs:TestRealWinRMRunsTheForcedEntry",
+   "internal/providers/windows/winrs:TestRealWinRMStdin",
+   "internal/providers/windows/winrs:TestRealWinRMCost",
+   "internal/providers/windows/winrs:TestRealWinRMListenerIdentity",
+   "internal/providers/windows/winrs:TestRealWinRMExitCodes",
+   "internal/providers/windows/winrs:TestRealWinRMAuthOffer",
+   "internal/providers/windows/winrs:TestRealWinRMAccountRights",
+   "internal/providers/windows:TestRealWinRMProvider",
+   "internal/providers/windows:TestFidelityWinRM",
+   "cmd/alice-winhelper:TestRealRunnerIsClean"
+  ]
+ },
+ {
+  "id": "WIN-75",
+  "status": "test",
+  "tests": [
+   "web/e2e/windows-winrm.spec.ts:add a server with WinRM, set its password with step-up, confirm the TLS key, deploy, roll back, refuse a wrong password"
+  ]
+ },
+ {
   "id": "HB-01",
   "status": "test",
   "tests": [

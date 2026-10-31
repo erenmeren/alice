@@ -480,14 +480,15 @@ Details:
 - No API-token download of private keys.
 - No Windows or macOS targets.
 
-## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62, R68, R69)
+## 13A. Windows servers and IIS over SSH (amendment, R60, R61, R62, R68, R69, R71)
 
 (Amendment, R60, phase W1, 2026-10-22; design `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md`,
 rulings `docs/superpowers/rulings/windows-iis.md`, host preparation `docs/windows-host-preparation.md`.) W1 reads only:
 target, connection and discovery. Amendment R61 (phase W2): deployment, verification, rollback and recovery
 (13A.8-13A.11). Amendment R62 (phase W3): drift and cleanup (13A.12-13A.14). Amendment R68 (phase W5): the
 Centralized Certificate Store (13A.15-13A.17). Amendment R69 (phase W6): the Remote Desktop certificate
-(13A.18-13A.19).
+(13A.18-13A.19). Amendment R71 (phase W7): WinRM over HTTPS as an alternative transport (13A.20-13A.21); everything
+else in 13A applies to it unchanged.
 
 ### 13A.1 Supported systems
 
@@ -1076,3 +1077,122 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
 - **Explicit W6 limits.** Only `RDP-Tcp`; no Remote Desktop setting is changed; the NETWORK SERVICE ACE of a
   third party's certificate stays until someone removes it; `SecurityLayer` 0's negotiation answer was not measured on
   a runner (the emulator covers `RDP_NEG_FAILURE`); Windows Server 2019 is not measured.
+
+### 13A.20 The WinRM transport: setting, password credential, setup script (amendment, R71)
+
+- **The setting.** A Windows server's `transport` is `ssh` (the default; OpenSSH stays the recommendation) or `winrm`,
+  given at creation (`POST /api/v1/targets`, top-level `transport`; only `winrm` is stored in `targets.config`, so an
+  SSH server's config is W6's). It never changes: a patch naming the other transport is `ALC-WIN-0027`
+  (`windows.transport_immutable`, 409); a value other than `ssh` or `winrm` is the field error `transport` `one_of`;
+  `transport` on another target type is `transport` `pattern`. Under `winrm` the port defaults to 5986. W7 does not
+  refuse a second live Windows target for the same host on the other transport.
+- **The account.** The existing rule (13A.2) and, under `winrm` only, `.\<SAM name>`; a UPN is refused. Sent to NTLM
+  as: `alice` and `.\alice` as the user `alice` with an empty domain; `HOST\alice` and `DOMAIN\alice` as the user
+  `alice` with the domain before the backslash. The account is a member of Administrators (directly or through a
+  group). The username is configuration, shown to target readers, and sent only inside the NTLM type 3 message.
+- **The password.** One per Windows server with `transport: winrm`, set and replaced through
+  `PUT /api/v1/targets/{id}/winrm-password` (`{"password": "..."}`, at most 4 KiB, strict decoding, `If-Match`
+  required): permission `credentials.manage`, an Administrator's browser session with a fresh step-up; licence
+  `ClassChange`. Order: the licence lock, a seal failure, an unknown target (404), a target that is not a WinRM
+  Windows server (`ALC-WIN-0011`, 409), the rule (12 to 128 printable ASCII characters `0x21`-`0x7E`, the CCS rule, else
+  `ALC-WIN-0028` `windows.winrm_password_invalid`, 422), the version. The answer is the target DTO with
+  `winrm_password_set_at` (the newest row's creation time, or null) and its new version; the password is never
+  answered, and no endpoint reads it back. Audit `target.winrm_password_set` (the name and the credential id).
+  Storage: a `credentials` row (purpose `win_winrm`, kind `winrm_password`, `target_id` the server, sealed with AAD
+  `credentials/<id>/ciphertext`, `public_info` `{}`); append-only, the newest row is the password; the CCS and WinRM
+  passwords share one implementation. Migration `00038` widens the four credential CHECKs of `00036`; its Down refuses
+  with `Z1036` while a `win_winrm` credential exists. `targets.credential_id` still names the platform key (unused).
+  A WinRM server can be created before its password: until it is set every helper call refuses with
+  `windows.winrm_password_missing` (`ALC-WIN-0025`, 409) before any dial. No removal, and Alice never changes the
+  Windows password itself.
+- **The source.** The provider reads the password per call through `providers.WinRMPasswordSource` (its own target
+  only; no row is `ErrNoWinRMPassword`, a row of another target or one that does not decrypt is
+  `ErrWinRMPasswordUnusable`, never opened) and zeroes it as soon as the call returns. go-ntlmssp takes it as a Go
+  string for the call only (a stated shortcut).
+- **The setup script.** `GET /api/v1/targets/{id}/winrm-setup[?from=<address>]` answers `{script}` for a live WinRM
+  Windows server (target read permission; the script holds no secret; another target is `ALC-WIN-0011`; a build
+  without helper checksums answers `""`); `from` is validated as the SSH setup guide's. Windows PowerShell 5.1 or
+  PowerShell 7, run once as an administrator next to `alice-helper.exe`, safe to run again. In order: the checks;
+  Negotiate read from the registry (`WSMAN\Service` value `auth_negotiate`, absent is on), stopping when it is off;
+  the helper's checksum; the account (a local one created, or its password set, with the password asked twice with
+  `Read-Host -AsSecureString` under Alice's rule, an empty answer keeping an existing account's password, never
+  printed or stored; `PasswordNeverExpires`; a domain account must exist and is never created, changed or added to a
+  group, with a warning when it is not a direct member of Administrators), membership of Administrators for a local
+  account, the deny rights "Deny log on locally" and "Deny log on through Remote Desktop Services" (never the network
+  deny right); the helper, its data directory and event source (shared with the SSH script); for a local account
+  `LocalAccountTokenFilterPolicy` set to 1 when it is 0 or absent, the value found printed; the WinRM service
+  automatic and started, an HTTPS listener on `*:5986` with a non-exportable self-signed certificate valid 10 years
+  only when no HTTPS listener exists; the firewall rule `Alice-WinRM-In` (`Alice WinRM (TCP 5986)`) from Alice's address;
+  each HTTPS listener's SPKI fingerprint and SHA-1 thumbprint, and the values it never changes (Basic, Kerberos,
+  Negotiate, Certificate, CredSSP, `CbtHardeningLevel`, `AllowUnencrypted`, the HTTP listeners), with warnings for
+  Basic on, `AllowUnencrypted` on, an HTTP listener and `CbtHardeningLevel` Strict. It never installs or changes
+  OpenSSH, maps no client certificate and never runs `Enable-PSRemoting`. Both scripts may run on one server, in
+  either order; the SSH script's output is unchanged.
+
+### 13A.21 WinRS calls, NTLMv2, the pin and the error mapping (amendment, R71)
+
+- **What Alice sends.** `internal/providers/windows/winrs` speaks a fixed subset of WS-Management to
+  `https://<host>:<port>/wsman`: Create, Command, Send, Receive, Signal (terminate only) and Delete of the `cmd` shell
+  resource URI, nothing else. Create carries one environment variable, `SSH_ORIGINAL_COMMAND`, holding the line
+  `linuxssh.ForcedCommand` built (13A.2's token rule); Command is `"C:\Program Files\Alice\alice-helper.exe"` (quotes
+  written raw: element text escapes only `&`, `<` and `>`) with the one argument `ssh`; standard input goes only in
+  Sends of at most 96 KiB with `End` on the last. WinRS starts the program through `cmd.exe /C` even with
+  `WINRS_SKIP_CMD_SHELL` TRUE (F25); `cmd.exe` parses only that constant line, and the helper's forced entry splits
+  `SSH_ORIGINAL_COMMAND` as under sshd. Helper `1.2.0`, protocol 1, unchanged; every `*MinVersion` rule applies.
+- **One call, one shell, one authenticated connection.** Each helper call holds one slot of the shared SSH pool
+  (`Pool.Slot`, so the per-target limit covers both transports), builds one `http.Transport` (no proxy, no HTTP/2,
+  one connection per host, `MaxResponseHeaderBytes` 64 KiB, the TLS handshake timeout of the SSH path) and allows two
+  dials, the second only while Create (the sign-in) is in flight, because Windows closes the connection after the
+  anonymous 401 (F24). Every dial goes through `netaddr.DialContext`. Receive loops with an `OperationTimeout` of at
+  most 20 s until `CommandState/Done`; stdout is capped at the call's limit and stderr at 64 KiB (discarded). A
+  timeout, a cancelled context or an output overflow sends Signal terminate and Delete, each with its own 5 s; Delete
+  follows every successful Create; the connection is closed when the call ends. Each response body is read through a
+  256 KiB limit and parsed strictly (no DOCTYPE, no unknown entity, no processing instruction, depth 32, one SOAP 1.2
+  envelope); a fault keeps only its numeric code and the request it answered.
+- **Authentication.** NTLMv2 inside the `Negotiate` or `NTLM` HTTP scheme through `ntlmssp.Negotiator` with no option
+  set: credentials go in through `SetBasicAuth` on the Create request only, the Negotiator replaces them with the NTLM
+  messages, and Basic never leaves the process; a listener that offers only Basic gets one request without
+  `Authorization` and the call fails. The first request takes three round trips (anonymous, type 1, type 3); later
+  requests use the authenticated connection. A refused logon is never retried within the call. No channel binding and
+  no MIC are sent, so `CbtHardeningLevel` Strict refuses Alice (F30); Kerberos, CredSSP and client certificates are not
+  implemented. Refused before any dial (`ErrBadConfig`): TLS below 1.2, a client certificate, `InsecureSkipVerify`
+  without `VerifyConnection`, an empty user or password, port 5985. Redirects are not followed; `HTTP(S)_PROXY` is
+  ignored.
+- **The pin.** One `tlspin.Verifier` per session (`Target`, `ServerName` the host, `Store` the target's host keys, pin
+  mode, no CA bundle): key type `tls-spki`, fingerprint `SHA256:` and the unpadded base64 of the SHA-256 of the
+  listener certificate's SubjectPublicKeyInfo. A first contact is `target.host_key_unconfirmed` with the fingerprint
+  and a different key `target.host_key_changed` (the target is blocked), both at the handshake, before any HTTP
+  request; the Administrator confirms or re-pins with the existing endpoints, and background work never pins.
+  `ConnectionReport.HostKey` is the presented identity. A renewal with the same key changes nothing; an expired
+  listener certificate is accepted (F28). The WinRM listener's own http.sys binding (`0.0.0.0:5986`) stays
+  `win_foreign_app`, never deployable, and W3's cleanup keeps its certificate.
+- **Outcomes.** Exit codes, the helper's JSON, the write gate, the journal, the fence, the rollback guard and every
+  outcome rule are the SSH path's. A write is a refusal (nothing changed) only for an error before the Command request
+  was written (`winrs.ErrNotSent`: the password, the slot, dial, TLS, the identity, an auth refusal, a fault or protocol
+  error at Create); anything later is uncertain and is settled by `iis-status` and `iis-fence`.
+- **Error mapping.** Every error carries the params `subcommand` and `transport=winrm`:
+
+  | `winrs` result | Reason | Retryable | Refusal |
+  |---|---|---|---|
+  | identity refused at the handshake | `target.host_key_unconfirmed` / `target.host_key_changed` | no | yes |
+  | no password / unusable / read failure | `windows.winrm_password_missing` (`ALC-WIN-0025`) / `internal.unexpected` / `windows.io_error` | no / no / yes | yes |
+  | `netaddr.ErrNotAllowed`, dial, TLS | `ssh.unreachable` | yes | yes |
+  | `ErrAuthRefused` (a final 401 or 403) | `windows.winrm_auth_refused` (`ALC-WIN-0024`, 502) | no | at Create yes, later no |
+  | a fault at Create | `windows.winrm_fault` (`ALC-WIN-0026`, 502, param `wsman_code`) | no | yes |
+  | a fault code 2 at Command | `ssh.helper_missing`, then `windows.helper_missing` | no | no |
+  | exit 9009 with no output (`cmd.exe` found no helper, F29) | `ssh.helper_missing`, then `windows.helper_missing` | no | no |
+  | any other fault after Create | `windows.winrm_fault` | no | no |
+  | `ErrTimeout` | `ssh.timeout` | yes | no |
+  | `ErrOutputTooLarge` | `ssh.output_too_large` | no | no |
+  | `ErrProtocol` | `ssh.protocol_error` | no | as its stage |
+  | `ErrBadConfig` | `internal.unexpected` | no | yes |
+
+  The API keeps one title per code and carries the param; the web and the e-mails show the WinRM wording of the
+  reused `ssh.*` reasons (`title_winrm`, chosen by `transport`). The fault's text is never kept.
+- **What Windows logs.** No PowerShell runs (no 4104, no transcription). Security 4688 with command lines records
+  `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh` and the helper's own line, never the subcommand or key
+  material; 4624 records one network logon per call (type 3, NTLM, `NTLM V2`), 4625 a refused one; WinRM's operational
+  log records each shell and its user, never the streams; the helper's Application events are those of 13A.8.
+- **Explicit W7 limits.** The account is not limited to the helper (no PSRP or JEA; WN-26); no Kerberos, UPN,
+  CredSSP, certificate mapping or channel binding; no CA bundle for the listener; the password is never rotated or
+  removed by Alice; a domain account, Server Core and Windows Server 2019 over WinRM are checked by hand only.

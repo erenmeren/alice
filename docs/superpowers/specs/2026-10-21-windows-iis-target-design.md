@@ -87,6 +87,13 @@ Non-goals (some get later phases, §13):
 | Customer familiarity | High (Ansible, SCCM). | Lower; one setup script enables it. | Agents are often refused in regulated networks. |
 | Firewall | 5986 from Alice. | 22 from Alice. | Outbound from every server to Alice. |
 
+Amended by R71 (Phase W7 built, §22): the WinRM column is built as an alternative transport with a username and
+password over NTLMv2 inside TLS, not certificate mapping (deferred with Kerberos and CredSSP). Its server identity is
+the listener's SPKI pinned with the shared TLS pinning and an Administrator's confirmation; the code is an in-house
+WinRS subset over `net/http` with `go-ntlmssp` (already in the module graph), not `masterzen/winrm` or `gokrb5`; no
+PowerShell is sent, so script block logging sees nothing; and the account is still not limited to the helper (no PSRP
+or JEA).
+
 ### 4.2 Recommendation
 
 **OpenSSH Server with a forced command to `alice-helper.exe`** (Q1). Reasons, in order: it is the only option where
@@ -95,10 +102,16 @@ server; it reuses the reviewed SSH identity model; key material never passes thr
 The cost is customer acceptance of sshd on Windows; the setup script (§6.1) makes that one step, and Windows Server 2025
 already ships the binaries.
 
-WinRM stays possible later (Phase W7, only on customer demand): the helper and its protocol do not change; the transport
-would be WinRS with certificate authentication, the listener's certificate pinned by SPKI (the shared TLS pinning of the
-roadmap's groundwork), Basic, NTLM and unencrypted HTTP refused; and the security analysis would state that the account
-is not limited to the helper unless PSRP and a JEA endpoint are built.
+WinRM is the alternative for a customer that refuses sshd (Phase W7, built, R71, §22): the helper and its protocol do
+not change (helper `1.2.0`); the transport is WinRS over HTTPS (TLS 1.2 or later, port 5986), authenticated with the
+target's username and a password an Administrator sets in Alice (NTLMv2 only; R71 amends the earlier "certificate
+authentication", which is deferred with Kerberos and CredSSP, because every competitor signs in to IIS servers over
+WinRM with a stored administrator password); the listener's certificate is pinned by SPKI (the shared TLS pinning of the
+roadmap's groundwork); Basic, unencrypted HTTP and port 5985 are refused by construction. **The account is not limited
+to the helper under WinRM:** whoever holds its username and password has a full administrator shell on the server, and
+the password also signs in to the server's other network services; only PSRP with a JEA endpoint could limit it, which
+W7 does not build. The owner accepted this residual as competitor parity (WN-26), and the UI and the guides say it
+where the transport is chosen. OpenSSH stays the recommended transport and the default.
 
 No agent (non-goal): a permanent service with its own update channel is a larger attack surface than one validated
 binary invoked per call.
@@ -353,7 +366,18 @@ never deleted. Expired certificates Alice did not import are only counted (`win.
   session), so a second command on a reused connection would run the first one again. The emulator models this and a
   provider test asserts one connection per call. The command line sent is the bare subcommand and its arguments (no
   `sudo`), which the forced command receives as `SSH_ORIGINAL_COMMAND`, byte for byte on a fresh connection.
-- `ConfigSchema`: `address`, `port` (22), `os_user`, `discovery_interval`. `CredentialSchema`: the platform key.
+- **The transport seam (W7, R71).** Every helper call goes through one function, `session.run`: `sshRun` (the fresh SSH
+  connection above) or, under `transport: winrm`, `winrmRun`. `winrmRun` holds a slot of the shared pool, reads the
+  target's WinRM password for the one call, opens one TLS connection to the pinned listener and one WinRS shell, and
+  runs the constant command `"C:\Program Files\Alice\alice-helper.exe" ssh` with the subcommand line in the shell's
+  environment variable `SSH_ORIGINAL_COMMAND`, so the helper takes its forced-command path byte for byte (WinRS starts
+  it through `cmd.exe`, which parses only that constant line, F25). The connection is authenticated once, on Create
+  (NTLM is connection-bound; the sign-in may need a second connection, F24), and closed when the call ends. Standard
+  input goes only in Send. Everything after `run` (decoding, the write gate, the journal, the fence, the rollback guard,
+  every outcome rule) is one code path for both transports; a write is a refusal only when nothing reached the helper
+  (`winrs.ErrNotSent`).
+- `ConfigSchema`: `address`, `port` (22; 5986 under WinRM), `os_user`, `transport` (`ssh` or `winrm`, fixed at
+  creation), `discovery_interval`. `CredentialSchema`: the platform key; a WinRM target also has its WinRM password.
 - `SetupGuide`: profile `windows`, the PowerShell snippet of §6.1, `HelperInfo` = path and `winproto.Protocol`.
 - Every outcome rule of `providers` (`CheckDeployReturn`, `CheckRollbackReturn`, `DeploymentState.Validate`) applies; the
   conformance suite (`providertest`) runs against the emulator (§12).
@@ -374,6 +398,11 @@ never deleted. Expired certificates Alice did not import are only counted (`win.
 | **Elevation of the `alice` account** | Interactive and RDP logon denied; sshd allows public key only; `administrators_authorized_keys` ACL fixed by the script. |
 | **Lateral movement from a Windows server to Alice** | Alice dials out; nothing on the server can call Alice. |
 | **Shared IIS configuration across a farm** | Alice never writes `applicationHost.config`; each server's http.sys binding is its own location. |
+| **WinRM (W7, R71): the account is not limited to the helper** (WN-26) | Under WinRM, whoever holds the account's username and password, or controls Alice, has a full administrator shell on the server, and the password signs in to its other network services. Alice's client sends only the helper's request set; the password is sealed per target, decrypted per call, never readable and set only with a step-up; the account is per server; the firewall rule opens 5986 to Alice only; WinRM is opt-in per target and the UI and guides say it. Residual High, accepted by the owner as competitor parity. |
+| **WinRM: a man in the middle, an NTLM relay, a downgrade** (WN-27) | The listener's SPKI is pinned with an Administrator's confirmation and checked before any HTTP byte, so NTLM messages reach only the pinned listener; NTLMv2 only; Basic never sent, HTTP and 5985 never used, no redirect or proxy. No channel binding is sent, so `CbtHardeningLevel` Strict refuses Alice and the server's relay protection stays at Relaxed. |
+| **WinRM: secrets in Windows logs** (WN-28) | No PowerShell runs; WinRS starts the helper through `cmd.exe` with the constant line, so process creation auditing (4688) records `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh` and the helper's own line, never the subcommand (in the environment) or key material (in Send, over TLS); NTLMv2 sends a proof, never the password; 4624 and 4625 name the account only. |
+| **WinRM: password theft from Alice or offline cracking** (WN-29) | Sealed under the master key, one row per server, audited on every set; a captured exchange is inside TLS to a pinned listener; at least 12 characters; the UI and the guide ask for a different password per server. |
+| **WinRM: server-side setup weakens the host** (WN-30) | `LocalAccountTokenFilterPolicy` set to 1 only for a local account found at 0 or absent (both runner images ship 1), printed by the script; the account keeps its local and Remote Desktop deny rights; the script never weakens Basic, `AllowUnencrypted` or 5985. |
 
 ## 10. Verification levels (R51)
 
@@ -514,9 +543,10 @@ Location kind `win_rdp` (the RDP-Tcp listener): import as in §6.3, grant read o
 listener's hash (the `SSLCertificateSHA1Hash` value, Q8), verify by a TLS handshake on 3389 after the RDP security layer
 negotiation (new probe mode). Key ACLs are the new risk and get their own review.
 
-### Phase W7 — WinRM transport (size L; only if customers refuse SSH)
+### Phase W7 — WinRM transport (size L; only if customers refuse SSH; built, R71, §22)
 
-§4.2: the same helper over WinRS with certificate authentication and listener SPKI pinning.
+§4.2: the same helper over WinRS with listener SPKI pinning; authentication amended by R71 to the target's username and
+a password over NTLMv2 (certificate mapping deferred).
 
 ### Interactions with other work
 
@@ -557,6 +587,15 @@ Images measured in W0 (§14.1): `windows-2022` = Windows Server 2022 Datacenter 
 | F21 (W6) | With F4's DACL the RDP handshake fails; after one ACE `(A;;GR;;;NS)` through `NCryptSetProperty(NCRYPT_SECURITY_DESCR_PROPERTY)` it succeeds; removing it gives F4's SDDL back byte for byte; the key stays not exportable. | The measured mask is used; if no grant is needed, the coordinator decides whether `grant_key_read` stays. | **Confirmed on 2022 and 2025, with the stored mask** (runs 1-2, https://github.com/erenmeren/alice/actions/runs/40644188468, https://github.com/erenmeren/alice/actions/runs/40646627907). With F4's DACL TermService resets the connection (Schannel 36870, 0x8009030D, `svchost[TermService]`); after the grant the certificate is served within 10-12 ms without a rewrite. `GENERIC_READ` is enough, but the Microsoft Software KSP stores it as `0x80120089` (`GENERIC_READ` plus `FILE_GENERIC_READ`), normalises a written `0x1` to `0x80000001` and, in run 1, merged a new NETWORK SERVICE allow ACE into an existing one; the helper therefore writes `0x80120089`, reads the DACL back and fails a merged grant. The revoke gives F4's DACL back byte for byte; a NETWORK SERVICE deny ACE, another trustee's allow ACE and a NETWORK SERVICE `DELETE` allow ACE survive grant and revoke. Not exportable (0x80090029). |
 | F22 (W6) | The X.224 Connection Request `03 00 00 13 0e e0 00 00 00 00 00 01 00 08 00 03 00 00 00` is answered by a 19-byte Connection Confirm with `RDP_NEG_RSP` and `selectedProtocol` 1 or 2, and a TLS ClientHello then completes; `SecurityLayer` 0 answers `RDP_NEG_FAILURE` or 0. | `helperproto.RDPNegotiate` follows the measured bytes. | **Confirmed on 2022 and 2025** (runs 1-3). `03 00 00 13 0e d0 00 00 12 34 00 02 <flags> 08 00 02 00 00 00`, flags `0x1f`, `0x2f` or `0x0f` (by image and NLA), `selectedProtocol` 2 (HYBRID) with NLA on and off; TLS completes. `RDPNegotiate` accepts every measured answer unchanged. `SecurityLayer` 0 not measured (the tests never write it); the emulator covers `RDP_NEG_FAILURE`. |
 | F23 (W6) | With NLA required the TLS handshake completes before CredSSP, so the leaf is read without credentials, and a disconnect right after it leaves no failed-logon event (4625) and no lockout. | The guides name the 4625 per attempt; or an NLA listener is verified by read-back only. | **Confirmed on 2022 and 2025** (runs 1-3). With `UserAuthentication` 1 the handshake completes before CredSSP; ten probes leave no Security 4625 or 4740 event, with the Logon subcategory auditing Success and Failure on both images. No fallback needed. |
+| F24 (W7) | A local account in `Administrators` authenticates with NTLMv2 to the image's `0.0.0.0:5986` listener through `winrs.Client`; `version` answers and the token is elevated with `LocalAccountTokenFilterPolicy` as shipped; the forms `alice`, `HOST\alice` and `.\alice` sign in; the first request costs 3 round trips and later ones 1 on the same connection. | (a) The script sets the policy for a local account; (b) Alice sends `HOST\` forms without the domain; (c) every request does the exchange; (d) `maxDialsPerCall` = 2. | **Confirmed on 2022 and 2025, with (d)** (W7 runs 2, 3 and 6, https://github.com/erenmeren/alice/actions/runs/41182325826 .. https://github.com/erenmeren/alice/actions/runs/41187834322). Create takes 3 requests (anonymous 401 offering `Negotiate` and `Basic realm="WSMAN"`, type 1, type 3), later requests 1 each without credentials; Windows closes the connection after the anonymous 401, so a call takes 2 dials and the second is allowed only during the sign-in. Elevated with the policy at 1 as both images ship it ((a) did not apply); all three forms sign in. The result with the policy at 0 is logged, not yet recorded. |
+| F25 (W7) | A shell created with `SSH_ORIGINAL_COMMAND` and the Command `"C:\Program Files\Alice\alice-helper.exe"` `ssh` with `WINRS_SKIP_CMD_SHELL` TRUE runs the helper's forced entry, without `cmd.exe`; 4688 records only the constant line. | Helper 1.3.0 with a `winrs` entry. | **The forced entry works; WinRS inserts `cmd.exe`** (runs 5 and 6). The helper answers `version` from the environment, but its parent is `cmd.exe /C "<program>" ssh` despite the option, and the child's line is the unquoted path; `cmd.exe` parses only the constant line, the subcommand stays in the environment. The helper stays 1.2.0 (the fallback would not remove `cmd.exe`; confirmation with the coordinator). The quotes travel raw in `rsp:Command`: the escaped `&#34;` reached `cmd.exe` as `&` (run 5). |
+| F26 (W7) | 256 KiB of stdin in Sends of 96 KiB with `End` on the last arrive byte for byte; `MaxEnvelopeSizekb` is 500. | Chunk size = the measured limit minus 25 %. | **Confirmed** (run 6). 1 B, 96 KiB, 96 KiB + 1 and 256 KiB hash equal; `MaxEnvelopeSizekb` 500; a Send of about 615 KB is answered HTTP 413 (no WS-Man fault). |
+| F27 (W7) | One shell per call costs under 3 s at p50; an undeleted shell is reaped after its idle time. | Re-check the budgets; set `winrs.ShellIdleTimeout` to the measured minimum. | **Cost confirmed; reaping not measured** (runs 4 and 6). 20 calls: p50 49-67 ms, maximum 54-114 ms; `MaxShellsPerUser` 2147483647. Shells cannot be enumerated as the test account ("A security error occurred"), so the idle clamp and the reaping are not measured; Alice deletes every shell it creates. |
+| F28 (W7) | The image's 5986 identity survives a WinRM restart; a listener renewed with a new key fails Alice's handshake before any HTTP request; the same key and an expired certificate are accepted. | The guide says the identity changes on restart; the script makes its own certificate. | **Confirmed** (runs 2, 3 and 6). Unchanged after `Restart-Service WinRM`; a new key is refused at the handshake (no 4624 or 4625, no WinRM Operational event); the same key and an expired certificate with the pinned key work. |
+| F29 (W7) | The helper's exits arrive as Receive's `ExitCode`; a missing program is a WS-Man fault 2 at Command. | The emulator and the fault mapping follow the measured codes. | **Exits confirmed; a missing program is `cmd.exe`'s exit 9009** (run 6; confirmation in run 7 pending). Exits 0, 2, 3 and 4 pass through; no fault at Command for a missing program; exit 9009 with no output is mapped to `windows.helper_missing`. |
+| F30 (W7) | What the listener offers; a Basic-only offer gets no credentials; a wrong password fails after at most 3 requests; `LmCompatibilityLevel` 5 works; `CbtHardeningLevel` Strict refuses. | A bug in the wrapping; the host guide names the setting. | **Confirmed** (runs 2-4). The image offers `Negotiate` and `Basic realm="WSMAN"`, has a 5985 HTTP listener, Basic and Kerberos on, `CbtHardeningLevel` Relaxed, `AllowUnencrypted` false, `LmCompatibilityLevel` absent; (a), (b) and (c) as expected; Strict refuses. WinRM reads Negotiate from `WSMAN\Service` value `auth_negotiate`. |
+| F31 (W7) | The deny rights of §4.3 and `PasswordNeverExpires` do not block the network logon (4624 type 3, NTLM, `NTLM V2`); a changed password refuses the old one; S-1-5-114 in the network deny right refuses a local account; an account out of Administrators is refused. | The script leaves out a blocking right; a fault code maps to `winrm_auth_refused`. | **Confirmed** (runs 3 and 6). 4624 type 3, NTLM, `NTLM V2`, elevated; a wrong password is 4625 (`0xc000006d`); the old password is refused after a change; S-1-5-114 refuses; out of Administrators is a 401. |
+| F32 (W7) | The setup script's printed SPKI fingerprint equals `providers.TLSIdentity` of the certificate Alice's client sees, for RSA and ECDSA listeners. | The script prints the SHA-1 thumbprint as well. | **Confirmed** (runs 4 and 6) for the image's RSA listener on 5986 and an ECDSA P-256 listener on 45521; the script prints the thumbprint too. |
 
 ### 14.1 Spike results
 
@@ -743,3 +782,10 @@ rulings in [windows-iis.md](../rulings/windows-iis.md) "W6 (R69)", test IDs `WIN
 | UI | The row **Remote Desktop (RDP-Tcp)** under **Websites on this server** (port, NLA, **Self-signed by Windows**, reasons, warning), the steps **Import the chain**, **Import the certificate**, **Allow NETWORK SERVICE to read the key**, **Point the listener to the certificate**, **Verify** and the `rdp_key_acl_left` note, the deploy dialog's RDP summary; EN and TR; e2e `web/e2e/windows-rdp.spec.ts` against `cmd/alice-fakewindows` (the demo host's listener on 3389) | — |
 | Tests | Helper rules, kills and the rebuild (`winhelper`), the emulator's listener with the negotiation and the NETWORK SERVICE key flag (`wintest`), the provider, inventory, engine tests on the emulator, real-Windows `TestRealRDP*`, `TestFidelityRDP` and `TestRealRunnerIsClean` (the value, RDP, NLA and TermService as found; ports 45500-45519) | The runner's RDP was already on, so the fixture's TermService start path was never needed |
 | Limits | Only `RDP-Tcp`; no Remote Desktop setting is changed; a third party's certificate keeps its NETWORK SERVICE ACE; `SecurityLayer` 0 and Windows Server 2019 not measured on a runner | — |
+
+## 22. Phase W7 as built (R71)
+
+Placeholder: filled by the final gates (plan `docs/superpowers/plans/2026-10-28-windows-w7-winrm.md`, Task 10), with
+the acceptance against §4.2 (as amended by R71) and §13 W7. Decision R71, rulings in
+[windows-iis.md](../rulings/windows-iis.md) "W7 (R71)", test IDs `WIN-68`..`WIN-75` (`alice-v1/06-quality.md` §24.7),
+STRIDE `WN-26`..`WN-30`, error codes `ALC-WIN-0024`..`ALC-WIN-0028`, migration `00038`, facts F24-F32 (§14).
