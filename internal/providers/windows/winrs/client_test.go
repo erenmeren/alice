@@ -493,7 +493,7 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 		},
 		"a control character": func(_ *winrs.Client, call *winrs.Call) { call.Program += "\t" },
 	}
-	for _, m := range "%&<>|^()" {
+	for _, m := range "%&<>|^()!" {
 		bad["the program has "+string(m)] = func(_ *winrs.Client, call *winrs.Call) { call.Program = `C:\x` + string(m) + `.exe` }
 	}
 	for name, mutate := range bad {

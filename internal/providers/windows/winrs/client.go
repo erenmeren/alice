@@ -101,12 +101,12 @@ func (c *Client) check(call Call) error {
 }
 
 // helperCall is amended Ruling 4's only call shape: cmd.exe, which WinRS inserts (F25), parses the program line, so
-// the program is a path without a cmd.exe metacharacter, the argument is ssh, and the one variable is
+// the program is a path without a cmd.exe metacharacter (! included: DelayedExpansion), the argument is ssh, and the one variable is
 // SSH_ORIGINAL_COMMAND, whose value cmd.exe never parses.
 func helperCall(call Call) bool {
 	_, hasLine := call.Env["SSH_ORIGINAL_COMMAND"]
 	return len(call.Args) == 1 && call.Args[0] == "ssh" && len(call.Env) == 1 && hasLine &&
-		!strings.ContainsAny(call.Program, "%&<>|^()")
+		!strings.ContainsAny(call.Program, "%&<>|^()!")
 }
 
 // Run runs the helper's forced-command entry (helperCall) as runCall does; any other call is ErrBadConfig.
@@ -342,6 +342,7 @@ func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, er
 		s.dialer.signIn(true)
 	}
 	resp, err := s.client.Do(req)
+	clear(body) // a Send body carries stdin (a deployment's private key); not needed once Do returned
 	if signIn {
 		s.dialer.signIn(false) // Create answered (or failed): no further dial
 	}
