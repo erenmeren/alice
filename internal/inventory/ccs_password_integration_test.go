@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -473,6 +474,62 @@ func TestSetTargetPasswordEndsTheOlderRow(t *testing.T) {
 	assert.Equal(t, 1, liveRows(h, win.ID, "win_ccs"))
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND rotated_at = $2", win.ID, *second.CCSPasswordSetAt),
 		"the older row ended when the newer was set")
+}
+
+// R72 Ruling 7 on a database upgraded from before 00039 (coordinator review M1): a set there never ended the older row,
+// so one purpose can hold several live rows. A removal ends them all and names them all; a set leaves one live row, the
+// new one.
+func TestSeveralLiveRowsOfAnUpgradedDatabase(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	// older adds a second live win_ccs row of target (a copy of the live one, an hour older) as code before 00039 left.
+	older := func(target uuid.UUID) uuid.UUID {
+		id := uuid.New()
+		_, err := h.db.Owner.Exec(h.ctx, `INSERT INTO credentials (id, purpose, kind, target_id, public_info, ciphertext, nonce, wrapped_dek, key_version, created_at)
+SELECT $2, purpose, kind, target_id, public_info, ciphertext, nonce, wrapped_dek, key_version, created_at - interval '1 hour'
+FROM credentials WHERE target_id = $1 AND purpose = 'win_ccs' AND rotated_at IS NULL`, target, id)
+		require.NoError(t, err)
+		require.Equal(t, 2, liveRows(h, target, "win_ccs"))
+		return id
+	}
+
+	removed := winTarget(t, h, admin, "iis-01")
+	set, err := setCCS(t, h, admin, removed, ccsPassword())
+	require.NoError(t, err)
+	old := older(removed.ID)
+	_, err = h.svc.ClearCCSPassword(h.ctx, admin, removed.ID, set.Version)
+	require.NoError(t, err)
+	assert.Zero(t, liveRows(h, removed.ID, "win_ccs"), "both rows ended")
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", removed.ID), "nothing deleted")
+	var details string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, `SELECT details->>'credential_id' FROM audit_log WHERE action = 'target.ccs_password_removed' AND object_id = $1`,
+		removed.ID.String()).Scan(&details))
+	rows, err := h.db.Owner.Query(h.ctx, "SELECT id FROM credentials WHERE target_id = $1", removed.ID)
+	require.NoError(t, err)
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	require.NoError(t, err)
+	require.Contains(t, ids, old)
+	for _, id := range ids {
+		assert.Contains(t, details, id.String(), "every ended row is named")
+	}
+	_, _, err = ccsSource(t, h).CCSPassword(h.ctx, removed.ID)
+	require.ErrorIs(t, err, providers.ErrNoCCSPassword)
+
+	replaced := winTarget(t, h, admin, "iis-02")
+	first, err := setCCS(t, h, admin, replaced, ccsPassword())
+	require.NoError(t, err)
+	older(replaced.ID)
+	h.clock.Advance(time.Minute)
+	next := ccsPassword()
+	second, err := setCCS(t, h, admin, first, next)
+	require.NoError(t, err)
+	assert.Equal(t, 1, liveRows(h, replaced.ID, "win_ccs"), "a set leaves one live row")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND rotated_at IS NULL AND created_at = $2", replaced.ID,
+		*second.CCSPasswordSetAt), "the new one")
+	pt, release, err := ccsSource(t, h).CCSPassword(h.ctx, replaced.ID)
+	require.NoError(t, err)
+	assert.Equal(t, next, pt.Bytes())
+	release()
 }
 
 // R72 Ruling 11 (R70 final M4; WIN-47): a password outside the rule is never sealed; the answers keep R70 Ruling 9's order.
