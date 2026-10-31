@@ -8,6 +8,7 @@ package main
 // would run before stores_*, write_* and others that make fixtures).
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,15 @@ if (@(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name
 exit 0`)))
 	assert.Empty(t, left, "W7 fixtures are left (no-listener-listed: the positive control, the image's 5986 listener, is missing; "+
 		"wsman-client-refused: WinRM refuses its own local client, a WinRM setting is left changed)")
+	// W8 (A16): TestRealBothTransportsShareTheHelper restores administrators_authorized_keys as found, so no line of
+	// its key (comment alice-w7-both) is left.
+	keys, err := os.ReadFile(filepath.Join(os.Getenv("ProgramData"), "ssh", "administrators_authorized_keys"))
+	if !errors.Is(err, os.ErrNotExist) {
+		require.NoError(t, err)
+	}
+	for _, l := range strings.Split(string(keys), "\n") {
+		assert.NotContains(t, l, "alice-w7-both", "the shared-helper test's authorized_keys line is left")
+	}
 	left, err = filepath.Glob(filepath.Join(os.Getenv("ProgramData"), "alice-w7-*"))
 	require.NoError(t, err)
 	assert.Empty(t, left, "the WinRS tests' program directories are left")

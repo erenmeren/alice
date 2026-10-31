@@ -211,8 +211,14 @@ Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $env:ALICE_W5_ACCOUNT`); err !=
 		return err
 	}
 	// The one site every CCS test serves from, made before any CCS handshake (run 3).
-	addSharedCleanup(func(logf func(string, ...any)) { removeCCSSite(logf, ccsSiteName, portCCSShared, ccsSiteDir) })
-	byIIS, err := createCCSSite(ccsSiteName, portCCSShared, ccsSiteDir, ccsSiteHosts)
+	// The teardown removes only what the fixture made: a refused pre-existing ccs record stays (F2, R72).
+	var made, byIIS bool
+	addSharedCleanup(func(logf func(string, ...any)) {
+		if made {
+			removeCCSSite(logf, ccsSiteName, portCCSShared, ccsSiteDir)
+		}
+	})
+	byIIS, made, err = createCCSSite(ccsSiteName, portCCSShared, ccsSiteDir, ccsSiteHosts)
 	if err != nil {
 		return err
 	}
@@ -298,36 +304,40 @@ func ccsSiteDirPath(dir string) string {
 // createCCSSite makes a started IIS site with an sslFlags=3 https binding on port for each host (and
 // the plain http binding every fixture site has), and the http.sys ccs:<port> record when IIS made
 // none: byIIS reports whether it did. A ccs:<port> record that exists before the site is a dirty
-// runner's, never adopted (W5-11, R70). removeCCSSite undoes it (register it first).
-func createCCSSite(name string, port int, dir string, hosts []string) (byIIS bool, err error) {
+// runner's, never adopted (W5-11, R70), and a listing that fails fails the fixture: made is false in both
+// cases (nothing was made), else true. removeCCSSite undoes it only when made (register it first).
+func createCCSSite(name string, port int, dir string, hosts []string) (byIIS, made bool, err error) {
 	appcmd := func(args ...string) error {
 		if out, err := exec.Command(appcmdPath(), args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("appcmd %v: %w: %s", args, err, out)
 		}
 		return nil
 	}
-	hasRecord := func() bool {
+	hasRecord := func() (bool, error) {
 		list, err := sslBindings()
 		if err != nil {
-			return false
+			return false, fmt.Errorf("cannot list http.sys records: %w", err)
 		}
 		_, ok := findBinding(list, winproto.BindingCCS, port)
-		return ok
+		return ok, nil
 	}
-	if hasRecord() {
-		return false, fmt.Errorf("a ccs:%d record exists before the test (dirty runner)", port)
+	if found, err := hasRecord(); err != nil || found {
+		if err == nil {
+			err = fmt.Errorf("a ccs:%d record exists before the test (dirty runner)", port)
+		}
+		return false, false, err
 	}
 	if err := os.MkdirAll(ccsSiteDirPath(dir), 0o750); err != nil {
-		return false, err
+		return false, true, err
 	}
 	if err := appcmd("add", "site", "/name:"+name, "/id:"+strconv.Itoa(port), "/physicalPath:"+ccsSiteDirPath(dir),
 		"/bindings:http/*:"+strconv.Itoa(portCCSSiteHTTP)+":"+name+".invalid"); err != nil {
-		return false, err
+		return false, true, err
 	}
 	for _, h := range hosts {
 		if err := appcmd("set", "site", "/site.name:"+name,
 			fmt.Sprintf("/+bindings.[protocol='https',bindingInformation='*:%d:%s',sslFlags='3']", port, h)); err != nil {
-			return false, err
+			return false, true, err
 		}
 	}
 	_ = exec.Command(appcmdPath(), "start", "site", "/site.name:"+name).Run() // "already started" is not an error here
@@ -339,20 +349,25 @@ func createCCSSite(name string, port int, dir string, hosts []string) (byIIS boo
 		}
 	}
 	if state != "Started" {
-		return false, fmt.Errorf("site %s is %q", name, state)
+		return false, true, fmt.Errorf("site %s is %q", name, state)
 	}
 	for deadline := time.Now().Add(10 * time.Second); !byIIS && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
-		byIIS = hasRecord()
+		if byIIS, err = hasRecord(); err != nil {
+			return false, true, err
+		}
 	}
 	if !byIIS {
 		if out, err := exec.Command("netsh", "http", "add", "sslcert", "ccs="+strconv.Itoa(port), "appid="+winproto.AppIDIIS).CombinedOutput(); err != nil {
-			return false, fmt.Errorf("netsh add ccs=%d: %w: %s", port, err, out)
+			return false, true, fmt.Errorf("netsh add ccs=%d: %w: %s", port, err, out)
 		}
-		if !hasRecord() {
-			return false, fmt.Errorf("netsh made no ccs:%d record", port)
+		if found, err := hasRecord(); err != nil || !found {
+			if err == nil {
+				err = fmt.Errorf("netsh made no ccs:%d record", port)
+			}
+			return false, true, err
 		}
 	}
-	return byIIS, nil
+	return byIIS, true, nil
 }
 
 // removeCCSSite deletes the ccs record of port, the site and its directory, each when it exists.

@@ -712,10 +712,15 @@ func TestRealCCSServedChain(t *testing.T) {
 	// DIAG (run 3, logged only): a site of its own on another port, made after the first CCS serve of
 	// this IIS, as run 1-3's per-test sites were; the same file on the shared port is the control.
 	const diagSite, diagDir = "alice-w5-ccs-diag", "alice-w5-ccs-diag"
-	t.Cleanup(func() { removeCCSSite(t.Logf, diagSite, portCCSDiag, diagDir) })
+	var made bool
+	t.Cleanup(func() {
+		if made {
+			removeCCSSite(t.Logf, diagSite, portCCSDiag, diagDir)
+		}
+	})
 	diag := issue("diag.alice-w5.test")
 	f.put("diag.alice-w5.test.pfx", ccsPFX(t, diag, f.password))
-	byIIS, err := createCCSSite(diagSite, portCCSDiag, diagDir, []string{"diag.alice-w5.test"})
+	byIIS, made, err := createCCSSite(diagSite, portCCSDiag, diagDir, []string{"diag.alice-w5.test"})
 	require.NoError(t, err)
 	f.refresh()
 	diagAddr := "127.0.0.1:" + strconv.Itoa(portCCSDiag)

@@ -388,7 +388,7 @@ if ($l.Count -gt 0) { Remove-WSManInstance -ResourceURI winrm/config/Listener -S
 		netsh := filepath.Join(os.Getenv("SystemRoot"), "System32", "netsh.exe")
 		if out, err := exec.Command(netsh, "http", "show", "sslcert", "ipport="+winrmF32Addr).CombinedOutput(); err == nil && bytes.Contains(out, []byte(winrmF32Port)) {
 			out, err = exec.Command(netsh, "http", "delete", "sslcert", "ipport="+winrmF32Addr).CombinedOutput()
-			t.Logf("the http.sys record %s was left after the listener's removal; deleted: %v: %s", winrmF32Addr, err, bytes.TrimSpace(out))
+			t.Logf("the http.sys record %s was left after the listener's removal; delete attempted: %v: %s", winrmF32Addr, err, bytes.TrimSpace(out))
 		}
 	})
 	winrmPSMust(t, map[string]string{"THUMB": thumb}, "", `New-WSManInstance -ResourceURI winrm/config/Listener -SelectorSet `+winrmListenerSels+
@@ -523,6 +523,7 @@ func TestRealWinRMSetupScript(t *testing.T) {
 	out, err = w.run(t, setupAccount, []string{pw, pw}, pw)
 	require.NoError(t, err, "the WinRM setup script succeeds")
 	require.Contains(t, out, winrmReadyLine)
+	first := out
 	fact := func(format string, args ...any) { t.Logf("FACT F32: "+format, args...) }
 	fact("the script %s the local account %s", map[bool]string{true: "created", false: "set the password of"}[strings.Contains(out, "Creating the local account")], setupAccount)
 
@@ -602,6 +603,10 @@ func TestRealWinRMSetupScript(t *testing.T) {
 	require.Contains(t, out, winrmReadyLine)
 	assert.Contains(t, out, "The password of alice is kept.")
 	assert.Equal(t, again, state(), "running the script again with an empty answer changes nothing")
+	// A8: the deny-rights fragment is idempotent: it denies on the first run and finds the rights held on the second
+	// (both outputs are logged by run).
+	assert.Contains(t, first, "Denying", "the first run denies the sign-in rights")
+	assert.NotContains(t, out, "Denying", "the second run finds the deny rights held")
 	assert.Equal(t, v, winrsVersion(t, image.RawSubjectPublicKeyInfo, pw), "the password is unchanged")
 }
 
@@ -762,6 +767,24 @@ func TestRealWinRMProvider(t *testing.T) {
 // (password) from the same helper.
 func TestRealBothTransportsShareTheHelper(t *testing.T) {
 	w := newWinRMSetup(t)
+	// A16: the SSH half adds the alice-w7-both line; administrators_authorized_keys is restored as found (removed when
+	// there was none), registered before the script runs.
+	keysFound, err := os.ReadFile(setupAuthorizedKeys)
+	keysAbsent := errors.Is(err, os.ErrNotExist)
+	if !keysAbsent {
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		var err error
+		if keysAbsent {
+			err = os.Remove(setupAuthorizedKeys)
+		} else {
+			err = os.WriteFile(setupAuthorizedKeys, keysFound, 0o600) // the existing file keeps its ACL
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("restoring %s as found: %v", setupAuthorizedKeys, err)
+		}
+	})
 
 	// The SSH half, with a fresh key, as TestRealSetupScript prepares it.
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
