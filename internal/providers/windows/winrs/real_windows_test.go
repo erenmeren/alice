@@ -137,7 +137,6 @@ func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	t0 := time.Now()
 
 	res, err := run(c, f.helperCall(winproto.SubVersion))
-	res, err = f.retryRefusedCreate(t, c, f.helperCall(winproto.SubVersion), res, err, t0)
 	fact(t, "F25", "SSH_ORIGINAL_COMMAND=version, the helper with the argument ssh: %s", outcome(res, err))
 	require.NoError(t, err)
 	v := decode[winproto.VersionResponse](t, res.Stdout)
@@ -612,7 +611,6 @@ func TestRealWinRMAccountRights(t *testing.T) {
 	c := f.client(t, account)
 	t0 := time.Now()
 	res, err := run(c, f.helperCall(winproto.SubVersion))
-	res, err = f.retryRefusedCreate(t, c, f.helperCall(winproto.SubVersion), res, err, t0)
 	fact(t, "F31", "with %v and PasswordNeverExpires: %s", deny, outcome(res, err))
 	require.NoError(t, err)
 	for _, right := range deny {
