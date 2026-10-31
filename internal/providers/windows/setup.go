@@ -142,6 +142,7 @@ func SetupScript(authorizedKeysLine string, allowUnverified bool) (string, error
 		"__MATCH_BLOCK__", strings.ReplaceAll(MatchBlock, "__USER__", "$MatchUser"),
 		"__HELPER_PATH__", winproto.HelperPath,
 		"__DATA_DIR__", winproto.DataDir,
+		"__SERVICE__", "sshd",
 	).Replace(scriptTemplate), nil
 }
 
@@ -155,12 +156,17 @@ func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers
 var errBadWinRMSetup = errors.New("windows: the account or the address cannot be embedded in the WinRM setup script")
 
 // SetupScriptWinRM is the PowerShell script that prepares a Windows server for the WinRM transport (R71 Ruling 18): run
-// once as an administrator in the directory that holds .\alice-helper.exe. user is the target's account in Ruling 6's
-// forms; the script names it without the .\ of a local account. from is the platform key line's from= value ("" for
-// any address). Without the helper checksums only a development build (allowUnverified) gets a script, as SetupScript.
+// once as an administrator in the directory that holds .\alice-helper.exe, on Windows PowerShell 5.1 or PowerShell 7,
+// and safe to run again. It checks the helper; prepares the account (a local one is created, or given a new password,
+// with the password the operator types twice; a domain one is only checked); installs the helper, its data directory
+// and the event source as SetupScript does; sets LocalAccountTokenFilterPolicy to 1 for a local account when it finds
+// 0 or none; starts WinRM and makes an HTTPS listener on *:5986 when there is none; refuses to go on when Negotiate is
+// off; adds the firewall rule Alice-WinRM-In; and prints each HTTPS listener's SPKI fingerprint and the settings it
+// never changes. It embeds no secret.
 //
-// shortcut: the header and the SSH script's helper check only; Task 7 of the W7 plan writes the account, listener and
-// firewall steps of Ruling 18.
+// user is the target's account in Ruling 6's forms; the script names it without the .\ of a local account. from is the
+// platform key line's from= value ("" for any address). Without the helper checksums only a development build
+// (allowUnverified) gets a script, as SetupScript.
 func SetupScriptWinRM(user, from string, allowUnverified bool) (string, error) {
 	if !allowUnverified && !HelperChecksumsKnown() {
 		return "", ErrHelperUnverified
@@ -168,18 +174,25 @@ func SetupScriptWinRM(user, from string, allowUnverified bool) (string, error) {
 	if (!ValidUser(user) && !localUserRE.MatchString(user)) || linuxssh.ValidateFrom(from) != nil {
 		return "", errBadWinRMSetup
 	}
-	return "#Requires -RunAsAdministrator\n" +
-		"# Prepares this Windows server for Alice over WinRM (HTTPS, NTLMv2). Run it once in an elevated PowerShell, in the\n" +
-		"# directory that holds alice-helper.exe from the helper folder of the Alice package.\n" +
-		"& {\n" +
-		"Set-StrictMode -Version 3\n" +
-		"$ErrorActionPreference = 'Stop'\n" +
-		"$AliceUser = '" + strings.TrimPrefix(user, `.\`) + "'\n" +
-		helperCheck(helperSHA256WindowsAMD64, helperSHA256WindowsARM64) +
-		"Test-Helper '.\\alice-helper.exe'\n" +
-		"Write-Warning 'This Alice version checks the helper only: prepare the account, the WinRM HTTPS listener and the firewall as docs/windows-host-preparation.md says.'\n" +
-		"}\n", nil
+	address, restricted := firewallAddress(from)
+	notice := winrmAddressNotice
+	if restricted {
+		notice = ""
+	}
+	return strings.NewReplacer(
+		"__ALICE_USER__", strings.TrimPrefix(user, `.\`),
+		"__ADDRESS__", address,
+		"__ADDRESS_NOTICE__", notice,
+		"__HELPER_CHECK__", helperCheck(helperSHA256WindowsAMD64, helperSHA256WindowsARM64),
+		"__USER_RE__", userRE.String(),
+		"__HELPER_PATH__", winproto.HelperPath,
+		"__DATA_DIR__", winproto.DataDir,
+		"__SERVICE__", "WinRM",
+	).Replace(winrmTemplate), nil
 }
+
+const winrmAddressNotice = `Write-Warning 'Alice''s address is not in these commands, so the firewall rule Alice-WinRM-In allows port 5986 from any address. To limit it, set $AliceAddress above.'
+`
 
 // WinRMSetupScript implements providers.WinRMSetupGuide: SetupScriptWinRM for user, without an address restriction;
 // "" when SetupScriptWinRM refuses (a build that cannot verify the helper).
@@ -191,40 +204,22 @@ func (p *Provider) WinRMSetupScript(user string) string {
 // HelperInfo implements providers.SetupGuide.
 func (p *Provider) HelperInfo() (string, int) { return winproto.HelperPath, winproto.Protocol }
 
-// scriptTemplate is ASCII only (Windows PowerShell 5.1 reads a file without a byte order mark in the ANSI code page).
-// Native programs run through Invoke-Native, so their standard error never becomes a terminating error under
-// $ErrorActionPreference = 'Stop' (Windows PowerShell 5.1) and their exit code is checked instead.
-const scriptTemplate = `#Requires -RunAsAdministrator
-# Prepares this Windows server for Alice. Run it once in an elevated PowerShell (Windows PowerShell 5.1 or
-# PowerShell 7), in the directory that holds alice-helper.exe from the helper folder of the Alice package.
-# Running it again is safe.
-# What it changes and how to undo it: docs/windows-host-preparation.md.
-# The whole script is one block, so a pasted copy also stops as a whole at the first error.
-& {
-Set-StrictMode -Version 3
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-
-# The Windows account Alice signs in as. The local account 'alice' is created by this script. For the domain
-# setup (a domain account that a group policy adds to the Administrators group of the servers), set the account
-# here before you run the script, for example 'DOMAIN\alice-svc', and enter the same name in Alice.
-$AliceUser = 'alice'
-# The addresses the firewall rule Alice-SSH-In accepts on port 22 ('Any', or a list such as '192.0.2.10').
-$AliceAddress = __ADDRESS__
-# Alice's key, as it goes into administrators_authorized_keys.
-$AuthorizedKey = '__LINE__'
-
-$HelperPath = '__HELPER_PATH__'
+// The fragments both setup scripts share (R71 Ruling 18): the helper's path and data directory, the well-known SIDs,
+// the functions, the checks before any change, the helper's check, the Administrators group, the account's membership
+// and deny rights, the helper's install and the event source. The SSH script is these fragments and its own parts in
+// the order it always had (TestSetupScriptUnchangedByTheRefactor); __SERVICE__ names the service that signs the
+// account in.
+const (
+	fragPaths = `$HelperPath = '__HELPER_PATH__'
 $DataDir = '__DATA_DIR__'
-$SshDir = 'C:\ProgramData\ssh'
-$AuthorizedKeysFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
-$SshdConfig = 'C:\ProgramData\ssh\sshd_config'
-$AdministratorsSid = 'S-1-5-32-544'
+`
+	fragSIDs = `$AdministratorsSid = 'S-1-5-32-544'
 $SystemSid = 'S-1-5-18'
 $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $NL = [string][char]13 + [char]10
-
+`
+	fragFunctions = `
 function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     $PSNativeCommandUseErrorActionPreference = $false
     $eap = $ErrorActionPreference
@@ -323,7 +318,112 @@ function Get-AccountSid([string]$Name) {
     }
 }
 
-# 32 characters from a cryptographic generator, with upper and lower case letters, digits and symbols.
+`
+	fragChecks = `$principal = New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run this script in an elevated PowerShell (Run as administrator).'
+}
+if ($AliceUser -notmatch '__USER_RE__') {
+    throw "'$AliceUser' is not an account name Alice accepts: a local name such as alice, or DOMAIN\name."
+}
+$IsDomainAccount = $AliceUser.Contains('\')
+if ($IsDomainAccount) { $QualifiedUser = $AliceUser } else { $QualifiedUser = "$env:COMPUTERNAME\$AliceUser" }
+`
+	fragHelperCheck = `__HELPER_CHECK__$HelperSource = Join-Path (Get-Location).ProviderPath 'alice-helper.exe'
+if (-not (Test-Path -LiteralPath $HelperSource -PathType Leaf)) {
+    throw 'Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version into this directory as alice-helper.exe first.'
+}
+Test-Helper $HelperSource
+`
+	fragAdminsGroup = `$adminsName = (New-Object System.Security.Principal.SecurityIdentifier($AdministratorsSid)).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+$group = [ADSI]"WinNT://$env:COMPUTERNAME/$adminsName,group"
+`
+	fragAddMember = `$memberPath = 'WinNT://' + $QualifiedUser.Replace('\', '/')
+if ((Get-GroupMemberSids $group) -notcontains $UserSid) {
+    Write-Host "Adding $AliceUser to $adminsName."
+    try {
+        $group.Add($memberPath)
+    } catch {
+        if (-not (Test-AlreadyMember $_.Exception)) { throw }
+    }
+}
+`
+	fragDenyRights = `$work = Join-Path $env:TEMP ('alice-setup-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $work | Out-Null
+try {
+    $secedit = "$env:WINDIR\System32\secedit.exe"
+    $export = Join-Path $work 'export.inf'
+    Invoke-Checked 'secedit /export' $secedit @('/export', '/cfg', $export, '/areas', 'USER_RIGHTS', '/quiet') | Out-Null
+    $rights = @{}
+    foreach ($l in @(Get-Content -LiteralPath $export -Encoding Unicode)) {
+        if ($l -match '^\s*(Se\w+)\s*=\s*(.*)$') { $rights[$Matches[1]] = $Matches[2].Trim() }
+    }
+    if (-not $IsDomainAccount -and $rights.ContainsKey('SeDenyNetworkLogonRight') -and $rights['SeDenyNetworkLogonRight'] -match '\*S-1-5-11[34]\b') {
+        Write-Warning 'This server denies network sign-in to local accounts ("Deny access to this computer from the network" holds S-1-5-113 or S-1-5-114, as hardened baselines do), so __SERVICE__ may refuse the local account. Use the domain setup of docs/windows-host-preparation.md.'
+    }
+    $inf = @('[Unicode]', 'Unicode=yes', '[Version]', 'signature="$CHICAGO$"', 'Revision=1', '[Privilege Rights]')
+    $changed = $false
+    foreach ($right in @('SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+        $entries = @()
+        if ($rights.ContainsKey($right) -and $rights[$right]) { $entries = @($rights[$right].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+        if ($entries -notcontains "*$UserSid") { $entries += "*$UserSid"; $changed = $true }
+        $inf += "$right = " + ($entries -join ',')
+    }
+    if ($changed) {
+        Write-Host "Denying $AliceUser local and Remote Desktop sign-in."
+        $infFile = Join-Path $work 'alice.inf'
+        Set-Content -LiteralPath $infFile -Value $inf -Encoding Unicode
+        Invoke-Checked 'secedit /configure' $secedit @('/configure', '/db', (Join-Path $work 'alice.sdb'), '/cfg', $infFile, '/areas', 'USER_RIGHTS', '/quiet') | Out-Null
+    }
+} finally {
+    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+`
+	fragInstall = `New-AdminOnlyDirectory (Split-Path -Parent $HelperPath) -ReadExecute @($UserSid)
+$staging = "$HelperPath.new"
+Copy-Item -LiteralPath $HelperSource -Destination $staging -Force
+try {
+    Test-Helper $staging
+} catch {
+    Remove-Item -LiteralPath $staging -Force -ErrorAction SilentlyContinue
+    throw
+}
+Move-Item -LiteralPath $staging -Destination $HelperPath -Force
+foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) { New-AdminOnlyDirectory $d }
+`
+	fragEventSource = `if (-not [System.Diagnostics.EventLog]::SourceExists('Alice Helper')) {
+    [System.Diagnostics.EventLog]::CreateEventSource('Alice Helper', 'Application')
+}
+`
+)
+
+// scriptTemplate is ASCII only (Windows PowerShell 5.1 reads a file without a byte order mark in the ANSI code page).
+// Native programs run through Invoke-Native, so their standard error never becomes a terminating error under
+// $ErrorActionPreference = 'Stop' (Windows PowerShell 5.1) and their exit code is checked instead.
+const scriptTemplate = `#Requires -RunAsAdministrator
+# Prepares this Windows server for Alice. Run it once in an elevated PowerShell (Windows PowerShell 5.1 or
+# PowerShell 7), in the directory that holds alice-helper.exe from the helper folder of the Alice package.
+# Running it again is safe.
+# What it changes and how to undo it: docs/windows-host-preparation.md.
+# The whole script is one block, so a pasted copy also stops as a whole at the first error.
+& {
+Set-StrictMode -Version 3
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+# The Windows account Alice signs in as. The local account 'alice' is created by this script. For the domain
+# setup (a domain account that a group policy adds to the Administrators group of the servers), set the account
+# here before you run the script, for example 'DOMAIN\alice-svc', and enter the same name in Alice.
+$AliceUser = 'alice'
+# The addresses the firewall rule Alice-SSH-In accepts on port 22 ('Any', or a list such as '192.0.2.10').
+$AliceAddress = __ADDRESS__
+# Alice's key, as it goes into administrators_authorized_keys.
+$AuthorizedKey = '__LINE__'
+
+` + fragPaths + `$SshDir = 'C:\ProgramData\ssh'
+$AuthorizedKeysFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
+$SshdConfig = 'C:\ProgramData\ssh\sshd_config'
+` + fragSIDs + fragFunctions + `# 32 characters from a cryptographic generator, with upper and lower case letters, digits and symbols.
 function New-RandomPassword {
     $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%+-=?@_'
     $limit = 256 - (256 % $alphabet.Length)
@@ -345,23 +445,9 @@ function New-RandomPassword {
 }
 
 # 1. Checks before any change.
-$principal = New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'Run this script in an elevated PowerShell (Run as administrator).'
-}
-if ($AliceUser -notmatch '__USER_RE__') {
-    throw "'$AliceUser' is not an account name Alice accepts: a local name such as alice, or DOMAIN\name."
-}
-$IsDomainAccount = $AliceUser.Contains('\')
-if ($IsDomainAccount) { $QualifiedUser = $AliceUser } else { $QualifiedUser = "$env:COMPUTERNAME\$AliceUser" }
-
+` + fragChecks + `
 # 2. The helper.
-__HELPER_CHECK__$HelperSource = Join-Path (Get-Location).ProviderPath 'alice-helper.exe'
-if (-not (Test-Path -LiteralPath $HelperSource -PathType Leaf)) {
-    throw 'Copy helper\alice-winhelper-windows-amd64.exe or helper\alice-winhelper-windows-arm64.exe from the package of this Alice version into this directory as alice-helper.exe first.'
-}
-Test-Helper $HelperSource
-
+` + fragHelperCheck + `
 # 3. OpenSSH Server: the Windows capability when sshd is absent; an sshd installed another way (the Win32-OpenSSH
 # MSI) is used as it is.
 if (-not (Get-Service -Name sshd -ErrorAction SilentlyContinue)) {
@@ -403,49 +489,8 @@ if (-not $UserSid) {
     $UserSid = Get-AccountSid $QualifiedUser
     if (-not $UserSid) { throw "The local account $AliceUser was created but cannot be found." }
 }
-$adminsName = (New-Object System.Security.Principal.SecurityIdentifier($AdministratorsSid)).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-$group = [ADSI]"WinNT://$env:COMPUTERNAME/$adminsName,group"
-$memberPath = 'WinNT://' + $QualifiedUser.Replace('\', '/')
-if ((Get-GroupMemberSids $group) -notcontains $UserSid) {
-    Write-Host "Adding $AliceUser to $adminsName."
-    try {
-        $group.Add($memberPath)
-    } catch {
-        if (-not (Test-AlreadyMember $_.Exception)) { throw }
-    }
-}
-
-$work = Join-Path $env:TEMP ('alice-setup-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $work | Out-Null
-try {
-    $secedit = "$env:WINDIR\System32\secedit.exe"
-    $export = Join-Path $work 'export.inf'
-    Invoke-Checked 'secedit /export' $secedit @('/export', '/cfg', $export, '/areas', 'USER_RIGHTS', '/quiet') | Out-Null
-    $rights = @{}
-    foreach ($l in @(Get-Content -LiteralPath $export -Encoding Unicode)) {
-        if ($l -match '^\s*(Se\w+)\s*=\s*(.*)$') { $rights[$Matches[1]] = $Matches[2].Trim() }
-    }
-    if (-not $IsDomainAccount -and $rights.ContainsKey('SeDenyNetworkLogonRight') -and $rights['SeDenyNetworkLogonRight'] -match '\*S-1-5-11[34]\b') {
-        Write-Warning 'This server denies network sign-in to local accounts ("Deny access to this computer from the network" holds S-1-5-113 or S-1-5-114, as hardened baselines do), so sshd may refuse the local account. Use the domain setup of docs/windows-host-preparation.md.'
-    }
-    $inf = @('[Unicode]', 'Unicode=yes', '[Version]', 'signature="$CHICAGO$"', 'Revision=1', '[Privilege Rights]')
-    $changed = $false
-    foreach ($right in @('SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
-        $entries = @()
-        if ($rights.ContainsKey($right) -and $rights[$right]) { $entries = @($rights[$right].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
-        if ($entries -notcontains "*$UserSid") { $entries += "*$UserSid"; $changed = $true }
-        $inf += "$right = " + ($entries -join ',')
-    }
-    if ($changed) {
-        Write-Host "Denying $AliceUser local and Remote Desktop sign-in."
-        $infFile = Join-Path $work 'alice.inf'
-        Set-Content -LiteralPath $infFile -Value $inf -Encoding Unicode
-        Invoke-Checked 'secedit /configure' $secedit @('/configure', '/db', (Join-Path $work 'alice.sdb'), '/cfg', $infFile, '/areas', 'USER_RIGHTS', '/quiet') | Out-Null
-    }
-} finally {
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-}
-
+` + fragAdminsGroup + fragAddMember + `
+` + fragDenyRights + `
 # 5. Alice's key, once: every other line with the same key (an earlier from= value) is replaced.
 $keyBlob = '__KEY_BLOB__'
 $existing = @()
@@ -487,18 +532,7 @@ if ($new -cne $old) {
 
 # 7. The helper and its data directory: Administrators and SYSTEM only (the account may also read and run the
 # helper, so an unelevated sign-in is told so by the helper itself).
-New-AdminOnlyDirectory (Split-Path -Parent $HelperPath) -ReadExecute @($UserSid)
-$staging = "$HelperPath.new"
-Copy-Item -LiteralPath $HelperSource -Destination $staging -Force
-try {
-    Test-Helper $staging
-} catch {
-    Remove-Item -LiteralPath $staging -Force -ErrorAction SilentlyContinue
-    throw
-}
-Move-Item -LiteralPath $staging -Destination $HelperPath -Force
-foreach ($d in @((Split-Path -Parent $DataDir), $DataDir)) { New-AdminOnlyDirectory $d }
-
+` + fragInstall + `
 # 8. The firewall rule for sshd, from Alice's address.
 __ADDRESS_NOTICE__Remove-NetFirewallRule -Name 'Alice-SSH-In' -ErrorAction SilentlyContinue
 New-NetFirewallRule -Name 'Alice-SSH-In' -DisplayName 'Alice SSH (TCP 22)' -Description 'Alice signs in to alice-helper.exe over SSH.' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress $AliceAddress -Action Allow -Profile Any | Out-Null
@@ -507,15 +541,257 @@ if ("$AliceAddress" -ne 'Any' -and @(Get-NetFirewallRule -Name 'OpenSSH-Server-I
 }
 
 # 9. The event source of the helper.
-if (-not [System.Diagnostics.EventLog]::SourceExists('Alice Helper')) {
-    [System.Diagnostics.EventLog]::CreateEventSource('Alice Helper', 'Application')
-}
-
+` + fragEventSource + `
 # 10. The host key fingerprints, to compare with the fingerprint Alice shows when the server is added.
 Write-Host 'Host key fingerprints of this server (compare them with the fingerprint Alice shows):'
 foreach ($k in @(Get-ChildItem -Path (Join-Path $SshDir 'ssh_host_*_key.pub'))) {
     Write-Host (Invoke-Checked 'ssh-keygen' $SshKeygen @('-lf', $k.FullName))
 }
 Write-Output 'This server is ready for Alice.'
+}
+`
+
+// winrmTemplate is SetupScriptWinRM's script (R71 Ruling 18): the fragments it shares with scriptTemplate and the WinRM
+// steps. ASCII only, as scriptTemplate. The password is read with Read-Host -AsSecureString and reaches only
+// SetPassword; nothing prints, logs or stores it.
+const winrmTemplate = `#Requires -RunAsAdministrator
+# Prepares this Windows server for Alice over WinRM (HTTPS, NTLMv2). Run it once in an elevated PowerShell (Windows
+# PowerShell 5.1 or PowerShell 7), in the directory that holds alice-helper.exe from the helper folder of the Alice
+# package. Running it again is safe. It asks for the password of a local account; enter the same password in Alice.
+# What it changes and how to undo it: docs/windows-host-preparation.md.
+# The whole script is one block, so a pasted copy also stops as a whole at the first error.
+& {
+Set-StrictMode -Version 3
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+# Windows PowerShell 5.1 has the WSMan: drive from the start; PowerShell 7 loads it with the module.
+if (-not (Get-PSDrive -Name WSMan -ErrorAction SilentlyContinue)) { Import-Module Microsoft.WSMan.Management }
+
+# The Windows account Alice signs in as, as it is named in Alice: a local account (created by this script when it
+# does not exist) or a domain account (DOMAIN\name, which this script never creates or changes).
+$AliceUser = '__ALICE_USER__'
+# The addresses the firewall rule Alice-WinRM-In accepts on port 5986 ('Any', or a list such as '192.0.2.10').
+$AliceAddress = __ADDRESS__
+
+` + fragPaths + fragSIDs + `$DontExpirePassword = 0x10000 # DONT_EXPIRE_PASSWORD: the copy of the password in Alice stays valid
+` + fragFunctions + `# The plain text of a secure string; the unmanaged copy is zeroed and freed at once.
+function ConvertFrom-AliceSecureString([System.Security.SecureString]$Secure) {
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+# Asks for the account's password twice (never shown, printed or written anywhere) and returns it. For an existing
+# account an empty answer returns '' and the password is kept. Alice's rule: 12 to 128 printable ASCII characters
+# without a space.
+function Read-AlicePassword([bool]$New) {
+    $prompt = "Password for $AliceUser (12 to 128 printable ASCII characters, no space)"
+    if (-not $New) { $prompt += '; press Enter to keep its current password' }
+    $password = ConvertFrom-AliceSecureString (Read-Host -Prompt $prompt -AsSecureString)
+    if ($password.Length -eq 0 -and -not $New) {
+        Remove-Variable password
+        return ''
+    }
+    if ($password -cnotmatch '^[\x21-\x7e]{12,128}$') {
+        Remove-Variable password
+        throw 'The password must be 12 to 128 printable ASCII characters without a space (Alice''s rule). Run this script again.'
+    }
+    $confirm = ConvertFrom-AliceSecureString (Read-Host -Prompt 'The same password again' -AsSecureString)
+    if ($password -cne $confirm) {
+        Remove-Variable password, confirm
+        throw 'The two passwords differ. Run this script again.'
+    }
+    Remove-Variable confirm
+    return $password
+}
+
+# The local account: created with the password the operator enters or, when it exists, given that password (an empty
+# answer keeps it). Its password never expires. Returns its SID.
+function Set-AliceLocalAccount {
+    $sid = Get-AccountSid $QualifiedUser
+    $password = Read-AlicePassword (-not $sid)
+    if (-not $sid) {
+        Write-Host "Creating the local account $AliceUser."
+        $u = ([ADSI]"WinNT://$env:COMPUTERNAME,computer").Create('User', $AliceUser)
+        [void]$u.SetPassword($password)
+        [void]$u.SetInfo()
+        [void]$u.Put('Description', 'Alice certificate manager (WinRM sign-in)')
+        [void]$u.SetInfo()
+        $sid = Get-AccountSid $QualifiedUser
+        if (-not $sid) { throw "The local account $AliceUser was created but cannot be found." }
+    } elseif ($password) {
+        Write-Host "Setting the password of $AliceUser."
+        [void]([ADSI]"WinNT://$env:COMPUTERNAME/$AliceUser,user").SetPassword($password)
+    } else {
+        Write-Host "The password of $AliceUser is kept."
+    }
+    Remove-Variable password
+    $u = [ADSI]"WinNT://$env:COMPUTERNAME/$AliceUser,user"
+    $flags = [int]$u.Get('UserFlags')
+    if (($flags -band $DontExpirePassword) -eq 0) {
+        [void]$u.Put('UserFlags', $flags -bor $DontExpirePassword)
+        [void]$u.SetInfo()
+    }
+    return $sid
+}
+
+# A listener's value by name ('' when the listener has none, which Set-StrictMode would otherwise refuse).
+function Get-Field($Object, [string]$Name) {
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return '' }
+    return "$($p.Value)"
+}
+
+# A DER element: the tag, the length (short or long form) and the content.
+function New-Der([byte]$Tag, [byte[]]$Content) {
+    $n = $Content.Length
+    $length = @()
+    if ($n -lt 0x80) {
+        $length = @($n)
+    } else {
+        while ($n -gt 0) {
+            $length = @($n -band 0xff) + $length
+            $n = $n -shr 8
+        }
+        $length = @(0x80 + $length.Count) + $length
+    }
+    return ,[byte[]](@($Tag) + $length + $Content)
+}
+
+# The DER OBJECT IDENTIFIER of a dotted OID.
+function ConvertTo-DerOid([string]$Oid) {
+    $arcs = @($Oid.Split('.') | ForEach-Object { [long]$_ })
+    $body = @(40 * $arcs[0] + $arcs[1])
+    for ($i = 2; $i -lt $arcs.Count; $i++) {
+        $v = $arcs[$i]
+        $chunk = @($v -band 0x7f)
+        $v = $v -shr 7
+        while ($v -gt 0) {
+            $chunk = @(($v -band 0x7f) -bor 0x80) + $chunk
+            $v = $v -shr 7
+        }
+        $body += $chunk
+    }
+    return ,[byte[]](New-Der 0x06 $body)
+}
+
+# A certificate's fingerprint as Alice shows it: SHA256: and the unpadded base64 of the SHA-256 of its
+# SubjectPublicKeyInfo, rebuilt in DER from the key's algorithm, parameters and value (Windows PowerShell 5.1 has no
+# method that exports it).
+function Get-SpkiFingerprint($Cert) {
+    $pk = $Cert.PublicKey
+    $parameters = [byte[]]@()
+    if ($null -ne $pk.EncodedParameters -and $null -ne $pk.EncodedParameters.RawData) { $parameters = [byte[]]$pk.EncodedParameters.RawData }
+    $algorithm = New-Der 0x30 ([byte[]]((ConvertTo-DerOid $pk.Oid.Value) + $parameters))
+    $key = New-Der 0x03 ([byte[]](@(0) + $pk.EncodedKeyValue.RawData))
+    $spki = New-Der 0x30 ([byte[]]($algorithm + $key))
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $sum = $sha.ComputeHash([byte[]]$spki)
+    } finally {
+        $sha.Dispose()
+    }
+    return 'SHA256:' + [Convert]::ToBase64String($sum).TrimEnd('=')
+}
+
+# 1. Checks before any change. HOST\name, where HOST is this computer's name, is the local account name.
+if ($AliceUser.Contains('\') -and $AliceUser.Split('\')[0] -eq $env:COMPUTERNAME) { $AliceUser = $AliceUser.Split('\')[1] }
+` + fragChecks + `
+# 2. The helper.
+` + fragHelperCheck + `
+# 3. The account, denied local and Remote Desktop sign-in (a network sign-in, as WinRM's, stays allowed). A local
+# account is created or given the password entered, and is made a member of Administrators (by its SID, whatever the
+# language of Windows). A domain account must exist; it is never created, changed or added to a group here.
+$UserSid = Get-AccountSid $QualifiedUser
+if ($IsDomainAccount) {
+    if (-not $UserSid) {
+        throw "The domain account $AliceUser is not known to this server. Create it in the domain first (docs/windows-host-preparation.md, the domain setup)."
+    }
+    Write-Host "The domain account $AliceUser is used as it is: this script never creates it or sets its password."
+} else {
+    $UserSid = Set-AliceLocalAccount
+}
+` + fragAdminsGroup + `if ($IsDomainAccount) {
+    if ((Get-GroupMemberSids $group) -notcontains $UserSid) {
+        Write-Warning "The domain account $AliceUser is not a direct member of $adminsName. Alice needs an administrator: add the account, or a group that holds it, unless a group already makes it one."
+    }
+} else {
+` + fragAddMember + `}
+
+` + fragDenyRights + `
+# 4. The helper and its data directory: Administrators and SYSTEM only (the account may also read and run the
+# helper), and the event source of the helper.
+` + fragInstall + fragEventSource + `
+# 5. Remote UAC gives a local administrator's network sign-in an unelevated token unless LocalAccountTokenFilterPolicy
+# is 1. For a local account it is set to 1 when it is 0 or absent, and the value found is printed. A domain account is
+# not filtered.
+if (-not $IsDomainAccount) {
+    $policyKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    $policy = Get-ItemProperty -LiteralPath $policyKey
+    $found = 'absent'
+    if ($null -ne $policy.PSObject.Properties['LocalAccountTokenFilterPolicy']) { $found = "$($policy.LocalAccountTokenFilterPolicy)" }
+    if ($found -eq 'absent' -or $found -eq '0') {
+        New-ItemProperty -LiteralPath $policyKey -Name 'LocalAccountTokenFilterPolicy' -PropertyType DWord -Value 1 -Force | Out-Null
+        Write-Host "LocalAccountTokenFilterPolicy found: $found; set to 1, so the WinRM sign-in of a local administrator is elevated."
+    } else {
+        Write-Host "LocalAccountTokenFilterPolicy found: $found; not changed."
+    }
+}
+
+# 6. The WinRM service, started automatically, and its HTTPS listener. An existing HTTPS listener and its certificate
+# are kept. Without one, a listener on port 5986 of every address is made, with a self-signed certificate for this
+# computer's names whose key cannot be exported, valid 10 years.
+Set-Service -Name WinRM -StartupType Automatic
+Start-Service -Name WinRM
+$listeners = @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)
+if (@($listeners | Where-Object { (Get-Field $_ 'Transport') -eq 'HTTPS' }).Count -eq 0) {
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+    $names = @($env:COMPUTERNAME)
+    if ($cs.PartOfDomain) { $names = @("$($cs.DNSHostName).$($cs.Domain)") + $names }
+    Write-Host "Creating an HTTPS listener on port 5986 with a self-signed certificate for $($names -join ', ')."
+    $listenerCert = New-SelfSignedCertificate -DnsName $names -CertStoreLocation 'Cert:\LocalMachine\My' -NotAfter (Get-Date).AddYears(10) -KeyExportPolicy NonExportable -FriendlyName 'Alice WinRM listener'
+    New-WSManInstance -ResourceURI winrm/config/Listener -SelectorSet @{ Address = '*'; Transport = 'HTTPS' } -ValueSet @{ Hostname = $names[0]; CertificateThumbprint = $listenerCert.Thumbprint } | Out-Null
+    $listeners = @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)
+}
+
+# 7. Alice signs in with NTLM through Negotiate. The script never changes it (another tool may rely on the setting):
+# it stops when Negotiate is off.
+$auth = @{}
+foreach ($n in @('Basic', 'Kerberos', 'Negotiate', 'Certificate', 'CredSSP', 'CbtHardeningLevel')) {
+    $auth[$n] = "$((Get-Item -LiteralPath "WSMan:\localhost\Service\Auth\$n").Value)"
+}
+if ($auth['Negotiate'] -ne 'true') {
+    throw 'WinRM''s Negotiate authentication is off (WSMan:\localhost\Service\Auth\Negotiate). Alice signs in with NTLM through Negotiate: turn it on, then run this script again.'
+}
+
+# 8. The firewall rule for WinRM over HTTPS, from Alice's address.
+__ADDRESS_NOTICE__Remove-NetFirewallRule -Name 'Alice-WinRM-In' -ErrorAction SilentlyContinue
+New-NetFirewallRule -Name 'Alice-WinRM-In' -DisplayName 'Alice WinRM (TCP 5986)' -Description 'Alice runs alice-helper.exe over WinRM (HTTPS).' -Direction Inbound -Protocol TCP -LocalPort 5986 -RemoteAddress $AliceAddress -Action Allow -Profile Any | Out-Null
+
+# 9. The listeners' identities, to compare with the fingerprint Alice shows when it first connects, and the settings
+# this script never changes.
+Write-Host 'WinRM HTTPS listeners of this server (compare the SPKI fingerprint with the one Alice shows):'
+foreach ($l in @($listeners | Where-Object { (Get-Field $_ 'Transport') -eq 'HTTPS' })) {
+    $thumb = ((Get-Field $l 'CertificateThumbprint') -replace '\s', '').ToUpperInvariant()
+    $where = (Get-Field $l 'Address') + ' port ' + (Get-Field $l 'Port')
+    $cert = $null
+    if ($thumb) { $cert = Get-Item -LiteralPath "Cert:\LocalMachine\My\$thumb" -ErrorAction SilentlyContinue }
+    if ($null -eq $cert) {
+        Write-Warning "The listener $where names the certificate '$thumb', which is not in the computer's Personal (My) store."
+        continue
+    }
+    Write-Host ('Listener ' + $where + ': SPKI ' + (Get-SpkiFingerprint $cert) + ' (SHA-1 thumbprint ' + $cert.Thumbprint + ')')
+}
+$unencrypted = "$((Get-Item -LiteralPath 'WSMan:\localhost\Service\AllowUnencrypted').Value)"
+$http = @($listeners | Where-Object { (Get-Field $_ 'Transport') -eq 'HTTP' })
+Write-Host "Not changed by this script: Basic=$($auth['Basic']), Kerberos=$($auth['Kerberos']), Negotiate=$($auth['Negotiate']), Certificate=$($auth['Certificate']), CredSSP=$($auth['CredSSP']), CbtHardeningLevel=$($auth['CbtHardeningLevel']), AllowUnencrypted=$unencrypted, HTTP listeners=$($http.Count)."
+if ($auth['Basic'] -eq 'true') { Write-Warning 'Basic authentication is on. Alice never uses it; turn it off if nothing else needs it.' }
+if ($unencrypted -eq 'true') { Write-Warning 'AllowUnencrypted is on. Alice never uses unencrypted WinRM; turn it off if nothing else needs it.' }
+if ($http.Count -gt 0) { Write-Warning 'An HTTP (unencrypted) WinRM listener exists. Alice uses HTTPS only; remove the HTTP listener if nothing else needs it.' }
+if ($auth['CbtHardeningLevel'] -eq 'Strict') { Write-Warning 'CbtHardeningLevel is Strict, so Alice cannot sign in (it sends no channel binding). Set it to Relaxed for Alice.' }
+Write-Output 'This server is ready for Alice over WinRM. Enter the account''s password in Alice.'
 }
 `

@@ -774,7 +774,7 @@ Expected: PASS; windows at least 95 %; every W1-W6 provider and engine test unch
 - Produces: `func SetupScriptWinRM(user, from string, allowUnverified bool) (string, error)` (Ruling 18). The user is in `$AliceUser = '<user>'`, checked against Ruling 6's rule before embedding; a `.\` user is embedded without the `.\`. The script embeds no secret; the password is asked with `Read-Host -AsSecureString` and never printed.
 - Mirror: `SetupScript` (`setup.go:114-148`), its tests (`setup_test.go:65-224`), `TestRealSetupScript` (`setup_windows_test.go:432`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - `setup_test.go`:
     - `TestSetupScriptUnchangedByTheRefactor`: `SetupScript`'s output for a fixed input equals a golden copy taken before the refactor (commit the golden file in this step, from the code before Step 3).
     - `TestSetupScriptWinRMSteps`: the script holds each of Ruling 18's steps in order, the helper checksum, the deny rights, `DONT_EXPIRE_PASSWORD`, `Read-Host -AsSecureString` and the password rule check. It holds no `Enable-PSRemoting`; no write of `Basic`, `Negotiate`, `Kerberos`, `CredSSP`, `CbtHardeningLevel`, `AllowUnencrypted` or a 5985 listener (only reads); no `ClientCertificate` mapping and no `TrustedPeople`; no `SeDenyNetworkLogonRight` write; no `sshd` and no `administrators_authorized_keys`.
@@ -795,10 +795,10 @@ Expected: PASS; windows at least 95 %; every W1-W6 provider and engine test unch
     - `TestRealBothTransportsShareTheHelper`: after `TestRealSetupScript` and `TestRealWinRMSetupScript`, `version` answers over SSH (key) and over WinRS (password) with the same helper.
     - `TestFidelityWinRM`: the same scenario list (version, win-facts, iis-dump, a refused `iis-deploy`, a wrong password, a fault at Command) against the emulator configured like the runner and against real WinRS. The answers are compared field by field (exit codes, helper JSON without messages, `winrs` error kinds and fault codes).
   - `windows.yml`: the four real tests join the required list.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test ./internal/providers/windows/ -run 'SetupScript' && GOOS=windows go test -c -o /dev/null ./internal/providers/windows/`
 Expected: FAIL (unit tests); the Windows test binary builds.
-- [ ] **Step 3: Implement.** Factor the shared fragments (`helperCheck`, the install, the data directory, the event source, the account's creation, membership and deny rights) into constants used by both scripts. The SSH script keeps its random never-shown password; the WinRM script's account fragment asks for the password instead. Then write `SetupScriptWinRM`. The SPKI fingerprint is computed in PowerShell 5.1 from `$cert.PublicKey.Oid`, `EncodedParameters` and `EncodedKeyValue` with a small DER writer (SEQUENCE, OID, BIT STRING, lengths). F32 checks it.
+- [x] **Step 3: Implement.** Factor the shared fragments (`helperCheck`, the install, the data directory, the event source, the account's creation, membership and deny rights) into constants used by both scripts. The SSH script keeps its random never-shown password; the WinRM script's account fragment asks for the password instead. Then write `SetupScriptWinRM`. The SPKI fingerprint is computed in PowerShell 5.1 from `$cert.PublicKey.Oid`, `EncodedParameters` and `EncodedKeyValue` with a small DER writer (SEQUENCE, OID, BIT STRING, lengths). F32 checks it.
 - [ ] **Step 4: Run, then real Windows**
 Run: `go test -race -count=1 -cover ./internal/providers/windows/ && make docs-check && actionlint .github/workflows/windows.yml && go test -count=1 ./internal/archtest/`
 Expected: PASS. Then push (run 2 or 3; budget 10): both legs green with `windows-required` green. Record F32.

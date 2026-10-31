@@ -303,6 +303,10 @@ jobs:
             'TestRealWinRMExitCodes',
             'TestRealWinRMAuthOffer',
             'TestRealWinRMAccountRights',
+            'TestRealWinRMSetupScript',
+            'TestRealWinRMProvider',
+            'TestRealBothTransportsShareTheHelper',
+            'TestFidelityWinRM',
             'TestRealRunnerIsClean'
           )
           $text = Get-Content -LiteralPath $log -Raw
