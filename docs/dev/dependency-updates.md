@@ -107,8 +107,9 @@ DN property tests of `internal/auth/ldap/ldapx` (`ldap.CompileFilter`, `ldap.Par
 that package import neither module. The network client in `internal/auth/ldap` imports go-ldap; no other package
 may (`TestOnlyTheDirectoryPackageImportsTheLDAPClient`).
 
-One new indirect module is compiled in: `github.com/Azure/go-ntlmssp` v0.1.1 (MIT; NTLM bind, linked by go-ldap but
-never called: Alice binds with a simple bind over `ldaps://` only). `github.com/google/uuid` v1.6.0 (BSD-3-Clause)
+One more module is compiled in: `github.com/Azure/go-ntlmssp` v0.1.1 (MIT; go-ldap's NTLM bind, which Alice does not
+call: Alice binds with a simple bind over `ldaps://` only). It was indirect until the WinRM transport made it direct
+(see "go-ntlmssp (WinRM)" below). `github.com/google/uuid` v1.6.0 (BSD-3-Clause)
 and `golang.org/x/crypto` v0.57.0 (BSD-3-Clause, `md4` for NTLM) were already in the graph at these or newer
 versions; go-ldap asks for x/crypto v0.54.0, so nothing moved. The module graph (and `go.sum`) also gains modules of
 go-ldap's GSSAPI and Windows SSPI packages, which Alice does not import and does not compile:
@@ -124,6 +125,25 @@ suffix), `go get github.com/go-ldap/ldap/v3@vX.Y.Z`, `go mod tidy`, `go mod veri
 `go test ./internal/auth/ldap/...`, `make fuzz-ldap` and `make test-integration` (the real OpenLDAP suite). Read the
 release notes for changes to `CompileFilter`, `ParseDN`, `EscapeFilter` or the TLS dial: the property tests of
 `ldapx` compare Alice's escaping with go-ldap's parser and fail when go-ldap reads a filter differently.
+
+## go-ntlmssp (WinRM)
+
+The WinRM transport (R71, Ruling 29) signs in to a Windows server's WinRM listener with NTLMv2, through
+`github.com/Azure/go-ntlmssp` v0.1.1 (MIT, Microsoft). The module was already compiled into `cmd/alice` through go-ldap,
+so it moved from the indirect block of `go.mod` to the direct one; `go.sum`, `THIRD_PARTY_NOTICES.md`, the release
+symbol check and the image did not change. Why: it is existing code in the module graph, and a client built on it
+cannot speak Basic, Kerberos or CredSSP at all (the alternative, `github.com/masterzen/winrm`, brings about ten
+modules, Kerberos and CredSSP among them). Only `internal/providers/windows/winrs` imports it in product code
+(`TestOnlyWinRSImportsNTLMSSP`), only through its `Negotiator` with `AllowBasicAuth` unset, and no product code names
+`AllowBasicAuth`, `PasswordHashed`, `NewAuthenticateMessage`, `ProcessChallenge` or `ProcessChallengeWithHash`
+(`TestNoCodeAllowsBasicAuth`).
+
+Update procedure: as go-ldap's above (`go list -m -versions github.com/Azure/go-ntlmssp`, `go get`, `go mod tidy`,
+`go mod verify`, `go list -m all`, the LICENSE, `CGO_ENABLED=0 go build ./cmd/...`, `go run ./tools/pincheck`,
+`make lockcheck`), then `go test ./internal/providers/windows/...`, which runs the WinRS client's tests against the
+emulator's NTLMv2 check (`internal/providers/windows/wintest/ntlm.go`, with MS-NLMP's NTLMv2 test vector), and the
+`windows.yml` real-runner run. Read the release notes for changes to the `Negotiator`'s retry order, its Basic
+handling or the AUTHENTICATE message. A go-ldap update that moves go-ntlmssp is checked against the same tests.
 
 ## Dependabot
 

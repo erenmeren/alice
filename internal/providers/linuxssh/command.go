@@ -407,6 +407,16 @@ func (c HelperCommand) Line() string {
 	return b.String()
 }
 
+// Input is the command's own copy of its stdin (nil when none), for a transport other than SSH (the WinRM
+// transport, R71 Ruling 15). WipeInput wipes it; the caller never keeps it after the call.
+func (c HelperCommand) Input() []byte { return c.input() }
+
+// Timeout is the command's time budget.
+func (c HelperCommand) Timeout() time.Duration { return c.timeout }
+
+// MaxOutput is the bound on the command's stdout.
+func (c HelperCommand) MaxOutput() int64 { return c.maxOutput }
+
 // Subcommand names the helper subcommand ("os-release" for the fixed command).
 func (c HelperCommand) Subcommand() string {
 	if c.fixed != "" {

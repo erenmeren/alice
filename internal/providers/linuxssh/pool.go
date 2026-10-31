@@ -160,8 +160,21 @@ func (p *Pool) AcquireFresh(ctx context.Context, target uuid.UUID, cfg Config, c
 	return p.acquire(ctx, target, cfg, cred, true)
 }
 
-func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource, fresh bool) (*Conn, func(healthy bool), error) {
-	tsem, err := p.targetSlots(target)
+// Slot takes one per-target and one global slot without a connection, for a call over another transport (the
+// WinRM transport, R71 Ruling 14): it waits as Acquire does and refuses a forgotten target and a closed pool, so
+// the limits and ForgetTarget cover both transports. release gives the slots back; later calls do nothing.
+func (p *Pool) Slot(ctx context.Context, target uuid.UUID) (release func(), err error) {
+	_, slots, err := p.takeSlots(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(slots) }, nil
+}
+
+// takeSlots waits for a slot of target and a global one; slots gives both back.
+func (p *Pool) takeSlots(ctx context.Context, target uuid.UUID) (tsem chan struct{}, slots func(), err error) {
+	tsem, err = p.targetSlots(target)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -172,7 +185,7 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 		<-tsem
 		return nil, nil, err
 	}
-	slots := func() {
+	slots = func() {
 		<-p.global
 		<-tsem
 	}
@@ -182,6 +195,14 @@ func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred p
 	if closed { // closed while this call waited for its slots: never dial after Close
 		slots()
 		return nil, nil, closedError()
+	}
+	return tsem, slots, nil
+}
+
+func (p *Pool) acquire(ctx context.Context, target uuid.UUID, cfg Config, cred providers.CredentialSource, fresh bool) (*Conn, func(healthy bool), error) {
+	tsem, slots, err := p.takeSlots(ctx, target)
+	if err != nil {
+		return nil, nil, err
 	}
 	if !fresh {
 		if c := p.takeIdle(ctx, target, cfg); c != nil {

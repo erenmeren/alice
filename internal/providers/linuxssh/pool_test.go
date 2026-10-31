@@ -446,3 +446,53 @@ func TestPoolClosesALateReleaseOfAForgottenTarget(t *testing.T) {
 	assert.Empty(t, e.pool.idle[testTarget])
 	e.pool.mu.Unlock()
 }
+
+// A WinRM call holds a slot of the shared pool without an SSH connection (R71 Ruling 14).
+func TestPoolSlot(t *testing.T) {
+	e := newPoolEnv(t, clock.Real{}, 2, 1)
+	ctx := context.Background()
+	rel, err := e.pool.Slot(ctx, testTarget)
+	require.NoError(t, err)
+
+	// The per-target limit counts the slot, for a slot and for an SSH connection alike.
+	_, err = e.pool.Slot(shortCtx(t, 100*time.Millisecond), testTarget)
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code)
+	_, _, err = e.pool.Acquire(shortCtx(t, 100*time.Millisecond), testTarget, e.cfg, e.cred)
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code)
+
+	// The global limit counts it too.
+	_, relOther, err := e.pool.Acquire(ctx, otherTarget, e.cfg, e.cred)
+	require.NoError(t, err)
+	third := uuid.MustParse("0190f5a0-0000-7000-8000-0000000000a3")
+	_, err = e.pool.Slot(shortCtx(t, 100*time.Millisecond), third)
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code)
+
+	// A waiting Slot gets the slot when it is released; release is idempotent.
+	got := make(chan error, 1)
+	go func() {
+		r, err := e.pool.Slot(shortCtx(t, 5*time.Second), testTarget)
+		if err == nil {
+			r()
+		}
+		got <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	rel()
+	rel()
+	require.NoError(t, <-got)
+	relOther(true)
+
+	// A cancelled context never wins over a free slot.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = e.pool.Slot(cancelled, testTarget)
+	assert.Equal(t, "ssh.timeout", providerCode(t, err).Code)
+
+	// A forgotten target and a closed pool are refused.
+	e.pool.ForgetTarget(otherTarget)
+	_, err = e.pool.Slot(ctx, otherTarget)
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+	e.pool.Close()
+	_, err = e.pool.Slot(ctx, testTarget)
+	assert.Equal(t, "ssh.unreachable", providerCode(t, err).Code)
+}

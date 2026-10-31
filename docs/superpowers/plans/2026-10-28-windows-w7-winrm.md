@@ -492,7 +492,7 @@ Expected: PASS; winrs at least 95 % (the codec alone).
   Errors wrap their stage: everything up to and including the Create response wraps `ErrNotSent` (`errors.Is`), the NTLM exchange included. `*FaultError` and `ErrProtocol` keep their stage the same way. A TLS identity refusal keeps the verifier's error in the chain (`errors.Is(err, tlspin.ErrIdentityRefused)` must hold; `winrs` does not import `tlspin`: the error comes from `VerifyConnection`). `winrs` does not import `linuxssh`: it holds its own `defaultDialTimeout = 10 * time.Second`, and a test in `internal/providers/windows` compares it with `linuxssh.DefaultDialTimeout`. The exact `NTLMServer` signature may follow `wintest`'s existing server helpers; the behaviour is Ruling 20's.
 - Mirror: `linuxssh.Conn.Run` (`dial.go:638-700`: ctx first, budget covering everything, abandon on timeout) and `cappedWriter`; `TestOnlyTheDirectoryPackageImportsTheLDAPClient` (`buildtags_test.go:417`).
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `wintest/ntlm_test.go` (the server check on its own, with go-ntlmssp's `Negotiator` as the client):
     - `TestNTLMv2Vector`: MS-NLMP §4.2.4's NTLMv2 values give its `NTProofStr`.
     - `TestNTLMServerAccepts`: `alice`, `HOST\alice` and the model's `DOMAIN\alice` with the right password → 200; a second request on the same connection → 200 without a new exchange.
@@ -529,10 +529,10 @@ Expected: PASS; winrs at least 95 % (the codec alone).
     - `TestWinRSShellIdle`: Create's `IdleTimeOut` is `PT<timeout+60>S`.
   - archtest: `TestOnlyWinRSImportsNTLMSSP` (only `internal/providers/windows/winrs` imports `github.com/Azure/go-ntlmssp` in non-test code; positive control) and `TestNoCodeAllowsBasicAuth` (Ruling 28's identifiers and calls absent from non-test code).
   - `linuxssh`: `TestForcedCommandAccessors` (Input is the copy and is wiped by `WipeInput`; Timeout and MaxOutput are the constructor's); `TestPoolSlot` (Slot counts against the per-target and global limits, waits, honours `ctx`, and refuses a forgotten target and a closed pool).
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test ./internal/providers/windows/winrs/ ./internal/providers/windows/wintest/ ./internal/providers/linuxssh/ ./internal/archtest/ -run 'WinRS|NTLM|ForcedCommandAccessors|PoolSlot|NTLMSSP|BasicAuth'`
 Expected: FAIL.
-- [ ] **Step 3: Implement** `Run` as Rulings 12 and 28. The order of a call:
+- [x] **Step 3: Implement** `Run` as Rulings 12 and 28. The order of a call:
   1. check config;
   2. build the transport, the one-dial dialer and the Negotiator client;
   3. Create (with the env; the NTLM exchange happens here), then Command;
@@ -540,10 +540,10 @@ Expected: FAIL.
   5. Receive loop;
   6. Delete (deferred, detached budget), then `CloseIdleConnections`.
   The stdin copy belongs to the caller (`HelperCommand`), so `winrs` never retains it after `Run`. All error texts are fixed; no server text and no credential is kept. Move go-ntlmssp to the direct block in `go.mod` (`go mod tidy`, then `git diff go.sum` is empty), and update `docs/dev/dependency-updates.md` (Ruling 29). The NTLM check in `wintest/ntlm.go` follows Ruling 20 and the lint notes of Global Constraints.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 Run: `go mod tidy && go mod verify && git diff --exit-code go.sum && go test -race -count=1 -cover ./internal/providers/windows/winrs/ ./internal/providers/windows/wintest/ ./internal/providers/linuxssh/... && go test -count=1 ./internal/archtest/ && make lint`
 Expected: PASS; winrs at least 95 %, linuxssh at least 93 %, wintest at least 90 %.
-- [ ] **Step 5: Commit**: `feat(winrs): a WinRS client over TLS with NTLMv2 only (go-ntlmssp direct, Basic never sent), one shell per call, stdin in Send only, bounded; the emulator's NTLMv2 check; linuxssh's HelperCommand accessors and Pool.Slot (R71)`.
+- [x] **Step 5: Commit**: `feat(winrs): a WinRS client over TLS with NTLMv2 only (go-ntlmssp direct, Basic never sent), one shell per call, stdin in Send only, bounded; the emulator's NTLMv2 check; linuxssh's HelperCommand accessors and Pool.Slot (R71)`.
 
 ---
 

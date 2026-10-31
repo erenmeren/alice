@@ -434,6 +434,57 @@ func TestOnlyTheDirectoryPackageImportsTheLDAPClient(t *testing.T) {
 	assert.True(t, found, "positive control: the directory package imports the client")
 }
 
+// Only the WinRS client links go-ntlmssp into product code (R71 Ruling 29).
+func TestOnlyWinRSImportsNTLMSSP(t *testing.T) {
+	found := false
+	for _, f := range sourceFiles(t) {
+		for _, imp := range f.file.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			if !covers("github.com/Azure/go-ntlmssp/...", path) {
+				continue
+			}
+			if f.test || inTestOnlyDir(f.rel) {
+				continue
+			}
+			found = true
+			dir := filepath.ToSlash(filepath.Dir(f.rel))
+			assert.Equal(t, "internal/providers/windows/winrs", dir, "%s imports %s", f.rel, path)
+		}
+	}
+	assert.True(t, found, "positive control: the WinRS client imports go-ntlmssp")
+}
+
+// basicAuthIdents are go-ntlmssp's ways to send Basic, to take a password hash, or to build an AUTHENTICATE message
+// outside the Negotiator (R71 Ruling 28).
+var basicAuthIdents = map[string]bool{"AllowBasicAuth": true, "PasswordHashed": true, "NewAuthenticateMessage": true,
+	"ProcessChallenge": true, "ProcessChallengeWithHash": true}
+
+func basicAuthUses(f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && basicAuthIdents[id.Name] {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+func TestNoCodeAllowsBasicAuth(t *testing.T) {
+	control, err := parser.ParseFile(token.NewFileSet(), "control.go", `package p
+var n = ntlmssp.Negotiator{AllowBasicAuth: true}
+var o = &ntlmssp.AuthenticateMessageOptions{PasswordHashed: true}
+func f() { ntlmssp.NewAuthenticateMessage(nil, "", "", nil); ntlmssp.ProcessChallenge(nil, "", "", false); ntlmssp.ProcessChallengeWithHash(nil, "", "") }`, 0)
+	require.NoError(t, err)
+	assert.Len(t, basicAuthUses(control), 5, "positive control: the check sees each identifier")
+	for _, f := range sourceFiles(t) {
+		if f.test || inTestOnlyDir(f.rel) {
+			continue
+		}
+		assert.Empty(t, basicAuthUses(f.file), "%s", f.rel)
+	}
+}
+
 func goListDeps(t *testing.T, tags string, pkgs ...string) []string {
 	t.Helper()
 	return goListDepsFor(t, "linux", "", tags, pkgs...)

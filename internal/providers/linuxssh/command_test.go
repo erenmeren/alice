@@ -418,3 +418,22 @@ func TestForcedCommandNeverPrintsItsStdin(t *testing.T) {
 	c.WipeInput()
 	assert.Equal(t, make([]byte, len(in)), c.input())
 }
+
+// The WinRM transport reads a forced command's input, budget and output bound through accessors (R71 Ruling 15).
+func TestForcedCommandAccessors(t *testing.T) {
+	in := []byte("key material")
+	c, err := ForcedCommand([]string{"iis-deploy"}, in, LongCommandTimeout, DefaultMaxOutput)
+	require.NoError(t, err)
+	assert.Equal(t, LongCommandTimeout, c.Timeout())
+	assert.Equal(t, int64(DefaultMaxOutput), c.MaxOutput())
+	assert.Equal(t, in, c.Input())
+	in[0] = 'X'
+	assert.Equal(t, byte('k'), c.Input()[0], "Input is the command's own copy")
+	c.WipeInput()
+	assert.Equal(t, make([]byte, len(in)), c.Input(), "WipeInput wipes what Input returns")
+
+	none, err := ForcedCommand([]string{"version"}, nil, DefaultCommandTimeout, smallOutput)
+	require.NoError(t, err)
+	assert.Nil(t, none.Input())
+	assert.Nil(t, HelperCommand{}.Input())
+}
