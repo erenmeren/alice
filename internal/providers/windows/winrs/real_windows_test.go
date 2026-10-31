@@ -220,10 +220,12 @@ func TestRealWinRMStdin(t *testing.T) {
 	require.Greater(t, len(big), 600<<10)
 	a = r.post(big, false)
 	fact(t, "F26", "a hand-built Send of %d bytes: status %d, %s, err %v", len(big), a.status, a.fault(), a.err)
+	// Runner run 6: the 413 closes the connection, so a Delete on it is not signed in (401) and stdinhash would wait
+	// for stdin until the shell's idle time, holding its file. The Delete goes on a new signed-in connection.
 	body, err = winrs.DeleteRequest(r.header(), shell)
 	require.NoError(t, err)
-	a = r.post(body, false)
-	t.Logf("Delete after it: status %d, err %v", a.status, a.err)
+	a = newRaw(t, imageAddr, f.spki, account, f.pw).post(body, true)
+	t.Logf("Delete after it, on a new connection: status %d, %s, err %v", a.status, a.fault(), a.err)
 }
 
 var durationRE = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$`)

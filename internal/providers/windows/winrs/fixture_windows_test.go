@@ -465,9 +465,14 @@ func winrmFixture(t *testing.T) *fx {
 	dir, err := os.MkdirTemp(os.Getenv("ProgramData"), "alice-w7-")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		for i := 0; ; i++ { // a program a failed call left running may hold its file for a moment
+		for i := 0; ; i++ {
 			if err = os.RemoveAll(dir); err == nil || i == 20 {
 				break
+			}
+			if i == 0 { // a program a shell left running holds its file (runner run 6): stop it
+				out, perr := psRun(map[string]string{"DIR": dir}, "",
+					`Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($env:DIR + '\', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { "stopping $($_.Name) $($_.Id)"; Stop-Process -Id $_.Id -Force }`)
+				t.Logf("removing %s: %v; %s %v", dir, err, out, perr)
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
