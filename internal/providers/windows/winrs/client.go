@@ -75,9 +75,10 @@ const (
 	// maxDialsPerCall: the call's one connection carries the NTLM sign-in and everything after it (Windows binds
 	// the logon to the connection). F24 (d) raises it to 2 only if Windows closes the connection after the
 	// anonymous 401.
-	maxDialsPerCall = 1
-	receiveTimeout  = 20 * time.Second
-	cleanupBudget   = 5 * time.Second
+	maxDialsPerCall   = 1
+	receiveTimeout    = 20 * time.Second
+	cleanupBudget     = 5 * time.Second
+	maxResponseHeader = 64 << 10
 	// faultTimedOut is w:TimedOut: a Receive that saw no output within its OperationTimeout. It is asked again.
 	faultTimedOut = 2150858793
 )
@@ -166,9 +167,11 @@ func (c *Client) newSession(ctx context.Context, call Call, url string) *session
 		DialContext:         d.dialContext,
 		TLSClientConfig:     cfg,
 		TLSHandshakeTimeout: DefaultHandshakeTimeout,
-		MaxConnsPerHost:     1,
-		MaxIdleConnsPerHost: 1,
-		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
+		// Bodies are bounded in roundTrip; the Negotiator drains a 401's body unbounded, within the call's budget.
+		MaxResponseHeaderBytes: maxResponseHeader,
+		MaxConnsPerHost:        1,
+		MaxIdleConnsPerHost:    1,
+		TLSNextProto:           map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
 	s := &session{call: call, url: url, user: c.User, password: c.Password, tr: tr, dialer: d}
 	s.client = &http.Client{

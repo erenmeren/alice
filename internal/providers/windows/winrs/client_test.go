@@ -771,6 +771,19 @@ func TestWinRSBounds(t *testing.T) {
 		_, err := f.client().Run(context.Background(), f.call())
 		require.ErrorIs(t, err, winrs.ErrProtocol)
 	})
+	t.Run("response header over 64 KiB", func(t *testing.T) {
+		f := newFake(t)
+		f.setHook(func(w http.ResponseWriter, s served) bool {
+			if s.req.Action != winrs.ActionReceive {
+				return false
+			}
+			w.Header().Set("X-Big", strings.Repeat("a", 70<<10))
+			_, _ = w.Write(winrs.ReceivedResponse(s.req.MessageID, s.req.CommandID, nil, true, 0))
+			return true
+		})
+		_, err := f.client().Run(context.Background(), f.call())
+		require.ErrorIs(t, err, winrs.ErrUnreachable)
+	})
 	t.Run("stderr over 64 KiB", func(t *testing.T) {
 		f := newFake(t)
 		f.setHook(func(w http.ResponseWriter, s served) bool {
