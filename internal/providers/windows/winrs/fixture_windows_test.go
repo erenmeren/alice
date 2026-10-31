@@ -196,31 +196,65 @@ func setDWORD(t *testing.T, path, name string, v uint32) func() {
 
 const wsmanSet = `Set-Item -LiteralPath ('WSMan:\localhost\' + $env:ITEM) -Value $env:VALUE -Force`
 
-// setWSMan sets a WSMan: item (Service\Auth\Basic and the like) and restores it as found.
+// wsmanServiceKey holds the WinRM service's configuration (Service\Auth\* among it).
+const wsmanServiceKey = `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service`
+
+func regExe(args ...string) (string, error) {
+	out, err := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "reg.exe"), args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// setWSMan sets a WSMan: item (Service\Auth\Basic and the like) and restores it as found. The WSMan: drive is
+// WinRM's own client, signing in to the local service with Negotiate: with Negotiate off (F30 a), or anything else
+// that refuses it, the drive cannot restore anything (runner run 2). So the service's registry key is exported
+// before the change, and a restore the drive refuses replaces the key with that export and restarts WinRM.
 func setWSMan(t *testing.T, item, value string) func() {
 	t.Helper()
 	old := ps(t, map[string]string{"ITEM": item}, "", `(Get-Item -LiteralPath ('WSMan:\localhost\' + $env:ITEM)).Value`)
+	snapshot := filepath.Join(t.TempDir(), "wsman-service.reg") // removed after the restore below (cleanups run last in, first out)
+	out, err := regExe("export", wsmanServiceKey, snapshot, "/y")
+	require.NoError(t, err, "reg export: %s", out)
 	restore := sync.OnceFunc(func() {
 		out, err := psRun(map[string]string{"ITEM": item, "VALUE": old}, "", wsmanSet)
 		if err == nil {
 			return
 		}
-		t.Logf("restoring WSMan:\\localhost\\%s through the WSMan: drive failed (%v: %s); trying Set-WSManInstance", item, err, out)
-		// The items the tests set are all Service\Auth\<name>: the same value through the WS-Management automation API.
-		name, ok := strings.CutPrefix(item, `Service\Auth\`)
-		if !ok {
-			t.Errorf("restoring WSMan:\\localhost\\%s to %s: %v: %s", item, old, err, out)
+		t.Logf("restoring WSMan:\\localhost\\%s through the WSMan: drive failed (%v: %s); restoring %s from its export", item, err, out, wsmanServiceKey)
+		if out, err := regExe("delete", wsmanServiceKey, "/f"); err != nil {
+			t.Errorf("reg delete %s: %v: %s", wsmanServiceKey, err, out)
+		}
+		if out, err := regExe("import", snapshot); err != nil {
+			t.Errorf("reg import of %s: %v: %s", wsmanServiceKey, err, out)
 			return
 		}
-		if out, err := psRun(map[string]string{"NAME": name, "VALUE": old}, "",
-			`Set-WSManInstance -ResourceURI winrm/config/service/auth -ValueSet @{ $env:NAME = $env:VALUE } | Out-Null`); err != nil {
-			t.Errorf("restoring WSMan:\\localhost\\%s to %s: %v: %s", item, old, err, out)
+		if out, err := psRun(nil, "", `Restart-Service -Name WinRM -Force`); err != nil {
+			t.Errorf("Restart-Service WinRM: %v: %s", err, out)
+			return
 		}
+		got, err := waitWSMan(item, time.Minute)
+		if err != nil || got != old {
+			t.Errorf("LOUD: WSMan:\\localhost\\%s is %q after the registry restore and a WinRM restart, not %q as found: %v", item, got, old, err)
+			return
+		}
+		t.Logf("WSMan:\\localhost\\%s restored to %s through the registry and a WinRM restart", item, old)
 	})
 	t.Cleanup(restore)
 	ps(t, map[string]string{"ITEM": item, "VALUE": value}, "", wsmanSet)
-	t.Logf("WSMan:\\localhost\\%s set to %s (%s before)", item, value, old)
+	q, _ := regExe("query", wsmanServiceKey)
+	t.Logf("WSMan:\\localhost\\%s set to %s (%s before); %s now: %s", item, value, old, wsmanServiceKey, strings.Join(strings.Fields(q), " "))
 	return restore
+}
+
+// waitWSMan reads a WSMan: item, retrying while the service starts.
+func waitWSMan(item string, within time.Duration) (string, error) {
+	end := time.Now().Add(within)
+	for {
+		got, err := psRun(map[string]string{"ITEM": item}, "", `(Get-Item -LiteralPath ('WSMan:\localhost\' + $env:ITEM)).Value`)
+		if err == nil || time.Now().After(end) {
+			return got, err
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // auditProcessCreation turns on the Process Creation audit subcategory and command lines in 4688, and restores

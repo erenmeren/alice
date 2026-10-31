@@ -556,6 +556,9 @@ func TestRealWinRMAuthOffer(t *testing.T) {
 	}
 	restoreNegotiate()
 	restoreBasic()
+	offers = anonymous("restored as found")
+	require.True(t, slices.ContainsFunc(offers, func(o string) bool { return strings.HasPrefix(o, "Negotiate") }),
+		"(b) and (c) run with Negotiate offered again, as found: %q", offers)
 
 	// (b) A wrong password: refused after at most three requests.
 	bad := f.client(t, account)
