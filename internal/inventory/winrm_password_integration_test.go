@@ -157,7 +157,7 @@ func TestSetWinRMPasswordRefuses(t *testing.T) {
 		t.Helper()
 		given := bytes.Clone(pw)
 		_, err := h.svc.SetWinRMPassword(h.ctx, admin, tg.ID, tg.Version, secrets.NewPlaintext(given))
-		assert.Equal(t, make([]byte, len(pw)), given, "the password is zeroed on a refusal")
+		assert.True(t, bytes.Equal(make([]byte, len(pw)), given), "the password is zeroed on a refusal")
 		return err
 	}
 
