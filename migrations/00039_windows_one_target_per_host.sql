@@ -8,7 +8,7 @@
 DO $$
 BEGIN
     IF EXISTS (SELECT lower(config->>'host') FROM targets WHERE type = 'windows' AND deleted_at IS NULL GROUP BY 1 HAVING count(*) > 1) THEN
-        RAISE EXCEPTION 'cannot migrate up: two Windows servers share a host; remove one of each pair in Alice (Servers page), then upgrade' USING ERRCODE = 'Z1037';
+        RAISE EXCEPTION 'cannot migrate up: two Windows servers share a host; remove one of each pair in Alice (Servers page) and upgrade again, or, when restoring a backup, restore it on the Alice version that made it, remove one of each pair, take a new backup, then upgrade' USING ERRCODE = 'Z1037';
     END IF;
 END $$;
 -- +goose StatementEnd

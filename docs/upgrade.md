@@ -150,7 +150,7 @@ OpenSSH or WinRM and on any port. The addresses are compared as written, ignorin
 database update refuses, the update returns to the installed version, and the update log holds:
 
 ```
-cannot migrate up: two Windows servers share a host; remove one of each pair in Alice (Servers page), then upgrade
+cannot migrate up: two Windows servers share a host; remove one of each pair in Alice (Servers page) and upgrade again, or, when restoring a backup, restore it on the Alice version that made it, remove one of each pair, take a new backup, then upgrade
 ```
 
 (PostgreSQL error code `Z1037`.) Find the pairs before the update, on the installed version:
@@ -161,6 +161,12 @@ cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d alice 
 
 Each row is an address with two or more Windows servers. Remove all but one of them on the **Servers** page (keep the
 one whose connection you want), then run the query again: when it returns no rows, update.
+
+**Restoring a backup taken before version 39.** A restore loads the backup at its own database version and then
+updates it to this version, so a backup that holds two Windows servers on one address is refused the same way
+(`The restore failed: …` with the message above), and the current data stays in use. Restore the backup on the Alice
+version that made it (a new or test server), remove one of each pair there, take a new backup, then restore that one
+here (see [backup-restore.md](backup-restore.md#restore-on-the-same-server)).
 
 ## The update log
 

@@ -183,6 +183,11 @@ Alice is started again whatever the outcome; if a check refuses the restore, the
 nothing was changed. The refusals and what to do are in
 [troubleshooting.md](troubleshooting.md#restore-refused).
 
+A restore updates the backup's data to this Alice version. A backup taken before database version 39 that holds two
+Windows servers on one address is refused (`The restore failed: …`, with the reason "two Windows servers share a
+host"): restore it on the Alice version that made it, remove one of each pair, take a new backup, and restore that
+one ([upgrade.md](upgrade.md#one-windows-server-per-address)).
+
 **After a restore:**
 
 - Everyone signs in again.
