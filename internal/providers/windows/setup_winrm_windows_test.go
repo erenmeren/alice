@@ -534,10 +534,21 @@ func TestRealWinRMSetupScript(t *testing.T) {
 	flags, admin, rights := winrmAccountState(t)
 	assert.NotZero(t, flags&0x10000, "PasswordNeverExpires (UserFlags %#x)", flags)
 	assert.True(t, admin, "alice is a member of Administrators")
-	for _, r := range []string{"SeDenyInteractiveLogonRight", "SeDenyRemoteInteractiveLogonRight"} {
-		assert.Contains(t, strings.Split(rights[r], ","), "*"+sid.String(), r)
+	// secedit names an account it can resolve by name, else by *SID (runner run 4).
+	holds := func(right string) bool {
+		for _, e := range strings.Split(rights[right], ",") {
+			e = strings.TrimSpace(e)
+			_, name, _ := strings.Cut(e, `\`)
+			if e == "*"+sid.String() || strings.EqualFold(e, setupAccount) || strings.EqualFold(name, setupAccount) {
+				return true
+			}
+		}
+		return false
 	}
-	assert.NotContains(t, rights["SeDenyNetworkLogonRight"], sid.String(), "never denied network sign-in")
+	for _, r := range []string{"SeDenyInteractiveLogonRight", "SeDenyRemoteInteractiveLogonRight"} {
+		assert.True(t, holds(r), "%s holds alice: %q", r, rights[r])
+	}
+	assert.False(t, holds("SeDenyNetworkLogonRight"), "never denied network sign-in: %q", rights["SeDenyNetworkLogonRight"])
 
 	// The token policy (F24): 1 for a local account, printed as found.
 	now, nowAbsent := readTokenPolicy(t)
@@ -554,10 +565,6 @@ func TestRealWinRMSetupScript(t *testing.T) {
 	require.Len(t, rule, 7, "%v", rule)
 	assert.Equal(t, []string{"Alice WinRM (TCP 5986)", "Inbound", "Allow", "True", "TCP", "5986", "Any"}, rule)
 	assert.Equal(t, before, winrmState(t), "the listeners, Basic, Negotiate, AllowUnencrypted and the other settings are as found")
-
-	// WinRS signs in with the password and runs the installed helper.
-	v := winrsVersion(t, image.RawSubjectPublicKeyInfo, pw)
-	assert.Equal(t, winproto.Version, v.Helper)
 
 	// F32: the printed fingerprints are what Alice's client sees, for the image's listener and the ECDSA one.
 	printed := printedListeners(out)
@@ -577,6 +584,10 @@ func TestRealWinRMSetupScript(t *testing.T) {
 		assert.True(t, bytes.Equal(c.leaf.Raw, seen.Raw), "port %s presents the expected certificate", c.port)
 	}
 	assert.Equal(t, x509.ECDSA, f32.PublicKeyAlgorithm)
+
+	// WinRS signs in with the password and runs the installed helper (after F32's checks, which need no WinRS call).
+	v := winrsVersion(t, image.RawSubjectPublicKeyInfo, pw)
+	assert.Equal(t, winproto.Version, v.Helper)
 
 	// A second run with an empty answer changes nothing.
 	state := func() []string {
