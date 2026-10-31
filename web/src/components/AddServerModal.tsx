@@ -91,7 +91,7 @@ export function AddServerModal({
   const chooseType = (next: ServerType) => {
     setType(next);
     if (!userEdited) setUsername(next === 'windows' ? WINDOWS_USER : LINUX_USER);
-    if (next !== 'windows') chooseTransport('ssh');
+    if (next !== 'windows' && transport === 'winrm') chooseTransport('ssh');
   };
 
   // chooseTransport switches a Windows server between OpenSSH and WinRM; the port follows the transport's default.

@@ -34,6 +34,15 @@ describe('AddServerModal WinRM transport', () => {
     expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# windows setup script');
   });
 
+  it('keeps a typed port when the type changes between Linux servers', async () => {
+    const { dialog } = await openWindows();
+    const port = within(dialog).getByLabelText(/^SSH port/);
+    await userEvent.clear(port);
+    await userEvent.type(port, '2222');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'nginx');
+    expect(within(dialog).getByLabelText(/^SSH port/)).toHaveValue('2222');
+  });
+
   it('sets port 5986 under WinRM, shows the WN-26 warning and the account forms, and goes back to 22', async () => {
     const { dialog } = await openWindows();
     await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
