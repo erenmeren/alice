@@ -170,9 +170,10 @@ func putField(b []byte, n, off int) {
 
 // field reads the variable field whose descriptor is at off; nil when it lies outside msg.
 func field(msg []byte, off int) []byte {
-	n := int(binary.LittleEndian.Uint16(msg[off:]))
-	start := int(binary.LittleEndian.Uint32(msg[off+4:]))
-	if start > len(msg) || n > len(msg)-start {
+	// Compared in uint64 before any conversion: a uint32 offset wraps as a 32-bit int (A2).
+	n := uint64(binary.LittleEndian.Uint16(msg[off:]))
+	start := uint64(binary.LittleEndian.Uint32(msg[off+4:]))
+	if start > uint64(len(msg)) || n > uint64(len(msg))-start {
 		return nil
 	}
 	return msg[start : start+n]

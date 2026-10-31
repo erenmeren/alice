@@ -361,7 +361,8 @@ func TestWinRMEmulatorFaultsAndLimits(t *testing.T) {
 
 	big := append(e.createBody(t), bytes.Repeat([]byte(" "), winrs.MaxEnvelopeSize)...)
 	status, body = post(big)
-	assert.Equal(t, uint32(faultEnvelopeTooLarge), faultCode(t, status, body))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, status, "an oversized request is HTTP 413, as Windows answers (F26)")
+	assert.Empty(t, string(body), "no WS-Man fault")
 
 	// A command that does not finish within the Receive's OperationTimeout is asked again; the call's timeout ends it
 	// with Signal and Delete.

@@ -232,6 +232,12 @@ func TestNTLMServerRefuses(t *testing.T) {
 		bad := v1Authenticate("alice")
 		binary.LittleEndian.PutUint32(bad[24:], 1<<20)
 		assertOffer(t, e.do(t, c, neg(bad)))
+		// An offset above the message that wraps when converted to a 32-bit int (A2): refused, never a panic.
+		c = e.client()
+		challenge(t, e, c)
+		bad = v1Authenticate("alice")
+		binary.LittleEndian.PutUint32(bad[24:], 0xFFFFFFFF)
+		assertOffer(t, e.do(t, c, neg(bad)))
 		// An odd-length user name is not UTF-16.
 		c = e.client()
 		ch := challenge(t, e, c)

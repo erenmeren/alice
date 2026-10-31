@@ -44,12 +44,11 @@ const (
 	// notRecognizedExit is cmd.exe's exit for a program it cannot find: WinRS starts the program through cmd.exe
 	// /C even with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command, not a fault (F29, measured on
 	// runner run 7).
-	notRecognizedExit     = 1
-	faultBadRequest       = 87         // ERROR_INVALID_PARAMETER: a request outside the subset or out of order
-	faultShellNotFound    = 2150858843 // the shell does not exist (deleted, or never made)
-	faultMaxShells        = 2150859173 // the user's MaxShellsPerUser is reached
-	faultEnvelopeTooLarge = 2150858817 // the request is larger than MaxEnvelopeSize (F26 records the real code)
-	faultTimedOut         = 2150858793 // w:TimedOut: no output within the Receive's OperationTimeout
+	notRecognizedExit  = 1
+	faultBadRequest    = 87         // ERROR_INVALID_PARAMETER: a request outside the subset or out of order
+	faultShellNotFound = 2150858843 // the shell does not exist (deleted, or never made)
+	faultMaxShells     = 2150859173 // the user's MaxShellsPerUser is reached
+	faultTimedOut      = 2150858793 // w:TimedOut: no output within the Receive's OperationTimeout
 )
 
 // WinRMRequest is one HTTP request the WinRM listener got: the action ("Create", "Command", "Send", "Receive",
@@ -314,7 +313,7 @@ func (m *Model) serveWSMan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body) > winrs.MaxEnvelopeSize {
-		fault("", faultEnvelopeTooLarge)
+		w.WriteHeader(http.StatusRequestEntityTooLarge) // F26: Windows answers 413, no WS-Man fault
 		return
 	}
 	req, err := winrs.ParseRequest(body)

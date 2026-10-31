@@ -777,6 +777,13 @@ func TestWinRSAlwaysDeletesTheShell(t *testing.T) {
 		{name: "overflow", mutate: func(c *winrs.Call) { c.MaxOutput = 3 }, want: winrs.ErrOutputTooLarge, signal: true, del: true},
 		{name: "Send fault", hook: faultAt(winrs.ActionSend, 7), del: true},
 		{name: "Receive protocol error", hook: malformedAt(winrs.ActionReceive), want: winrs.ErrProtocol, del: true},
+		{name: "Send 413", hook: func(w http.ResponseWriter, s served) bool { // Windows' answer to an oversized request (F26)
+			if s.req.Action != winrs.ActionSend {
+				return false
+			}
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return true
+		}, want: winrs.ErrProtocol, del: true},
 		{name: "Create fault", hook: faultAt(winrs.ActionCreate, 5)},
 	}
 	for _, tt := range tests {
