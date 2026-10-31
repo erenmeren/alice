@@ -146,6 +146,7 @@ type session struct {
 	tr             *http.Transport
 	client         *http.Client
 	dialer         *dialer
+	signInErr      *firstError
 	reqCtx         context.Context // outlives the call's ctx, so an abandoned request can free the connection
 	stop           context.CancelFunc
 	wg             sync.WaitGroup
@@ -173,9 +174,9 @@ func (c *Client) newSession(ctx context.Context, call Call, url string) *session
 		MaxIdleConnsPerHost:    1,
 		TLSNextProto:           map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	s := &session{call: call, url: url, user: c.User, password: c.Password, tr: tr, dialer: d}
+	s := &session{call: call, url: url, user: c.User, password: c.Password, tr: tr, dialer: d, signInErr: &firstError{rt: tr}}
 	s.client = &http.Client{
-		Transport:     ntlmssp.Negotiator{RoundTripper: tr},
+		Transport:     ntlmssp.Negotiator{RoundTripper: s.signInErr},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	s.reqCtx, s.stop = context.WithCancel(context.WithoutCancel(ctx))
@@ -347,8 +348,10 @@ func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, er
 	case resp.StatusCode == http.StatusOK:
 		return b, nil
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		if s.dialer.wasRefused() { // the exchange needed a connection the call may not open
-			return nil, fmt.Errorf("%w: %w", ErrUnreachable, errSecondDial)
+		// The Negotiator hands back the anonymous 401 when a later step of the exchange fails in transport (a dial,
+		// the pin, I/O): that 401 is no answer to the credentials.
+		if err := s.signInErr.get(); signIn && err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 		}
 		return nil, ErrAuthRefused
 	}
@@ -359,12 +362,36 @@ func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, er
 	return nil, ErrProtocol
 }
 
+// firstError keeps the first transport error under the Negotiator, which drops the errors of the exchange's steps.
+type firstError struct {
+	rt  http.RoundTripper
+	mu  sync.Mutex
+	err error
+}
+
+func (f *firstError) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := f.rt.RoundTrip(req)
+	if err != nil {
+		f.mu.Lock()
+		if f.err == nil {
+			f.err = err
+		}
+		f.mu.Unlock()
+	}
+	return resp, err
+}
+
+func (f *firstError) get() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
 // dialer opens at most maxDialsPerCall connections, the second only during the sign-in, and refuses any other.
 type dialer struct {
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	mu      sync.Mutex
 	dials   int
-	refused bool
 	signing bool // the Create request is in flight
 	conns   []net.Conn
 }
@@ -372,7 +399,6 @@ type dialer struct {
 func (d *dialer) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	d.mu.Lock()
 	if d.dials >= maxDialsPerCall || (d.dials > 0 && !d.signing) {
-		d.refused = true
 		d.mu.Unlock()
 		return nil, errSecondDial
 	}
@@ -392,12 +418,6 @@ func (d *dialer) signIn(on bool) {
 	d.mu.Lock()
 	d.signing = on
 	d.mu.Unlock()
-}
-
-func (d *dialer) wasRefused() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.refused
 }
 
 func (d *dialer) closeAll() {

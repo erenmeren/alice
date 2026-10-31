@@ -3,11 +3,15 @@ package windows
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,6 +269,47 @@ func TestWinRMIdentityFlow(t *testing.T) {
 		_, err = w.wopen(t).TestConnection(context.Background())
 		assert.NoError(t, err, name)
 	}
+}
+
+// F24 (d): Windows closes the connection after the anonymous 401, so the sign-in dials again; another key on that
+// second connection is the listener's identity changing (a sighting, host_key_changed), not a refused password.
+func TestWinRMSecondConnectionIdentity(t *testing.T) {
+	w := newWinRMEnv(t)
+	other := w.ca.Issue(pki.Opts{CommonName: "iis-01", SANs: []string{"iis-01"}}, time.Now())
+	keys := make([]tls.Certificate, 2)
+	for i, l := range []pki.Leaf{w.key, other} {
+		c, err := tls.X509KeyPair(l.CertPEM, l.KeyPEM)
+		require.NoError(t, err)
+		keys[i] = c
+	}
+	var conns atomic.Int32
+	requests := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("WWW-Authenticate", "Negotiate")
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: keys[min(int(conns.Add(1))-1, 1):][:1]}, nil
+	}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	p, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	w.wref.Config["port"] = p
+
+	_, err = w.openErr(w.wcred)
+	pe := providerErr(t, err)
+	assert.Equal(t, tlspin.CodeChanged, pe.Code)
+	assert.Equal(t, providers.TLSIdentity(other.Cert.RawSubjectPublicKeyInfo).Fingerprint, pe.Params["new_fingerprint"])
+	assert.Equal(t, TransportWinRM, pe.Params["transport"])
+	assert.True(t, errors.Is(err, winrs.ErrNotSent))
+	assert.Equal(t, int32(2), conns.Load())
+	assert.Equal(t, 1, requests, "only the anonymous request reached the listener")
+	assert.Contains(t, w.whk.seen, providers.TLSIdentity(other.Cert.RawSubjectPublicKeyInfo), "the store saw the sighting")
 }
 
 // Ruling 8: without a password nothing is dialled; the source's errors map as the CCS password's.

@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -650,6 +651,44 @@ func TestWinRSSignInMayTakeASecondConnection(t *testing.T) {
 		assert.ErrorIs(t, err, winrs.ErrNotSent)
 		assert.Equal(t, 2, dials, "the third dial is refused before it reaches Dial")
 		assert.Empty(t, f.actions())
+	})
+	// A fault on the second connection is the transport's, not a refused password (the Negotiator would hand back
+	// the anonymous 401).
+	t.Run("the pin refused on the second connection", func(t *testing.T) {
+		f := newFake(t)
+		f.closeFirst = 1
+		refusal := errors.New("the identity is not the pinned one")
+		c := f.client()
+		verify, handshakes := c.TLS.VerifyConnection, 0
+		c.TLS.VerifyConnection = func(cs tls.ConnectionState) error {
+			if handshakes++; handshakes > 1 {
+				return refusal
+			}
+			return verify(cs)
+		}
+		_, err := c.Run(context.Background(), f.call())
+		require.ErrorIs(t, err, refusal)
+		assert.ErrorIs(t, err, winrs.ErrUnreachable)
+		assert.ErrorIs(t, err, winrs.ErrNotSent)
+		assert.NotErrorIs(t, err, winrs.ErrAuthRefused)
+		assert.Len(t, f.rawRequests(), 1, "only the anonymous request reached the listener")
+	})
+	t.Run("the second dial refused", func(t *testing.T) {
+		f := newFake(t)
+		f.closeFirst = 1
+		dials := 0
+		c := f.client()
+		c.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if dials++; dials > 1 {
+				return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		_, err := c.Run(context.Background(), f.call())
+		require.ErrorIs(t, err, winrs.ErrUnreachable)
+		assert.ErrorIs(t, err, syscall.ECONNREFUSED)
+		assert.ErrorIs(t, err, winrs.ErrNotSent)
+		assert.NotErrorIs(t, err, winrs.ErrAuthRefused)
 	})
 }
 
