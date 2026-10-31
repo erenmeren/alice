@@ -662,6 +662,8 @@ function New-Der([byte]$Tag, [byte[]]$Content) {
 }
 
 # The DER OBJECT IDENTIFIER of a dotted OID.
+# shortcut: a first arc 2 with a second arc of 48 or more is not encoded (one byte holds 40 * first + second); the
+# RSA, EC and Ed25519 OIDs are unaffected; upgrade if another key type appears.
 function ConvertTo-DerOid([string]$Oid) {
     $arcs = @($Oid.Split('.') | ForEach-Object { [long]$_ })
     $body = @(40 * $arcs[0] + $arcs[1])
