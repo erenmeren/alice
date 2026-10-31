@@ -811,7 +811,20 @@ decision R71, rulings in [windows-iis.md](../rulings/windows-iis.md) "W7 (R71)",
 | Security | WN-26 High accepted by the owner (the account is not limited to the helper; competitor parity), WN-27..WN-30 (WN-28: `cmd.exe /C` runs the `AutoRun` values and the Create body goes up to 3 times to the pinned listener; WN-29: lockout and the Go-string residual; WN-30 Med, since F24 (a) applies); the transport review (Ruling 26) and the independent final review at `3b5da306`: 0 critical, 2 important, 10 minor, each fixed or declined with its reason | — |
 | Limits | A domain account by syntax and the emulator only; a domain account, Server Core and Windows Server 2019 over WinRM, and `.\alice` on a domain-joined server, are manual-matrix items; no PSRP or JEA, Kerberos, CredSSP, certificate mapping or channel binding (`CbtHardeningLevel` Strict refuses); no password rotation or removal by Alice, no transport change, a second target for one host on the other transport is not refused; the shell `IdleTimeOut` reaping is not measured (Alice always deletes its shell) | — |
 
-## 23. Phase W8 as built
+## 23. Phase W8 as built (2026-10-31, R72)
 
-To be filled when phase W8 is accepted (plan `docs/superpowers/plans/2026-10-31-windows-w8-debt.md`, Task 6; decision
-R72, rulings in [windows-iis.md](../rulings/windows-iis.md) "W8 (R72)", test IDs `WIN-76`..`WIN-78`).
+Built on branch `windows-w8` (plan `docs/superpowers/plans/2026-10-31-windows-w8-debt.md`, Tasks 0-6); decision R72,
+rulings in [windows-iis.md](../rulings/windows-iis.md) "W8 (R72)", test IDs `WIN-76`..`WIN-78`
+(`alice-v1/06-quality.md` §24.7), STRIDE `WN-26` and `WN-29` amended in place, one new error code `ALC-WIN-0029`. One
+migration, `00039`. Helper `1.2.0` unchanged, protocol 1. Two runner runs of four (run 1 red on A8 only, run 2 green).
+
+| Item | As built | Differs from this design |
+|---|---|---|
+| Alice's address | An optional field beside every setup script in the Add server dialog (Linux profiles too) and in the server page's "Show setup script again" modal; the typed address goes as `?from=` to `GET /ssh-keys/platform-key` and `GET /targets/{id}/winrm-setup` (no API change); the API's 422 shows under the field and no script; the script is hidden until the typed address is asked; the help names the firewall on Windows and the key line only on Linux | The WN-26 firewall rule is limited to Alice's address when the Administrator enters it |
+| One server per host | Partial unique index `targets_windows_host_live` on `lower(config->>'host')` for live `windows` targets, any port, either transport; `ALC-WIN-0029` `windows.host_already_managed` (409); the same endpoint still answers `ALC-TGT-0001`; other types unaffected; a removed target frees the host; 00039's Up refuses with `Z1037` while a pair exists | A transport change is "remove, then add" (`ALC-WIN-0027`'s advice flipped) |
+| Password removal | `DELETE /api/v1/targets/{id}/ccs-password` and `.../winrm-password` (Administrator, fresh step-up, never a token, `If-Match`, `license.ClassChange`), 200 with the target; the live rows are ended through `credentials.rotated_at` and kept sealed; a repeat is 200 unchanged; a `PUT` ends the older live rows; every read takes live rows only; audited `target.ccs_password_removed` / `target.winrm_password_removed` without the secret; 00039's Down refuses with `Z1038` while a live server has a removed password and no new one | A removal is an end, not an erase (the ciphertext stays in the database and backups) |
+| Seal order | A password outside the rule is never sealed; R70 Ruling 9's answer order kept | - |
+| Emulator | An oversized WinRM request is HTTP 413 with an empty body (F26, re-measured on run 1) | - |
+| Setup script | The deny-rights fragment compares `secedit`'s entries by SID (an exported entry is a name), so a second run denies nothing again (A8, run 1's evidence); the SSH golden files changed with it | - |
+| Debt | 17 fixed, 10 declined, 3 done (the item table in the rulings file); F9 not reproduced | - |
+| Limits | Everything under the plan's "Not in W8", carried to W9+ | - |

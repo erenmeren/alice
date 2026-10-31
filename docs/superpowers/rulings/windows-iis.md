@@ -3755,6 +3755,7 @@ A13); the three features B1-B3 done. F9 changed no code (not reproduced); A8's f
 | Run | windows.yml | Head | windows-2022 / windows-2025 | windows-required | What it found |
 |---|---|---|---|---|---|
 | 1 | <https://github.com/erenmeren/alice/actions/runs/41227580690> | `921e0d15` | fail / fail | fail | Only `TestRealWinRMSetupScript` failed, on A8: the second run printed "Denying" again on both images (the fragment is not idempotent). Every other real test, the F2 fixture and `TestRealRunnerIsClean` (A16) passed; F26 re-measured: an oversized Send is 413 with no fault. On windows-2022 the account existed before the run, so the first-run check was skipped (T1-4) |
+| 2 | <https://github.com/erenmeren/alice/actions/runs/41229659964> | `026bf049` | pass / pass | pass | The A8 fix (entries compared by SID) and the final review fixes: `TestRealWinRMSetupScript`'s second run prints no "Denying" on both images; `TestRealBothTransportsShareTheHelper`, `TestRealCCSSharedFolderRemoved` and `TestRealRunnerIsClean` pass. The account existed before the script on both images (the first-run check skipped, T1-4) |
 
 ## Final review fixes (W8)
 
@@ -3780,3 +3781,63 @@ item table: no Critical, one Important, six Minor.
   the real test logs the exported deny lines if the second run still prints "Denying".
 - M6, A2's row proves the fix only under `GOARCH=386`, which no gate runs: declined — the conversion is test-only
   emulator code; the 386 RED is recorded (T1-1); a 386 leg in `make test` costs more than the risk.
+
+## Gates (W8)
+
+- `make ci` with `E2E_PROJECT=alice-e2e-w8 ALICE_E2E_PORT=9986`: exit 0. It started at `74ddeef2`; the A8 fix
+  (`88a12494`) landed during its `make test` stage, so `coverage`, the build, the e2e and the image stages ran on the
+  A8 tree (the Windows package's unit tests were also run on it alone, and runner run 2 is green on it). The first
+  `make ci` (at `921e0d15`) failed only `tools/matrixcheck:TestDocIsCurrent`: the traceability map was edited during
+  the run; regenerated in `74ddeef2`.
+- e2e: 171 passed, 4 skipped (59.4 min), both `windows-winrm.spec.ts` journeys (en, tr) with the removal step;
+  vitest 171 files, 2758 tests.
+- `make coverage` (in `make ci`): every floor met, none lowered: `inventory` 89.3 (89), `api` 96.9 (95), `windows`
+  99.1 (95), `winproto` 100 (100), `winhelper` 97.2 (95), `wintest` 97.2 (90), `winrs` 96.9 (95),
+  `cmd/alice-fakewindows` 93.4 (90).
+- `secrets-scan`: gitleaks scanned 2195 commits, no leaks; no fingerprint added; no password literal in tests.
+- `release-symcheck: ok`, `image-check: ok (alice:ci)`; `go mod tidy` leaves `go.mod`/`go.sum` unchanged; the Windows
+  build and vet line passes at `88a12494`; `make matrix-check MATRIXCHECK_FLAGS=-strict`: 382 IDs, 0 pending, 0 gaps;
+  `make docs-check`, `make i18n-check` pass; `make helper winhelper` before the e2e (the helper is unchanged, 1.2.0).
+
+## Acceptance (design §13 / W8)
+
+- Every item of the plan's table has its disposition and its commit or reason (Item dispositions above).
+- `WIN-76`..`WIN-78` are green (vitest, inventory, API, migration and e2e tests named in `test/matrix/traceability.json`).
+- Alice's address reaches both scripts (`?from=` to the platform key and the WinRM setup script); a bad address shows
+  the API's field error and no script.
+- One live Windows target per host across transports: `ALC-WIN-0029`, migration 00039 (`Z1037` on a pair).
+- The password removal with step-up ends the live rows and keeps them sealed; a WinRM server then refuses with
+  `ALC-WIN-0025`; 00039's Down refuses with `Z1038` while such a removal would be undone.
+- The helper is unchanged at 1.2.0, protocol 1; no winproto change.
+- Runner runs: 2 of 4 (run 1 red on A8 only, run 2 green on both legs with `windows-required`).
+- `web/node_modules` (the untracked symlink) is removed before hand-over (F12); `git status --short` is clean.
+
+## Owner items (W8)
+
+1. Rulings 4-5: one live Windows server per host (textual `lower(host)`, any port, both transports); an existing pair
+   stops the upgrade at 00039 (`Z1037`) until one is removed.
+2. Ruling 6: `ALC-WIN-0027`'s advice is now "remove, then add".
+3. Rulings 7-9: a removal ends the rows and keeps them sealed (not erased from the database or backups); a repeat is
+   200 and changes nothing (with the current ETag; a stale `If-Match` is 412, review-gate M2); a WinRM server then
+   refuses every call with `ALC-WIN-0025`; a CCS server lists no file.
+4. Ruling 3: the address field is shown beside every setup script (Linux types included, with a key-line-only help)
+   and in the server page's script modal.
+5. Ruling 11: a password outside the rule is no longer sealed; the error order of R70 Ruling 9 is unchanged.
+6. Ruling 13, the declines: A1 (the default stays 22; the help now names 5986), A5, A7, A11, A15, A17, F7, F10, F11,
+   F12; and the review declines (the `rotated_at` trigger, the 386 leg).
+7. The Turkish texts (table above), including two the plan did not quote: the new clause of `targets.winrm.setupHelp`
+   (T3-9) and `targets.form.aliceAddressKeyHelp` (review-gate M3).
+8. A8's verdict: the fragment printed "Denying" on every run (run 1, both images); it now compares by SID and the SSH
+   script's text changed with it (golden files refreshed).
+9. New beside the plan: 00039's Down refuses with SQLSTATE `Z1038` while a live server has a removed password and no new
+   one (review-gate I1), and the app role gains `UPDATE (rotated_at)` on `credentials` (T2-1).
+
+## Deferred to W9+
+
+- Everything under the plan's "Not in W8": PSRP and JEA; Kerberos and UPN names; CredSSP; client-certificate mapping;
+  NTLM channel binding; tlspin's CA-bundle mode for WinRM; Alice rotating the Windows password; changing a target's
+  transport (remove, then add); the CCS farm layout; CCS file creation; RD Gateway, RD Web Access, RD Connection Broker,
+  RemoteApp and the other "Not in W6" items; the manual matrix rows 8.1-8.8; an ARM64 runner leg; R70's class B and C
+  boundary; the items R70 and W8 declined; a domain account on a runner; Server Core and Windows Server 2019 over WinRM.
+- New in W8: the Windows port field's label "SSH port" under WinRM (T5-5); ending the older live rows of an upgraded
+  database in a migration (final review M3, reworded instead); A2's 386 check in a gate (final review M6).
