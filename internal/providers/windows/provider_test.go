@@ -19,6 +19,7 @@ import (
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/providers/providertest"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/providers/windows/winrs"
 )
 
 func TestWindowsProviderDescribesItself(t *testing.T) {
@@ -491,6 +492,39 @@ func TestACallThatTimesOutClosesItsConnection(t *testing.T) {
 }
 
 // A call whose command cannot be built is an internal error and sends nothing.
+// cancelOnRelease is the platform key whose release ends a context: the connection is open by then.
+type cancelOnRelease struct {
+	*fakeCred
+	cancel context.CancelFunc
+}
+
+func (c cancelOnRelease) SSHSigner(context.Context) (ssh.Signer, func(), error) {
+	return c.signer, c.cancel, nil
+}
+
+// A context that ends after the connection is acquired but before Run sends nothing: ssh.timeout, marked not sent.
+func TestSSHRunContextEndedAfterAcquire(t *testing.T) {
+	e := newEnv(t)
+	s, ok := e.open(t).(*session)
+	require.True(t, ok)
+	before := len(e.srv.Commands())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.cred = cancelOnRelease{fakeCred: e.cred, cancel: cancel}
+	c, err := cmd(winproto.SubVersion, nil)
+	require.NoError(t, err)
+	_, hk, err := s.sshRun(ctx, c)
+	var pe *providers.Error
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, "ssh.timeout", pe.Code)
+	assert.True(t, pe.Retryable)
+	assert.Equal(t, winproto.SubVersion, pe.Params["subcommand"])
+	assert.ErrorIs(t, err, winrs.ErrNotSent)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotEmpty(t, hk.Fingerprint, "the connection was open")
+	assert.Len(t, e.srv.Commands(), before, "no command was sent")
+}
+
 func TestCallRefusesAnInvalidCommand(t *testing.T) {
 	e := newEnv(t)
 	s, ok := e.open(t).(*session)
