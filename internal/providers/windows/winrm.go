@@ -100,7 +100,8 @@ func winrmParams(sub string) map[string]string {
 
 // winrmError maps a failed WinRS call (Ruling 13). Every error carries subcommand and transport=winrm, and keeps the
 // winrs error, so winrs.ErrNotSent stays in the chain. A refused identity is the verifier's (the sighting recorded);
-// a fault keeps its numeric code only; the helper missing at Command is ssh.helper_missing, which mapHelper names.
+// a fault keeps its numeric code only; code 2 answering Command (the helper missing) is ssh.helper_missing, which mapHelper
+// names, and every other fault after Create is windows.winrm_fault.
 func winrmError(err error, v *tlspin.Verifier, ctx context.Context, sub string) error {
 	params := winrmParams(sub)
 	notSent := errors.Is(err, winrs.ErrNotSent)
@@ -118,7 +119,7 @@ func winrmError(err error, v *tlspin.Verifier, ctx context.Context, sub string) 
 		code, retryable = ReasonWinRMAuthRefused, false
 	case errors.As(err, &fe) && notSent && fe.Code == faultAccessDenied:
 		code, retryable = ReasonWinRMAuthRefused, false
-	case errors.As(err, &fe) && !notSent && fe.Code == faultFileNotFound:
+	case errors.As(err, &fe) && fe.Action == winrs.ActionCommand && fe.Code == faultFileNotFound:
 		code, retryable = "ssh.helper_missing", false
 	case errors.As(err, &fe):
 		code, retryable = ReasonWinRMFault, false

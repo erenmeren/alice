@@ -122,7 +122,7 @@ func (c *Client) Run(ctx context.Context, call Call) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, call.Timeout)
 	defer cancel()
 
-	resp, err := s.post(ctx, create, true)
+	resp, err := s.post(ctx, ActionCreate, create, true)
 	if err == nil {
 		var shellID string
 		if shellID, err = ParseShellCreated(resp); err == nil {
@@ -206,7 +206,7 @@ func (s *session) run(ctx context.Context, shellID string) (Result, string, erro
 	if err != nil {
 		return Result{}, "", ErrBadConfig
 	}
-	resp, err := s.post(ctx, req, false)
+	resp, err := s.post(ctx, ActionCommand, req, false)
 	if err != nil {
 		return Result{}, "", err
 	}
@@ -221,7 +221,7 @@ func (s *session) run(ctx context.Context, shellID string) (Result, string, erro
 		if err != nil {
 			return Result{}, cmdID, err
 		}
-		if _, err := s.post(ctx, req, false); err != nil {
+		if _, err := s.post(ctx, ActionSend, req, false); err != nil {
 			return Result{}, cmdID, err
 		}
 		if in = in[n:]; len(in) == 0 {
@@ -244,7 +244,7 @@ func (s *session) receive(ctx context.Context, shellID, cmdID string) (Result, e
 		if err != nil {
 			return Result{}, err
 		}
-		resp, err := s.post(ctx, req, false)
+		resp, err := s.post(ctx, ActionReceive, req, false)
 		var fe *FaultError
 		if errors.As(err, &fe) && fe.Code == faultTimedOut {
 			continue
@@ -269,23 +269,25 @@ func (s *session) receive(ctx context.Context, shellID, cmdID string) (Result, e
 // cleanup sends Signal terminate (when signal is set and the command started), then Delete, each on its own
 // budget detached from ctx. Their failures change nothing: the shell's idle time reaps it.
 func (s *session) cleanup(ctx context.Context, shellID, cmdID string, signal bool) {
-	send := func(req []byte, err error) {
+	send := func(action string, req []byte, err error) { // the answer, a fault included, is ignored
 		if err != nil {
 			return
 		}
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
 		defer cancel()
-		_, _ = s.post(cctx, req, false)
+		_, _ = s.post(cctx, action, req, false)
 	}
 	if signal && cmdID != "" {
-		send(SignalRequest(s.header(0), shellID, cmdID, SignalTerminate))
+		req, err := SignalRequest(s.header(0), shellID, cmdID, SignalTerminate)
+		send(ActionSignal, req, err)
 	}
-	send(DeleteRequest(s.header(0), shellID))
+	req, err := DeleteRequest(s.header(0), shellID)
+	send(ActionDelete, req, err)
 }
 
 // post sends one request on the call's connection and waits for its answer or the end of ctx. A request left
 // behind keeps running until it ends or the session closes.
-func (s *session) post(ctx context.Context, body []byte, signIn bool) ([]byte, error) {
+func (s *session) post(ctx context.Context, action string, body []byte, signIn bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTimeout, err)
 	}
@@ -297,7 +299,7 @@ func (s *session) post(ctx context.Context, body []byte, signIn bool) ([]byte, e
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		b, err := s.roundTrip(body, signIn)
+		b, err := s.roundTrip(action, body, signIn)
 		ch <- answer{b, err}
 	}()
 	select {
@@ -311,7 +313,7 @@ func (s *session) post(ctx context.Context, body []byte, signIn bool) ([]byte, e
 // roundTrip sends one request. signIn (Create only) gives it the credentials, which the Negotiator reads and never
 // forwards: it runs the NTLM exchange (Ruling 28, as amended: credentials on Create only). A request without them
 // passes the Negotiator untouched, so a 401 on it is final: no new exchange, no resent body.
-func (s *session) roundTrip(body []byte, signIn bool) ([]byte, error) {
+func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(s.reqCtx, http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, ErrBadConfig
@@ -347,6 +349,7 @@ func (s *session) roundTrip(body []byte, signIn bool) ([]byte, error) {
 		return nil, ErrAuthRefused
 	}
 	if fe, ok := ParseFault(b); ok {
+		fe.Action = action
 		return nil, fe
 	}
 	return nil, ErrProtocol

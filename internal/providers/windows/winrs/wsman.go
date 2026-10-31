@@ -55,8 +55,12 @@ var ErrProtocol = errors.New("winrs: malformed or unexpected WS-Management messa
 var errBadInput = errors.New("winrs: invalid request input")
 
 // FaultError is a WS-Management fault. Only the WSManFault code is kept (0 when the fault has none): the
-// fault's text comes from the server and is never kept, logged or shown.
-type FaultError struct{ Code uint32 }
+// fault's text comes from the server and is never kept, logged or shown. Action is the request it answered (one of
+// the Action* constants), set by Client.Run; the parser leaves it empty.
+type FaultError struct {
+	Code   uint32
+	Action string
+}
 
 func (e *FaultError) Error() string {
 	return "winrs: WS-Management fault " + strconv.FormatUint(uint64(e.Code), 10)

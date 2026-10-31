@@ -625,13 +625,13 @@ func TestWinRSNotSentStages(t *testing.T) {
 	}{
 		{name: "dial refused", mutate: func(_ *winrs.Client, call *winrs.Call) { call.Addr = "169.254.169.254:5986" }, want: netaddr.ErrNotAllowed, notSent: true},
 		{name: "NTLM refused", mutate: func(c *winrs.Client, _ *winrs.Call) { c.Password += "x" }, want: winrs.ErrAuthRefused, notSent: true},
-		{name: "Create fault", hook: faultAt(winrs.ActionCreate, 5), want: &winrs.FaultError{Code: 5}, notSent: true},
+		{name: "Create fault", hook: faultAt(winrs.ActionCreate, 5), want: &winrs.FaultError{Code: 5, Action: winrs.ActionCreate}, notSent: true},
 		{name: "Create malformed", hook: malformedAt(winrs.ActionCreate), want: winrs.ErrProtocol, notSent: true},
-		{name: "Command fault 2", hook: faultAt(winrs.ActionCommand, 2), want: &winrs.FaultError{Code: 2}},
+		{name: "Command fault 2", hook: faultAt(winrs.ActionCommand, 2), want: &winrs.FaultError{Code: 2, Action: winrs.ActionCommand}},
 		{name: "Command malformed", hook: malformedAt(winrs.ActionCommand), want: winrs.ErrProtocol},
-		{name: "Send fault", hook: faultAt(winrs.ActionSend, 7), want: &winrs.FaultError{Code: 7}},
+		{name: "Send fault", hook: faultAt(winrs.ActionSend, 7), want: &winrs.FaultError{Code: 7, Action: winrs.ActionSend}},
 		{name: "Receive malformed", hook: malformedAt(winrs.ActionReceive), want: winrs.ErrProtocol},
-		{name: "Receive fault", hook: faultAt(winrs.ActionReceive, 9), want: &winrs.FaultError{Code: 9}},
+		{name: "Receive fault", hook: faultAt(winrs.ActionReceive, 9), want: &winrs.FaultError{Code: 9, Action: winrs.ActionReceive}},
 		{name: "Receive never done", hook: neverDone, mutate: func(_ *winrs.Client, call *winrs.Call) { call.Timeout = 500 * time.Millisecond }, want: winrs.ErrTimeout},
 		{name: "a server error without a fault", hook: func(w http.ResponseWriter, s served) bool {
 			if s.req.Action != winrs.ActionSend {
@@ -654,6 +654,7 @@ func TestWinRSNotSentStages(t *testing.T) {
 			if errors.As(tt.want, &want) {
 				require.ErrorAs(t, err, &fe)
 				assert.Equal(t, want.Code, fe.Code)
+				assert.Equal(t, want.Action, fe.Action, "the fault names the request it answered")
 			} else {
 				require.ErrorIs(t, err, tt.want)
 			}

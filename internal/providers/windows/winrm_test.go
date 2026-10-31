@@ -366,11 +366,13 @@ func TestWinRMErrorTable(t *testing.T) {
 		{"a refused configuration", ns(winrs.ErrBadConfig), reasonUnexpected, false, nil},
 		{"auth refused", ns(winrs.ErrAuthRefused), ReasonWinRMAuthRefused, false, nil},
 		{"auth refused after Create", winrs.ErrAuthRefused, ReasonWinRMAuthRefused, false, nil},
-		{"access denied at Create", ns(&winrs.FaultError{Code: faultAccessDenied}), ReasonWinRMAuthRefused, false, nil},
-		{"a fault at Create", ns(&winrs.FaultError{Code: 2150859173}), ReasonWinRMFault, false, map[string]string{"wsman_code": "2150859173"}},
-		{"file not found at Command", &winrs.FaultError{Code: faultFileNotFound}, "ssh.helper_missing", false, nil},
-		{"access denied after Create", &winrs.FaultError{Code: faultAccessDenied}, ReasonWinRMFault, false, map[string]string{"wsman_code": "5"}},
-		{"a fault after Command", &winrs.FaultError{Code: 87}, ReasonWinRMFault, false, map[string]string{"wsman_code": "87"}},
+		{"access denied at Create", ns(&winrs.FaultError{Code: faultAccessDenied, Action: winrs.ActionCreate}), ReasonWinRMAuthRefused, false, nil},
+		{"a fault at Create", ns(&winrs.FaultError{Code: 2150859173, Action: winrs.ActionCreate}), ReasonWinRMFault, false, map[string]string{"wsman_code": "2150859173"}},
+		{"file not found at Command", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionCommand}, "ssh.helper_missing", false, nil},
+		{"code 2 at Send", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionSend}, ReasonWinRMFault, false, map[string]string{"wsman_code": "2"}},
+		{"code 2 at Receive", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionReceive}, ReasonWinRMFault, false, map[string]string{"wsman_code": "2"}},
+		{"access denied after Create", &winrs.FaultError{Code: faultAccessDenied, Action: winrs.ActionCommand}, ReasonWinRMFault, false, map[string]string{"wsman_code": "5"}},
+		{"a fault after Command", &winrs.FaultError{Code: 87, Action: winrs.ActionReceive}, ReasonWinRMFault, false, map[string]string{"wsman_code": "87"}},
 		{"a timeout", fmt.Errorf("%w: %w", winrs.ErrTimeout, context.DeadlineExceeded), "ssh.timeout", true, nil},
 		{"a timeout before Create", ns(winrs.ErrTimeout), "ssh.timeout", true, nil},
 		{"output too large", winrs.ErrOutputTooLarge, "ssh.output_too_large", false, nil},
@@ -389,7 +391,7 @@ func TestWinRMErrorTable(t *testing.T) {
 		assert.Equal(t, want, pe.Params, r.name)
 	}
 	// The helper missing at Command becomes windows.helper_missing through mapHelper, keeping the params.
-	pe := providerErr(t, mapHelper(winrmError(&winrs.FaultError{Code: faultFileNotFound}, v, context.Background(), sub)))
+	pe := providerErr(t, mapHelper(winrmError(&winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionCommand}, v, context.Background(), sub)))
 	assert.Equal(t, ReasonHelperMissing, pe.Code)
 	assert.Equal(t, TransportWinRM, pe.Params["transport"])
 
