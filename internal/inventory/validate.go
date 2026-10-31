@@ -203,6 +203,10 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 		out.Port = defaultWinRMPort
 	case in.Port == 0:
 		out.Port = defaultSSHPort
+	case in.Port == 5985 && out.Transport == TransportWinRM:
+		// WinRM's plain-HTTP port: the client refuses it before any dial (R71 Ruling 12), so a target on it would
+		// never connect.
+		errs.Add("port", validate.Pattern, nil)
 	case in.Port < 1 || in.Port > 65535:
 		errs.Add("port", validate.OutOfRange, map[string]string{"min": "1", "max": "65535"})
 	}

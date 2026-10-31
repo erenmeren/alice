@@ -147,6 +147,7 @@ func TestValidateNewTarget(t *testing.T) {
 		{NewTarget{Name: "web\u00ad01", Type: "linux", Host: "web"}, "name", validate.Pattern},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Port: 70000}, "port", validate.OutOfRange},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Port: -1}, "port", validate.OutOfRange},
+		{NewTarget{Name: "web", Type: "windows", Host: "web", Transport: "winrm", Port: 5985}, "port", validate.Pattern},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Username: "Root"}, "username", validate.Pattern},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Username: "a;b"}, "username", validate.Pattern},
 		{NewTarget{Name: "web", Type: "linux", Host: "web", Username: strings.Repeat("a", 33)}, "username", validate.Pattern},

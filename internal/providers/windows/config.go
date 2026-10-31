@@ -63,6 +63,9 @@ func ParseConfig(cfg providers.TargetConfig) (Config, []validate.FieldError) {
 	if p, ok := cfg["port"]; c.Transport == TransportWinRM && (!ok || p == nil) {
 		c.Port = DefaultWinRMPort
 	}
+	if c.Transport == TransportWinRM && c.Port == 5985 {
+		errs.Add("port", validate.Pattern, nil) // WinRM's plain-HTTP port, never dialled (Ruling 12)
+	}
 	c.Username = DefaultUser
 	if v, ok := cfg["username"]; ok && v != nil {
 		u, _ := v.(string)

@@ -585,3 +585,13 @@ func TestWinRMConfig(t *testing.T) {
 	assert.Equal(t, providers.Field{Name: "transport", Type: providers.FieldEnum, Values: []string{TransportSSH, TransportWinRM},
 		Default: TransportSSH, LabelKey: "provider.windows.fields.transport.label", HelpKey: "provider.windows.fields.transport.help"}, schema)
 }
+
+// R71 Ruling 12: WinRM's plain-HTTP port is refused when the target is created, not at the first call.
+func TestParseConfigRefusesTheWinRMHTTPPort(t *testing.T) {
+	_, errs := ParseConfig(providers.TargetConfig{"host": "iis-01", "transport": "winrm", "port": float64(5985)})
+	require.Len(t, errs, 1)
+	assert.Equal(t, "port", errs[0].Field)
+	assert.Equal(t, validate.Pattern, errs[0].Code)
+	_, errs = ParseConfig(providers.TargetConfig{"host": "iis-01", "port": float64(5985)})
+	assert.Empty(t, errs, "an SSH server may listen on 5985")
+}
