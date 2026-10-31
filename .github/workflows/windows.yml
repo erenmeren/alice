@@ -237,8 +237,10 @@ jobs:
           # W5's CCS tests poll IIS's pickup for up to 120 s per write (F15): past go test's default
           # 10-minute package timeout, within the job's.
           # W7's WinRS facts wait up to a shell's idle time plus 30 s (F27): past the default 10 minutes
-          # together with the rest of that package.
-          go test -count=1 -v -timeout 30m ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
+          # together with the rest of that package. -p 1: the packages' real tests change machine-wide
+          # settings (accounts, user rights, WinRM, the helper's data directory), so they run one package
+          # at a time.
+          go test -count=1 -v -p 1 -timeout 30m ./internal/providers/windows/... 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
           go test -count=1 -v -timeout 30m -tags alicetest ./cmd/alice-winhelper/... 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { $status = $LASTEXITCODE }
