@@ -468,6 +468,7 @@ func TestWinRMReleasesThePassword(t *testing.T) {
 		{"a timeout", func(w *winrmEnv) { w.model.Delay(winproto.SubWinFacts, time.Minute) }, 300 * time.Millisecond, false},
 		{"a fault", func(w *winrmEnv) { w.model.FailWinRM(87) }, 0, false},
 		{"an auth refusal", func(w *winrmEnv) { w.model.SetWinRMAccount("alice", "other-"+rand.Text()) }, 0, false},
+		{"an output overflow", func(*winrmEnv) {}, 0, false},
 		{"an identity refusal", func(w *winrmEnv) {
 			other := providers.TLSIdentity(pki.SelfSigned("other", pki.ECDSA256, time.Now()).Cert.RawSubjectPublicKeyInfo)
 			w.whk.pinned = &other
@@ -483,7 +484,12 @@ func TestWinRMReleasesThePassword(t *testing.T) {
 				ctx, cancel = context.WithTimeout(ctx, r.ctx)
 				defer cancel()
 			}
-			if r.reopen {
+			if r.name == "an output overflow" {
+				c, err := linuxssh.ForcedCommand([]string{winproto.SubVersion}, nil, time.Minute, 1)
+				require.NoError(t, err)
+				_, _, err = s.run(ctx, c)
+				assert.Equal(t, "ssh.output_too_large", providerErr(t, err).Code)
+			} else if r.reopen {
 				_, err := w.openErr(w.wcred)
 				require.Error(t, err)
 			} else {

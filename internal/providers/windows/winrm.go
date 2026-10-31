@@ -48,11 +48,11 @@ func (s *session) winrmRun(ctx context.Context, c linuxssh.HelperCommand) (linux
 	if err != nil {
 		return linuxssh.Result{}, providers.HostKey{}, winrmPasswordRefusal(ctx, err, sub)
 	}
+	defer release() // before the slot's release: defers run last in, first out
 	cl := winrs.Client{TLS: s.pin.TLSConfig(), User: ntlmUser(s.cfg.Username), Password: string(pw)}
 	r, err := cl.Run(ctx, winrs.Call{Addr: net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port)), Program: winproto.HelperPath,
 		Args: []string{"ssh"}, Env: map[string]string{"SSH_ORIGINAL_COMMAND": c.Line()}, Stdin: c.Input(), Timeout: c.Timeout(),
 		MaxOutput: c.MaxOutput()})
-	release()
 	if err != nil {
 		return linuxssh.Result{}, providers.HostKey{}, winrmError(err, s.pin, ctx, sub)
 	}
