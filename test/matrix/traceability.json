@@ -2572,7 +2572,9 @@
    "internal/providers/windows/winproto:TestValidCCSPassword",
    "internal/providers/windows/winhelper:TestCCSJournalHoldsNoPassword",
    "migrations:TestMigration00036WindowsCCS",
-   "internal/inventory:TestSetCCSPasswordOnANonWindowsTargetIsAConflict"
+   "internal/inventory:TestSetCCSPasswordOnANonWindowsTargetIsAConflict",
+   "internal/inventory:TestSetCCSPasswordRefusesBeforeSealing",
+   "cmd/alice-winhelper:TestRealCCSSharedFolderRemoved"
   ]
  },
  {
@@ -2823,7 +2825,8 @@
    "internal/providers/windows/winrs:TestWinRSAlwaysDeletesTheShell",
    "internal/providers/windows/winrs:TestWinRSBounds",
    "internal/providers/windows/winrs:TestWinRSShellIdle",
-   "internal/providers/linuxssh:TestPoolSlot"
+   "internal/providers/linuxssh:TestPoolSlot",
+   "internal/providers/windows/wintest:TestWinRMEmulatorFaultsAndLimits"
   ]
  },
  {
@@ -2892,6 +2895,39 @@
   "id": "WIN-75",
   "status": "test",
   "tests": [
+   "web/e2e/windows-winrm.spec.ts:add a server with WinRM, set its password with step-up, confirm the TLS key, deploy, roll back, refuse a wrong password"
+  ]
+ },
+ {
+  "id": "WIN-76",
+  "status": "test",
+  "tests": [
+   "web/src/components/AddServerModal.test.tsx:sends the typed address to the platform key and shows the script it answers",
+   "web/src/components/AddServerModal.test.tsx:shows the API\\'s field error for a bad address and no script",
+   "web/src/components/AddServerModal.test.tsx:asks the WinRM setup script with the typed address, and without one when the field is empty"
+  ]
+ },
+ {
+  "id": "WIN-77",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestOneWindowsTargetPerHost",
+   "migrations:TestMigration00039",
+   "internal/api:TestWindowsHostAlreadyManagedHandler"
+  ]
+ },
+ {
+  "id": "WIN-78",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestClearTargetPassword",
+   "internal/inventory:TestSetTargetPasswordEndsTheOlderRow",
+   "internal/inventory:TestWinRMTargetAfterPasswordRemoval",
+   "internal/api:TestClearTargetPasswordHandlers",
+   "web/src/components/CCSPasswordPanel.test.tsx:removes the WinRM password after the confirmation, through the step-up with the version, and says \"Not set\"",
+   "web/src/components/CCSPasswordPanel.test.tsx:removes the CCS password with the CCS text and endpoint",
+   "web/src/components/CCSPasswordPanel.test.tsx:sends nothing when the confirmation is cancelled",
+   "web/src/components/CCSPasswordPanel.test.tsx:offers no Remove password when nothing is set or to a person who cannot manage credentials",
    "web/e2e/windows-winrm.spec.ts:add a server with WinRM, set its password with step-up, confirm the TLS key, deploy, roll back, refuse a wrong password"
   ]
  },

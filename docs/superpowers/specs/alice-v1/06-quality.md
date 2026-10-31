@@ -235,7 +235,7 @@ HWM = high-water mark, written hourly (encrypted and MAC'd with the master-key-d
 
 ## 24. Failure-Mode Test Catalogue
 
-Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10; fixes batch 2, R67: FX-07..FX-12, §24.11; fixes batch 3, R70: WIN-65..WIN-67, §24.7). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
+Each case has an ID, is automated unless marked (M) manual, and lists observable expected behavior (hardening batch 1, R64: HB-01..HB-17, §24.8; fixes batch 1, R66: FX-01..FX-06, §24.9; canary deployment, R65: CAN-01..CAN-32, §24.10; fixes batch 2, R67: FX-07..FX-12, §24.11; fixes batch 3, R70: WIN-65..WIN-67, §24.7; phase W8 (R72): WIN-76..WIN-78, §24.7). "Auto-rollback" means: restore backed-up files, run `nginx -t`, reload, verify the old certificate is served again. Every failure produces an audit event with result `failed`, a job record with a plain-language reason (EN and TR), and an alert to admins. No private key or full command output containing key material may appear in any message.
 
 ### 24.1 Nginx deployment failures
 
@@ -349,13 +349,13 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 | F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
 | F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
 
-### 24.7 Windows servers (R60, R61, R62, R63, R68, R69, R70, R71)
+### 24.7 Windows servers (R60, R61, R62, R63, R68, R69, R70, R71, R72)
 
 (Phase W1, read only: WIN-01..WIN-14; phase W2, deployment, verification and rollback (R61): WIN-15..WIN-28;
 phase W3, drift and cleanup (R62): WIN-29..WIN-38; phase W4, real-Windows CI and release (R63): WIN-39..WIN-45; phase W5, Centralized Certificate Store (R68):
 WIN-46..WIN-55; phase W6, Remote Desktop certificate (R69): WIN-56..WIN-64; fixes batch 3, the deferred minors
 (R70, rulings `docs/superpowers/rulings/fixes-2026-10-28.md`): WIN-65..WIN-67; phase W7, the WinRM transport (R71):
-WIN-68..WIN-75;
+WIN-68..WIN-75; phase W8, debt and small features (R72): WIN-76..WIN-78;
 design
 `docs/superpowers/specs/2026-10-21-windows-iis-target-design.md` §11, §12; rulings
 `docs/superpowers/rulings/windows-iis.md`.) The emulated host `internal/providers/windows/wintest` runs the helper's own
@@ -438,6 +438,9 @@ decision code; the `cmd/alice-winhelper` rows run on the real-Windows workflow (
 | WIN-73 | The WinRM setup script: its steps, the password asked and never printed, domain accounts untouched, the SSH script unchanged, the fingerprint (F32), both transports on one server | The script checks Negotiate in the registry before any change, checks the helper's hash, prepares the account (a local account's password asked twice with `Read-Host -AsSecureString` under Alice's rule, never printed; a domain account never created or changed), installs the helper, sets `LocalAccountTokenFilterPolicy` only for a local account found at 0 or absent, keeps an existing HTTPS listener, adds `Alice WinRM (TCP 5986)` from Alice's address and prints each HTTPS listener's SPKI fingerprint and thumbprint, which equal what Alice's client sees; the SSH script is byte for byte unchanged; both scripts share the helper on one server |
 | WIN-74 | Real Windows: F24-F31, the provider over real WinRS, fidelity, the runner left clean | On windows-2022 and windows-2025 a local administrator signs in with NTLMv2 to the image's 5986 listener (4624 type 3, `NTLM V2`), the helper's forced entry runs with `SSH_ORIGINAL_COMMAND`, 256 KiB of stdin arrive byte for byte, a call costs well under 3 s, the pinned listener identity holds across a restart and a new key is refused before any HTTP request, exit codes pass through, a Basic-only offer and a wrong password are refused, a deny-network right and a non-admin account are refused; the provider discovers, deploys, verifies and rolls back over WinRS; `TestFidelityWinRM` gives equal answers on both hosts; the runner is left as found |
 | WIN-75 | The WinRM journey in the browser, in English and Turkish | A Windows server added with WinRM shows the WN-26 warning and port 5986, the setup script, the password set with step-up and the TLS key confirmed; the connection test passes, discovery lists the bindings, a deployment commits and verifies, with stale TLS a deployment rolls back, a wrong password in Alice fails the test with `ALC-WIN-0024`; the server page passes the accessibility check |
+| WIN-76 | Alice's address typed in the Add server dialog (OpenSSH and WinRM) or the server page's script modal | The served script's `$AliceAddress` (and the SSH key line's `from=`) holds the address; the firewall rule accepts it only; a bad address shows the API's `from` field error and no script; an empty field gives today's script with its warning |
+| WIN-77 | A second live Windows target for a host Alice already manages (the other transport, another port, another case) | `ALC-WIN-0029`, nothing added; an Nginx target on that host, or a Windows target after the first is removed, is created; migration 00039 refuses with `Z1037` while a pair exists |
+| WIN-78 | `DELETE .../winrm-password` or `.../ccs-password` by an Administrator with step-up and `If-Match` | The live rows are ended (kept, never deleted), the target's `*_password_set_at` is null, audited without the secret; a WinRM target refuses every call with `ALC-WIN-0025` until a new password; a repeat is 200 and changes nothing; a later `PUT` works |
 
 ### 24.8 Hardening batch 1 (R64)
 

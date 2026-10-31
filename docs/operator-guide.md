@@ -179,6 +179,13 @@ off: Alice asks no certificate authority anything until an Administrator switche
 that once the Alice host may reach your certificate authorities' OCSP and CRL addresses over HTTP and HTTPS (ports 80 and
 443, no proxy). A new installation has it on. See [admin-guide.md](admin-guide.md#revocation-checks).
 
+**One Windows server per address (R72, database version 39).** The update to a release with database version 39
+refuses, and returns to the installed version, while two live Windows servers in Alice share an address (error code
+`Z1037` in the update log). Find and remove the pairs first, as
+[upgrade.md](upgrade.md#one-windows-server-per-address) describes. Going back below version 39 makes the earlier
+version use a removed WinRM or CCS password again (see
+[upgrade.md](upgrade.md#going-back-to-an-earlier-version)).
+
 ## Logs
 
 | What | Where |

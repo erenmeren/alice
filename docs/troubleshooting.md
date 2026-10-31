@@ -2376,7 +2376,7 @@ None of these files holds key material.
 
 **Meaning.** The server is reached over WinRM, which signs in with the account's password, and no password was set in Alice; Alice did not connect. (HTTP 409, reason `windows.winrm_password_missing`.)
 
-**Likely cause.** The server was added with the WinRM connection and its password step was skipped.
+**Likely cause.** The server was added with the WinRM connection and its password step was skipped, or the password was removed.
 
 **What to do.** An Administrator sets the password on the server's page in Alice: the password the WinRM setup script set for the account on the server. Then test the connection again.
 
@@ -2394,7 +2394,7 @@ None of these files holds key material.
 
 **Likely cause.** The connection is chosen when a Windows server is added, because the pinned server identity (an SSH host key or the WinRM listener's TLS key) and the credential differ between the two.
 
-**What to do.** To use the other connection, add the server again with it, confirm its identity, then remove the old entry.
+**What to do.** To use the other connection, remove this entry, then add the server again with it and confirm its identity.
 
 ## ALC-WIN-0028: This WinRM password cannot be used
 
@@ -2403,6 +2403,14 @@ None of these files holds key material.
 **Likely cause.** The password is shorter than 12 characters, longer than 128, or holds a space or a character outside printable ASCII.
 
 **What to do.** Set a password that follows this rule for the account on the server (the WinRM setup script asks for it), then enter the same password in Alice.
+
+## ALC-WIN-0029: Alice already manages this Windows server
+
+**Meaning.** Another Windows server in Alice has the same address (over OpenSSH or WinRM, on any port); nothing was added. (HTTP 409, reason `windows.host_already_managed`.)
+
+**Likely cause.** The server was added before, perhaps with the other connection or another port. Alice keeps one entry per Windows server, because two entries for one server would count twice against the licence and would both change the same bindings. Addresses are compared as written, ignoring case: a short name, the full name and the IP address of one server are three addresses.
+
+**What to do.** Use the existing entry. To change its connection type, remove it first, then add the server again. A removed entry frees the address at once.
 
 ## ALC-CRT-0001: Not a readable certificate
 

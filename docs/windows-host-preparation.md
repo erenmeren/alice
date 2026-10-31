@@ -79,10 +79,13 @@ the account is local.
    stores) and then reads the bindings. Choose **Discover** on the server's page to read it again at any time; Alice
    also does it on its own once per discovery interval.
 
-A restriction to Alice's source address is not added by the **Servers** page. If you want it, ask for the script
-through the API with `GET /api/v1/ssh-keys/platform-key?from=<Alice's IP address>`: the key line then carries
-`from="<address>"` and the firewall rule accepts port 22 only from that address. Without it the script warns that the
-rule accepts any address; you can also set `$AliceAddress` in the script yourself (one address, a range such as
+To limit the server to Alice's source address, take the script from **Add server** instead of **Prepare a server for
+Alice**: the dialog shows the same commands with an **Alice's address (optional)** field. Enter the IP address the
+server sees Alice connect from: the key line then carries `from="<address>"` and the firewall rule accepts port 22
+only from that address. Alice accepts one IPv4 or IPv6 address (no host name, range or `%zone`); anything else shows
+the reason under the field and no script. The API gives the same script with
+`GET /api/v1/ssh-keys/platform-key?from=<Alice's IP address>`. Without an address the script warns that the rule
+accepts any address; you can also set `$AliceAddress` in the script yourself (one address, a range such as
 `192.0.2.0/24`, or a list such as `'192.0.2.10', '192.0.2.11'`).
 
 ### OpenSSH Server without Windows Update
@@ -262,7 +265,8 @@ Alice, linked to the IIS sites IIS serves from it. Prepare the store like this:
   128 printable ASCII characters and no spaces; choose such a password in IIS before you export the files with it. An
   Administrator enters the same password in Alice on the server's page (**CCS password**, with step-up). Alice never
   reads the password IIS keeps in the registry; a file the password in Alice does not open is shown as a problem and
-  never written.
+  never written. **Remove password** on the same panel (with step-up) takes it away again: Alice then lists and deploys
+  no CCS file until a new password is set, and the removed password stays sealed in Alice's database and backups.
 - **File names.** `<host>.pfx` for a host (`www.example.com.pfx`) and `_.<domain>.pfx` for a wildcard
   (`_.example.com.pfx`, which IIS uses for every name below `example.com`, also two or more labels down, but not for
   `example.com` itself). IIS compares names without regard to case and prefers the exact file. A name that gives no
@@ -372,8 +376,9 @@ Use this only when the server cannot run OpenSSH. OpenSSH stays the recommended 
 **Under WinRM, anyone with this account's password can run any command on the server as an administrator. With
 OpenSSH, Alice's key can run only alice-helper.exe.** The password is an ordinary Windows password: it also signs in to
 the server's other network services that accept the account (file sharing, remote management), not only WinRM. Use a
-dedicated account, a different password on every server, and keep port 5986 open to the Alice server only (the
-script's firewall rule accepts any address until you set `$AliceAddress`, below).
+dedicated account, a different password on every server, and keep port 5986 open to the Alice server only (enter
+**Alice's address** beside the setup script; without it the script's firewall rule accepts any address until you set
+`$AliceAddress`, below).
 
 Over WinRM Alice runs the same `alice-helper.exe`, with the same subcommands, journal and rollback as over SSH. It
 connects to the server's WinRM HTTPS listener (TLS 1.2 or later, port 5986), signs in with the account's name and
@@ -382,6 +387,12 @@ Each call is one connection and one WinRS shell, which runs `"C:\Program Files\A
 Alice's subcommand in the shell's environment variable `SSH_ORIGINAL_COMMAND`; certificates and keys travel only on
 the helper's standard input. Alice never uses Basic authentication, unencrypted HTTP (port 5985), Kerberos, CredSSP
 or client certificates, and sends no PowerShell.
+
+Alice keeps one entry per Windows server: a second server with the same address is refused (`ALC-WIN-0029`), over
+OpenSSH or WinRM, on any port. Alice compares the address as written, so `iis-01`, `iis-01.corp.example` and its IP
+address count as three servers: add each server once, under one name. The connection type of an entry never changes.
+To move a server from OpenSSH to WinRM (or back), remove its entry in Alice, then add the server again with the other
+connection.
 
 ### The account
 
@@ -415,10 +426,11 @@ $AliceUser = 'alice'
 $AliceAddress = 'Any'
 ```
 
-(Alice fills in the server's account. The address is `'Any'` by default: the script shown in Alice's web interface
-keeps it, and only the API's optional `from` parameter (`GET /api/v1/targets/{id}/winrm-setup?from=<address>`) fills
-it in. With `'Any'` the script prints a warning that port 5986 is open to every address: set `$AliceAddress` to the
-Alice server's address before you run it.) In order, it:
+(Alice fills in the server's account. The address is `'Any'` unless you enter **Alice's address (optional)** beside
+the script, in **Add server** or **Show setup script again**: the IP address the server sees Alice connect from, which
+Alice checks and writes in; the API's optional `from` parameter (`GET /api/v1/targets/{id}/winrm-setup?from=<address>`)
+does the same. With `'Any'` the script prints a warning that port 5986 is open to every address: enter the address in
+Alice, or set `$AliceAddress` to the Alice server's address before you run it.) In order, it:
 
 1. Checks that it runs elevated, the account name, and that WinRM's Negotiate authentication is on (read from
    `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service`, value `auth_negotiate`). With Negotiate off it
@@ -494,6 +506,11 @@ A refused sign-in is `ALC-WIN-0024` ([troubleshooting.md](troubleshooting.md)).
   (run the script again, or `net user`), set the same password in Alice: until then every call is refused
   (`ALC-WIN-0024`), and the password Alice still holds no longer works (measured).
 - Use a different password on every server, so one password opens one server.
+- An Administrator can remove it: **Remove password** on the server's page, then a fresh authenticator code. Alice
+  then holds no password for the server, refuses every call before connecting (`ALC-WIN-0025`) and shows **Not set**
+  until a new password is set. The removed password is not erased: it stays sealed under Alice's master key in the
+  database and in backups, and Alice never uses it again. Removing it does not change the account on the server;
+  to stop the account itself, see [Revoking Alice's access](#revoking-alices-access).
 
 ### Checking the listener's fingerprint
 

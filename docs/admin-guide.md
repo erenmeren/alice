@@ -1452,13 +1452,24 @@ server once with the PowerShell setup script that **Add server** shows for **Win
 
 - **OpenSSH or WinRM.** **Add server** asks for the **Connection** of a Windows server: **OpenSSH (recommended)** or
   **WinRM over HTTPS**. Choose WinRM only when the server cannot run OpenSSH. The choice is fixed when the server is
-  added (`ALC-WIN-0027`); to change it, add the server again with the other connection, confirm its identity, then
-  remove the old entry. Everything below (discovery, deployment, verification, rollback, drift, cleanup) works the
+  added (`ALC-WIN-0027`); to change it, remove the entry, then add the server again with the other connection and
+  confirm its identity. Everything below (discovery, deployment, verification, rollback, drift, cleanup) works the
   same over both, with the same `alice-helper.exe`.
+- **One entry per server.** Alice keeps at most one Windows server per address, over either connection and on any
+  port: a second **Add server** for the same address is refused (`ALC-WIN-0029`) and nothing is added. Alice compares
+  the address as written (upper and lower case count as one), so `iis-01`, `iis-01.corp.example` and its IP address
+  are three addresses: add each server once. Removing the entry frees the address at once. A server of another type
+  (Nginx, Apache, HAProxy) on the same address is allowed.
+- **Alice's address.** Beside every setup script (**Add server** for every server type, and **Show setup script
+  again** on a WinRM server's page) the field **Alice's address (optional)** takes the IP address the server sees Alice
+  connect from. With it, the script's firewall rule opens the port (22 or 5986) to that address only, and the SSH key
+  line accepts Alice's key only from it; without it, the rule opens the port to any address until you set
+  `$AliceAddress` in the script, and the script warns. Alice accepts one IPv4 or IPv6 address; anything else shows the
+  reason under the field and no script.
 - **The WinRM caution.** Under WinRM, anyone with this account's password can run any command on the server as an
   administrator. With OpenSSH, Alice's key can run only alice-helper.exe. The password also signs in to the server's
   other network services (file sharing, remote management). Use a dedicated account and a different password on every
-  server, and keep port 5986 open to Alice's address only (the setup script does).
+  server, and keep port 5986 open to Alice's address only (enter **Alice's address** beside the setup script).
 - **The WinRM account.** Enter it as `alice` or `.\alice` (a local account), `SERVER\alice` (a local account named with
   the computer's name) or `DOMAIN\alice` (a domain account); a name such as `alice@corp.example` is refused. It must be
   a member of the server's Administrators group. Choosing WinRM sets the port to 5986.
@@ -1470,7 +1481,10 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   **Password set** with the date, or that it is not set (until then Alice does not connect, `ALC-WIN-0025`). To change
   the password, change it on the server first (run the script again, or `net user`), then set the same one in Alice:
   the call after a change on the server alone is refused (`ALC-WIN-0024`). **Show setup script again** on the server's
-  page shows the script again.
+  page shows the script again. **Remove password** (an Administrator, step-up) takes the password away: the panel shows
+  that it is not set and Alice refuses every call to the server before connecting (`ALC-WIN-0025`) until a new
+  password is set. A removal is audited (**WinRM password of a Windows server removed**); the removed password is not
+  erased but stays sealed under the master key in the database and in backups, and Alice never uses it again.
 - **The WinRM identity.** At the first connection Alice shows the fingerprint of the WinRM listener's certificate key
   (**TLS certificate key (SPKI SHA-256)**). Compare it with the line `Listener ... port 5986: SPKI SHA256:...` the setup
   script printed on the server, then confirm it, as for an SSH host key. A listener whose certificate was renewed with
@@ -1526,8 +1540,9 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   - the store's private-key password, which an Administrator enters once in the **CCS password** panel of the server's
     page (with step-up): 12 to 128 printable ASCII characters, no spaces. One password per server, as IIS has one for
     the whole store. It is sealed on the Alice server, goes to the helper only on standard input while a file is read
-    or written, and is never shown again; the panel shows the date it was set and lets an Administrator replace it.
-    Then choose **Discover**.
+    or written, and is never shown again; the panel shows the date it was set and lets an Administrator replace it or
+    remove it (**Remove password**, step-up). Without a password Alice lists and deploys no CCS file (`ALC-WIN-0018`);
+    a removed password stays sealed in the database and in backups and is never used again. Then choose **Discover**.
 
   A file the password does not open is shown as a problem and never written (`ALC-WIN-0017`); the page counts such
   files. An IIS site whose host has no file is shown with the hint to place the first file in the folder: Alice
@@ -1627,8 +1642,8 @@ server once with the PowerShell setup script that **Add server** shows for **Win
   services get one e-mail naming the store and the thumbprint, so an administrator can replace it there and delete it.
 - Codes `ALC-WIN-0004` to `ALC-WIN-0012` name what stopped a deployment, `ALC-WIN-0013` a binding Alice cannot repair,
   `ALC-WIN-0014` a cleanup whose outcome is unknown (the next run settles it), `ALC-WIN-0015` to `ALC-WIN-0020` the
-  Centralized Certificate Store, `ALC-WIN-0021` to `ALC-WIN-0023` the Remote Desktop listener and `ALC-WIN-0024` to
-  `ALC-WIN-0028` the WinRM connection (see
+  Centralized Certificate Store, `ALC-WIN-0021` to `ALC-WIN-0023` the Remote Desktop listener, `ALC-WIN-0024` to
+  `ALC-WIN-0028` the WinRM connection and `ALC-WIN-0029` a second entry for one server (see
   [troubleshooting.md](troubleshooting.md)). A helper older than 0.2.0 cannot deploy: Alice names it outdated
   (`ALC-WIN-0002`) before changing anything.
 - **Where the helper comes from.** Each Alice package carries the Windows helper in its `helper\` folder:

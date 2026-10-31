@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — W8 (Windows debt and small features, R72)
+
+**Added**
+- **Alice's address (optional)** beside every setup script (**Add server** for every server type, OpenSSH and WinRM,
+  and **Show setup script again** on a WinRM server's page). With it, the script's firewall rule opens port 22 or 5986
+  to that address only and the SSH key line accepts Alice's key only from it; a wrong address shows the reason under
+  the field and no script. Without it the script is unchanged: the rule accepts any address until `$AliceAddress` is
+  set, with a warning.
+- One entry per Windows server: a second live Windows server with the same address, over either connection and on any
+  port, is refused (`ALC-WIN-0029`, nothing added). Addresses are compared as written, ignoring case; a server of
+  another type on the same address is still allowed, and a removed entry frees the address at once.
+- **Remove password** for the CCS and WinRM passwords on the server's page (an Administrator, with step-up; also
+  `DELETE /api/v1/targets/{id}/ccs-password` and `DELETE /api/v1/targets/{id}/winrm-password` with `If-Match`). The
+  password's row is ended, not erased: it stays sealed under the master key in the database and in backups, and Alice
+  never uses it again. A WinRM server is then refused before any connection (`ALC-WIN-0025`) and a CCS server lists no
+  file until a new password is set. The removal is audited without the secret; removing when nothing is set changes
+  nothing.
+
+**Changed**
+- To change a Windows server's connection type, remove its entry, then add the server again (the old order, add then
+  remove, is refused by the one-entry rule); `ALC-WIN-0027`'s advice says so.
+- Setting a password ends the previous one, so a server holds one live password of each kind.
+- The test emulator answers an oversized WinRM request with HTTP 413 and an empty body, as Windows does.
+- **Upgrade:** database version 39 refuses while two live Windows servers share an address
+  (`docs/upgrade.md`, "One Windows server per address"); going back below it makes the earlier version use a removed
+  password again.
+
+**Fixed**
+- The WinRM dialog says that closing it without a password leaves Alice unable to reach the server, and what to check
+  when the sign-in is refused right after the password is saved.
+- The deploy dialog's summary follows the ticked places only: an unticked opening binding leaves no summary of its kind.
+- A CCS or WinRM password outside the rule is refused before it is sealed; the order of the answers is unchanged.
+- Real-Windows and emulator tests: an NTLM field offset is checked before conversion, the RDP status row where the
+  store read fails, the WinRM script is run twice, the shared-helper test restores `administrators_authorized_keys`,
+  the CCS fixture fails on a listing error and never deletes a record it did not make, the shellcheck pins are tied
+  together by a test.
+
+Rulings: `docs/superpowers/rulings/windows-iis.md` "W8 (R72)". Migration `00039` (one live Windows server per host,
+ended password rows). The helper stays 1.2.0.
+
 ## Unreleased — Windows servers (WinRM transport, R71)
 
 **Added**

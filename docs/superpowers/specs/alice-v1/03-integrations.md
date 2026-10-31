@@ -1197,3 +1197,46 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
 - **Explicit W7 limits.** The account is not limited to the helper (no PSRP or JEA; WN-26); no Kerberos, UPN,
   CredSSP, certificate mapping or channel binding; no CA bundle for the listener; the password is never rotated or
   removed by Alice; a domain account, Server Core and Windows Server 2019 over WinRM are checked by hand only.
+
+### 13A.22 One Windows server per host; removing a password; Alice's address in the setup dialogs (amendment, R72)
+
+- **One live Windows server per host.** At most one target of type `windows` with `deleted_at IS NULL` per
+  `lower(config->>'host')`, any port, either transport. This replaces 13A.20's "W7 does not refuse a second live Windows
+  target for the same host on the other transport". The comparison is textual, as `targets_endpoint_live` compares:
+  `iis-01`, `iis-01.corp.example` and its IP address are three hosts; `IIS-01` and `iis-01` are one. Other target types
+  on the same host are allowed (an Nginx target beside a Windows one, as before), and a removed target frees the host
+  at once. Enforced by the partial unique index `targets_windows_host_live` (migration `00039`), so two creates in
+  parallel cannot both pass; a second one is `ALC-WIN-0029` (`windows.host_already_managed`, 409) on
+  `POST /api/v1/targets`, nothing added; a duplicate name or endpoint keeps `ALC-TGT-0001`. No update path can change
+  a host. To change a server's transport, remove its entry, then add the server again with the other transport
+  (`ALC-WIN-0027`'s advice). The Up step of `00039` refuses with SQLSTATE `Z1037` ("cannot migrate up: two Windows
+  servers share a host; remove one of each pair in Alice (Servers page), then upgrade") while
+  `SELECT lower(config->>'host') FROM targets WHERE type = 'windows' AND deleted_at IS NULL GROUP BY 1 HAVING count(*) > 1`
+  returns rows.
+- **Removing a password.** `DELETE /api/v1/targets/{id}/ccs-password` and `DELETE /api/v1/targets/{id}/winrm-password`,
+  the twins of the `PUT`s (13A.16, 13A.20): permission `credentials.manage`, an Administrator's browser session with a
+  fresh step-up, never a token; licence `ClassChange`; `If-Match` required (412 `ALC-SYS-0008`); no body. A target
+  that is not a Windows server, or an OpenSSH Windows server on the WinRM route, is `ALC-WIN-0011` (409); a stale
+  version is the usual 412. The answer is 200 with the target DTO (`ccs_password_set_at` or `winrm_password_set_at`
+  null) and its `ETag`. In one transaction the live rows of the purpose are ended (`credentials.rotated_at` set; a live
+  row is `rotated_at IS NULL`), the target's version moves, and the audit action `target.ccs_password_removed` or
+  `target.winrm_password_removed` is appended with `name` and `credential_id` (the ended ids), never a secret. Nothing
+  to remove answers 200 with the target unchanged: no version bump, no audit row. No row is deleted: an ended row
+  keeps `rotated_at` and its ciphertext stays sealed under the master key, in the database and in backups; every read
+  (the source, `*_password_set_at`) takes live rows only. A `PUT` also ends the older live row before it inserts, so a
+  purpose has at most one live row. Migration `00039` grants the app role `UPDATE (rotated_at)` on `credentials` (the
+  other columns stay refused); its Down revokes it and drops the index. After a removal a WinRM server refuses every
+  helper call with `windows.winrm_password_missing` (`ALC-WIN-0025`) before any dial until a new password is set; a
+  CCS server's next discovery warns `win_ccs_password_missing` and lists no file, and a CCS deployment is refused
+  `ALC-WIN-0018`.
+- **A password outside the rule is never sealed.** `PUT .../ccs-password` and `PUT .../winrm-password` decide the rule
+  before sealing; the answer order of 13A.16 and 13A.20 is unchanged.
+- **Alice's address in the setup dialogs.** The web shows an optional "Alice's address" field beside every setup script
+  (the Add server dialog for every target type, OpenSSH and WinRM, and the server page's "Show setup script again"
+  modal) and passes the trimmed value as `from` to `GET /api/v1/ssh-keys/platform-key` and
+  `GET /api/v1/targets/{id}/winrm-setup` (no API change); the API's rule decides (an IP literal in canonical form), and
+  a bad value shows the API's `from` field error under the field and no script. With an address the SSH key line's
+  `from=` and the firewall rule accept that address only; without one the script is the W7 script, whose firewall rule
+  opens the port to any address, with its warning, until `$AliceAddress` is set in the script.
+- **The emulator.** `wintest` answers a WinRM request above its envelope limit with HTTP 413 and an empty body, as
+  Windows does (F26); Alice's client maps it to `ssh.protocol_error` and still deletes the shell.

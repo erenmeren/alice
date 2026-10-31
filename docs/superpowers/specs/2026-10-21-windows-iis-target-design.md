@@ -551,6 +551,11 @@ negotiation (new probe mode). Key ACLs are the new risk and get their own review
 §4.2: the same helper over WinRS with listener SPKI pinning; authentication amended by R71 to the target's username and
 a password over NTLMv2 (certificate mapping deferred).
 
+### Phase W8 (R72) — Windows debt and small features (size M; §23)
+
+The W7 minors and R70's open code items; Alice's address in the setup dialogs, one live Windows server per host
+(`ALC-WIN-0029`, migration `00039`), removing a WinRM or CCS password. The helper stays `1.2.0`.
+
 ### Interactions with other work
 
 - Scoped access (R49, R53-R56): a Windows server belongs to a service like any target; cross-service deployment needs
@@ -805,3 +810,8 @@ decision R71, rulings in [windows-iis.md](../rulings/windows-iis.md) "W7 (R71)",
 | Tests | `winrs` unit tests (never Basic, sign-in on Create only, the dial rule, bounds, faults, the shell always deleted), the emulator's WinRM HTTPS listener with NTLMv2 verification and WinRS shells (`wintest`, `alice-fakewindows ctl winrm-account`), provider, inventory, API, notify and deployment-job tests on the emulator, real-Windows `TestRealWinRM*` and `TestFidelityWinRM` on both images (each test as its own account `alice-w7-<n>`, everything restored), e2e `windows-winrm.spec.ts` in EN and TR; `WIN-68`..`WIN-75` | — |
 | Security | WN-26 High accepted by the owner (the account is not limited to the helper; competitor parity), WN-27..WN-30 (WN-28: `cmd.exe /C` runs the `AutoRun` values and the Create body goes up to 3 times to the pinned listener; WN-29: lockout and the Go-string residual; WN-30 Med, since F24 (a) applies); the transport review (Ruling 26) and the independent final review at `3b5da306`: 0 critical, 2 important, 10 minor, each fixed or declined with its reason | — |
 | Limits | A domain account by syntax and the emulator only; a domain account, Server Core and Windows Server 2019 over WinRM, and `.\alice` on a domain-joined server, are manual-matrix items; no PSRP or JEA, Kerberos, CredSSP, certificate mapping or channel binding (`CbtHardeningLevel` Strict refuses); no password rotation or removal by Alice, no transport change, a second target for one host on the other transport is not refused; the shell `IdleTimeOut` reaping is not measured (Alice always deletes its shell) | — |
+
+## 23. Phase W8 as built
+
+To be filled when phase W8 is accepted (plan `docs/superpowers/plans/2026-10-31-windows-w8-debt.md`, Task 6; decision
+R72, rulings in [windows-iis.md](../rulings/windows-iis.md) "W8 (R72)", test IDs `WIN-76`..`WIN-78`).

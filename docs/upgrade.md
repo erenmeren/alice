@@ -23,6 +23,9 @@ returns to the installed version by itself when the new one does not start.
       does not know `ALICE_MIGRATE_TIMEOUT` or `ALICE_TRUSTED_PROXIES` (a release before these settings) drops
       them on that one update and the database update uses the default. Check `/opt/alice/.env` after the update
       and add the keys again if needed.
+- [ ] Updating to a release with database version 39 (Windows servers phase W8, see `CHANGELOG.md`): Alice keeps at
+      most one Windows server per address, and the database update stops while two live Windows servers share one
+      (see [One Windows server per address](#one-windows-server-per-address)). Check before you update.
 - [ ] Announce the outage to the people who use Alice. Alice shows no "update in progress" message of its own.
 - [ ] Check the package as in [install-guide.md](install-guide.md#3-check-the-package-before-you-extract-it): the
       vendor's signature of the `.sha256` file and the checksum.
@@ -139,6 +142,26 @@ Messages that stop the update before any change:
 
 See also [troubleshooting.md](troubleshooting.md#update-rolled-back).
 
+### One Windows server per address
+
+Database version 39 (Windows servers phase W8) lets Alice keep at most one live Windows server per address, over
+OpenSSH or WinRM and on any port. The addresses are compared as written, ignoring case: `iis-01`,
+`iis-01.corp.example` and its IP address are three addresses. If two Windows servers in Alice share an address, the
+database update refuses, the update returns to the installed version, and the update log holds:
+
+```
+cannot migrate up: two Windows servers share a host; remove one of each pair in Alice (Servers page), then upgrade
+```
+
+(PostgreSQL error code `Z1037`.) Find the pairs before the update, on the installed version:
+
+```
+cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d alice -c "SELECT lower(config->>'host') FROM targets WHERE type = 'windows' AND deleted_at IS NULL GROUP BY 1 HAVING count(*) > 1"
+```
+
+Each row is an address with two or more Windows servers. Remove all but one of them on the **Servers** page (keep the
+one whose connection you want), then run the query again: when it returns no rows, update.
+
 ## The update log
 
 Every line the script prints is also written to `/opt/alice/update-<yyyymmddThhmmssZ>.log` (mode 0600, root only),
@@ -172,3 +195,9 @@ backup into a new installation of the earlier version:
 
 Everything that happened after the backup is lost. This procedure has not been exercised by a test yet; run it on a
 test server first.
+
+**A removed Windows password returns below database version 39.** From version 39 on, removing a WinRM or CCS
+password in Alice ends its row and keeps it sealed; an earlier version does not know ended rows and uses the newest
+row, ended or not, so a password removed after the update is in use again. Before you take the database below version
+39, set a new password for such a server in Alice, or remove the server; after a restore of the pre-upgrade backup,
+the passwords are those of the backup.
