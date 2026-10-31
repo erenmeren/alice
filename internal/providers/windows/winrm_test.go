@@ -298,7 +298,7 @@ func TestWinRMPasswordMissing(t *testing.T) {
 	assert.True(t, pe.Retryable)
 }
 
-// Ruling 13 through the emulator: faults at Create, a wrong password, the helper missing at Command, a stalled
+// Ruling 13 through the emulator: faults at Create, a wrong password, the helper missing (cmd.exe's 9009), a stalled
 // Receive, an unreachable listener; and every row of the table through winrmError.
 func TestWinRMErrorTable(t *testing.T) {
 	w := newWinRMEnv(t)
@@ -333,7 +333,7 @@ func TestWinRMErrorTable(t *testing.T) {
 		_, err := s.TestConnection(context.Background())
 		check(t, err, ReasonWinRMAuthRefused, false, true, nil)
 	})
-	t.Run("the helper missing at Command", func(t *testing.T) {
+	t.Run("the helper missing: cmd.exe's exit 9009", func(t *testing.T) {
 		w.model.SetHelperMissing(true)
 		t.Cleanup(func() { w.model.SetHelperMissing(false) })
 		_, err := s.TestConnection(context.Background())
@@ -424,7 +424,7 @@ func TestWinRMWriteOutcomeTable(t *testing.T) {
 		{"a fault at Create", func(_ *testing.T, w *winrmEnv) { w.model.FailWinRM(87) }, 0, providers.DeployNoChange, ReasonWinRMFault, false},
 		{"a wrong password", func(_ *testing.T, w *winrmEnv) { w.wcred.set("wrong-"+rand.Text(), nil) }, 0,
 			providers.DeployNoChange, ReasonWinRMAuthRefused, false},
-		{"the helper missing at Command", func(_ *testing.T, w *winrmEnv) { w.model.SetHelperMissing(true) }, 0,
+		{"the helper missing: cmd.exe's exit 9009", func(_ *testing.T, w *winrmEnv) { w.model.SetHelperMissing(true) }, 0,
 			providers.DeployUncertain, ReasonHelperMissing, false},
 		{"a timeout after Command", func(_ *testing.T, w *winrmEnv) { w.model.Delay(winproto.SubIISDeploy, time.Minute) },
 			500 * time.Millisecond, providers.DeployUncertain, "ssh.timeout", true},
@@ -532,6 +532,11 @@ func TestWinRMListenerBindingStaysUnsupported(t *testing.T) {
 		w := newWinRMEnv(t)
 		check(t, w, w.wopen(t), func() int { return w.count("Create") })
 	})
+}
+
+// F29 as measured: a missing helper is cmd.exe's exit 9009 with nothing on stdout, mapped as over SSH.
+func TestWinRMHelperMissingExit(t *testing.T) {
+	assert.Equal(t, 9009, WinRMHelperMissingExit)
 }
 
 func TestWinRMDialTimeoutMatchesSSH(t *testing.T) {

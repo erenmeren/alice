@@ -39,7 +39,10 @@ const (
 	maxWinRMLog      = 1024        // the latest requests WinRMLog keeps
 	defaultOpTimeout = time.Minute // a Receive without OperationTimeout
 
-	faultFileNotFound     = 2          // Command: a program other than the helper, or the helper missing (F29)
+	faultFileNotFound = 2 // Command: the helper with arguments other than ssh
+	// notRecognizedExit is cmd.exe's exit for a program that does not exist: WinRS starts the program through cmd.exe
+	// even with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command, not a fault (F29, runner runs 6 and 7).
+	notRecognizedExit     = 9009
 	faultBadRequest       = 87         // ERROR_INVALID_PARAMETER: a request outside the subset or out of order
 	faultShellNotFound    = 2150858843 // the shell does not exist (deleted, or never made)
 	faultMaxShells        = 2150859173 // the user's MaxShellsPerUser is reached
@@ -69,10 +72,12 @@ type winrmShell struct {
 
 type winrmCommand struct {
 	id     string
+	absent string // the program cmd.exe did not find: Send runs nothing, Receive answers notRecognizedExit
 	stdin  []byte
 	ended  bool
 	done   chan struct{} // closed when the helper's answer may be read
 	stdout []byte        // what Receive has not returned yet
+	stderr []byte        // likewise, for stderr
 	exit   int
 }
 
@@ -385,8 +390,8 @@ func (m *Model) winrmCreate(req winrs.Request) ([]byte, uint32) {
 	return winrs.ShellCreatedResponse(req.MessageID, id), 0
 }
 
-// winrmStart starts the shell's one command: the helper with the argument ssh, or fault 2 as Windows answers a
-// program that does not exist.
+// winrmStart starts the shell's one command: the helper with the argument ssh (other arguments fault 2). A program
+// that does not exist, or the helper on a host without it, starts too and ends as cmd.exe ends it (notRecognizedExit).
 func (m *Model) winrmStart(req winrs.Request) ([]byte, uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -396,10 +401,13 @@ func (m *Model) winrmStart(req winrs.Request) ([]byte, uint32) {
 		return nil, faultShellNotFound
 	case sh.cmd != nil:
 		return nil, faultBadRequest
-	case req.Program != winproto.HelperPath || !slices.Equal(req.Args, []string{"ssh"}) || m.helperMissing:
+	case req.Program == winproto.HelperPath && !slices.Equal(req.Args, []string{"ssh"}):
 		return nil, faultFileNotFound
 	}
 	sh.cmd = &winrmCommand{id: winrmID(), done: make(chan struct{})}
+	if req.Program != winproto.HelperPath || m.helperMissing {
+		sh.cmd.absent = req.Program
+	}
 	return winrs.CommandStartedResponse(req.MessageID, sh.cmd.id), 0
 }
 
@@ -434,7 +442,13 @@ func (m *Model) winrmSend(req winrs.Request) ([]byte, uint32) {
 	if code == 0 && answer == nil {
 		return nil, faultBadRequest
 	}
-	if run != nil {
+	if run != nil && run.cmd.absent != "" {
+		m.mu.Lock()
+		run.cmd.stdin, run.cmd.exit = nil, notRecognizedExit
+		run.cmd.stderr = []byte("'" + run.cmd.absent + "' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n")
+		m.mu.Unlock()
+		close(run.cmd.done)
+	} else if run != nil {
 		m.mu.Lock()
 		line, stdin := run.env["SSH_ORIGINAL_COMMAND"], run.cmd.stdin
 		run.cmd.stdin = nil
@@ -474,6 +488,8 @@ func (m *Model) winrmReceive(ctx context.Context, req winrs.Request, wait time.D
 		n := min(len(c.stdout), maxReceiveChunk)
 		chunk := c.stdout[:n]
 		c.stdout = c.stdout[n:]
-		return winrs.ReceivedResponse(req.MessageID, c.id, chunk, len(c.stdout) == 0, c.exit)
+		errChunk := c.stderr
+		c.stderr = nil
+		return winrs.ReceivedStreamsResponse(req.MessageID, c.id, chunk, errChunk, len(c.stdout) == 0, c.exit)
 	})
 }

@@ -670,12 +670,20 @@ func CommandStartedResponse(relatesTo, commandID string) []byte {
 
 // ReceivedResponse answers Receive with one stdout chunk (none when empty) and the command's state.
 func ReceivedResponse(relatesTo, commandID string, stdout []byte, done bool, exitCode int) []byte {
+	return ReceivedStreamsResponse(relatesTo, commandID, stdout, nil, done, exitCode)
+}
+
+// ReceivedStreamsResponse is ReceivedResponse with a stderr chunk too (the emulator's "not recognized" text, F29).
+func ReceivedStreamsResponse(relatesTo, commandID string, stdout, stderr []byte, done bool, exitCode int) []byte {
 	return response(ActionReceive+"Response", relatesTo, func(b *bytes.Buffer) {
 		var id bytes.Buffer
 		escAttr(&id, commandID)
 		b.WriteString(`<rsp:ReceiveResponse>`)
 		if len(stdout) > 0 {
 			b.WriteString(`<rsp:Stream Name="stdout" CommandId="` + id.String() + `">` + base64.StdEncoding.EncodeToString(stdout) + `</rsp:Stream>`)
+		}
+		if len(stderr) > 0 {
+			b.WriteString(`<rsp:Stream Name="stderr" CommandId="` + id.String() + `">` + base64.StdEncoding.EncodeToString(stderr) + `</rsp:Stream>`)
 		}
 		st := stateRunning
 		if done {

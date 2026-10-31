@@ -881,7 +881,7 @@ func TestFidelityWinRM(t *testing.T) {
 		{"iis-dump", pw, winproto.HelperPath, winproto.SubIISDump, nil, true, []string{"ok"}},
 		{"a refused iis-deploy", pw, winproto.HelperPath, refused, []byte("{"), false, nil},
 		{"a wrong password", wrong, winproto.HelperPath, winproto.SubVersion, nil, false, nil},
-		{"a fault at Command", pw, absent, winproto.SubVersion, nil, false, nil},
+		{"a missing program", pw, absent, winproto.SubVersion, nil, false, nil},
 	} {
 		t.Run(sc.name, func(t *testing.T) {
 			r, err := winrsRun(winrmImageAddr, image.RawSubjectPublicKeyInfo, setupAccount, sc.pw, sc.program, sc.line, sc.stdin)

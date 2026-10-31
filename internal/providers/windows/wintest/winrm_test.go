@@ -254,9 +254,8 @@ func TestWinRMEmulatorRefusesOtherPrograms(t *testing.T) {
 	e := newWinRMEnv(t)
 	c := e.client("alice", e.password)
 	for name, call := range map[string]func(*winrs.Call){
-		"another program": func(c *winrs.Call) { c.Program = `C:\Windows\System32\cmd.exe` },
-		"other args":      func(c *winrs.Call) { c.Args = []string{"ssh", "version"} },
-		"no args":         func(c *winrs.Call) { c.Args = nil },
+		"other args": func(c *winrs.Call) { c.Args = []string{"ssh", "version"} },
+		"no args":    func(c *winrs.Call) { c.Args = nil },
 	} {
 		cl := e.call(winproto.SubVersion, nil)
 		call(&cl)
@@ -265,14 +264,23 @@ func TestWinRMEmulatorRefusesOtherPrograms(t *testing.T) {
 		require.ErrorAs(t, err, &fe, name)
 		assert.Equal(t, uint32(2), fe.Code, name)
 	}
-	e.m.SetHelperMissing(true)
-	_, err := e.run(t, winproto.SubVersion, nil)
-	var fe *winrs.FaultError
-	require.ErrorAs(t, err, &fe, "a host without the helper")
-	assert.Equal(t, uint32(2), fe.Code)
-	e.m.SetHelperMissing(false)
-
+	// F29 as measured (runner runs 6 and 7): WinRS starts a program that does not exist through cmd.exe, so the
+	// command runs and ends with cmd.exe's "not recognized" exit, its text on stderr, nothing on stdout.
 	cl := e.call(winproto.SubVersion, nil)
+	cl.Program = `C:\Windows\System32\alice-absent.exe`
+	r, err := c.Run(context.Background(), cl)
+	require.NoError(t, err, "another program")
+	assert.Equal(t, notRecognizedExit, r.ExitCode)
+	assert.Empty(t, r.Stdout)
+	e.m.SetHelperMissing(true)
+	r, err = e.run(t, winproto.SubVersion, []byte("stdin"))
+	require.NoError(t, err, "a host without the helper")
+	assert.Equal(t, notRecognizedExit, r.ExitCode)
+	assert.Empty(t, r.Stdout)
+	e.m.SetHelperMissing(false)
+	assert.Zero(t, e.m.WinRMShells())
+	var fe *winrs.FaultError
+	cl = e.call(winproto.SubVersion, nil)
 	cl.Env = map[string]string{"PATH": "version"}
 	_, err = c.Run(context.Background(), cl)
 	require.ErrorAs(t, err, &fe, "another variable")

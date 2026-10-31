@@ -27,6 +27,11 @@ const (
 	faultFileNotFound = 2
 )
 
+// WinRMHelperMissingExit is cmd.exe's "is not recognized" exit code: WinRS starts the program through cmd.exe even
+// with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command with this exit and nothing on stdout, not a
+// fault at Command (F29, measured on runner runs 6 and 7). The real test asserts against it.
+const WinRMHelperMissingExit = 9009
+
 // ntlmUser is the account name sent to NTLM (Ruling 6): the local form .\alice without its .\ (go-ntlmssp would send
 // "." as the domain); every other form as typed, go-ntlmssp taking the part before the backslash as the domain.
 func ntlmUser(username string) string {
@@ -56,7 +61,13 @@ func (s *session) winrmRun(ctx context.Context, c linuxssh.HelperCommand) (linux
 	if err != nil {
 		return linuxssh.Result{}, providers.HostKey{}, winrmError(err, s.pin, ctx, sub)
 	}
-	return linuxssh.Result{Stdout: r.Stdout, ExitCode: r.ExitCode}, providers.TLSIdentity(r.PeerSPKI), nil
+	hk := providers.TLSIdentity(r.PeerSPKI)
+	if r.ExitCode == WinRMHelperMissingExit && len(r.Stdout) == 0 {
+		// The SSH path's missing helper (mapHelper names it windows.helper_missing); nothing ran, but the Command
+		// was sent, so a write stays uncertain as over SSH.
+		return linuxssh.Result{}, hk, providers.NewError("ssh.helper_missing", false, nil, winrmParams(sub))
+	}
+	return linuxssh.Result{Stdout: r.Stdout, ExitCode: r.ExitCode}, hk, nil
 }
 
 // winrmPassword is the server's WinRM password for one helper call (Ruling 8), as ccsPassword reads the CCS password:

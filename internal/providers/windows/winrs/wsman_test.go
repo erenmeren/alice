@@ -385,6 +385,9 @@ func TestServerResponsesParse(t *testing.T) {
 	r, err = ParseReceived(ReceivedResponse("uuid:x", cmdID, nil, true, 4), cmdID)
 	require.NoError(t, err)
 	assert.Equal(t, Received{Done: true, ExitCode: 4}, r)
+	r, err = ParseReceived(ReceivedStreamsResponse("uuid:x", cmdID, nil, []byte("not recognized"), true, 9009), cmdID)
+	require.NoError(t, err)
+	assert.Equal(t, Received{Stderr: []byte("not recognized"), Done: true, ExitCode: 9009}, r)
 
 	for _, a := range []string{ActionSend, ActionSignal, ActionDelete} {
 		b := EmptyResponse("uuid:<x>", a)
