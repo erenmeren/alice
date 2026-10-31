@@ -154,9 +154,10 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 	// internal/vconsole/store/tls.go (the vendor's own tool, not the product) only reads the field, to refuse a database
 	// connection that does not verify the server certificate; it skips nothing. R59 G2 adds internal/providers/tlspin, whose
 	// VerifyConnection accepts only the pinned SubjectPublicKeyInfo. R65 adds internal/providers/httpcheck, whose
-	// VerifyConnection accepts only the deployed leaf.
+	// VerifyConnection accepts only the deployed leaf. R71 adds internal/providers/windows/winrs/client.go, which only reads
+	// the field, to refuse a configuration that sets it without VerifyConnection.
 	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "internal/discovery/tlsprobe/probe.go", "internal/notify/pin.go", "internal/providers/httpcheck/httpcheck.go", "internal/providers/linuxssh/helperproto/helperproto.go",
-		"internal/providers/tlspin/tlspin.go", "internal/vconsole/store/tls.go"}, found)
+		"internal/providers/tlspin/tlspin.go", "internal/providers/windows/winrs/client.go", "internal/vconsole/store/tls.go"}, found)
 	tp, err := os.ReadFile(filepath.Join(root, "internal", "providers", "tlspin", "tlspin.go")) //nolint:gosec // G304: a fixed source file of the repository
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(tp), needle), "tlspin skips the chain check in one place only")

@@ -45,6 +45,8 @@ var allowedSkipVerify = map[string]int{
 	"internal/providers/tlspin/tlspin.go": 1,
 	// R65: a canary check compares the presented leaf with the deployed certificate in VerifyConnection (design §9.3).
 	"internal/providers/httpcheck/httpcheck.go": 1,
+	// R71: the WinRS client only reads the field, to refuse a configuration that sets it without VerifyConnection.
+	"internal/providers/windows/winrs/client.go": 1,
 }
 
 // rootSkips are the directories, by exact root-relative path, that hold other projects' Go files
