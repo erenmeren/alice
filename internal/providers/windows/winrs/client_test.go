@@ -63,6 +63,9 @@ type fakeWinRM struct {
 	stdout []byte
 	exit   int
 	hook   func(w http.ResponseWriter, s served) bool // true: the hook answered
+	// closeFirst closes the connection after each of the call's first closeFirst responses (Windows closes it
+	// after the anonymous 401, F24 (d)).
+	closeFirst int
 }
 
 func newFake(t *testing.T, opts ...wintest.NTLMOption) *fakeWinRM {
@@ -75,6 +78,10 @@ func newFake(t *testing.T, opts ...wintest.NTLMOption) *fakeWinRM {
 		_ = r.Header.Write(&head)
 		f.mu.Lock()
 		f.raw = append(f.raw, rawRequest{conn: r.Context().Value(connKey{}).(int), auth: r.Header.Get("Authorization"), url: r.URL.String(), head: head.String(), body: body})
+		if f.closeFirst > 0 {
+			f.closeFirst--
+			w.Header().Set("Connection", "close")
+		}
 		f.mu.Unlock()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		ntlm.ServeHTTP(w, r)
@@ -598,8 +605,51 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 		_, err := c.Run(context.Background(), f.call())
 		require.ErrorIs(t, err, winrs.ErrUnreachable)
 		assert.NotErrorIs(t, err, winrs.ErrNotSent, "the shell exists: what follows is uncertain")
-		assert.Equal(t, 1, dials, "the second dial is refused before it reaches Dial")
+		assert.Equal(t, 1, dials, "after Create's answer a dial is refused before it reaches Dial")
 		assert.Equal(t, []string{"Create"}, f.actions(), "no Send was written")
+	})
+}
+
+// F24 (d): Windows closes the connection after the anonymous 401, so the sign-in takes a second connection; everything
+// after Create goes on that authenticated connection. A third dial is never allowed.
+func TestWinRSSignInMayTakeASecondConnection(t *testing.T) {
+	counting := func(c *winrs.Client, dials *int) {
+		c.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			*dials++
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+	}
+	t.Run("closed after the anonymous 401", func(t *testing.T) {
+		f := newFake(t)
+		f.closeFirst = 1
+		dials := 0
+		c := f.client()
+		counting(c, &dials)
+		call := f.call()
+		call.Stdin = []byte("key material")
+		res, err := c.Run(context.Background(), call)
+		require.NoError(t, err)
+		assert.Equal(t, f.stdout, res.Stdout)
+		assert.Equal(t, 2, dials)
+		raw := f.rawRequests()
+		require.Len(t, raw, 7)
+		assert.Equal(t, 1, raw[0].conn, "the anonymous request")
+		for _, r := range raw[1:] {
+			assert.Equal(t, 2, r.conn, "the exchange and every later request, the Send included, on the second connection")
+		}
+		f.waitClosed(t)
+	})
+	t.Run("a third dial during the sign-in", func(t *testing.T) {
+		f := newFake(t)
+		f.closeFirst = 2 // also after the type 2: the type 3 would need a third connection
+		dials := 0
+		c := f.client()
+		counting(c, &dials)
+		_, err := c.Run(context.Background(), f.call())
+		require.ErrorIs(t, err, winrs.ErrUnreachable)
+		assert.ErrorIs(t, err, winrs.ErrNotSent)
+		assert.Equal(t, 2, dials, "the third dial is refused before it reaches Dial")
+		assert.Empty(t, f.actions())
 	})
 }
 

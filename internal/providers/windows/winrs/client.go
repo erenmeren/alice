@@ -60,7 +60,7 @@ var (
 	ErrOutputTooLarge = errors.New("winrs: the program's output is too large")
 	ErrNotSent        = errors.New("winrs: nothing reached the program")
 
-	errSecondDial = errors.New("winrs: a call opens one connection only")
+	errSecondDial = errors.New("winrs: a call opens no connection after its sign-in")
 )
 
 const (
@@ -72,10 +72,10 @@ const (
 	DefaultDialTimeout      = 10 * time.Second
 	DefaultHandshakeTimeout = 15 * time.Second
 
-	// maxDialsPerCall: the call's one connection carries the NTLM sign-in and everything after it (Windows binds
-	// the logon to the connection). F24 (d) raises it to 2 only if Windows closes the connection after the
-	// anonymous 401.
-	maxDialsPerCall   = 1
+	// maxDialsPerCall: Windows closes the connection after the anonymous 401, so the NTLM exchange needs a second
+	// one (F24 (d), measured on the runners). Both dials happen during the sign-in (the Create request); after
+	// Create's answer no dial is allowed, so everything after it, stdin included, goes on the authenticated connection.
+	maxDialsPerCall   = 2
 	receiveTimeout    = 20 * time.Second
 	cleanupBudget     = 5 * time.Second
 	maxResponseHeader = 64 << 10
@@ -321,8 +321,12 @@ func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, er
 	req.Header.Set("Content-Type", ContentType)
 	if signIn {
 		req.SetBasicAuth(s.user, s.password)
+		s.dialer.signIn(true)
 	}
 	resp, err := s.client.Do(req)
+	if signIn {
+		s.dialer.signIn(false) // Create answered (or failed): no further dial
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
@@ -355,18 +359,19 @@ func (s *session) roundTrip(action string, body []byte, signIn bool) ([]byte, er
 	return nil, ErrProtocol
 }
 
-// dialer opens the call's one connection and refuses any other.
+// dialer opens at most maxDialsPerCall connections, the second only during the sign-in, and refuses any other.
 type dialer struct {
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	mu      sync.Mutex
 	dials   int
 	refused bool
+	signing bool // the Create request is in flight
 	conns   []net.Conn
 }
 
 func (d *dialer) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	d.mu.Lock()
-	if d.dials >= maxDialsPerCall {
+	if d.dials >= maxDialsPerCall || (d.dials > 0 && !d.signing) {
 		d.refused = true
 		d.mu.Unlock()
 		return nil, errSecondDial
@@ -381,6 +386,12 @@ func (d *dialer) dialContext(ctx context.Context, network, addr string) (net.Con
 	d.conns = append(d.conns, c)
 	d.mu.Unlock()
 	return c, nil
+}
+
+func (d *dialer) signIn(on bool) {
+	d.mu.Lock()
+	d.signing = on
+	d.mu.Unlock()
 }
 
 func (d *dialer) wasRefused() bool {
