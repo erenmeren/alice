@@ -560,7 +560,9 @@ type pwSource struct {
 	fn func() (secrets.Plaintext, func(), error)
 }
 
-func (p pwSource) WinRMPassword(context.Context, uuid.UUID) (secrets.Plaintext, func(), error) { return p.fn() }
+func (p pwSource) WinRMPassword(context.Context, uuid.UUID) (secrets.Plaintext, func(), error) {
+	return p.fn()
+}
 
 // The paths of winrmPassword and withParams no emulator call reaches: a source that fails with a release, one that
 // gives no release (the Plaintext is zeroed instead), and an error without params.
