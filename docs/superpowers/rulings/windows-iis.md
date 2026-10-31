@@ -3393,6 +3393,10 @@ Final gates (Task 10), at `a2d1e828` (the last code change) and `829d74c2`:
 
 ## Owner items (W7)
 
+**Accepted by the owner on 2026-10-31, as written** ("tamam, maddeleri kabul ediyorum"): the eight items below, the
+items added during execution and the Turkish texts. The web input for Alice's address (`from`) stays deferred to W8+;
+no further action in W7.
+
 From the plan (decided by the delegation, recorded, no further action): Ruling 1 (the in-house client), Rulings 6-8
 (username and password over NTLMv2, the sealed per-target password), Ruling 4 (the helper stays 1.2.0), Rulings 21 and
 31 (WN-26 accepted, no channel binding), Ruling 29 (go-ntlmssp direct).
