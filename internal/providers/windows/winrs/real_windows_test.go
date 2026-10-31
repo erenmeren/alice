@@ -53,12 +53,11 @@ func outcome(res winrs.Result, err error) string {
 	return fmt.Sprintf("exit %d, %s", res.ExitCode, out)
 }
 
-// checkDials asserts F24 (d): at most 2 dials per call, and says loudly when there were 2.
+// checkDials asserts F24 (d) as measured in runner run 2: at most 2 dials per call (Windows closes the first
+// connection after the anonymous 401, so the sign-in may take a second one); more is a bug.
 func checkDials(t *testing.T, what string, n int32) {
 	t.Helper()
-	if n == 2 {
-		fact(t, "F24", "LOUD: %s needed 2 dials: Windows closed the connection after the anonymous 401, so F24 (d) applies (maxDialsPerCall = 2)", what)
-	}
+	fact(t, "F24", "%s used %d dial(s) (at most 2: F24 (d), maxDialsPerCall = 2)", what, n)
 	assert.LessOrEqual(t, n, int32(2), "%s: more than 2 dials per call is a bug (F24 (d))", what)
 }
 
@@ -83,14 +82,13 @@ func TestRealWinRMNTLMAuth(t *testing.T) {
 	require.NoError(t, err)
 	a = r.post(body, false)
 	fact(t, "F24", "the following request (Delete, no credentials) took %d request(s): %v, status %d, err %v", len(a.reqs), a.reqs, a.status, a.err)
-	fact(t, "F24", "the hand-driven call used %d dial(s)", r.dials.Load())
 	checkDials(t, "the hand-driven call", r.dials.Load())
 
 	// version and win-facts as alice-w7, with LocalAccountTokenFilterPolicy as the image ships it (F3).
 	c := f.client(t, account)
 	f.dials.Store(0)
 	res, err := run(c, f.helperCall(winproto.SubVersion))
-	fact(t, "F24", "version as %s: %s, %d dial(s)", account, outcome(res, err), f.dials.Load())
+	fact(t, "F24", "version as %s: %s", account, outcome(res, err))
 	checkDials(t, "the client's call", f.dials.Load())
 	require.NoError(t, err)
 	v := decode[winproto.VersionResponse](t, res.Stdout)
