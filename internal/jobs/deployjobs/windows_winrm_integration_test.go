@@ -5,6 +5,7 @@ package deployjobs
 import (
 	"context"
 	"crypto/rand"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -64,12 +65,14 @@ func TestWindowsWinRMCrashTable(t *testing.T) {
 			id := e.request(s.loc)[0]
 			e.drain()
 			require.Equal(t, inventory.DeployStateRecovering, e.deployment(id).State, "a killed helper is an uncertain outcome")
+			require.Equal(t, 1, s.sentWinRM(winproto.SubIISDeploy))
 			s.model.StaleTLS(false)
 			s.model.Reboot()
 			d := e.settle(id)
 			assert.Equal(t, tc.status, d.Status, "%s %v", d.ErrorCode, d.ErrorParams)
 			assert.Equal(t, tc.reason, d.ErrorCode)
 			e.assertWinServes(s.winServer, tc.want(e))
+			assert.Equal(t, 1, s.sentWinRM(winproto.SubIISDeploy), "the certificate is sent at most once")
 			switch {
 			case tc.fenced:
 				assert.Equal(t, winproto.PhaseFenced, s.phase(t, id))
@@ -81,6 +84,17 @@ func TestWindowsWinRMCrashTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sentWinRM is the number of shells created for sub: the WinRM log keeps each Create's SSH_ORIGINAL_COMMAND line.
+func (s *winrmServer) sentWinRM(sub string) int {
+	n := 0
+	for _, r := range s.model.WinRMLog() {
+		if first, _, _ := strings.Cut(r.Line, " "); r.Action == "Create" && first == sub {
+			n++
+		}
+	}
+	return n
 }
 
 // TestWindowsWinRMDiscoveryAndCleanup: over WinRM discovery lists the bindings, the CCS files and the RDP listener of
