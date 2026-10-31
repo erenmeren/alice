@@ -348,6 +348,9 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 			errs = append(errs, empty...)
 		}
 	}
+	if p.Transport != nil && *p.Transport != TransportSSH && *p.Transport != TransportWinRM {
+		errs.Add("transport", validate.OneOf, map[string]string{"values": TransportSSH + ", " + TransportWinRM})
+	}
 	if p.DiscoveryIntervalHours != nil && (*p.DiscoveryIntervalHours < 1 || *p.DiscoveryIntervalHours > 720) {
 		errs.Add("discovery_interval_hours", validate.OutOfRange, map[string]string{"min": "1", "max": "720"})
 	}

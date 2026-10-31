@@ -275,6 +275,15 @@ func TestTransportImmutable(t *testing.T) {
 	require.ErrorAs(t, err, &empty, "the same transport alone is an empty patch")
 	assert.Equal(t, "name", empty[0].Field)
 	assert.NotErrorIs(t, err, inventory.ErrTransportImmutable)
+	// A transport that is no transport is the field's error, never the conflict.
+	for _, bad := range []string{"", "psrp", "WinRM"} {
+		_, err = h.svc.UpdateTarget(h.ctx, admin, win.ID, cur.Version, inventory.TargetPatch{Name: &name, Transport: tr(bad)})
+		var fe validate.Errors
+		require.ErrorAs(t, err, &fe, "%q", bad)
+		require.Len(t, fe, 1, "%q", bad)
+		assert.Equal(t, "transport", fe[0].Field, "%q", bad)
+		assert.Equal(t, validate.OneOf, fe[0].Code, "%q", bad)
+	}
 	assert.Equal(t, cur.Version, mustTarget(t, h, win.ID).Version, "nothing changed")
 
 	linux := okTarget(t, h, admin, "web-01")
