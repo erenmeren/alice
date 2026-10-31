@@ -3525,7 +3525,26 @@ Open after this: the W3 owner decisions (cleanup while the licence is locked; th
 
 ### The first release tag run
 
-Pending: filled when the `v1.0.0-rc.1` run of `release.yml` ends.
+`v1.0.0-rc.1` at `fa182290`: <https://github.com/erenmeren/alice/actions/runs/41216814002> (2026-10-31 15:51-21:38 UTC).
+
+- **`windows`:** called with `all: true`; `changes`, `linux-build`, `helper (windows-2022)`, `helper (windows-2025)` and
+  `windows-required` all green (the legs ran, none skipped). The W4 Ruling 12 check holds. Release-checklist row 1.46
+  can name this run once the owner ticks it.
+- **`fuzz`:** all 16 fuzz legs green.
+- **`gates` (`make release-gates`): failed** on three gates, so `zap-full` was cancelled and `stage` skipped (the
+  "stage waits for windows" check is the workflow's `needs`; it is observed on the next tag):
+  1. `ci`: `tools/releasebuild` `TestReleaseRefusesExistingOutputs` and `TestReleaseTestKeepsAProductionStage` failed,
+     because under `make release-gates` the tests' own `make` ran as a nested make that printed
+     `make[3]: Entering directory` before the refusal line they assert. Fixed on `main` in `e0389951` (the tests
+     clear the inherited `MAKEFLAGS`); not reachable from a plain `make ci`.
+  2. `e2e-browsers`: 1 of 513 failed after 4.7 h: `[webkit] phase1.spec.ts "new screens have no serious accessibility
+     violations"` with `page.setViewportSize: Target page, context or browser has been closed` on the retry (a WebKit
+     crash on the hosted runner; the test passed on chromium and firefox). Recorded in the flaky list of
+     `docs/superpowers/rulings/fixes-2026-10-26.md`; capture with the Playwright trace on the next run.
+  3. `release-keycheck`: "no production release public key in deploy/release/keys" (`rk-*.pem`). By design (R36,
+     S-12): the gate fails until the vendor commits the production release key and the license key set. **Owner
+     item:** commit the keys as `docs/vendor/licensing-vendor.md` "Release key" describes; until then no `v*` tag can
+     reach `stage`, so the next release-candidate tag waits for the keys.
 
 ## Deferred to W8+
 
