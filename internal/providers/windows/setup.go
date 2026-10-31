@@ -564,7 +564,7 @@ const winrmTemplate = `#Requires -RunAsAdministrator
 Set-StrictMode -Version 3
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-# Windows PowerShell 5.1 has the WSMan: drive from the start; PowerShell 7 loads it with the module.
+# Windows PowerShell 5.1 has the WSMan drive from the start; PowerShell 7 loads it with the module.
 if (-not (Get-PSDrive -Name WSMan -ErrorAction SilentlyContinue)) { Import-Module Microsoft.WSMan.Management }
 
 # The Windows account Alice signs in as, as it is named in Alice: a local account (created by this script when it
@@ -699,7 +699,14 @@ function Get-SpkiFingerprint($Cert) {
 
 # 1. Checks before any change. HOST\name, where HOST is this computer's name, is the local account name.
 if ($AliceUser.Contains('\') -and $AliceUser.Split('\')[0] -eq $env:COMPUTERNAME) { $AliceUser = $AliceUser.Split('\')[1] }
-` + fragChecks + `
+` + fragChecks + `# Alice signs in with NTLM through Negotiate, and with Negotiate off WinRM refuses even its own local client, so it is
+# read from the registry before any change and any WinRM call (absent means on). The script never changes it (another
+# tool may rely on the setting): it stops instead.
+$wsmanService = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service' -ErrorAction SilentlyContinue
+if ($null -ne $wsmanService -and $null -ne $wsmanService.PSObject.Properties['auth_negotiate'] -and "$($wsmanService.auth_negotiate)" -eq '0') {
+    throw 'WinRM''s Negotiate authentication is off (Service\Auth\Negotiate). Alice signs in with NTLM through Negotiate: turn it on, then run this script again.'
+}
+
 # 2. The helper.
 ` + fragHelperCheck + `
 # 3. The account, denied local and Remote Desktop sign-in (a network sign-in, as WinRM's, stays allowed). A local
@@ -757,14 +764,10 @@ if (@($listeners | Where-Object { (Get-Field $_ 'Transport') -eq 'HTTPS' }).Coun
     $listeners = @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)
 }
 
-# 7. Alice signs in with NTLM through Negotiate. The script never changes it (another tool may rely on the setting):
-# it stops when Negotiate is off.
+# 7. The authentication settings, printed below; this script never changes them.
 $auth = @{}
 foreach ($n in @('Basic', 'Kerberos', 'Negotiate', 'Certificate', 'CredSSP', 'CbtHardeningLevel')) {
     $auth[$n] = "$((Get-Item -LiteralPath "WSMan:\localhost\Service\Auth\$n").Value)"
-}
-if ($auth['Negotiate'] -ne 'true') {
-    throw 'WinRM''s Negotiate authentication is off (WSMan:\localhost\Service\Auth\Negotiate). Alice signs in with NTLM through Negotiate: turn it on, then run this script again.'
 }
 
 # 8. The firewall rule for WinRM over HTTPS, from Alice's address.

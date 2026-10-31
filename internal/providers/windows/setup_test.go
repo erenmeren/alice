@@ -344,6 +344,8 @@ func TestSetupScriptWinRMSteps(t *testing.T) {
 		"$AliceUser = 'alice'\n",
 		"$AliceAddress = '192.0.2.10'\n",
 		"if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {",
+		`'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service'`,
+		"$wsmanService.PSObject.Properties['auth_negotiate']",
 		"'AMD64' = '" + strings.Repeat("ab", 32) + "'",
 		"Test-Helper $HelperSource\n",
 		"$UserSid = Set-AliceLocalAccount\n",
@@ -358,7 +360,7 @@ func TestSetupScriptWinRMSteps(t *testing.T) {
 		"Start-Service -Name WinRM\n",
 		"New-SelfSignedCertificate",
 		"New-WSManInstance -ResourceURI winrm/config/Listener -SelectorSet @{ Address = '*'; Transport = 'HTTPS' }",
-		"if ($auth['Negotiate'] -ne 'true') {",
+		"$auth[$n] = ",
 		"Remove-NetFirewallRule -Name 'Alice-WinRM-In' -ErrorAction SilentlyContinue\n",
 		"New-NetFirewallRule -Name 'Alice-WinRM-In' -DisplayName 'Alice WinRM (TCP 5986)'",
 		"-LocalPort 5986 -RemoteAddress $AliceAddress",
@@ -371,6 +373,18 @@ func TestSetupScriptWinRMSteps(t *testing.T) {
 		require.GreaterOrEqual(t, i, 0, "step %q, after the one before it", step)
 		at += i + len(step)
 	}
+
+	// Negotiate off makes WinRM refuse its own local client, so the registry check comes before any WinRM call and
+	// any change (fix round 1); the WSMan: value is only printed.
+	check := strings.Index(s, "$wsmanService = Get-ItemProperty")
+	require.Positive(t, check)
+	for _, later := range []string{"Get-WSManInstance", `Get-Item -LiteralPath "WSMan:`, "Test-Helper $HelperSource", "Set-AliceLocalAccount\n",
+		"New-AdminOnlyDirectory (", "New-ItemProperty", "Set-Service", "New-NetFirewallRule"} {
+		i := strings.Index(s, later)
+		require.Positive(t, i, later)
+		assert.Less(t, check, i, "the Negotiate check precedes %s", later)
+	}
+	assert.NotContains(t, s, "$auth['Negotiate'] -ne", "the WSMan: value decides nothing")
 
 	// The account fragment: deny rights of §4.3, DONT_EXPIRE_PASSWORD, the password asked twice under Alice's rule.
 	assert.Contains(t, s, "DONT_EXPIRE_PASSWORD")
