@@ -29,7 +29,7 @@ import (
 )
 
 // windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012, R62 0013-0014, R68
-// 0015-0020, R69 0021-0023, R71 0024-0028).
+// 0015-0020, R69 0021-0023, R71 0024-0028, R72 0029).
 var windowsTable = []struct {
 	code, reason string
 	status       int
@@ -63,6 +63,7 @@ var windowsTable = []struct {
 	{"ALC-WIN-0026", "windows.winrm_fault", 502, false},
 	{"ALC-WIN-0027", "windows.transport_immutable", 409, false},
 	{"ALC-WIN-0028", "windows.winrm_password_invalid", 422, false},
+	{"ALC-WIN-0029", "windows.host_already_managed", 409, false},
 }
 
 // Each Windows code is registered as the table says, has EN and TR texts without placeholders (the provider sends
@@ -370,4 +371,20 @@ func TestWinRMErrorParams(t *testing.T) {
 	}
 	assert.Nil(t, providerParams(map[string]string{"wsman_code": "12345678901"}), "at most 10 digits")
 	assert.Nil(t, providerParams(map[string]string{"wsman_code": "0x80338012"}), "the number only, never the fault's text")
+}
+
+// R72 Ruling 4 (WIN-77): a second live Windows server for a host is 409 ALC-WIN-0029; a duplicate name or address is
+// still ALC-TGT-0001.
+func TestWindowsHostAlreadyManagedHandler(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	h := NewHandler(d)
+	body := `{"name":"iis-01-winrm","type":"windows","host":"IIS-01.corp.example","transport":"winrm"}`
+	for err, want := range map[error]string{inventory.ErrWindowsHostManaged: "ALC-WIN-0029", inventory.ErrDuplicateTarget: "ALC-TGT-0001"} {
+		inv.CreateTargetFn = func(context.Context, inventory.Actor, inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+			return inventory.Target{}, uuid.Nil, err
+		}
+		rec := call(h, http.MethodPost, "/api/v1/targets", "admin", body)
+		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		assert.Equal(t, want, decodeErr(t, rec).Error.Code)
+	}
 }

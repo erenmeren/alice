@@ -1122,8 +1122,9 @@ paths:
       operationId: createTarget
       summary: Add a server; counts against the license and starts a connection test that fetches its fingerprint
       description: >-
-        A 409 answer is ALC-TGT-0001 (another server has this name, or this address and port) or
-        ALC-LIC-0008 (the license's target limit is reached). Refused with 403 ALC-LIC-0001 while the license is locked.
+        A 409 answer is ALC-TGT-0001 (another server has this name, or this address and port),
+        ALC-WIN-0029 (a Windows server with this host, compared without case, already exists over either transport and
+        any port; R72) or ALC-LIC-0008 (the license's target limit is reached). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
       x-scope: create
       requestBody:

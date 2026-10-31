@@ -339,6 +339,8 @@ var (
 	ErrWINWinRMFault           = ErrorCode{Code: "ALC-WIN-0026", Reason: "windows.winrm_fault", Status: http.StatusBadGateway}
 	ErrWINTransportImmutable   = ErrorCode{Code: "ALC-WIN-0027", Reason: "windows.transport_immutable", Status: http.StatusConflict}
 	ErrWINWinRMPasswordInvalid = ErrorCode{Code: "ALC-WIN-0028", Reason: "windows.winrm_password_invalid", Status: http.StatusUnprocessableEntity}
+	// R72 Ruling 4: one live Windows server per host. ALC-WIN-0030 is reserved, unused (Ruling 8's alternative).
+	ErrWINHostManaged = ErrorCode{Code: "ALC-WIN-0029", Reason: "windows.host_already_managed", Status: http.StatusConflict}
 
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
@@ -696,6 +698,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown, ErrWINCCSDisabled, ErrWINCCSPathChanged, ErrWINCCSPasswordMismatch,
 		ErrWINCCSPasswordMissing, ErrWINCCSPasswordInvalid, ErrWINCCSFileNotFound, ErrWINRDPDisabled, ErrWINRDPTLSOff, ErrWINRDPKeyACLFailed,
 		ErrWINWinRMAuthRefused, ErrWINWinRMPasswordMissing, ErrWINWinRMFault, ErrWINTransportImmutable, ErrWINWinRMPasswordInvalid,
+		ErrWINHostManaged,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
@@ -830,8 +833,9 @@ var errorMap = []struct {
 	{authz.ErrSourceNotAllowed, ErrSVCSourceNotAllowed, nil},
 	{authz.ErrACMENotAllowed, ErrSVCACMENotAllowed, nil},
 	{authz.ErrPolicyFieldUnavailable, ErrSVCPolicyFieldUnavailable, nil},
-	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},     // EnsurePlatformKey runs before serving; only a broken start reaches this
-	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil}, // a non-development build without the helper checksums
+	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},         // EnsurePlatformKey runs before serving; only a broken start reaches this
+	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil},     // a non-development build without the helper checksums
+	{inventory.ErrWindowsHostManaged, ErrWINHostManaged, nil}, // R72 Ruling 4
 	{inventory.ErrDuplicateTarget, ErrTargetDuplicate, nil},
 	{inventory.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	{inventory.ErrHostKeyUnconfirmed, ErrHostKeyUnconfirmed, nil},

@@ -1233,12 +1233,17 @@
       "transport_immutable": {
         "title": "Bir sunucunun bağlantı türü değiştirilemez.",
         "cause": "Sunucunun bağlantısı (OpenSSH ya da WinRM) sunucu eklenirken seçilir; çünkü sabitlenen sunucu kimliği ve kimlik bilgisi ikisinde farklıdır. Hiçbir şey değiştirilmedi.",
-        "action": "Diğer bağlantıyı kullanmak için sunucuyu o bağlantıyla yeniden ekleyin, ardından eski kaydı kaldırın."
+        "action": "Diğer bağlantıyı kullanmak için bu kaydı kaldırın, ardından sunucuyu o bağlantıyla yeniden ekleyin."
       },
       "winrm_password_invalid": {
         "title": "Bu WinRM parolası kullanılamaz.",
         "cause": "Alice, boşluksuz ve yazdırılabilir ASCII karakterlerden oluşan, 12 ile 128 karakter arasında bir WinRM parolası kabul eder. Parola saklanmadı.",
         "action": "Sunucudaki hesap için bu kurala uyan bir parola belirleyin (WinRM kurulum betiği bunu sorar), ardından aynı parolayı buraya girin."
+      },
+      "host_already_managed": {
+        "title": "Alice bu Windows sunucusunu zaten yönetiyor.",
+        "cause": "Aynı adrese sahip başka bir kayıt var (OpenSSH ya da WinRM üzerinden). Bir sunucu için iki kayıt lisansta iki kez sayılır ve ikisi de aynı bağlamaları değiştirir. Hiçbir şey eklenmedi.",
+        "action": "Var olan kaydı kullanın. Bağlantı türünü değiştirmek için önce kaydı kaldırın, ardından sunucuyu yeniden ekleyin."
       }
     },
     "certificate": {

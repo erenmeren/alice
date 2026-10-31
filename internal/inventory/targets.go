@@ -250,14 +250,16 @@ discovery_interval_seconds, facts, created_by, created_at, updated_at, service_i
 }
 
 // closedTargetWriteError maps the database's refusals of a write to targets to closed errors, so no
-// SQLSTATE and no database text reaches a caller: a duplicate name or address, a credential that is
-// not the target's own (Z1006) and the application role's attempt to change a server's credential
-// (Z1005). ok is false for every other error (and for nil).
+// SQLSTATE and no database text reaches a caller: a second live Windows server for a host (R72 Ruling 4), a
+// duplicate name or address, a credential that is not the target's own (Z1006) and the application role's
+// attempt to change a server's credential (Z1005). ok is false for every other error (and for nil).
 func closedTargetWriteError(err error) (error, bool) {
 	var pg *pgconn.PgError
 	switch {
 	case err == nil:
 		return nil, false
+	case db.IsUniqueViolationOn(err, "targets_windows_host_live"):
+		return ErrWindowsHostManaged, true
 	case db.IsUniqueViolation(err):
 		return ErrDuplicateTarget, true
 	case errors.As(err, &pg) && pg.Code == sqlstateCredentialMismatch:

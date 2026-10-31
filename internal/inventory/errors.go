@@ -14,7 +14,9 @@ import (
 var (
 	ErrNotFound        = errors.New("inventory: not found")
 	ErrDuplicateTarget = errors.New("inventory: a server with this name or address exists")
-	ErrVersionMismatch = errors.New("inventory: the target changed since it was read")
+	// ErrWindowsHostManaged: a live Windows server with this host exists, over either transport (R72 Ruling 4).
+	ErrWindowsHostManaged = errors.New("inventory: a live Windows server with this host exists")
+	ErrVersionMismatch    = errors.New("inventory: the target changed since it was read")
 	// ErrRevocationSettingsVersion: the revocation check switch changed since it was read (R64; the API's 412).
 	ErrRevocationSettingsVersion = errors.New("inventory: the revocation check setting changed since it was read")
 	ErrHostKeyUnconfirmed        = errors.New("inventory: the server's fingerprint is not confirmed")

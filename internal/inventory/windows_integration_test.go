@@ -425,3 +425,45 @@ func TestTargetCertificateCleanupSwitchIsSaved(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, linux.Version, got.Version, "nothing changed")
 }
+
+// R72 Ruling 4 (WIN-77): one live Windows server per host, compared as lower(host), whatever the port or the transport.
+// A duplicate name is still ErrDuplicateTarget; other types are untouched; a removed server frees its host at once.
+func TestOneWindowsTargetPerHost(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	first := winTarget(t, h, admin, "iis-02")
+	add := func(name, typ, host string, port int, transport string) error {
+		_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: name, Type: typ, Host: host, Port: port, Transport: transport})
+		return err
+	}
+
+	err := add("iis-02-winrm", inventory.TypeWindows, "IIS-02.corp.example", 5986, inventory.TransportWinRM)
+	require.ErrorIs(t, err, inventory.ErrWindowsHostManaged, "the same host over the other transport, in another case")
+	assert.NotErrorIs(t, err, inventory.ErrDuplicateTarget)
+	assert.ErrorIs(t, add("iis-02-ssh", inventory.TypeWindows, "iis-02.corp.example", 2222, ""), inventory.ErrWindowsHostManaged,
+		"another port")
+	assert.ErrorIs(t, add("iis-02", inventory.TypeWindows, "iis-99.corp.example", 0, ""), inventory.ErrDuplicateTarget,
+		"a duplicate name is still the duplicate")
+	require.NoError(t, add("web-on-iis-02", inventory.TypeLinux, "iis-02.corp.example", 0, ""), "another type on the host")
+
+	// DeleteTarget's soft delete (its provider clean-up needs the SSH pool this harness's provider lacks).
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE targets SET deleted_at = now() WHERE id = $1", first.ID)
+	require.NoError(t, err)
+	require.NoError(t, add("iis-02-winrm", inventory.TypeWindows, "IIS-02.corp.example", 5986, inventory.TransportWinRM),
+		"a removed server frees its host")
+	require.NoError(t, add("iis-03", inventory.TypeWindows, "iis-03.corp.example", 0, ""), "another host")
+
+	// Two adds of one host (two ports) at once: the index decides, so exactly one is created.
+	errs := make(chan error, 2)
+	for i, name := range []string{"iis-04-a", "iis-04-b"} {
+		go func() { errs <- add(name, inventory.TypeWindows, "iis-04.corp.example", 22+i*2200, "") }()
+	}
+	e1, e2 := <-errs, <-errs
+	assert.True(t, (e1 == nil) != (e2 == nil), "%v / %v", e1, e2)
+	for _, e := range []error{e1, e2} {
+		if e != nil {
+			assert.ErrorIs(t, e, inventory.ErrWindowsHostManaged)
+		}
+	}
+	assert.Equal(t, 3, h.count("SELECT count(*) FROM targets WHERE type = 'windows' AND deleted_at IS NULL"))
+}
