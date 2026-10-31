@@ -201,7 +201,19 @@ func setWSMan(t *testing.T, item, value string) func() {
 	t.Helper()
 	old := ps(t, map[string]string{"ITEM": item}, "", `(Get-Item -LiteralPath ('WSMan:\localhost\' + $env:ITEM)).Value`)
 	restore := sync.OnceFunc(func() {
-		if out, err := psRun(map[string]string{"ITEM": item, "VALUE": old}, "", wsmanSet); err != nil {
+		out, err := psRun(map[string]string{"ITEM": item, "VALUE": old}, "", wsmanSet)
+		if err == nil {
+			return
+		}
+		t.Logf("restoring WSMan:\\localhost\\%s through the WSMan: drive failed (%v: %s); trying Set-WSManInstance", item, err, out)
+		// The items the tests set are all Service\Auth\<name>: the same value through the WS-Management automation API.
+		name, ok := strings.CutPrefix(item, `Service\Auth\`)
+		if !ok {
+			t.Errorf("restoring WSMan:\\localhost\\%s to %s: %v: %s", item, old, err, out)
+			return
+		}
+		if out, err := psRun(map[string]string{"NAME": name, "VALUE": old}, "",
+			`Set-WSManInstance -ResourceURI winrm/config/service/auth -ValueSet @{ $env:NAME = $env:VALUE } | Out-Null`); err != nil {
 			t.Errorf("restoring WSMan:\\localhost\\%s to %s: %v: %s", item, old, err, out)
 		}
 	})
