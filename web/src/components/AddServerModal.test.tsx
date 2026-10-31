@@ -220,6 +220,25 @@ describe('Alice\'s address in the setup scripts', () => {
     expect(help).not.toHaveAccessibleDescription(expect.stringContaining('firewall'));
   });
 
+  it('shows the API\'s field error for an address with a zone in the WinRM setup script, and no script', async () => {
+    const froms: (string | null)[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.get('/api/v1/targets/:id/winrm-setup', ({ request }) => {
+        const from = new URL(request.url).searchParams.get('from');
+        froms.push(from);
+        if (from) return errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'from', code: 'validation.pattern' }] });
+        return HttpResponse.json({ script: "# winrm setup script\n$AliceAddress = ''" });
+      }),
+    );
+    await renderWithStepUp(<WinRMSetupScript targetId={windowsWinRMTargetFixture.id} />);
+    await screen.findByTestId('winrm-setup-script');
+    await userEvent.type(screen.getByLabelText(ADDRESS), 'fe80::1%eth0');
+    await waitFor(() => expect(screen.getByLabelText(ADDRESS)).toHaveAccessibleDescription(expect.stringContaining(commonEn.validation.pattern)));
+    expect(froms.at(-1)).toBe('fe80::1%eth0');
+    expect(screen.queryByTestId('winrm-setup-script')).not.toBeInTheDocument();
+  });
+
   it('asks the WinRM setup script with the typed address, and without one when the field is empty', async () => {
     const froms: (string | null)[] = [];
     server.use(
