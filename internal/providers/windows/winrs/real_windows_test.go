@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 
+	winprovider "alice/internal/providers/windows"
 	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/winrs"
@@ -409,11 +410,6 @@ func TestRealWinRMListenerIdentity(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// winRMHelperMissingExit is cmd.exe's exit for a program it cannot find (9009). shortcut: a local copy of the
-// provider constant windows.WinRMHelperMissingExit, not yet in the tree when this was written; use the provider's
-// once it exists.
-const winRMHelperMissingExit = 9009
-
 func TestRealWinRMExitCodes(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
@@ -438,7 +434,7 @@ func TestRealWinRMExitCodes(t *testing.T) {
 	require.NoError(t, err)
 	_, stderr, code, rerr := f.rawRun(t, missing.Program, missing.Args, missing.Env, nil, nil)
 	fact(t, "F29", "a missing program: exit %d, stderr %s (hand-driven: exit %d, err %v)", res.ExitCode, first(stderr, 200), code, rerr)
-	assert.Equal(t, winRMHelperMissingExit, res.ExitCode)
+	assert.Equal(t, winprovider.WinRMHelperMissingExit, res.ExitCode, "the provider maps this exit to the helper missing")
 
 	killAtPrepared(t, f)
 }
