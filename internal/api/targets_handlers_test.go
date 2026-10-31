@@ -441,8 +441,8 @@ func TestInfrastructureRoutesAreGated(t *testing.T) {
 	}
 	// 10 of Phase 3 and 4, plus Phase 5's PUT vault-credentials and the release of a held version, plus Phase 6's
 	// generation, deploy and private key download (the download stays available in lock, R41 row 5), plus R68's PUT
-	// ccs-password.
-	assert.Equal(t, 16, n)
+	// ccs-password, plus R71's PUT winrm-password.
+	assert.Equal(t, 17, n)
 }
 
 func TestTargetActionsAreRefusedInLock(t *testing.T) {

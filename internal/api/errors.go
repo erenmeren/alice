@@ -330,6 +330,16 @@ var (
 	ErrWINRDPTLSOff       = ErrorCode{Code: "ALC-WIN-0022", Reason: "windows.rdp_tls_off", Status: http.StatusConflict}
 	ErrWINRDPKeyACLFailed = ErrorCode{Code: "ALC-WIN-0023", Reason: "windows.rdp_key_acl_failed", Status: http.StatusConflict}
 
+	// R71 (W7): the WinRM transport. The server refused the account's sign-in (or Alice has no password for it), the
+	// WinRM service answered a fault, a change named another transport than the target's (Ruling 3), or a WinRM password
+	// outside the rule of Ruling 7 was not stored. Other transport failures reuse the ssh.* reasons with the param
+	// transport=winrm (Ruling 13).
+	ErrWINWinRMAuthRefused     = ErrorCode{Code: "ALC-WIN-0024", Reason: "windows.winrm_auth_refused", Status: http.StatusBadGateway}
+	ErrWINWinRMPasswordMissing = ErrorCode{Code: "ALC-WIN-0025", Reason: "windows.winrm_password_missing", Status: http.StatusConflict}
+	ErrWINWinRMFault           = ErrorCode{Code: "ALC-WIN-0026", Reason: "windows.winrm_fault", Status: http.StatusBadGateway}
+	ErrWINTransportImmutable   = ErrorCode{Code: "ALC-WIN-0027", Reason: "windows.transport_immutable", Status: http.StatusConflict}
+	ErrWINWinRMPasswordInvalid = ErrorCode{Code: "ALC-WIN-0028", Reason: "windows.winrm_password_invalid", Status: http.StatusUnprocessableEntity}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -685,6 +695,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrWINIOError, ErrWINStoreError, ErrWINKeyUnusable, ErrWINBackupMissing, ErrWINLocationUnsupported, ErrWINHelperRefused,
 		ErrWINDriftNotRepairable, ErrWINCleanupOutcomeUnknown, ErrWINCCSDisabled, ErrWINCCSPathChanged, ErrWINCCSPasswordMismatch,
 		ErrWINCCSPasswordMissing, ErrWINCCSPasswordInvalid, ErrWINCCSFileNotFound, ErrWINRDPDisabled, ErrWINRDPTLSOff, ErrWINRDPKeyACLFailed,
+		ErrWINWinRMAuthRefused, ErrWINWinRMPasswordMissing, ErrWINWinRMFault, ErrWINTransportImmutable, ErrWINWinRMPasswordInvalid,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
@@ -881,6 +892,9 @@ var errorMap = []struct {
 	// The CCS password (R68, W5 Rulings 9 and 10).
 	{inventory.ErrCCSPasswordInvalid, ErrWINCCSPasswordInvalid, nil},
 	{inventory.ErrNotWindowsTarget, ErrWINLocationUnsupported, nil},
+	// The WinRM transport (R71 Rulings 3 and 7).
+	{inventory.ErrTransportImmutable, ErrWINTransportImmutable, nil},
+	{inventory.ErrWinRMPasswordInvalid, ErrWINWinRMPasswordInvalid, nil},
 	// Canary deployment (R65).
 	{inventory.ErrRolloutNotFound, ErrDeployRolloutNotFound, nil},
 	{inventory.ErrRolloutState, ErrDeployRolloutState, nil},

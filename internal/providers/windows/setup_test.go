@@ -244,3 +244,45 @@ func TestSetupSnippets(t *testing.T) {
 	assert.Contains(t, MatchBlock, "    ForceCommand \""+winproto.HelperPath+"\" ssh\n", "sshd runs the installed helper")
 	var _ providers.SetupGuide = p
 }
+
+// R71 Ruling 18, first part (Task 5): the WinRM setup script checks the helper like the SSH script, takes the account in
+// Ruling 6's forms (without the .\ of a local account) and refuses anything it cannot quote. Task 7 completes its body.
+func TestSetupScriptWinRMMinimal(t *testing.T) {
+	amd, arm := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	withChecksums(t, amd, arm)
+	for user, want := range map[string]string{`.\alice`: "alice", "alice": "alice", `CORP\alice-svc`: `CORP\alice-svc`} {
+		s, err := SetupScriptWinRM(user, "", false)
+		require.NoError(t, err, user)
+		assert.Contains(t, s, "$AliceUser = '"+want+"'", user)
+		assert.Contains(t, s, "'AMD64' = '"+amd+"'", "the SSH script's helper check")
+		assert.True(t, strings.HasPrefix(s, "#Requires -RunAsAdministrator\n"))
+		for i, r := range s {
+			require.Less(t, r, rune(0x80), "ASCII only, at %d", i)
+		}
+	}
+	for _, bad := range []string{"al'ice", "alice@corp.example", `..\alice`, "", `.\`, "alice\n"} {
+		_, err := SetupScriptWinRM(bad, "", false)
+		assert.Error(t, err, "%q", bad)
+	}
+	_, err := SetupScriptWinRM("alice", "10.0.0.0/8 ';", false)
+	assert.Error(t, err, "a from it cannot quote")
+
+	withChecksums(t, "", "")
+	_, err = SetupScriptWinRM("alice", "", false)
+	require.ErrorIs(t, err, ErrHelperUnverified)
+	s, err := SetupScriptWinRM("alice", "", true)
+	require.NoError(t, err)
+	assert.Contains(t, s, "cannot verify alice-helper.exe")
+}
+
+// R71 Ruling 19: the provider answers the WinRM script through providers.WinRMSetupGuide, "" when the build cannot
+// verify the helper.
+func TestWinRMSetupScriptGuide(t *testing.T) {
+	var g providers.WinRMSetupGuide = New(Options{AllowUnverifiedHelper: true})
+	withChecksums(t, "", "")
+	want, err := SetupScriptWinRM(`.\alice`, "", true)
+	require.NoError(t, err)
+	assert.Equal(t, want, g.WinRMSetupScript(`.\alice`))
+	assert.Empty(t, New(Options{}).WinRMSetupScript(`.\alice`), "no checksums, no development build")
+	assert.Empty(t, g.WinRMSetupScript("al'ice"))
+}

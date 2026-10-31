@@ -81,6 +81,8 @@ never a platform one. A resource outside the caller's services answers the opera
 | GET | `/api/v1/targets/{id}/ssh-keys` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/targets/{id}/certificate-locations` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | PUT | `/api/v1/targets/{id}/ccs-password` | `credentials.manage` | resource | no | yes | no | no | no | yes | no |
+| PUT | `/api/v1/targets/{id}/winrm-password` | `credentials.manage` | resource | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/targets/{id}/winrm-setup` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/ssh-keys` | `read` | list | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | any | no | yes | no | no | operate | no | yes |
 | GET | `/api/v1/ssh-keys/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |

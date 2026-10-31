@@ -24,13 +24,14 @@ import (
 
 // targetColumns is the column list every target read uses (scanTarget's order).
 //
-// The last two columns are the public information of a vault's own credential ('null' for a server) and when the
-// newest CCS password of a Windows server was set (NULL for none); every query that uses the list reads FROM targets
-// without an alias.
+// The last three columns are the public information of a vault's own credential ('null' for a server) and when the
+// newest CCS password and the newest WinRM password of a Windows server were set (NULL for none); every query that
+// uses the list reads FROM targets without an alias.
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
 discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at, service_id,
 certificate_cleanup, coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb),
-(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_ccs')`
+(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_ccs'),
+(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_winrm')`
 
 func scanTarget(row pgx.Row) (Target, error) {
 	var t Target
@@ -38,7 +39,7 @@ func scanTarget(row pgx.Row) (Target, error) {
 	var interval int
 	err := row.Scan(&t.ID, &t.Name, &t.Type, &cfg, &t.Status, &t.LastErrorCode, &t.LastSuccessAt, &t.LastDiscoveryAt,
 		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &t.CertificateCleanup, &vaultInfoRaw,
-		&t.CCSPasswordSetAt)
+		&t.CCSPasswordSetAt, &t.WinRMPasswordSetAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
@@ -56,6 +57,10 @@ func scanTarget(row pgx.Row) (Target, error) {
 	t.DiscoveryInterval = time.Duration(interval) * time.Second
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	t.LastSuccessAt, t.LastDiscoveryAt, t.CCSPasswordSetAt = utcPtr(t.LastSuccessAt), utcPtr(t.LastDiscoveryAt), utcPtr(t.CCSPasswordSetAt)
+	t.WinRMPasswordSetAt = utcPtr(t.WinRMPasswordSetAt)
+	if t.Transport = c.Transport; t.Type == TypeWindows && t.Transport == "" {
+		t.Transport = TransportSSH
+	}
 	if t.Capabilities == nil {
 		t.Capabilities = []string{}
 	}
@@ -146,8 +151,12 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 		errs.Add("type", validate.OneOf, typeValues()) // a type of this build without its provider
 		return Target{}, uuid.Nil, errs
 	}
-	cfg := targetConfig{Host: n.Host, Port: n.Port, Username: n.Username}
-	if fes := p.ValidateConfig(providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}); len(fes) > 0 {
+	cfg := targetConfig{Host: n.Host, Port: n.Port, Username: n.Username, Transport: n.Transport}
+	pc := providers.TargetConfig{"host": cfg.Host, "port": cfg.Port, "username": cfg.Username}
+	if cfg.Transport != "" {
+		pc["transport"] = cfg.Transport
+	}
+	if fes := p.ValidateConfig(pc); len(fes) > 0 {
 		return Target{}, uuid.Nil, validate.Errors(fes)
 	}
 	pk, err := s.EnsurePlatformKey(ctx)
@@ -366,8 +375,15 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		if p.CertificateCleanup != nil && !slices.Contains(cur.Capabilities, string(providers.CapCleanupCertificates)) {
 			kindErrs.Add("certificate_cleanup", validate.Pattern, nil)
 		}
+		// The transport belongs to a Windows server and is fixed when it is created (R71 Ruling 3).
+		if p.Transport != nil && cur.Type != TypeWindows {
+			kindErrs.Add("transport", validate.Pattern, nil)
+		}
 		if len(kindErrs) > 0 {
 			return kindErrs
+		}
+		if p.Transport != nil && *p.Transport != cur.Transport {
+			return ErrTransportImmutable
 		}
 		var fields []string
 		details := map[string]string{}

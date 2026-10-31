@@ -314,3 +314,12 @@ func (o LocationObservation) RDPAutoenroll() bool { return o.rdpAutoenroll }
 
 // WarnRDPHelperOutdated exposes the inventory's copy of winproto.WarnRDPHelperOutdated to the test that pins the two.
 const WarnRDPHelperOutdated = warnRDPHelperOutdated
+
+// ValidWinRMPassword exposes validWinRMPassword to the test that pins it to the CCS rule (R71 Ruling 7).
+func ValidWinRMPassword(pw []byte) bool { return validWinRMPassword(pw) }
+
+// ValidWindowsUserFor exposes the account rule of a Windows target under transport (R71 Ruling 6).
+func ValidWindowsUserFor(transport, s string) bool { return validWindowsUser(transport, s) }
+
+// DefaultWinRMPort is the port the inventory stores for a WinRM target that names none.
+const DefaultWinRMPort = defaultWinRMPort

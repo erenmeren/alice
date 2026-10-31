@@ -519,8 +519,11 @@ FROM certificate_locations WHERE certificate_id = $2 LIMIT 1`, rolloutID, ids["/
 			path = strings.ReplaceAll(path, "{id}", id)
 		}
 		// The exports are audited (SEC-075): exactly one audit.exported or inventory.exported row is their only write.
-		wantAudit, wantAction := 0, ""
+		wantAudit, wantAction, wantStatus := 0, "", http.StatusOK
 		switch op.path {
+		case "/api/v1/targets/{id}/winrm-setup":
+			// R71 Ruling 19: the server here uses OpenSSH, so the answer is the refusal; it changes nothing either.
+			wantStatus = http.StatusConflict
 		case "/api/v1/audit/export":
 			path, wantAudit, wantAction = path+"?format=json", 1, "audit.exported"
 		case "/api/v1/certificates/export", "/api/v1/ssh-keys/export":
@@ -553,7 +556,7 @@ FROM certificate_locations WHERE certificate_id = $2 LIMIT 1`, rolloutID, ids["/
 			continue
 		}
 		rec := c.do(http.MethodGet, path, nil)
-		assert.Equal(t, http.StatusOK, rec.Code, "%s: %s", op.key(), rec.Body.String())
+		assert.Equal(t, wantStatus, rec.Code, "%s: %s", op.key(), rec.Body.String())
 		assert.Equal(t, before, snapshot(), "GET %s changed stored state", path)
 
 		assert.Equal(t, history, s.rowsChecksum("audit_log", "seq <= "+strconv.FormatInt(seq, 10)), "GET %s changed existing audit rows", path)

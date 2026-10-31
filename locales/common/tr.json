@@ -17,7 +17,8 @@
       "fields": {
         "host": { "label": "Adres", "help": "Windows sunucusunun ana bilgisayar adı veya IP adresi." },
         "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22 (Windows üzerindeki OpenSSH Server)." },
-        "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." }
+        "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." },
+        "transport": { "label": "Bağlantı", "help": "OpenSSH (önerilir) ya da hesabın parolasıyla HTTPS üzerinden WinRM." }
       }
     }
   },
@@ -479,6 +480,7 @@
     "ssh": {
       "unreachable": {
         "title": "Alice sunucuya ulaşamıyor.",
+        "title_winrm": "Alice sunucunun WinRM HTTPS dinleyicisine ulaşamıyor.",
         "cause": "Sunucu kapalı, adres veya bağlantı noktası yanlış ya da bir güvenlik duvarı bağlantıyı engelliyor.",
         "action": "Sunucunun çalıştığını ve Alice'in çalıştığı makinenin sunucunun SSH bağlantı noktasına erişebildiğini kontrol edin, sonra bağlantıyı yeniden sınayın."
       },
@@ -489,6 +491,7 @@
       },
       "timeout": {
         "title": "Sunucunun yanıt vermesi çok uzun sürdü.",
+        "title_winrm": "Sunucunun WinRM üzerinden yanıt vermesi çok uzun sürdü.",
         "cause": "Sunucu veya ağ çok yavaş ya da sunucudaki bir komut zamanında bitmedi.",
         "action": "Daha sonra yeniden deneyin. Sorun sürerse sunucunun yükünü ve ağını kontrol edin."
       },
@@ -529,11 +532,13 @@
       },
       "output_too_large": {
         "title": "Sunucu, Alice'in kabul ettiğinden fazla veri gönderdi.",
+        "title_winrm": "Sunucu WinRM üzerinden Alice'in kabul ettiğinden fazla veri gönderdi.",
         "cause": "Sunucudaki bir dosya veya komut olağandışı büyük bir yanıt üretti.",
         "action": "Sunucuda Alice'in okuduğu içerikte olağandışı büyüklükte bir şey olup olmadığını denetleyin: authorized_keys dosyaları, SSH sunucusu ayarları veya Nginx yapılandırması."
       },
       "protocol_error": {
         "title": "Alice sunucunun yanıtını anlayamadı.",
+        "title_winrm": "Alice sunucunun WinRM yanıtını anlayamadı.",
         "cause": "Sunucudaki yardımcı program beklenmeyen bir biçimde yanıt verdi; başka bir program onun yerini almış olabilir.",
         "action": "alice-helper programını hazırlık komutlarıyla yeniden kurun, sonra bağlantıyı sınayın."
       },
@@ -1209,6 +1214,31 @@
         "title": "Alice, Uzak Masaüstü'nün sertifikanın özel anahtarını kullanmasına izin veremedi.",
         "cause": "Uzak Masaüstü NETWORK SERVICE olarak çalışır ve özel anahtarı okuyabilmesi gerekir. Bu erişim verilemedi; bu yüzden Alice dinleyiciyi yeni sertifikaya yöneltmedi. Dinleyici değiştirilmedi.",
         "action": "Sunucunun Uygulama olay günlüğünü ve makine anahtar deposunu denetleyin, ardından yeniden dağıtın. Alice'teki dağıtım geçmişi her adımı gösterir."
+      },
+      "winrm_auth_refused": {
+        "title": "Windows sunucusu Alice'in WinRM oturum açmasını reddetti.",
+        "cause": "Alice'te girilen parola sunucudaki hesabın parolasından farklı, hesap Administrators grubunun üyesi değil ya da sunucu NTLM'i reddediyor (Negotiate kimlik doğrulaması kapalı, CbtHardeningLevel Strict ya da bir ilke NTLM'i kısıtlıyor). Yardımcı programa hiçbir şey gönderilmedi.",
+        "action": "Sunucudaki hesabı ve parolasını kontrol edin, aynı parolayı Alice'te sunucunun sayfasında girin ve sunucunun WinRM kimlik doğrulama ayarlarını kontrol edin. Ardından bağlantıyı yeniden sınayın."
+      },
+      "winrm_password_missing": {
+        "title": "Alice'te bu sunucu için WinRM parolası yok.",
+        "cause": "Bu sunucuya, hesabın parolasıyla oturum açan WinRM üzerinden ulaşılıyor ve Alice'te parola girilmemiş. Alice bağlanmadı.",
+        "action": "Bir Yönetici parolayı Alice'te sunucunun sayfasında girer (WinRM kurulum betiğinin sunucuda belirlediği parola). Ardından bağlantıyı yeniden sınayın."
+      },
+      "winrm_fault": {
+        "title": "Sunucunun WinRM hizmeti isteği reddetti.",
+        "cause": "Sunucudaki WinRM hizmeti bir hatayla yanıt verdi; örneğin bir kota, bir WinRM ayarı ya da bir ilke nedeniyle. Hatanın kodu ayrıntılarda yer alır.",
+        "action": "Sunucunun WinRM ayarlarını ve Microsoft-Windows-WinRM/Operational olay günlüğünü kontrol edin, ardından yeniden deneyin."
+      },
+      "transport_immutable": {
+        "title": "Bir sunucunun bağlantı türü değiştirilemez.",
+        "cause": "Sunucunun bağlantısı (OpenSSH ya da WinRM) sunucu eklenirken seçilir; çünkü sabitlenen sunucu kimliği ve kimlik bilgisi ikisinde farklıdır. Hiçbir şey değiştirilmedi.",
+        "action": "Diğer bağlantıyı kullanmak için sunucuyu o bağlantıyla yeniden ekleyin, ardından eski kaydı kaldırın."
+      },
+      "winrm_password_invalid": {
+        "title": "Bu WinRM parolası kullanılamaz.",
+        "cause": "Alice, boşluksuz ve yazdırılabilir ASCII karakterlerden oluşan, 12 ile 128 karakter arasında bir WinRM parolası kabul eder. Parola saklanmadı.",
+        "action": "Sunucudaki hesap için bu kurala uyan bir parola belirleyin (WinRM kurulum betiği bunu sorar), ardından aynı parolayı buraya girin."
       }
     },
     "certificate": {

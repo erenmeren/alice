@@ -117,6 +117,9 @@ func (p *Provider) ConfigSchema() providers.ConfigSchema {
 			LabelKey: "provider.windows.fields.port.label", HelpKey: "provider.windows.fields.port.help"},
 		{Name: "username", Type: providers.FieldString, Default: DefaultUser, Pattern: userRE.String(), Min: 1, Max: 36,
 			LabelKey: "provider.windows.fields.username.label", HelpKey: "provider.windows.fields.username.help"},
+		// R71 Ruling 2: under winrm the port defaults to DefaultWinRMPort and username also takes .\<SAM name> (ParseConfig).
+		{Name: "transport", Type: providers.FieldEnum, Values: []string{TransportSSH, TransportWinRM}, Default: TransportSSH,
+			LabelKey: "provider.windows.fields.transport.label", HelpKey: "provider.windows.fields.transport.help"},
 	}}
 }
 
@@ -173,7 +176,7 @@ type session struct {
 	providers.UnsupportedSession
 	p       *Provider
 	pool    *linuxssh.Pool
-	cfg     linuxssh.Config // Host is also the address of later probes
+	cfg     Config // Host is also the address of later probes
 	cred    providers.CredentialSource
 	target  uuid.UUID
 	caps    providers.CapabilitySet
@@ -225,7 +228,7 @@ func callIn[T any](ctx context.Context, s *session, sub string, stdin []byte, ar
 		return zero, providers.HostKey{}, providers.NewError("internal.unexpected", false, err, map[string]string{"subcommand": sub})
 	}
 	defer c.WipeInput()
-	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg, s.cred)
+	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
 	if err != nil {
 		return zero, providers.HostKey{}, err
 	}

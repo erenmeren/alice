@@ -1,26 +1,34 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/i18n"
+	"alice/internal/inventory"
 	"alice/internal/providers/windows"
+	"alice/internal/secrets"
 	"alice/locales"
 )
 
 // windowsTable is the pinned table of the Windows codes (area WIN: R60 0001-0003, R61 0004-0012, R62 0013-0014, R68
-// 0015-0020, R69 0021-0023).
+// 0015-0020, R69 0021-0023, R71 0024-0028).
 var windowsTable = []struct {
 	code, reason string
 	status       int
@@ -49,6 +57,11 @@ var windowsTable = []struct {
 	{"ALC-WIN-0021", "windows.rdp_disabled", 409, false},
 	{"ALC-WIN-0022", "windows.rdp_tls_off", 409, false},
 	{"ALC-WIN-0023", "windows.rdp_key_acl_failed", 409, false},
+	{"ALC-WIN-0024", "windows.winrm_auth_refused", 502, false},
+	{"ALC-WIN-0025", "windows.winrm_password_missing", 409, false},
+	{"ALC-WIN-0026", "windows.winrm_fault", 502, false},
+	{"ALC-WIN-0027", "windows.transport_immutable", 409, false},
+	{"ALC-WIN-0028", "windows.winrm_password_invalid", 422, false},
 }
 
 // Each Windows code is registered as the table says, has EN and TR texts without placeholders (the provider sends
@@ -161,4 +174,159 @@ func TestWindowsErrorParams(t *testing.T) {
 	assert.Equal(t, map[string]string{"store": "Remote Desktop"}, providerParams(map[string]string{"store": "Remote Desktop"}),
 		"W6: the listener's self-signed store")
 	assert.Equal(t, map[string]string{"store": "MY"}, providerParams(map[string]string{"store": "MY"}), "a NULL store reads MY")
+}
+
+// R71 Ruling 7: PUT /targets/{id}/winrm-password, W5's CCS password route exactly: an Administrator with step-up sets the
+// WinRM password of a Windows server whose transport is winrm; the answer is the target, with the date and never the
+// password.
+func TestSetWinRMPasswordHandler(t *testing.T) {
+	h, inv, aud := ccsDeps(t)
+	path := "/api/v1/targets/" + targetID.String() + "/winrm-password"
+	pw := ccsSecret()
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	winrm := func(setAt *time.Time) inventory.Target {
+		tg := sampleWindows(nil)
+		tg.Port, tg.Transport, tg.WinRMPasswordSetAt = 5986, inventory.TransportWinRM, setAt
+		return tg
+	}
+	var (
+		got   []byte
+		given secrets.Plaintext
+		ver   int
+		id    uuid.UUID
+		calls int
+	)
+	inv.SetWinRMPasswordFn = func(_ context.Context, _ inventory.Actor, target uuid.UUID, v int, p secrets.Plaintext) (inventory.Target, error) {
+		calls++
+		got, given, ver, id = bytes.Clone(p.Bytes()), p, v, target
+		return winrm(&at), nil
+	}
+	body := `{"password":"` + pw + `"}`
+	hdr := map[string]string{"If-Match": `"7"`}
+
+	rec := callWith(h, http.MethodPut, path, "admin", body, hdr)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "ALC-AUTH-0003", decodeErr(t, rec).Error.Code, "an Administrator needs a fresh step-up")
+	assert.Equal(t, http.StatusForbidden, callWith(h, http.MethodPut, path, "alice_operate_admin", body, hdr).Code, "never an API token")
+	assert.Equal(t, http.StatusForbidden, callWith(h, http.MethodPut, path, "operator-stepup", body, hdr).Code, "an Operator")
+	assert.Zero(t, calls, "no refusal reached the inventory")
+
+	rec = callWith(h, http.MethodPut, path, "admin-stepup", body, hdr)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, []byte(pw), got)
+	assert.Equal(t, make([]byte, len(pw)), given.Bytes(), "the handler zeroes the password after the call")
+	assert.Equal(t, 7, ver)
+	assert.Equal(t, targetID, id)
+	assert.Equal(t, `"7"`, rec.Header().Get("ETag"))
+	obj := jsonObj(t, rec)
+	assert.Equal(t, "2026-10-31T09:00:00Z", obj["winrm_password_set_at"])
+	assert.Equal(t, "winrm", obj["transport"])
+	assert.Equal(t, targetID.String(), obj["id"], "the answer is the target")
+	assert.NotContains(t, obj, "password")
+	assert.NotContains(t, rec.Body.String(), pw)
+
+	// A WinRM server without a password says null; an SSH Windows server and a Linux server have no such field.
+	inv.SetWinRMPasswordFn = func(context.Context, inventory.Actor, uuid.UUID, int, secrets.Plaintext) (inventory.Target, error) {
+		return winrm(nil), nil
+	}
+	obj = jsonObj(t, callWith(h, http.MethodPut, path, "admin-stepup", body, hdr))
+	v, ok := obj["winrm_password_set_at"]
+	assert.True(t, ok)
+	assert.Nil(t, v)
+	ssh := sampleWindows(nil)
+	ssh.Transport = inventory.TransportSSH
+	assert.NotContains(t, mustJSON(targetJSON(ssh, serviceRefs{})), "winrm_password_set_at", "an SSH Windows server has no WinRM password")
+	assert.Contains(t, mustJSON(targetJSON(ssh, serviceRefs{})), `"transport":"ssh"`)
+	assert.NotContains(t, mustJSON(targetJSON(sampleTarget(), serviceRefs{})), "transport", "a Linux server has no transport")
+
+	// If-Match is required; a stale one is 412; another member or a number is refused before the inventory.
+	assert.Equal(t, "ALC-SYS-0008", decodeErr(t, call(h, http.MethodPut, path, "admin-stepup", body)).Error.Code)
+	inv.SetWinRMPasswordFn = func(context.Context, inventory.Actor, uuid.UUID, int, secrets.Plaintext) (inventory.Target, error) {
+		return inventory.Target{}, inventory.ErrVersionMismatch
+	}
+	assert.Equal(t, "ALC-SYS-0008", decodeErr(t, callWith(h, http.MethodPut, path, "admin-stepup", body, hdr)).Error.Code)
+	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPut, path, "admin-stepup", `{"password":"`+pw+`","x":1}`, hdr).Code)
+	assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPut, path, "admin-stepup", `{"password":123456789012}`, hdr).Code)
+	assert.Equal(t, http.StatusRequestEntityTooLarge,
+		callWith(h, http.MethodPut, path, "admin-stepup", `{"password":"`+strings.Repeat("a", 5000)+`"}`, hdr).Code)
+
+	for err, want := range map[error]string{inventory.ErrWinRMPasswordInvalid: "ALC-WIN-0028", inventory.ErrNotWindowsTarget: "ALC-WIN-0011",
+		fmt.Errorf("%w: its transport is not winrm", inventory.ErrNotWindowsTarget): "ALC-WIN-0011"} {
+		inv.SetWinRMPasswordFn = func(context.Context, inventory.Actor, uuid.UUID, int, secrets.Plaintext) (inventory.Target, error) {
+			return inventory.Target{}, err
+		}
+		rec := callWith(h, http.MethodPut, path, "admin-stepup", body, hdr)
+		assert.Equal(t, want, decodeErr(t, rec).Error.Code, "%v", err)
+		assert.NotContains(t, rec.Body.String(), pw)
+	}
+	inv.SetWinRMPasswordFn = func(context.Context, inventory.Actor, uuid.UUID, int, secrets.Plaintext) (inventory.Target, error) {
+		return inventory.Target{}, inventory.ErrNotFound
+	}
+	assert.Equal(t, http.StatusNotFound, callWith(h, http.MethodPut, path, "admin-stepup", body, hdr).Code)
+	assert.Equal(t, http.StatusNotFound, callWith(h, http.MethodPut, "/api/v1/targets/x/winrm-password", "admin-stepup", body, hdr).Code)
+	for _, e := range aud.Events() {
+		assert.NotContains(t, mustJSON(e), pw, e.Action)
+	}
+}
+
+// R71 Ruling 19: GET /targets/{id}/winrm-setup answers the WinRM setup script of a WinRM Windows server to a target
+// reader; any other target is the code of ErrNotWindowsTarget.
+func TestWinRMSetupHandler(t *testing.T) {
+	h, inv, _ := ccsDeps(t)
+	path := "/api/v1/targets/" + targetID.String() + "/winrm-setup"
+	want, err := windows.SetupScriptWinRM(`.\alice`, "", true)
+	require.NoError(t, err)
+	inv.WinRMSetupFn = func(_ context.Context, id uuid.UUID) (inventory.WinRMSetup, error) {
+		if id != targetID {
+			return inventory.WinRMSetup{}, inventory.ErrNotFound
+		}
+		return inventory.WinRMSetup{User: `.\alice`, Script: want}, nil
+	}
+	rec := call(h, http.MethodGet, path, "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	obj := jsonObj(t, rec)
+	require.Len(t, obj, 1)
+	script, _ := obj["script"].(string)
+	assert.Equal(t, want, script, "the inventory's script, as it is")
+	assert.NotEmpty(t, script)
+
+	inv.WinRMSetupFn = func(context.Context, uuid.UUID) (inventory.WinRMSetup, error) {
+		return inventory.WinRMSetup{}, fmt.Errorf("%w: its transport is not winrm", inventory.ErrNotWindowsTarget)
+	}
+	rec = call(h, http.MethodGet, path, "auditor", "")
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "ALC-WIN-0011", decodeErr(t, rec).Error.Code)
+	inv.WinRMSetupFn = func(context.Context, uuid.UUID) (inventory.WinRMSetup, error) {
+		return inventory.WinRMSetup{}, inventory.ErrNotFound
+	}
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, path, "auditor", "").Code)
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/targets/x/winrm-setup", "auditor", "").Code)
+}
+
+// R71 Rulings 2 and 3: a Windows server is created with its transport, and a change that names another transport is
+// ALC-WIN-0027.
+func TestTargetTransportHandlers(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	h := NewHandler(d)
+	var in inventory.NewTarget
+	inv.CreateTargetFn = func(_ context.Context, _ inventory.Actor, n inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+		in = n
+		tg := sampleWindows(nil)
+		tg.Transport = n.Transport
+		return tg, uuid.New(), nil
+	}
+	rec := call(h, http.MethodPost, "/api/v1/targets", "admin", `{"name":"iis-01","type":"windows","host":"iis-01.corp.example","transport":"winrm"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.TransportWinRM, in.Transport)
+
+	var patch inventory.TargetPatch
+	inv.UpdateTargetFn = func(_ context.Context, _ inventory.Actor, _ uuid.UUID, _ int, p inventory.TargetPatch) (inventory.Target, error) {
+		patch = p
+		return inventory.Target{}, inventory.ErrTransportImmutable
+	}
+	rec = callWith(h, http.MethodPatch, "/api/v1/targets/"+targetID.String(), "admin", `{"name":"x","transport":"ssh"}`, map[string]string{"If-Match": `"3"`})
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "ALC-WIN-0027", decodeErr(t, rec).Error.Code)
+	require.NotNil(t, patch.Transport)
+	assert.Equal(t, "ssh", *patch.Transport)
 }

@@ -152,6 +152,42 @@ func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers
 	return map[string]providers.SetupSnippet{"windows": {Profile: "windows", Script: script}}
 }
 
+var errBadWinRMSetup = errors.New("windows: the account or the address cannot be embedded in the WinRM setup script")
+
+// SetupScriptWinRM is the PowerShell script that prepares a Windows server for the WinRM transport (R71 Ruling 18): run
+// once as an administrator in the directory that holds .\alice-helper.exe. user is the target's account in Ruling 6's
+// forms; the script names it without the .\ of a local account. from is the platform key line's from= value ("" for
+// any address). Without the helper checksums only a development build (allowUnverified) gets a script, as SetupScript.
+//
+// shortcut: the header and the SSH script's helper check only; Task 7 of the W7 plan writes the account, listener and
+// firewall steps of Ruling 18.
+func SetupScriptWinRM(user, from string, allowUnverified bool) (string, error) {
+	if !allowUnverified && !HelperChecksumsKnown() {
+		return "", ErrHelperUnverified
+	}
+	if (!ValidUser(user) && !localUserRE.MatchString(user)) || linuxssh.ValidateFrom(from) != nil {
+		return "", errBadWinRMSetup
+	}
+	return "#Requires -RunAsAdministrator\n" +
+		"# Prepares this Windows server for Alice over WinRM (HTTPS, NTLMv2). Run it once in an elevated PowerShell, in the\n" +
+		"# directory that holds alice-helper.exe from the helper folder of the Alice package.\n" +
+		"& {\n" +
+		"Set-StrictMode -Version 3\n" +
+		"$ErrorActionPreference = 'Stop'\n" +
+		"$AliceUser = '" + strings.TrimPrefix(user, `.\`) + "'\n" +
+		helperCheck(helperSHA256WindowsAMD64, helperSHA256WindowsARM64) +
+		"Test-Helper '.\\alice-helper.exe'\n" +
+		"Write-Warning 'This Alice version checks the helper only: prepare the account, the WinRM HTTPS listener and the firewall as docs/windows-host-preparation.md says.'\n" +
+		"}\n", nil
+}
+
+// WinRMSetupScript implements providers.WinRMSetupGuide: SetupScriptWinRM for user, without an address restriction;
+// "" when SetupScriptWinRM refuses (a build that cannot verify the helper).
+func (p *Provider) WinRMSetupScript(user string) string {
+	script, _ := SetupScriptWinRM(user, "", p.allowUnverified)
+	return script
+}
+
 // HelperInfo implements providers.SetupGuide.
 func (p *Provider) HelperInfo() (string, int) { return winproto.HelperPath, winproto.Protocol }
 

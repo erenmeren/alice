@@ -549,6 +549,8 @@ type fakeInventory struct {
 	CreateVaultFn                  func(ctx context.Context, a inventory.Actor, in inventory.NewVault) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	SetCCSPasswordFn               func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
+	SetWinRMPasswordFn             func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
+	WinRMSetupFn                   func(ctx context.Context, target uuid.UUID) (inventory.WinRMSetup, error)
 	DeleteVaultFn                  func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
 	RequestAccessCheckFn           func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
 	ListKVCertificatesFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
@@ -834,6 +836,20 @@ func (f *fakeInventory) SetCCSPassword(ctx context.Context, a inventory.Actor, t
 		return f.SetCCSPasswordFn(ctx, a, target, v, pw)
 	}
 	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) SetWinRMPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, v int, pw secrets.Plaintext) (inventory.Target, error) {
+	if f.SetWinRMPasswordFn != nil {
+		return f.SetWinRMPasswordFn(ctx, a, target, v, pw)
+	}
+	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) WinRMSetup(ctx context.Context, target uuid.UUID) (inventory.WinRMSetup, error) {
+	if f.WinRMSetupFn != nil {
+		return f.WinRMSetupFn(ctx, target)
+	}
+	return inventory.WinRMSetup{}, errNotConfigured
 }
 
 func (f *fakeInventory) DeleteVault(ctx context.Context, a inventory.Actor, id uuid.UUID, remove bool) error {

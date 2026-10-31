@@ -301,3 +301,41 @@ func TestRenderReasonVariant(t *testing.T) {
 			cat.T(lang, "errors.windows.busy.title", nil), "%s: a code without a listener title", lang)
 	}
 }
+
+// R71 Ruling 13: a WinRM target's transport failures reuse the ssh.* reasons with the param transport=winrm, and their
+// e-mails name WinRM through the reason's title_winrm. Without the param the text is R70's, byte for byte; the param is
+// never rendered, and it combines with the RDP listener's variant.
+func TestRenderTransportVariant(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	base := map[string]string{"name": "iis.example", "names": "iis.example", "count": "1", "expires_at": "2026-12-01 09:00 UTC"}
+	render := func(lang string, extra map[string]string) string {
+		p := maps.Clone(base)
+		maps.Copy(p, extra)
+		return s.Render("ada@example.com", inventory.TemplateACMERenewalFailed, lang, p).Body
+	}
+	for _, lang := range []string{"en", "tr"} {
+		for _, code := range []string{"ssh.unreachable", "ssh.timeout"} {
+			plain := cat.T(lang, "errors."+code+".title", nil)
+			key := "errors." + code + ".title_winrm"
+			winrm := cat.T(lang, key, nil)
+			require.NotEqual(t, key, winrm, "%s %s", lang, code)
+			assert.Contains(t, winrm, "WinRM", "%s %s", lang, code)
+			assert.NotContains(t, winrm, "SSH", "%s %s", lang, code)
+			body := render(lang, map[string]string{"error_reason": code, "transport": "winrm"})
+			assert.Contains(t, body, winrm, "%s %s", lang, code)
+			assert.NotContains(t, body, plain, "%s %s", lang, code)
+			assert.NotContains(t, body, "transport", "%s %s", lang, code)
+			want := render(lang, map[string]string{"error_reason": code})
+			assert.Contains(t, want, plain, "%s %s: without the param, R70's text", lang, code)
+			assert.Equal(t, want, render(lang, map[string]string{"error_reason": code, "transport": "ssh"}), "%s %s", lang, code)
+			assert.Equal(t, want, render(lang, map[string]string{"error_reason": code, "reason_variant": "rdp"}),
+				"%s %s: no listener title", lang, code)
+			assert.Contains(t, render(lang, map[string]string{"error_reason": code, "reason_variant": "rdp", "transport": "winrm"}), winrm,
+				"%s %s: the listener over WinRM", lang, code)
+		}
+		assert.Contains(t, render(lang, map[string]string{"error_reason": "windows.binding_changed", "reason_variant": "rdp", "transport": "winrm"}),
+			cat.T(lang, "errors.windows.binding_changed.title_rdp", nil), "%s: the listener's title first", lang)
+	}
+}

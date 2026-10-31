@@ -203,7 +203,7 @@ func runWrite[T any](ctx context.Context, s *session, sub string, stdin []byte, 
 		return writeCall[T]{refusal: providers.NewError(reasonUnexpected, false, err, map[string]string{"subcommand": sub})}
 	}
 	defer c.WipeInput()
-	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg, s.cred)
+	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
 	if err != nil {
 		return writeCall[T]{refusal: asProviderError(err)}
 	}

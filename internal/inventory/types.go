@@ -134,7 +134,11 @@ type Target struct {
 	CertificateCleanup   bool      // the cleanup switch (targets.certificate_cleanup, on by default); meaningful for a server with the cleanup_certificates capability (R62 Ruling 13)
 	ServiceID            uuid.UUID // the owning service (R49)
 	// CCSPasswordSetAt is when the newest CCS password of a Windows server was set (W5 Ruling 9); nil when none was.
-	CCSPasswordSetAt     *time.Time
+	CCSPasswordSetAt *time.Time
+	// Transport is a Windows server's transport, TransportSSH or TransportWinRM (R71 Ruling 2); "" for any other type.
+	Transport string
+	// WinRMPasswordSetAt is when the newest WinRM password of a Windows server was set (R71 Ruling 7); nil when none was.
+	WinRMPasswordSetAt   *time.Time
 	Version              int
 	CreatedAt, UpdatedAt time.Time
 }
@@ -188,6 +192,9 @@ type NewTarget struct {
 	Host     string
 	Port     int    // 0 = 22
 	Username string // "" = alice-svc
+	// Transport is a Windows server's transport (R71 Ruling 2): "" or TransportSSH (the default), or TransportWinRM.
+	// Any other type takes none.
+	Transport string
 	// ServiceID is the service the server goes to (R49); uuid.Nil = the Default service.
 	ServiceID uuid.UUID
 }
@@ -200,6 +207,8 @@ type TargetPatch struct {
 	// CertificateCleanup is the per-server cleanup switch (R62 Ruling 13); only a server whose provider can clean up
 	// takes it.
 	CertificateCleanup *bool
+	// Transport is refused unless it is the target's own (R71 Ruling 3: fixed when the target is created).
+	Transport *string
 }
 
 // targetConfig is targets.config.
@@ -208,4 +217,6 @@ type targetConfig struct {
 	Port     int    `json:"port"`
 	Username string `json:"username,omitempty"`
 	VaultURL string `json:"vault_url,omitempty"` // a Key Vault only (host is its host name, port 443)
+	// Transport is set for a WinRM Windows server only (R71 Ruling 2), so an SSH server's config stays W6's.
+	Transport string `json:"transport,omitempty"`
 }

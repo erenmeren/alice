@@ -154,6 +154,8 @@ var notReasons = map[string]bool{
 	"deployment.rollout_preempted": true, "deployment.rollout_completed": true,
 	// The CCS password of a Windows server (R68): an audit action
 	"target.ccs_password_set": true,
+	// The WinRM password of a Windows server (R71): an audit action
+	"target.winrm_password_set": true,
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

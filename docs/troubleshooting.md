@@ -2336,6 +2336,46 @@ None of these files holds key material.
 
 **What to do.** Check the server's Application event log and its machine key store, then deploy again. The deployment ends **Failed, restored** although the listener was never changed; the deployment history in Alice shows each step, and the step **Allow NETWORK SERVICE to read the key** says if the access could not be taken back.
 
+## ALC-WIN-0024: The Windows server refused Alice's WinRM sign-in
+
+**Meaning.** The Windows server's WinRM listener refused the sign-in of the target's account with the password set in Alice, so Alice sent nothing to the helper. (HTTP 502, reason `windows.winrm_auth_refused`.)
+
+**Likely cause.** The password set in Alice differs from the account's password on the server; the account is not a member of Administrators (directly or through a group); or the server refuses NTLM: Negotiate authentication is turned off for WinRM, `CbtHardeningLevel` is `Strict` (Alice sends no channel binding), or a policy restricts NTLM. A local account on a server where "Deny access to this computer from the network" names Local account (S-1-5-114) cannot sign in over the network either.
+
+**What to do.** Check the account and its password on the server, set the same password in Alice on the server's page, and check the server's WinRM authentication settings (`Get-ChildItem WSMan:\localhost\Service\Auth`). Then test the connection again.
+
+## ALC-WIN-0025: Alice has no WinRM password for this server
+
+**Meaning.** The server is reached over WinRM, which signs in with the account's password, and no password was set in Alice; Alice did not connect. (HTTP 409, reason `windows.winrm_password_missing`.)
+
+**Likely cause.** The server was added with the WinRM connection and its password step was skipped.
+
+**What to do.** An Administrator sets the password on the server's page in Alice: the password the WinRM setup script set for the account on the server. Then test the connection again.
+
+## ALC-WIN-0026: The server's WinRM service refused the request
+
+**Meaning.** The WinRM service on the server answered Alice's request with a WS-Management fault. The fault's numeric code is in the error's details; its text is not kept. (HTTP 502, reason `windows.winrm_fault`.)
+
+**Likely cause.** A WinRM quota (for example the number of shells per user) or setting, or a policy on the server, refused the request.
+
+**What to do.** Check the server's WinRM settings (`winrm get winrm/config`) and the `Microsoft-Windows-WinRM/Operational` event log for the code, then try again.
+
+## ALC-WIN-0027: The connection type of a server cannot be changed
+
+**Meaning.** A change named another connection (OpenSSH or WinRM) than the server's; nothing was changed. (HTTP 409, reason `windows.transport_immutable`.)
+
+**Likely cause.** The connection is chosen when a Windows server is added, because the pinned server identity (an SSH host key or the WinRM listener's TLS key) and the credential differ between the two.
+
+**What to do.** To use the other connection, add the server again with it, confirm its identity, then remove the old entry.
+
+## ALC-WIN-0028: This WinRM password cannot be used
+
+**Meaning.** Alice accepts a WinRM password of 12 to 128 characters of printable ASCII without spaces; the password was not stored. (HTTP 422, reason `windows.winrm_password_invalid`.)
+
+**Likely cause.** The password is shorter than 12 characters, longer than 128, or holds a space or a character outside printable ASCII.
+
+**What to do.** Set a password that follows this rule for the account on the server (the WinRM setup script asks for it), then enter the same password in Alice.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

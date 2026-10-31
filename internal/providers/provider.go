@@ -263,6 +263,12 @@ type SetupGuide interface {
 	HelperInfo() (path string, protocol int)                         // "/usr/local/libexec/alice-helper", helperproto.Protocol (windows: winproto.HelperPath, winproto.Protocol)
 }
 
+// WinRMSetupGuide is implemented by the Windows provider (R71 Ruling 19): the WinRM setup script for an account in the
+// provider's forms. Script is "" when the build cannot verify the helper, as SetupSnippets' Script is.
+type WinRMSetupGuide interface {
+	WinRMSetupScript(user string) string
+}
+
 // SetupSnippet is the host preparation for one profile.
 type SetupSnippet struct {
 	Profile string // "linux" | "nginx" | "apache" | "haproxy" | "windows"

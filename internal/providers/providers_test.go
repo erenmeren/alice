@@ -670,3 +670,23 @@ func TestWindowsFactsRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &out))
 	assert.Equal(t, *in.Windows, out)
 }
+
+// R71 Ruling 8: the WinRM password source's sentinels are worded as the CCS ones and are distinct from them, so a missing
+// WinRM password never reads as a missing CCS password.
+func TestWinRMPasswordSentinels(t *testing.T) {
+	all := []error{providers.ErrNoWinRMPassword, providers.ErrWinRMPasswordUnusable, providers.ErrNoCCSPassword, providers.ErrCCSPasswordUnusable}
+	for i, a := range all {
+		for j, b := range all {
+			assert.Equal(t, i == j, errors.Is(a, b), "%v / %v", a, b)
+		}
+	}
+	assert.Equal(t, "providers: no WinRM password is set", providers.ErrNoWinRMPassword.Error())
+	assert.Equal(t, "providers: the WinRM password cannot be used", providers.ErrWinRMPasswordUnusable.Error())
+	var _ providers.WinRMPasswordSource = winrmSource{}
+}
+
+type winrmSource struct{}
+
+func (winrmSource) WinRMPassword(context.Context, uuid.UUID) (secrets.Plaintext, func(), error) {
+	return secrets.Plaintext{}, func() {}, nil
+}

@@ -152,6 +152,11 @@ type targetDTO struct {
 	// CCSPasswordSetAt is when the CCS password of a Windows server was set (W5 Ruling 9): a time or null for a Windows
 	// server, left out for every other target. The password itself is never answered.
 	CCSPasswordSetAt **time.Time `json:"ccs_password_set_at,omitempty"`
+	// Transport is a Windows server's transport, ssh or winrm (R71 Ruling 2); left out for every other target.
+	Transport string `json:"transport,omitempty"`
+	// WinRMPasswordSetAt is when the WinRM password of a WinRM Windows server was set (R71 Ruling 7): a time or null for
+	// such a server, left out for every other target. The password itself is never answered.
+	WinRMPasswordSetAt **time.Time `json:"winrm_password_set_at,omitempty"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
 	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
@@ -209,10 +214,14 @@ func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 	if slices.Contains(t.Capabilities, string(providers.CapCleanupCertificates)) {
 		cleanup = &t.CertificateCleanup
 	}
-	var ccs **time.Time
+	var ccs, winrm **time.Time
 	if t.Type == inventory.TypeWindows {
 		at := utcPtr(t.CCSPasswordSetAt)
 		ccs = &at
+	}
+	if t.Transport == inventory.TransportWinRM {
+		at := utcPtr(t.WinRMPasswordSetAt)
+		winrm = &at
 	}
 	return targetDTO{
 		CertificateCleanup: cleanup,
@@ -222,7 +231,7 @@ func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,
 		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Vault: vaultJSON(t), Version: t.Version,
 		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), Service: refs.of(t.ServiceID), AllowedActions: refs.actions(t.ServiceID),
-		CCSPasswordSetAt: ccs,
+		CCSPasswordSetAt: ccs, Transport: t.Transport, WinRMPasswordSetAt: winrm,
 	}
 }
 

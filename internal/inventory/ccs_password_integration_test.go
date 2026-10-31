@@ -315,6 +315,15 @@ func TestWindowsServerPathsReportADatabaseFailure(t *testing.T) {
 			_, _, err := svc.Credentials().(providers.CCSPasswordSource).CCSPassword(ctx, id)
 			return err
 		},
+		"SetWinRMPassword": func() error {
+			_, err := svc.SetWinRMPassword(ctx, a, id, 1, secrets.NewPlaintext(ccsPassword()))
+			return err
+		},
+		"WinRMPassword": func() error {
+			_, _, err := svc.Credentials().(providers.WinRMPasswordSource).WinRMPassword(ctx, id)
+			return err
+		},
+		"WinRMSetup":        func() error { _, err := svc.WinRMSetup(ctx, id); return err },
 		"SSHSigner":         func() error { _, _, err := svc.Credentials().SSHSigner(ctx); return err },
 		"PlatformKey":       func() error { _, err := svc.PlatformKey(ctx); return err },
 		"EnsurePlatformKey": func() error { _, err := svc.EnsurePlatformKey(ctx); return err },
@@ -341,7 +350,7 @@ func TestWindowsServerPathsReportADatabaseFailure(t *testing.T) {
 	} {
 		err := call()
 		require.Error(t, err, what)
-		for _, refusal := range []error{inventory.ErrNotFound, providers.ErrNoCCSPassword, inventory.ErrNoPlatformKey} {
+		for _, refusal := range []error{inventory.ErrNotFound, providers.ErrNoCCSPassword, providers.ErrNoWinRMPassword, inventory.ErrNoPlatformKey} {
 			assert.NotErrorIs(t, err, refusal, what)
 		}
 	}

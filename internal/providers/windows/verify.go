@@ -184,7 +184,7 @@ func (s *session) probeWith(ctx context.Context, ep tlsverify.Endpoint, keyType 
 		(sni != helperproto.NoSNI && !helperproto.ValidSNI(sni)) {
 		return tlsverify.Served{}, false, nil
 	}
-	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg, s.cred)
+	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
 	if err != nil {
 		return tlsverify.Served{}, false, err
 	}

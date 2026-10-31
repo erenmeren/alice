@@ -38,6 +38,9 @@ func (s *server) targetRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listTargetLocations},
 		// W5 Ruling 9: the CCS password is a credential, set as a vault's (an Administrator with step-up, never a token).
 		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/ccs-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.setCCSPassword},
+		// R71 Rulings 7 and 19: the WinRM password is set as the CCS password; the setup script holds no secret.
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/winrm-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.setWinRMPassword},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/winrm-setup", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.winrmSetup},
 	}
 }
 
@@ -116,6 +119,8 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 		Host     string `json:"host"`
 		Port     int    `json:"port"`
 		Username string `json:"username"`
+		// Transport is a Windows server's (R71 Ruling 2): ssh (absent) or winrm.
+		Transport string `json:"transport"`
 		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
 		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
 		ServiceID *uuid.UUID `json:"service_id"`
@@ -132,7 +137,7 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, jobID, err := s.deps.Inventory.CreateTarget(r.Context(), s.actor(r), inventory.NewTarget{
-		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, ServiceID: service,
+		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, Transport: req.Transport, ServiceID: service,
 	})
 	if err != nil {
 		s.fail(w, r, err)
@@ -193,6 +198,53 @@ func (s *server) setCCSPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, targetJSON(t, refs))
 }
 
+// setWinRMPassword sets the WinRM password of a Windows server whose transport is winrm (R71 Ruling 7), as
+// setCCSPassword sets the CCS password.
+func (s *server) setWinRMPassword(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	version, ok := ifMatch(r)
+	if !ok {
+		s.writeError(w, r, ErrPreconditionFailed)
+		return
+	}
+	var req struct {
+		Password secretText `json:"password"`
+	}
+	defer func() { req.Password.zero() }()
+	if !s.decodeExact(w, r, &req, maxCCSBody, "password") {
+		return
+	}
+	t, err := s.deps.Inventory.SetWinRMPassword(r.Context(), s.actor(r), id, version, secrets.NewPlaintext(req.Password))
+	req.Password.zero()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", etag(t.Version))
+	writeJSON(w, http.StatusOK, targetJSON(t, refs))
+}
+
+// winrmSetup answers the WinRM setup script of a Windows server whose transport is winrm (R71 Ruling 19). script is ""
+// for a build that cannot verify the helper, as the setup guide's profiles are.
+func (s *server) winrmSetup(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	in, err := s.deps.Inventory.WinRMSetup(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"script": in.Script})
+}
+
 func (s *server) updateTarget(w http.ResponseWriter, r *http.Request) {
 	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
@@ -210,13 +262,14 @@ func (s *server) updateTarget(w http.ResponseWriter, r *http.Request) {
 		DiscoveryIntervalHours *int    `json:"discovery_interval_hours"`
 		PollIntervalMinutes    *int    `json:"poll_interval_minutes"` // vaults only (5..1440)
 		CertificateCleanup     *bool   `json:"certificate_cleanup"`   // servers that can clean up certificates (R62 Ruling 13)
+		Transport              *string `json:"transport"`             // refused unless the target's own (R71 Ruling 3)
 	}
 	if !s.decode(w, r, &req) {
 		return
 	}
 	t, err := s.deps.Inventory.UpdateTarget(r.Context(), s.actor(r), id, version,
 		inventory.TargetPatch{Name: req.Name, DiscoveryIntervalHours: req.DiscoveryIntervalHours, PollIntervalMinutes: req.PollIntervalMinutes,
-			CertificateCleanup: req.CertificateCleanup})
+			CertificateCleanup: req.CertificateCleanup, Transport: req.Transport})
 	if err != nil {
 		s.failTarget(w, r, id, err)
 		return

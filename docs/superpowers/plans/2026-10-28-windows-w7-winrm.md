@@ -659,7 +659,7 @@ Expected: PASS.
   - constants `purposeWinWinRM = "win_winrm"`, `kindWinRMPassword = "winrm_password"`.
 - Mirror: `00036_windows_ccs.sql` (the four CHECKs, the refusing Down), `ccs_password.go` (the sealed append-only credential, its rule, its source, its audit), `setCCSPassword` and its tests, W6 Task 5 (codes, OpenAPI).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - `windows_winrm_integration_test.go`:
     - Up accepts a `win_winrm` / `winrm_password` credential with `target_id`, and refuses one without it, and refuses `winrm_password` under another purpose.
     - Down refuses with `Z1036` while one exists and succeeds after it is removed.
@@ -674,14 +674,14 @@ Expected: PASS.
     - `TestWinRMSetupOnlyForWinRMTargets`.
   - `internal/notify`: the `transport=winrm` variant of `ssh.unreachable` and `ssh.timeout` renders in EN and TR; without the param, the text is byte for byte R70's.
   - `errors_winserver_test.go`: the five codes with their reasons and statuses. `PUT .../winrm-password`: 200 with the target, `ETag` and `winrm_password_set_at`, and no password in the answer; without step-up `ALC-AUTH-0003`; without `If-Match` or with a stale one `ALC-SYS-0008`; an invalid password `ALC-WIN-0028`; an SSH Windows target `ALC-WIN-0011`; an unknown member in the body refused (`decodeExact`). The setup endpoint answers 200 with a script for a WinRM target, the code of `ErrNotWindowsTarget` for an SSH one, and 404 for an unknown target. The OpenAPI conformance test passes.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test -count=1 -tags integration ./migrations/ ./internal/inventory/ ./internal/notify/ ./internal/api/ -run 'WinRM|Transport|Winserver|Migration'`
 Expected: FAIL.
-- [ ] **Step 3: Implement**, the OpenAPI entries included.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 3: Implement**, the OpenAPI entries included.
+- [x] **Step 4: Run the tests**
 Run: `go test -race -count=1 ./internal/providers/ && go test -count=1 -tags integration ./migrations/ ./internal/inventory/ ./internal/notify/ ./internal/api/ && make i18n-check`
 Expected: PASS; inventory at least 89 %, api at least 95 %.
-- [ ] **Step 5: Commit**: `feat(inventory): a Windows target's transport, its WinRM password as a sealed append-only credential set with step-up, the setup endpoint and ALC-WIN-0024..0028; migration 00038 (R71)`.
+- [x] **Step 5: Commit**: `feat(inventory): a Windows target's transport, its WinRM password as a sealed append-only credential set with step-up, the setup endpoint and ALC-WIN-0024..0028; migration 00038 (R71)`.
 
 ---
 

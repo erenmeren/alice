@@ -58,6 +58,7 @@ var inventorySentinels = map[string]error{
 	"ErrRolloutNotFound": inventory.ErrRolloutNotFound, "ErrRolloutState": inventory.ErrRolloutState, "ErrCanaryOverrideForbidden": inventory.ErrCanaryOverrideForbidden,
 	"ErrDriftNotBound": inventory.ErrDriftNotBound, "ErrDriftNotDrifted": inventory.ErrDriftNotDrifted, "ErrDriftNotRepairable": inventory.ErrDriftNotRepairable,
 	"ErrCCSPasswordInvalid": inventory.ErrCCSPasswordInvalid, "ErrNotWindowsTarget": inventory.ErrNotWindowsTarget,
+	"ErrWinRMPasswordInvalid": inventory.ErrWinRMPasswordInvalid, "ErrTransportImmutable": inventory.ErrTransportImmutable, // R71
 	"ErrDriftRepairSuperseded": inventory.ErrDriftRepairSuperseded, "ErrDriftRepairOff": inventory.ErrDriftRepairOff,
 	"ErrClaimLost": inventory.ErrClaimLost, "ErrCSRBusy": inventory.ErrCSRBusy, "ErrTooManyPendingCSRs": inventory.ErrTooManyPendingCSRs,
 	// Phase 5 (Tasks 10-14)

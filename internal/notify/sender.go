@@ -212,7 +212,8 @@ func backoff(attempt int) time.Duration {
 // plain title of that code in the reader's language (errors.<code>.title; an unknown code reads as
 // internal.unexpected's title), so no raw code reaches the reader. A param reason_variant selects
 // errors.<code>.title_<variant> where that key exists (else the plain title) and is dropped from the
-// rendered params.
+// rendered params; then a param transport (winrm: a WinRM Windows server's ssh.* reasons, R71 Ruling 13)
+// selects errors.<code>.title_<transport> the same way.
 func (s *Sender) Render(to, template, locale string, params map[string]string) Message {
 	clean := make(map[string]string, len(params))
 	for k, v := range params {
@@ -220,7 +221,7 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	}
 	if code, ok := params["error_reason"]; ok {
 		delete(clean, "error_reason")
-		clean["reason"] = s.reasonTitle(locale, code, params["reason_variant"])
+		clean["reason"] = s.reasonTitle(locale, code, params["reason_variant"], params["transport"])
 	}
 	delete(clean, "reason_variant") // the variant of the reason's title (W6 final review M2); never rendered itself
 	subject := oneLine(s.Catalog.T(locale, "email."+template+".subject", clean))
@@ -258,15 +259,19 @@ var reasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 // reasonVariant is the form of a title variant (reason_variant: "rdp", the Remote Desktop listener's titles).
 var reasonVariant = regexp.MustCompile(`^[a-z]+$`)
 
-// reasonTitle is the plain title of an error code in locale (see Render): errors.<code>.title_<variant> when the
-// variant is a word and that key exists (W6 final review M2: the listener's titles), else errors.<code>.title.
-func (s *Sender) reasonTitle(locale, code, variant string) string {
+// reasonTitle is the plain title of an error code in locale (see Render): errors.<code>.title_<variant> for the
+// first variant that is a word and whose key exists (W6 final review M2: the listener's titles; R71: the WinRM
+// transport's), else errors.<code>.title.
+func (s *Sender) reasonTitle(locale, code string, variants ...string) string {
 	if reasonCode.MatchString(code) {
-		keys := []string{"errors." + code + ".title"}
-		if reasonVariant.MatchString(variant) {
-			keys = append([]string{keys[0] + "_" + variant}, keys...)
+		title := "errors." + code + ".title"
+		var keys []string
+		for _, v := range variants {
+			if reasonVariant.MatchString(v) {
+				keys = append(keys, title+"_"+v)
+			}
 		}
-		for _, key := range keys {
+		for _, key := range append(keys, title) {
 			if t := s.Catalog.T(locale, key, nil); t != key {
 				return oneLine(t)
 			}

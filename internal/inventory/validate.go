@@ -42,6 +42,23 @@ var usernameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 // provider); TestWindowsUserRuleEqualsTheProviders compares the two.
 var windowsUserRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9-]{0,14}\\)?[A-Za-z0-9][A-Za-z0-9._-]{0,19}$`)
 
+// windowsLocalUserRE is the form .\<SAM name> of a local account, which a WinRM Windows server also takes (R71 Ruling
+// 6). It equals the provider's rule; TestWindowsUserRuleByTransportEqualsTheProviders compares the two.
+var windowsLocalUserRE = regexp.MustCompile(`^\.\\[A-Za-z0-9][A-Za-z0-9._-]{0,19}$`)
+
+// The transports of a Windows server (windows.TransportSSH, TransportWinRM; R71 Ruling 2) and the port of a WinRM
+// server that names none (windows.DefaultWinRMPort).
+const (
+	TransportSSH     = "ssh"
+	TransportWinRM   = "winrm"
+	defaultWinRMPort = 5986
+)
+
+// validWindowsUser is the account rule of a Windows server under transport (R60 Ruling 1, R71 Ruling 6).
+func validWindowsUser(transport, s string) bool {
+	return windowsUserRE.MatchString(s) || (transport == TransportWinRM && windowsLocalUserRE.MatchString(s))
+}
+
 // windowsDefaultUser is the account a Windows server's setup script creates when none is named (windows.DefaultUser).
 const windowsDefaultUser = "alice"
 
@@ -172,21 +189,33 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 	} else {
 		out.Host = host
 	}
+	// A Windows server's transport (R71 Ruling 2): only WinRM is stored, so an SSH server's config stays W6's.
 	switch {
+	case in.Transport == "" || (in.Transport == TransportSSH && in.Type == TypeWindows):
+		out.Transport = ""
+	case in.Type != TypeWindows:
+		errs.Add("transport", validate.Pattern, nil)
+	case in.Transport != TransportWinRM:
+		errs.Add("transport", validate.OneOf, map[string]string{"values": TransportSSH + ", " + TransportWinRM})
+	}
+	switch {
+	case in.Port == 0 && out.Transport == TransportWinRM:
+		out.Port = defaultWinRMPort
 	case in.Port == 0:
 		out.Port = defaultSSHPort
 	case in.Port < 1 || in.Port > 65535:
 		errs.Add("port", validate.OutOfRange, map[string]string{"min": "1", "max": "65535"})
 	}
-	// A Linux account follows SEC-062, a Windows account R60 Ruling 1 (DOMAIN\name, kept as typed).
-	user, rule := ServiceUser, usernameRE
+	// A Linux account follows SEC-062, a Windows account R60 Ruling 1 (DOMAIN\name, kept as typed) and, under WinRM,
+	// R71 Ruling 6 (.\name).
+	user, valid := ServiceUser, usernameRE.MatchString
 	if in.Type == TypeWindows {
-		user, rule = windowsDefaultUser, windowsUserRE
+		user, valid = windowsDefaultUser, func(s string) bool { return validWindowsUser(out.Transport, s) }
 	}
 	out.Username = strings.TrimSpace(in.Username)
 	if out.Username == "" {
 		out.Username = user
-	} else if !rule.MatchString(out.Username) {
+	} else if !valid(out.Username) {
 		errs.Add("username", validate.Pattern, nil)
 	}
 	return out, errs

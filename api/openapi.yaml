@@ -2552,6 +2552,74 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/winrm-password:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    put:
+      operationId: setWinRMPassword
+      summary: Set the WinRM password of a Windows server reached over WinRM (R71)
+      description: >-
+        The password of the server's account (config username) that Alice signs in with over WinRM (HTTPS, NTLMv2), one
+        per Windows server whose transport is winrm. Alice stores it sealed, as a credential of the server, and decrypts
+        it for one helper call at a time; a new password replaces the old one (both are kept sealed as history; there is
+        no delete). Until one is set, every call to the server is refused with 409 ALC-WIN-0025, nothing dialled. The
+        answer is the target, whose winrm_password_set_at says when the password was set; the password is never
+        answered, logged or audited (audited as target.winrm_password_set, without it). It must have 12 to 128
+        characters of printable ASCII without spaces (422 ALC-WIN-0028 otherwise, nothing stored). A target that is not a
+        Windows server, or a Windows server whose transport is ssh, is 409 ALC-WIN-0011. If-Match with the target's ETag
+        is required (412 ALC-SYS-0008); the body is at most 4 KiB. A sign-in the server refuses is ALC-WIN-0024 and a
+        WS-Management fault ALC-WIN-0026 (param wsman_code); other transport failures are the ssh.* codes with the param
+        transport=winrm. Needs an Administrator's browser session with a fresh step-up verification code (403
+        ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403
+        ALC-LIC-0001 while the license is locked.
+      x-permission: credentials.manage
+      x-scope: resource
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WinRMPassword" }
+      responses:
+        "200":
+          description: The Windows server with its new winrm_password_set_at
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/targets/{id}/winrm-setup:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getWinRMSetup
+      summary: The PowerShell script that prepares a Windows server for WinRM (R71)
+      description: >-
+        For a Windows server whose transport is winrm: the script an administrator runs once on the server, in the
+        directory that holds alice-helper.exe. It holds no secret. script is "" when this Alice build cannot verify
+        alice-helper.exe (built without the helper checksums). Any other target is 409 ALC-WIN-0011.
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The script
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WinRMSetup" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/kv/certificates:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -7295,6 +7363,18 @@ components:
       additionalProperties: false
       properties:
         password: { type: string, minLength: 12, maxLength: 128, writeOnly: true, description: 'R68. Printable ASCII (0x21-0x7E) without spaces' }
+    WinRMPassword:
+      type: object
+      required: [password]
+      additionalProperties: false
+      properties:
+        password: { type: string, minLength: 12, maxLength: 128, writeOnly: true, description: 'R71. Printable ASCII (0x21-0x7E) without spaces' }
+    WinRMSetup:
+      type: object
+      required: [script]
+      additionalProperties: false
+      properties:
+        script: { type: string, description: 'R71. The PowerShell script; "" when this build cannot verify alice-helper.exe' }
     VaultCredentials:
       type: object
       required: [auth]
@@ -8120,7 +8200,8 @@ components:
         type: { type: string, enum: [linux, nginx, apache, haproxy, windows], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
-        username: { type: string, maxLength: 36, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed; any other type refuses the backslash.' }
+        username: { type: string, maxLength: 36, description: 'Absent means alice-svc (alice on a Windows server). A Windows server also takes a domain account, DOMAIN\alice-svc, stored as typed (and, over WinRM, a local account as .\alice); any other type refuses the backslash. A UPN (alice@corp.example) is refused.' }
+        transport: { type: string, enum: [ssh, winrm], default: ssh, description: 'R71. A Windows server only (any other type is 422 validation.pattern on transport): OpenSSH (ssh, recommended) or WinRM over HTTPS with the account''s password (winrm; port 0 or absent then means 5986, and the password is set with PUT /targets/{id}/winrm-password). Fixed at creation.' }
     TargetPatch:
       type: object
       additionalProperties: false
@@ -8129,6 +8210,7 @@ components:
         discovery_interval_hours: { type: integer, minimum: 1, maximum: 720 }
         poll_interval_minutes: { type: integer, minimum: 5, maximum: 1440, description: Key Vaults only }
         certificate_cleanup: { type: boolean, description: 'R62. Servers whose provider can clean up certificates (capability cleanup_certificates) only; any other target is 422 validation.pattern on certificate_cleanup. A value that is not a boolean is 400. Audited as target.updated (fields certificate_cleanup).' }
+        transport: { type: string, enum: [ssh, winrm], description: 'R71. Fixed at creation: the Windows server''s own transport passes, another one is 409 ALC-WIN-0027 and any other target is 422 validation.pattern on transport.' }
     TargetFacts:
       type: object
       required: [os, helper_version, helper_protocol, sshd, host_keys, warnings, unreadable]
@@ -8246,6 +8328,17 @@ components:
           description: >-
             R68. Only for a Windows server (absent otherwise): when an Administrator last set its Centralized Certificate
             Store password (PUT /targets/{id}/ccs-password); null when none was set. The password itself is never
+            answered.
+        transport:
+          type: string
+          enum: [ssh, winrm]
+          description: R71. Only for a Windows server (absent otherwise) - OpenSSH or WinRM over HTTPS; fixed at creation.
+        winrm_password_set_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            R71. Only for a Windows server whose transport is winrm (absent otherwise): when an Administrator last set its
+            WinRM password (PUT /targets/{id}/winrm-password); null when none was set. The password itself is never
             answered.
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }

@@ -17,7 +17,8 @@
       "fields": {
         "host": { "label": "Address", "help": "Host name or IP address of the Windows server." },
         "port": { "label": "SSH port", "help": "Usually 22 (OpenSSH Server on Windows)." },
-        "username": { "label": "Windows account", "help": "alice, or DOMAIN\\alice-svc for a domain account." }
+        "username": { "label": "Windows account", "help": "alice, or DOMAIN\\alice-svc for a domain account." },
+        "transport": { "label": "Connection", "help": "OpenSSH (recommended), or WinRM over HTTPS with the account's password." }
       }
     }
   },
@@ -479,6 +480,7 @@
     "ssh": {
       "unreachable": {
         "title": "Alice cannot reach the server.",
+        "title_winrm": "Alice cannot reach the server's WinRM HTTPS listener.",
         "cause": "The server is turned off, the address or port is wrong, or a firewall blocks the connection.",
         "action": "Check that the server is running and that the Alice host can reach its SSH port, then test the connection again."
       },
@@ -489,6 +491,7 @@
       },
       "timeout": {
         "title": "The server took too long to answer.",
+        "title_winrm": "The server took too long to answer over WinRM.",
         "cause": "The server or the network is very slow, or a command on the server did not finish in time.",
         "action": "Try again later. If it keeps happening, check the load and the network of the server."
       },
@@ -529,11 +532,13 @@
       },
       "output_too_large": {
         "title": "The server sent more data than Alice accepts.",
+        "title_winrm": "The server sent more data over WinRM than Alice accepts.",
         "cause": "A file or a command on the server produced an unusually large answer.",
         "action": "Check the server for unusually large content in what Alice reads there: the authorized_keys files, the SSH server settings or the Nginx configuration."
       },
       "protocol_error": {
         "title": "Alice could not understand the server's answer.",
+        "title_winrm": "Alice could not understand the server's WinRM answer.",
         "cause": "The helper on the server answered in an unexpected way, possibly because another program replaced it.",
         "action": "Install alice-helper again with the preparation commands, then test the connection."
       },
@@ -1209,6 +1214,31 @@
         "title": "Alice could not let Remote Desktop use the certificate's private key.",
         "cause": "Remote Desktop runs as NETWORK SERVICE, which must be able to read the private key. Giving it that access failed, so Alice did not point the listener to the new certificate. The listener was not changed.",
         "action": "Check the server's Application event log and its machine key store, then deploy again. The deployment history in Alice shows each step."
+      },
+      "winrm_auth_refused": {
+        "title": "The Windows server refused Alice's WinRM sign-in.",
+        "cause": "The password set in Alice differs from the account's password on the server, the account is not a member of Administrators, or the server refuses NTLM (Negotiate authentication is off, CbtHardeningLevel is Strict, or a policy restricts NTLM). Nothing was sent to the helper.",
+        "action": "Check the account and its password on the server, set the same password in Alice on the server's page, and check the server's WinRM authentication settings. Then test the connection again."
+      },
+      "winrm_password_missing": {
+        "title": "Alice has no WinRM password for this server.",
+        "cause": "This server is reached over WinRM, which signs in with the account's password, and no password was set in Alice. Alice did not connect.",
+        "action": "An Administrator sets the password on the server's page in Alice (the one the WinRM setup script set on the server). Then test the connection again."
+      },
+      "winrm_fault": {
+        "title": "The server's WinRM service refused the request.",
+        "cause": "The WinRM service on the server answered with a fault, for example because of a quota, a WinRM setting or a policy. The fault's code is in the details.",
+        "action": "Check the server's WinRM settings and the Microsoft-Windows-WinRM/Operational event log, then try again."
+      },
+      "transport_immutable": {
+        "title": "The connection type of a server cannot be changed.",
+        "cause": "A server's connection (OpenSSH or WinRM) is chosen when it is added, because the pinned server identity and the credential differ between the two. Nothing was changed.",
+        "action": "To use the other connection, add the server again with it, then remove the old entry."
+      },
+      "winrm_password_invalid": {
+        "title": "This WinRM password cannot be used.",
+        "cause": "Alice accepts a WinRM password of 12 to 128 characters of printable ASCII without spaces. The password was not stored.",
+        "action": "Set a password that follows this rule for the account on the server (the WinRM setup script asks for it), then enter the same password here."
       }
     },
     "certificate": {

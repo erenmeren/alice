@@ -35,7 +35,7 @@ func TestWindowsProviderDescribesItself(t *testing.T) {
 		assert.Equal(t, "provider.windows.fields."+f.Name+".label", f.LabelKey)
 		assert.Equal(t, "provider.windows.fields."+f.Name+".help", f.HelpKey)
 	}
-	require.Len(t, fields, 3)
+	require.Len(t, fields, 4)
 	assert.True(t, fields["host"].Required)
 	assert.Equal(t, 22, fields["port"].Default)
 	assert.Equal(t, DefaultUser, fields["username"].Default)
@@ -66,10 +66,10 @@ func TestParseConfigTakesDomainAccounts(t *testing.T) {
 
 	c, errs := ParseConfig(providers.TargetConfig{"host": "iis-01"})
 	require.Empty(t, errs)
-	assert.Equal(t, linuxssh.Config{Host: "iis-01", Port: 22, Username: DefaultUser}, c)
+	assert.Equal(t, linuxssh.Config{Host: "iis-01", Port: 22, Username: DefaultUser}, c.Config)
 	c, errs = ParseConfig(providers.TargetConfig{"host": "iis-01", "port": float64(2222), "username": nil})
 	require.Empty(t, errs)
-	assert.Equal(t, linuxssh.Config{Host: "iis-01", Port: 2222, Username: DefaultUser}, c)
+	assert.Equal(t, linuxssh.Config{Host: "iis-01", Port: 2222, Username: DefaultUser}, c.Config)
 
 	// host and port follow the Linux rules (one shared check).
 	_, errs = ParseConfig(providers.TargetConfig{"port": 70000, "username": "a b"})
@@ -498,4 +498,52 @@ func TestCallRefusesAnInvalidCommand(t *testing.T) {
 	_, _, err := call[winproto.VersionResponse](context.Background(), s, "version", "a b")
 	assert.Equal(t, "internal.unexpected", providerErr(t, err).Code)
 	assert.Equal(t, []string{"version"}, e.srv.Commands())
+}
+
+// Ruling 2 and 6 (R71): the transport is ssh unless the target says winrm; under winrm the port defaults to 5986 and the
+// local form .\<SAM name> is also accepted. A UPN is refused under both (Kerberos is deferred), and so is an unknown
+// transport.
+func TestWinRMConfig(t *testing.T) {
+	c, errs := ParseConfig(providers.TargetConfig{"host": "iis-01", "transport": "winrm"})
+	require.Empty(t, errs)
+	assert.Equal(t, Config{Config: linuxssh.Config{Host: "iis-01", Port: DefaultWinRMPort, Username: DefaultUser}, Transport: TransportWinRM}, c)
+	assert.Equal(t, 5986, DefaultWinRMPort)
+	c, errs = ParseConfig(providers.TargetConfig{"host": "iis-01", "transport": "winrm", "port": 45986})
+	require.Empty(t, errs)
+	assert.Equal(t, 45986, c.Port, "a port the target names is kept")
+	c, errs = ParseConfig(providers.TargetConfig{"host": "iis-01", "transport": "ssh"})
+	require.Empty(t, errs)
+	assert.Equal(t, Config{Config: linuxssh.Config{Host: "iis-01", Port: 22, Username: DefaultUser}, Transport: TransportSSH}, c)
+
+	for _, u := range []string{"alice", `.\alice`, `HOST\alice`, `CORP\alice`} {
+		c, errs := ParseConfig(providers.TargetConfig{"host": "iis-01", "transport": "winrm", "username": u})
+		assert.Empty(t, errs, u)
+		assert.Equal(t, u, c.Username, "kept as typed")
+	}
+	refused := func(cfg providers.TargetConfig, field, code string) {
+		t.Helper()
+		_, errs := ParseConfig(cfg)
+		require.Len(t, errs, 1, "%v", cfg)
+		assert.Equal(t, field, errs[0].Field, "%v", cfg)
+		assert.Equal(t, code, errs[0].Code, "%v", cfg)
+	}
+	refused(providers.TargetConfig{"host": "iis-01", "transport": "ssh", "username": `.\alice`}, "username", validate.Pattern)
+	refused(providers.TargetConfig{"host": "iis-01", "username": `.\alice`}, "username", validate.Pattern)
+	for _, tr := range []string{"ssh", "winrm"} {
+		refused(providers.TargetConfig{"host": "iis-01", "transport": tr, "username": "alice@corp.example"}, "username", validate.Pattern)
+		refused(providers.TargetConfig{"host": "iis-01", "transport": tr, "username": `.\`}, "username", validate.Pattern)
+		refused(providers.TargetConfig{"host": "iis-01", "transport": tr, "username": `..\alice`}, "username", validate.Pattern)
+	}
+	refused(providers.TargetConfig{"host": "iis-01", "transport": "psrp"}, "transport", validate.OneOf)
+	refused(providers.TargetConfig{"host": "iis-01", "transport": 1}, "transport", validate.OneOf)
+	refused(providers.TargetConfig{"host": "iis-01", "transport": "WinRM"}, "transport", validate.OneOf)
+
+	var schema providers.Field
+	for _, f := range newEnv(t).prov.ConfigSchema().Fields {
+		if f.Name == "transport" {
+			schema = f
+		}
+	}
+	assert.Equal(t, providers.Field{Name: "transport", Type: providers.FieldEnum, Values: []string{TransportSSH, TransportWinRM},
+		Default: TransportSSH, LabelKey: "provider.windows.fields.transport.label", HelpKey: "provider.windows.fields.transport.help"}, schema)
 }
