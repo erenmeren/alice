@@ -129,14 +129,16 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
 	// values as the first WinRS fixture found them (it wrote them to the temporary directory, read with the
 	// same script).
 	left = strings.Fields(string(powershell(t, `Import-Module Microsoft.WSMan.Management
-if ([ADSI]::Exists("WinNT://$env:COMPUTERNAME/alice-w7,user")) { 'account' }
+# [ADSI]::Exists throws for an absent account (runner run 1 of W7); Win32_UserAccount answers nothing.
+if (@(Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='alice-w7'").Count -gt 0) { 'account' }
 $n = 0
 foreach ($l in @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)) {
     $n++
     if ([int]$l.Port -ge 45520 -and [int]$l.Port -le 45539) { "listener:$($l.Address)/$($l.Transport):$($l.Port)" }
 }
 if ($n -eq 0) { 'no-listener-listed' }
-if (@(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Alice*WinRM*' -or $_.DisplayName -like 'Alice WinRM*' }).Count -gt 0) { 'firewall-rule' }`)))
+if (@(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Alice*WinRM*' -or $_.DisplayName -like 'Alice WinRM*' }).Count -gt 0) { 'firewall-rule' }
+exit 0`)))
 	assert.Empty(t, left, "W7 fixtures are left (no-listener-listed: the positive control, the image's 5986 listener, is missing)")
 	left, err = filepath.Glob(filepath.Join(os.Getenv("ProgramData"), "alice-w7-*"))
 	require.NoError(t, err)

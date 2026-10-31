@@ -100,7 +100,9 @@ func powershellEnviron() []string {
 // psRun runs a fixture or check script. Values reach it through $env:, a secret only through stdin (one line).
 func psRun(env map[string]string, stdin, script string) (string, error) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-		"$ErrorActionPreference = 'Stop'; Import-Module Microsoft.WSMan.Management; "+script)
+		// exit 0 at the end: powershell.exe -Command otherwise exits 1 when the last statement left $? false (an error
+		// caught or silenced on the way, runner run 1); a terminating error still ends it with 1 before that line.
+		"$ErrorActionPreference = 'Stop'; Import-Module Microsoft.WSMan.Management; "+script+"\nexit 0")
 	cmd.Env = powershellEnviron()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -335,17 +337,30 @@ func newPassword(t *testing.T) string {
 	return "Aa1!" + hex.EncodeToString(raw) // 32 characters: upper, lower, digit and symbol, within Alice's rule
 }
 
-func deleteAccount() error {
-	out, err := psRun(map[string]string{"ACCOUNT": account}, "", `$sid = $null
-try { $sid = (New-Object System.Security.Principal.NTAccount($env:ACCOUNT)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }
-if ($sid) {
-    Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Remove-CimInstance
-    ([ADSI]"WinNT://$env:COMPUTERNAME,computer").Delete('User', $env:ACCOUNT)
-}`)
+func deleteAccount() (profileLeft string, err error) {
+	// Win32_UserAccount answers an absent account with nothing ([ADSI]::Exists and NTAccount.Translate throw, run 1).
+	// The account is deleted even when its profile cannot be removed (still loaded for a moment after a sign-in):
+	// the profile error is reported after the deletion.
+	out, err := psRun(map[string]string{"ACCOUNT": account}, "", `$u = @(Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='$($env:ACCOUNT)'")
+if ($u.Count -eq 0) { exit 0 }
+$sid = $u[0].SID
+$profileError = ''
+for ($i = 0; $i -lt 5; $i++) {
+    try {
+        Get-CimInstance -ClassName Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Remove-CimInstance
+        $profileError = ''
+        break
+    } catch {
+        $profileError = $_.Exception.Message
+        Start-Sleep -Seconds 2
+    }
+}
+([ADSI]"WinNT://$env:COMPUTERNAME,computer").Delete('User', $env:ACCOUNT)
+if ($profileError) { "profile: $profileError" }`)
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
+		return "", fmt.Errorf("%w: %s", err, out)
 	}
-	return nil
+	return out, nil
 }
 
 // setPassword changes alice-w7's password (on the child's stdin).
@@ -416,10 +431,17 @@ func winrmFixture(t *testing.T) *fx {
 		goBuild(t, f.helper, "alice/cmd/alice-winhelper")
 	}
 
-	require.NoError(t, deleteAccount(), "an alice-w7 account left by an earlier run")
+	left, err := deleteAccount()
+	require.NoError(t, err, "deleting an alice-w7 account left by an earlier run")
+	if left != "" {
+		t.Logf("an earlier %s was deleted; its %s", account, left)
+	}
 	t.Cleanup(func() {
-		if err := deleteAccount(); err != nil {
+		left, err := deleteAccount()
+		if err != nil {
 			t.Errorf("deleting %s: %v", account, err)
+		} else if left != "" {
+			t.Logf("%s is deleted; its %s", account, left)
 		}
 	})
 	f.pw = newPassword(t)

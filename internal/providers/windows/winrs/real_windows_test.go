@@ -261,7 +261,7 @@ func TestRealWinRMCost(t *testing.T) {
 		fact(t, "F27", "LOUD: p50 is above 3 s: the budgets of iis-dump and the probes are re-checked")
 	}
 	fact(t, "F27", "the shell limits: %s", ps(t, nil, "", `foreach ($n in 'MaxShellsPerUser', 'IdleTimeout', 'MaxConcurrentUsers', 'MaxProcessesPerShell', 'MaxMemoryPerShellMB') {
-    "$n=$((Get-Item -LiteralPath "WSMan:\localhost\Shell\$n").Value)"
+    "$n=$((Get-Item -LiteralPath "WSMan:\localhost\Shell\$n" -ErrorAction SilentlyContinue).Value)"
 }`))
 
 	// A shell left undeleted, with the IdleTimeOut Alice sends for a 30 s call.

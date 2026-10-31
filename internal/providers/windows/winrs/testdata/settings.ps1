@@ -25,3 +25,5 @@ try {
 } finally {
     Remove-Item -LiteralPath $inf -Force -ErrorAction SilentlyContinue
 }
+# powershell.exe -Command exits 1 when the last statement left $? false; every line above was read.
+exit 0
