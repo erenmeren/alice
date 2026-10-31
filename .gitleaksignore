@@ -72,3 +72,6 @@ a8c3f77ce09b8cf604e7008f4771db4f7ba75946:web/src/components/acme/AcmeSettings.te
 # The fake's stale-TLS test passes fixed operation ids (UUIDs) to iis-deploy, no key material.
 469a584fe82de1d8e3768c5e962cdbc26d31e746:cmd/alice-fakewindows/main_test.go:generic-api-key:492
 469a584fe82de1d8e3768c5e962cdbc26d31e746:cmd/alice-fakewindows/main_test.go:generic-api-key:500
+# R71: the SSH setup script goldens' public-key blob, the base64 of "ssh-ed25519" and the word "emulated" (a public key placeholder, no secret).
+7dae4807ffe857741eb15ee67b46386ecd36cfe2:internal/providers/windows/testdata/setup-ssh-verified.golden:generic-api-key:265
+7dae4807ffe857741eb15ee67b46386ecd36cfe2:internal/providers/windows/testdata/setup-ssh-unverified.golden:generic-api-key:258
