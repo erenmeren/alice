@@ -498,8 +498,8 @@ after staging inside the protected directory; it never sets `LocalAccountTokenFi
 (Amendment, R68.) A Windows server whose IIS uses a Centralized Certificate Store has one more secret, the store's
 private-key password: a sealed `credentials` row of the server (purpose `win_ccs`, kind `win_ccs_password`, AAD
 `credentials/<id>/ciphertext`, under SEC-040/041), set through `PUT /api/v1/targets/{id}/ccs-password` by an
-Administrator with a fresh step-up (never an API token), write-only, append-only (the newest row is the password; no
-delete). It is sent to the helper only on standard input of `ccs-dump` and `ccs-deploy`, never on the command line,
+Administrator with a fresh step-up (never an API token), write-only; rows are never deleted: a set or a removal (`DELETE`, R72) ends the live row (`rotated_at`), the
+newest live row is the password. It is sent to the helper only on standard input of `ccs-dump` and `ccs-deploy`, never on the command line,
 and is never written to a journal, an event, a log, an error, an API answer, an audit row or a job payload (WN-19,
 WIN-47). Alice never reads the copy IIS keeps in the registry.
 

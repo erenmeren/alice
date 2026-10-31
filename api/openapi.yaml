@@ -2518,7 +2518,7 @@ paths:
         The private-key password IIS's Centralized Certificate Store (CCS) opens its PFX files with, one per Windows server.
         Alice stores it sealed, as a credential of the server, and sends it to the server's helper only on standard input
         when it reads or writes a CCS file; a new password replaces the old one (both are kept sealed as history; DELETE
-        removes it). The answer is the target, whose ccs_password_set_at says when the password was set; the password is
+        ends it, its row stays sealed). The answer is the target, whose ccs_password_set_at says when the password was set; the password is
         never answered, logged or audited (audited as target.ccs_password_set, without it). It must have 12 to 128
         characters of printable ASCII without spaces (422 ALC-WIN-0019 otherwise, nothing stored). A target that is not a
         Windows server is 409 ALC-WIN-0011. If-Match with the target's ETag is required (412 ALC-SYS-0008); the body is
@@ -2592,7 +2592,7 @@ paths:
         The password of the server's account (config username) that Alice signs in with over WinRM (HTTPS, NTLMv2), one
         per Windows server whose transport is winrm. Alice stores it sealed, as a credential of the server, and decrypts
         it for one helper call at a time; a new password replaces the old one (both are kept sealed as history; DELETE
-        removes it). Until one is set, every call to the server is refused with 409 ALC-WIN-0025, nothing dialled. The
+        ends it, its row stays sealed). Until one is set, every call to the server is refused with 409 ALC-WIN-0025, nothing dialled. The
         answer is the target, whose winrm_password_set_at says when the password was set; the password is never
         answered, logged or audited (audited as target.winrm_password_set, without it). It must have 12 to 128
         characters of printable ASCII without spaces (422 ALC-WIN-0028 otherwise, nothing stored). A target that is not a

@@ -20,8 +20,9 @@ import (
 // The CCS password of a Windows server (R68, W5 Rulings 9-11). IIS's Centralized Certificate Store opens every PFX file
 // of the store with one private-key password, so Alice keeps one per server: a credentials row of purpose win_ccs and
 // kind win_ccs_password whose target_id is the server, sealed like every credential (AAD credentials/<id>/ciphertext;
-// public_info is empty). Rows are never deleted: a set or a removal ends the live row (rotated_at, R72 Ruling 7), so a
-// server has at most one live row, its password. The
+// public_info is empty). Rows are never deleted: a set or a removal ends the live row (rotated_at, R72 Ruling 7), so after
+// its first set or removal a server has at most one live row, its password (older rows of an upgraded database stay
+// live until then; the newest live row is read). The
 // password reaches the Windows provider only through the platform credential source (CCSPassword) and leaves Alice only
 // inside the helper's standard input.
 

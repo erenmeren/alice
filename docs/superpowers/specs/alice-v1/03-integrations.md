@@ -1223,8 +1223,9 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
   `target.winrm_password_removed` is appended with `name` and `credential_id` (the ended ids), never a secret. Nothing
   to remove answers 200 with the target unchanged: no version bump, no audit row. No row is deleted: an ended row
   keeps `rotated_at` and its ciphertext stays sealed under the master key, in the database and in backups; every read
-  (the source, `*_password_set_at`) takes live rows only. A `PUT` also ends the older live row before it inserts, so a
-  purpose has at most one live row. Migration `00039` grants the app role `UPDATE (rotated_at)` on `credentials` (the
+  (the source, `*_password_set_at`) takes live rows only. A `PUT` also ends the older live rows before it inserts, so after
+  its first set or removal under 39 a purpose has one live row at most (rows from before 39 stay live until then;
+  reads take the newest live row). Migration `00039` grants the app role `UPDATE (rotated_at)` on `credentials` (the
   other columns stay refused); its Down refuses with SQLSTATE `Z1038` while a live server has a removed password and no
   new one (an earlier Alice would read the ended row), and otherwise revokes the grant and drops the index. After a removal a WinRM server refuses every
   helper call with `windows.winrm_password_missing` (`ALC-WIN-0025`) before any dial until a new password is set; a

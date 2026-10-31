@@ -2921,6 +2921,7 @@
   "status": "test",
   "tests": [
    "internal/inventory:TestClearTargetPassword",
+   "migrations:TestMigration00039DownKeepsRemovedPasswordsRemoved",
    "internal/inventory:TestSetTargetPasswordEndsTheOlderRow",
    "internal/inventory:TestWinRMTargetAfterPasswordRemoval",
    "internal/api:TestClearTargetPasswordHandlers",
