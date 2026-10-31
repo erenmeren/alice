@@ -485,6 +485,7 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 		assert.Len(t, f.rawRequests(), 3, "the redirect is not followed")
 	})
 	t.Run("proxy in the environment", func(t *testing.T) {
+		// Go never proxies a loopback address, so the target is a name; Dial sends it to the fake listener.
 		proxy, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = proxy.Close() })
@@ -495,11 +496,32 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 				_ = c.Close()
 			}
 		}()
-		t.Setenv("HTTPS_PROXY", "http://"+proxy.Addr().String())
+		for _, v := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+			t.Setenv(v, "http://"+proxy.Addr().String())
+		}
 		t.Setenv("NO_PROXY", "")
+		t.Setenv("no_proxy", "")
 		f := newFake(t)
-		_, err = f.client().Run(context.Background(), f.call())
+		const target = "winrm.example:5986"
+		var mu sync.Mutex
+		var dialled []string
+		c := f.client()
+		c.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			mu.Lock()
+			dialled = append(dialled, addr)
+			mu.Unlock()
+			if addr == target {
+				addr = f.srv.Listener.Addr().String()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		call := f.call()
+		call.Addr = target
+		_, err = c.Run(context.Background(), call)
 		require.NoError(t, err)
+		mu.Lock()
+		assert.Equal(t, []string{target}, dialled, "only the target is dialled")
+		mu.Unlock()
 		select {
 		case <-connects:
 			t.Fatal("the proxy saw a connection")
