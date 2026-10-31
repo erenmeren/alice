@@ -225,7 +225,8 @@ func CreateShellRequest(h Header, env map[string]string, idle time.Duration) ([]
 	})
 }
 
-// CommandRequest starts program (quoted on the wire) with args, without cmd.exe and with stdin as a pipe.
+// CommandRequest starts program (quoted on the wire) with args and stdin as a pipe. It asks WinRS to skip cmd.exe
+// (WINRS_SKIP_CMD_SHELL), which WinRS does not honour: the program still runs under cmd.exe /C (F25).
 func CommandRequest(h Header, shellID, program string, args []string) ([]byte, error) {
 	if !idRE.MatchString(shellID) || !validCommand(program, args) {
 		return nil, errBadInput
