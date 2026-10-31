@@ -57,6 +57,9 @@ VALUES ($1, $2, 'windows', $3, $4, 'ok', now(), now())`, id, name, cfg, cred)
 	assert.Equal(t, 1, indexCount(t, d))
 	_, err = add("iis-01-again", "iis-01.corp.example", 2222, "")
 	assert.Equal(t, uniqueViolation, sqlState(err), "the same host, another port and transport")
+	assert.Equal(t, "targets_windows_host_live", constraintOf(err))
+	_, err = add("iis-01-same-port", "iis-01.corp.example", 5986, "winrm")
+	assert.Equal(t, "targets_endpoint_live", constraintOf(err), "the same endpoint answers the duplicate-endpoint index first (ALC-TGT-0001)")
 	require.NoError(t, exec(t, d.Owner, `INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
 VALUES ($1, 'web-on-iis-01', 'nginx', '{"host":"iis-01.corp.example","port":22}', $2, 'ok', now(), now())`, uuid.New(), cred),
 		"another type on the host")
@@ -66,6 +69,9 @@ VALUES ($1, 'web-on-iis-01', 'nginx', '{"host":"iis-01.corp.example","port":22}'
 	_, err = p.DownTo(ctx, 38)
 	require.NoError(t, err)
 	assert.Zero(t, indexCount(t, d), "the Down drops the index")
+	var may bool
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT has_column_privilege('alice_app', 'credentials', 'rotated_at', 'UPDATE')").Scan(&may))
+	assert.False(t, may, "the Down revokes the grant")
 	_, err = p.Up(ctx)
 	require.NoError(t, err)
 }
@@ -75,4 +81,34 @@ func indexCount(t *testing.T, d *pgtest.DB) int {
 	var n int
 	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT count(*) FROM pg_indexes WHERE indexname = 'targets_windows_host_live'").Scan(&n))
 	return n
+}
+
+// 00039's Down refuses while a removed CCS or WinRM password exists (an ended row with no live row after it): code
+// before 00039 reads the newest row whether ended or not and would use the removed password again. A replaced password
+// (an ended row with a live one after it) or a removed server does not block it.
+func TestMigration00039DownKeepsRemovedPasswordsRemoved(t *testing.T) {
+	ctx := context.Background()
+	d := pgtest.New(t)
+	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
+	require.NoError(t, err)
+	win := seedWinRMWorld(t, d)
+	require.NoError(t, ccsCredential(t, d, "win_winrm", "winrm_password", win))
+	require.NoError(t, exec(t, d.Owner, "UPDATE credentials SET rotated_at = now() WHERE purpose = 'win_winrm'"))
+
+	_, err = p.DownTo(ctx, 38)
+	assert.Equal(t, "Z1038", sqlState(err), "a removed password exists: %v", err)
+	assert.Equal(t, 1, indexCount(t, d), "nothing changed")
+
+	require.NoError(t, ccsCredential(t, d, "win_winrm", "winrm_password", win), "a new password after the removal")
+	_, err = p.DownTo(ctx, 38)
+	require.NoError(t, err, "a replaced password is no removal")
+
+	_, err = p.Up(ctx)
+	require.NoError(t, err)
+	require.NoError(t, exec(t, d.Owner, "UPDATE credentials SET rotated_at = now() WHERE purpose = 'win_winrm' AND rotated_at IS NULL"))
+	_, err = p.DownTo(ctx, 38)
+	assert.Equal(t, "Z1038", sqlState(err), "removed again: %v", err)
+	require.NoError(t, exec(t, d.Owner, "UPDATE targets SET deleted_at = now() WHERE id = $1", win))
+	_, err = p.DownTo(ctx, 38)
+	require.NoError(t, err, "a removed server's ended rows are never read")
 }

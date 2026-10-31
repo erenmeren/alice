@@ -1225,7 +1225,8 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
   keeps `rotated_at` and its ciphertext stays sealed under the master key, in the database and in backups; every read
   (the source, `*_password_set_at`) takes live rows only. A `PUT` also ends the older live row before it inserts, so a
   purpose has at most one live row. Migration `00039` grants the app role `UPDATE (rotated_at)` on `credentials` (the
-  other columns stay refused); its Down revokes it and drops the index. After a removal a WinRM server refuses every
+  other columns stay refused); its Down refuses with SQLSTATE `Z1038` while a live server has a removed password and no
+  new one (an earlier Alice would read the ended row), and otherwise revokes the grant and drops the index. After a removal a WinRM server refuses every
   helper call with `windows.winrm_password_missing` (`ALC-WIN-0025`) before any dial until a new password is set; a
   CCS server's next discovery warns `win_ccs_password_missing` and lists no file, and a CCS deployment is refused
   `ALC-WIN-0018`.

@@ -18,5 +18,18 @@ CREATE UNIQUE INDEX targets_windows_host_live ON targets (lower(config->>'host')
 GRANT UPDATE (rotated_at) ON credentials TO alice_app;
 
 -- +goose Down
+-- The Down refuses, with SQLSTATE Z1038, while a removed CCS or WinRM password exists (an ended row with no live row of
+-- its live target and purpose): code before 00039 reads the newest row whether ended or not and would use it again. A
+-- replaced password (a live row after the ended one) does not block it. Nothing is changed then.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM credentials c JOIN targets t ON t.id = c.target_id AND t.deleted_at IS NULL
+               WHERE c.purpose IN ('win_ccs', 'win_winrm') AND c.rotated_at IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM credentials n WHERE n.target_id = c.target_id AND n.purpose = c.purpose AND n.rotated_at IS NULL)) THEN
+        RAISE EXCEPTION 'cannot migrate down: removed Windows passwords exist; set a new password or remove the server in Alice, or restore a backup taken before 00039' USING ERRCODE = 'Z1038';
+    END IF;
+END $$;
+-- +goose StatementEnd
 REVOKE UPDATE (rotated_at) ON credentials FROM alice_app;
 DROP INDEX targets_windows_host_live;

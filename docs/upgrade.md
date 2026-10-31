@@ -196,8 +196,8 @@ backup into a new installation of the earlier version:
 Everything that happened after the backup is lost. This procedure has not been exercised by a test yet; run it on a
 test server first.
 
-**A removed Windows password returns below database version 39.** From version 39 on, removing a WinRM or CCS
-password in Alice ends its row and keeps it sealed; an earlier version does not know ended rows and uses the newest
-row, ended or not, so a password removed after the update is in use again. Before you take the database below version
-39, set a new password for such a server in Alice, or remove the server; after a restore of the pre-upgrade backup,
-the passwords are those of the backup.
+**A removed Windows password blocks a step below database version 39.** From version 39 on, removing a WinRM or CCS
+password in Alice ends its row and keeps it sealed; an earlier version does not know ended rows and would use the
+newest row, ended or not. So the step down from 39 refuses (PostgreSQL error code `Z1038`) while a server in Alice has
+a removed password and no new one. Set a new password for such a server in Alice, or remove the server, first; after a
+restore of the pre-upgrade backup, the passwords are those of the backup.
