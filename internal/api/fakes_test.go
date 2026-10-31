@@ -550,7 +550,7 @@ type fakeInventory struct {
 	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	SetCCSPasswordFn               func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
 	SetWinRMPasswordFn             func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
-	WinRMSetupFn                   func(ctx context.Context, target uuid.UUID) (inventory.WinRMSetup, error)
+	WinRMSetupFn                   func(ctx context.Context, target uuid.UUID, from string) (inventory.WinRMSetup, error)
 	DeleteVaultFn                  func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
 	RequestAccessCheckFn           func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
 	ListKVCertificatesFn           func(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)
@@ -845,9 +845,9 @@ func (f *fakeInventory) SetWinRMPassword(ctx context.Context, a inventory.Actor,
 	return inventory.Target{}, errNotConfigured
 }
 
-func (f *fakeInventory) WinRMSetup(ctx context.Context, target uuid.UUID) (inventory.WinRMSetup, error) {
+func (f *fakeInventory) WinRMSetup(ctx context.Context, target uuid.UUID, from string) (inventory.WinRMSetup, error) {
 	if f.WinRMSetupFn != nil {
-		return f.WinRMSetupFn(ctx, target)
+		return f.WinRMSetupFn(ctx, target, from)
 	}
 	return inventory.WinRMSetup{}, errNotConfigured
 }

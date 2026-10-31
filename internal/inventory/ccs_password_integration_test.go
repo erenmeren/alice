@@ -323,7 +323,7 @@ func TestWindowsServerPathsReportADatabaseFailure(t *testing.T) {
 			_, _, err := svc.Credentials().(providers.WinRMPasswordSource).WinRMPassword(ctx, id)
 			return err
 		},
-		"WinRMSetup":        func() error { _, err := svc.WinRMSetup(ctx, id); return err },
+		"WinRMSetup":        func() error { _, err := svc.WinRMSetup(ctx, id, ""); return err },
 		"SSHSigner":         func() error { _, _, err := svc.Credentials().SSHSigner(ctx); return err },
 		"PlatformKey":       func() error { _, err := svc.PlatformKey(ctx); return err },
 		"EnsurePlatformKey": func() error { _, err := svc.EnsurePlatformKey(ctx); return err },

@@ -308,7 +308,7 @@ func TestWinRMSetupOnlyForWinRMTargets(t *testing.T) {
 	local, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "iis-01", Type: "windows", Host: "iis-01.corp.example",
 		Username: `.\alice-w7`, Transport: inventory.TransportWinRM})
 	require.NoError(t, err)
-	got, err := h.svc.WinRMSetup(h.ctx, local.ID)
+	got, err := h.svc.WinRMSetup(h.ctx, local.ID, "")
 	require.NoError(t, err)
 	assert.Equal(t, `.\alice-w7`, got.User, "the account as typed")
 	want, err := windows.SetupScriptWinRM(`.\alice-w7`, "", false)
@@ -317,10 +317,23 @@ func TestWinRMSetupOnlyForWinRMTargets(t *testing.T) {
 	}
 	assert.Equal(t, want, got.Script, "the Windows provider's script")
 
+	// from (fix round 1): validated as the setup guide's, canonical in the script.
+	got, err = h.svc.WinRMSetup(h.ctx, local.ID, "2001:DB8::5")
+	require.NoError(t, err)
+	if want != "" {
+		assert.Contains(t, got.Script, "$AliceAddress = '2001:db8::5'\n")
+	}
+	for _, bad := range []string{"web-01", "fe80::1%eth0", "::ffff:192.0.2.1"} {
+		_, err = h.svc.WinRMSetup(h.ctx, local.ID, bad)
+		var errs validate.Errors
+		require.ErrorAs(t, err, &errs, bad)
+		assert.Equal(t, "from", errs[0].Field, bad)
+	}
+
 	for _, tg := range []inventory.Target{winTarget(t, h, admin, "iis-02"), okTarget(t, h, admin, "web-01")} {
-		_, err := h.svc.WinRMSetup(h.ctx, tg.ID)
+		_, err := h.svc.WinRMSetup(h.ctx, tg.ID, "")
 		require.ErrorIs(t, err, inventory.ErrNotWindowsTarget, tg.Name)
 	}
-	_, err = h.svc.WinRMSetup(h.ctx, uuid.New())
+	_, err = h.svc.WinRMSetup(h.ctx, uuid.New(), "")
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 }

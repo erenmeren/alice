@@ -183,6 +183,21 @@ func windowsAuthorizedKeysLine(publicKey, from string) string {
 // windowsKeyOptions are windows.keyOptions: restrict and the forced command of the installed helper.
 const windowsKeyOptions = `restrict,command="\"C:\Program Files\Alice\alice-helper.exe\" ssh"`
 
+// setupFrom is a setup script's optional from address in its canonical form, or the field error from pattern: what
+// SetupGuide and WinRMSetup (R71) both take.
+func setupFrom(from string) (string, error) {
+	if from == "" {
+		return "", nil
+	}
+	a, err := netip.ParseAddr(from)
+	if err != nil || a.Zone() != "" || a.Is4In6() {
+		var errs validate.Errors
+		errs.Add("from", validate.Pattern, nil)
+		return "", errs
+	}
+	return a.String(), nil
+}
+
 // SetupGuide returns the platform key and the setup snippets of every sudoers profile and, when the Windows
 // provider is registered, its "windows" profile (a PowerShell script with the Windows key line). from is an
 // optional IP address that the authorized_keys line restricts Alice's key to (§12.2). It is
@@ -190,14 +205,9 @@ const windowsKeyOptions = `restrict,command="\"C:\Program Files\Alice\alice-help
 // quoted from="…" option is always exactly an address. Zones and IPv4-mapped IPv6 addresses are
 // refused: sshd matches the client's address as it sees it, and a mapped form would never match.
 func (s *Service) SetupGuide(ctx context.Context, from string) (Guide, error) {
-	if from != "" {
-		a, err := netip.ParseAddr(from)
-		if err != nil || a.Zone() != "" || a.Is4In6() {
-			var errs validate.Errors
-			errs.Add("from", validate.Pattern, nil)
-			return Guide{}, errs
-		}
-		from = a.String()
+	from, err := setupFrom(from)
+	if err != nil {
+		return Guide{}, err
 	}
 	pk, err := s.EnsurePlatformKey(ctx)
 	if err != nil {

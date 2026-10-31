@@ -211,14 +211,19 @@ func (s *server) setTargetPassword(w http.ResponseWriter, r *http.Request,
 }
 
 // winrmSetup answers the WinRM setup script of a Windows server whose transport is winrm (R71 Ruling 19). script is ""
-// for a build that cannot verify the helper, as the setup guide's profiles are.
+// for a build that cannot verify the helper, as the setup guide's profiles are. ?from= is the address the script's
+// firewall rule accepts, as the platform key's.
 func (s *server) winrmSetup(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
 		return
 	}
-	in, err := s.deps.Inventory.WinRMSetup(r.Context(), id)
+	from, ok := s.queryFrom(w, r)
+	if !ok {
+		return
+	}
+	in, err := s.deps.Inventory.WinRMSetup(r.Context(), id, from)
 	if err != nil {
 		s.fail(w, r, err)
 		return

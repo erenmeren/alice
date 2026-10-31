@@ -178,17 +178,26 @@ func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// platformKey returns Alice's public key and the setup snippets (§12.2, §18.5 step 7). ?from= adds
-// a from="…" restriction to the authorized_keys line (SEC-082); it must be an IP address.
-func (s *server) platformKey(w http.ResponseWriter, r *http.Request) {
+// queryFrom is the optional ?from= of a setup script: "" or an IP address; anything else answers the field error.
+func (s *server) queryFrom(w http.ResponseWriter, r *http.Request) (string, bool) {
 	from := r.URL.Query().Get("from")
 	if from != "" {
 		if _, err := netip.ParseAddr(from); err != nil {
 			var v validate.Errors
 			v.Add("from", validate.Pattern, nil)
 			s.fail(w, r, v)
-			return
+			return "", false
 		}
+	}
+	return from, true
+}
+
+// platformKey returns Alice's public key and the setup snippets (§12.2, §18.5 step 7). ?from= adds
+// a from="…" restriction to the authorized_keys line (SEC-082); it must be an IP address.
+func (s *server) platformKey(w http.ResponseWriter, r *http.Request) {
+	from, ok := s.queryFrom(w, r)
+	if !ok {
+		return
 	}
 	g, err := s.deps.Inventory.SetupGuide(r.Context(), from)
 	if err != nil {

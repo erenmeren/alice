@@ -42,7 +42,13 @@ type WinRMSetup struct {
 // WinRMSetup answers the WinRM setup script of live Windows server target, through the Windows provider's
 // providers.WinRMSetupGuide (the inventory may not import the provider). Any other target, an SSH Windows server among
 // them, is ErrNotWindowsTarget.
-func (s *Service) WinRMSetup(ctx context.Context, target uuid.UUID) (WinRMSetup, error) {
+//
+// from is the optional address the script's firewall rule accepts, validated and made canonical as SetupGuide's.
+func (s *Service) WinRMSetup(ctx context.Context, target uuid.UUID, from string) (WinRMSetup, error) {
+	from, err := setupFrom(from)
+	if err != nil {
+		return WinRMSetup{}, err
+	}
 	t, err := s.GetTarget(ctx, target)
 	if err != nil {
 		return WinRMSetup{}, err
@@ -53,7 +59,7 @@ func (s *Service) WinRMSetup(ctx context.Context, target uuid.UUID) (WinRMSetup,
 	out := WinRMSetup{User: t.Username}
 	if p, ok := s.providerFor(t.Type); ok {
 		if g, ok := p.(providers.WinRMSetupGuide); ok {
-			out.Script = g.WinRMSetupScript(t.Username)
+			out.Script = g.WinRMSetupScript(t.Username, from)
 		}
 	}
 	return out, nil

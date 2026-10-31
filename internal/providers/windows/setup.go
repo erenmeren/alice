@@ -196,8 +196,8 @@ const winrmAddressNotice = `Write-Warning 'Alice''s address is not in these comm
 
 // WinRMSetupScript implements providers.WinRMSetupGuide: SetupScriptWinRM for user, without an address restriction;
 // "" when SetupScriptWinRM refuses (a build that cannot verify the helper).
-func (p *Provider) WinRMSetupScript(user string) string {
-	script, _ := SetupScriptWinRM(user, "", p.allowUnverified)
+func (p *Provider) WinRMSetupScript(user, from string) string {
+	script, _ := SetupScriptWinRM(user, from, p.allowUnverified)
 	return script
 }
 

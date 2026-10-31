@@ -277,7 +277,9 @@ func TestWinRMSetupHandler(t *testing.T) {
 	path := "/api/v1/targets/" + targetID.String() + "/winrm-setup"
 	want, err := windows.SetupScriptWinRM(`.\alice`, "", true)
 	require.NoError(t, err)
-	inv.WinRMSetupFn = func(_ context.Context, id uuid.UUID) (inventory.WinRMSetup, error) {
+	var froms []string
+	inv.WinRMSetupFn = func(_ context.Context, id uuid.UUID, from string) (inventory.WinRMSetup, error) {
+		froms = append(froms, from)
 		if id != targetID {
 			return inventory.WinRMSetup{}, inventory.ErrNotFound
 		}
@@ -291,13 +293,21 @@ func TestWinRMSetupHandler(t *testing.T) {
 	assert.Equal(t, want, script, "the inventory's script, as it is")
 	assert.NotEmpty(t, script)
 
-	inv.WinRMSetupFn = func(context.Context, uuid.UUID) (inventory.WinRMSetup, error) {
+	// ?from= (fix round 1): an IP address reaches the inventory; anything else is the field error, nothing asked.
+	rec = call(h, http.MethodGet, path+"?from=192.0.2.10", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, []string{"", "192.0.2.10"}, froms)
+	rec = call(h, http.MethodGet, path+"?from=web-01", "auditor", "")
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	assert.Len(t, froms, 2, "an invalid from never reaches the inventory")
+
+	inv.WinRMSetupFn = func(context.Context, uuid.UUID, string) (inventory.WinRMSetup, error) {
 		return inventory.WinRMSetup{}, fmt.Errorf("%w: its transport is not winrm", inventory.ErrNotWindowsTarget)
 	}
 	rec = call(h, http.MethodGet, path, "auditor", "")
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Equal(t, "ALC-WIN-0011", decodeErr(t, rec).Error.Code)
-	inv.WinRMSetupFn = func(context.Context, uuid.UUID) (inventory.WinRMSetup, error) {
+	inv.WinRMSetupFn = func(context.Context, uuid.UUID, string) (inventory.WinRMSetup, error) {
 		return inventory.WinRMSetup{}, inventory.ErrNotFound
 	}
 	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, path, "auditor", "").Code)

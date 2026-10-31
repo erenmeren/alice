@@ -175,7 +175,7 @@ type InventoryService interface {
 	// W5 (R68): the CCS password of a Windows server.
 	SetCCSPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
 	SetWinRMPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
-	WinRMSetup(ctx context.Context, target uuid.UUID) (inventory.WinRMSetup, error)
+	WinRMSetup(ctx context.Context, target uuid.UUID, from string) (inventory.WinRMSetup, error)
 	DeleteVault(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
 	RequestAccessCheck(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
 	ListKVCertificates(ctx context.Context, vault uuid.UUID, f inventory.KVFilter) (inventory.KVCertificatePage, error)

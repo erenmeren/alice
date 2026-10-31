@@ -284,9 +284,12 @@ func TestWinRMSetupScriptGuide(t *testing.T) {
 	withChecksums(t, "", "")
 	want, err := SetupScriptWinRM(`.\alice`, "", true)
 	require.NoError(t, err)
-	assert.Equal(t, want, g.WinRMSetupScript(`.\alice`))
-	assert.Empty(t, New(Options{}).WinRMSetupScript(`.\alice`), "no checksums, no development build")
-	assert.Empty(t, g.WinRMSetupScript("al'ice"))
+	assert.Equal(t, want, g.WinRMSetupScript(`.\alice`, ""))
+	assert.Empty(t, New(Options{}).WinRMSetupScript(`.\alice`, ""), "no checksums, no development build")
+	assert.Empty(t, g.WinRMSetupScript("al'ice", ""))
+	// The address reaches the firewall rule (fix round 1).
+	assert.Contains(t, g.WinRMSetupScript(`.\alice`, "192.0.2.10"), "$AliceAddress = '192.0.2.10'\n")
+	assert.Empty(t, g.WinRMSetupScript(`.\alice`, "web-01"))
 }
 
 // R71 Task 7: the SSH script's output is byte for byte what it was before the shared fragments were factored out of

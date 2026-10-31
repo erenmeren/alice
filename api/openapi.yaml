@@ -2607,9 +2607,12 @@ paths:
       description: >-
         For a Windows server whose transport is winrm: the script an administrator runs once on the server, in the
         directory that holds alice-helper.exe. It holds no secret. script is "" when this Alice build cannot verify
-        alice-helper.exe (built without the helper checksums). Any other target is 409 ALC-WIN-0011.
+        alice-helper.exe (built without the helper checksums). Any other target is 409 ALC-WIN-0011. from limits the
+        script's firewall rule to Alice's address; without it the rule accepts any address and the script says so.
       x-permission: read
       x-scope: resource
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, description: IP address the firewall rule accepts } }
       responses:
         "200":
           description: The script
