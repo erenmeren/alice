@@ -408,9 +408,50 @@ func TestWinRSNeverSendsBasic(t *testing.T) {
 			_, err := f.client().Run(context.Background(), f.call())
 			require.ErrorIs(t, err, winrs.ErrAuthRefused)
 			assertNoBasic(t, f, f.acct.Password)
-			assert.NotContains(t, f.actions(), "Delete", "no sign-in is tried again after a refusal")
+			assert.Equal(t, 2, signIns(f), "one exchange (type 1, type 3) on Create, never another")
 		})
 	}
+}
+
+// signIns counts the requests that carried an Authorization header.
+func signIns(f *fakeWinRM) int {
+	n := 0
+	for _, r := range f.rawRequests() {
+		if r.auth != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// Only Create carries the credentials: a 401 on a later request is final, with no new exchange and no resent body.
+func TestWinRSSignsInOnCreateOnly(t *testing.T) {
+	f := newFake(t)
+	f.setHook(func(w http.ResponseWriter, s served) bool {
+		if s.req.Action != winrs.ActionSend {
+			return false
+		}
+		w.Header().Add("WWW-Authenticate", "Negotiate")
+		w.WriteHeader(http.StatusUnauthorized)
+		return true
+	})
+	call := f.call()
+	call.Stdin = []byte("key material")
+	_, err := f.client().Run(context.Background(), call)
+	require.ErrorIs(t, err, winrs.ErrAuthRefused)
+	assert.NotErrorIs(t, err, winrs.ErrNotSent, "after Command, what reached the program is uncertain")
+	sends := 0
+	for _, r := range f.rawRequests() {
+		if bytes.Contains(r.body, []byte(winrs.ActionSend)) {
+			sends++
+		}
+	}
+	assert.Equal(t, 1, sends, "the Send was not sent again")
+	assert.Equal(t, 2, signIns(f), "no new exchange after the 401")
+	f.mu.Lock()
+	assert.Empty(t, f.stdin)
+	f.mu.Unlock()
+	assert.Equal(t, []string{"Create", "Command", "Send", "Delete"}, f.actions(), "the cleanup is still attempted")
 }
 
 func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {

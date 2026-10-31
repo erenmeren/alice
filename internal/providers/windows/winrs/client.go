@@ -100,8 +100,9 @@ func (c *Client) check(call Call) error {
 }
 
 // Run runs call: Create (the NTLM exchange happens here), Command, the stdin Sends, Receive until Done, and Delete
-// on every path after a successful Create but a refused sign-in. A timeout or an output overflow also sends Signal
-// terminate. Each cleanup request has its own budget, detached from ctx. A refused sign-in is never retried.
+// on every path after a successful Create. A timeout or an output overflow also sends Signal terminate. Each cleanup
+// request has its own budget, detached from ctx. Only Create carries the credentials, so the NTLM exchange runs once,
+// on Create; a refused sign-in is never retried, and no later request can start a new one.
 func (c *Client) Run(ctx context.Context, call Call) (Result, error) {
 	if err := c.check(call); err != nil {
 		return Result{}, notSent(err)
@@ -120,14 +121,12 @@ func (c *Client) Run(ctx context.Context, call Call) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, call.Timeout)
 	defer cancel()
 
-	resp, err := s.post(ctx, create)
+	resp, err := s.post(ctx, create, true)
 	if err == nil {
 		var shellID string
 		if shellID, err = ParseShellCreated(resp); err == nil {
 			res, cmdID, err := s.run(ctx, shellID)
-			if !errors.Is(err, ErrAuthRefused) { // a refused sign-in is never tried again: the idle time reaps the shell
-				s.cleanup(ctx, shellID, cmdID, errors.Is(err, ErrTimeout) || errors.Is(err, ErrOutputTooLarge))
-			}
+			s.cleanup(ctx, shellID, cmdID, errors.Is(err, ErrTimeout) || errors.Is(err, ErrOutputTooLarge))
 			if err != nil {
 				return Result{}, err
 			}
@@ -204,7 +203,7 @@ func (s *session) run(ctx context.Context, shellID string) (Result, string, erro
 	if err != nil {
 		return Result{}, "", ErrBadConfig
 	}
-	resp, err := s.post(ctx, req)
+	resp, err := s.post(ctx, req, false)
 	if err != nil {
 		return Result{}, "", err
 	}
@@ -219,7 +218,7 @@ func (s *session) run(ctx context.Context, shellID string) (Result, string, erro
 		if err != nil {
 			return Result{}, cmdID, err
 		}
-		if _, err := s.post(ctx, req); err != nil {
+		if _, err := s.post(ctx, req, false); err != nil {
 			return Result{}, cmdID, err
 		}
 		if in = in[n:]; len(in) == 0 {
@@ -242,7 +241,7 @@ func (s *session) receive(ctx context.Context, shellID, cmdID string) (Result, e
 		if err != nil {
 			return Result{}, err
 		}
-		resp, err := s.post(ctx, req)
+		resp, err := s.post(ctx, req, false)
 		var fe *FaultError
 		if errors.As(err, &fe) && fe.Code == faultTimedOut {
 			continue
@@ -273,7 +272,7 @@ func (s *session) cleanup(ctx context.Context, shellID, cmdID string, signal boo
 		}
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
 		defer cancel()
-		_, _ = s.post(cctx, req)
+		_, _ = s.post(cctx, req, false)
 	}
 	if signal && cmdID != "" {
 		send(SignalRequest(s.header(0), shellID, cmdID, SignalTerminate))
@@ -283,7 +282,7 @@ func (s *session) cleanup(ctx context.Context, shellID, cmdID string, signal boo
 
 // post sends one request on the call's connection and waits for its answer or the end of ctx. A request left
 // behind keeps running until it ends or the session closes.
-func (s *session) post(ctx context.Context, body []byte) ([]byte, error) {
+func (s *session) post(ctx context.Context, body []byte, signIn bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTimeout, err)
 	}
@@ -295,7 +294,7 @@ func (s *session) post(ctx context.Context, body []byte) ([]byte, error) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		b, err := s.roundTrip(body)
+		b, err := s.roundTrip(body, signIn)
 		ch <- answer{b, err}
 	}()
 	select {
@@ -306,13 +305,18 @@ func (s *session) post(ctx context.Context, body []byte) ([]byte, error) {
 	}
 }
 
-func (s *session) roundTrip(body []byte) ([]byte, error) {
+// roundTrip sends one request. signIn (Create only) gives it the credentials, which the Negotiator reads and never
+// forwards: it runs the NTLM exchange (Ruling 28, as amended: credentials on Create only). A request without them
+// passes the Negotiator untouched, so a 401 on it is final: no new exchange, no resent body.
+func (s *session) roundTrip(body []byte, signIn bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(s.reqCtx, http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, ErrBadConfig
 	}
 	req.Header.Set("Content-Type", ContentType)
-	req.SetBasicAuth(s.user, s.password) // read by the Negotiator, never forwarded (Ruling 28)
+	if signIn {
+		req.SetBasicAuth(s.user, s.password)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
