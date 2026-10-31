@@ -164,7 +164,7 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if cfg.Transport == TransportWinRM {
 		pin, err := tlspin.New(ctx, tlspin.Options{Target: t.ID, ServerName: cfg.Host, Store: env.HostKeys})
 		if err != nil {
-			return nil, err
+			return nil, withParams(asProviderError(err), winrmParams(winproto.SubVersion))
 		}
 		s.pin, s.run = pin, s.winrmRun
 	}
@@ -232,11 +232,11 @@ func (s *session) open() error {
 func (s *session) sshRun(ctx context.Context, c linuxssh.HelperCommand) (linuxssh.Result, providers.HostKey, error) {
 	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
 	if err != nil {
-		return linuxssh.Result{}, providers.HostKey{}, markNotSent(err)
+		return linuxssh.Result{}, providers.HostKey{}, markNotSent(err, nil)
 	}
 	defer release(false)
 	if err := ctx.Err(); err != nil {
-		return linuxssh.Result{}, conn.HostKey(), markNotSent(providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": c.Subcommand()}))
+		return linuxssh.Result{}, conn.HostKey(), markNotSent(providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": c.Subcommand()}), nil)
 	}
 	res, err := conn.Run(ctx, c)
 	return res, conn.HostKey(), err

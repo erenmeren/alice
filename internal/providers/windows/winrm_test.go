@@ -532,3 +532,21 @@ func TestWinRMDialTimeoutMatchesSSH(t *testing.T) {
 	assert.Equal(t, linuxssh.DefaultDialTimeout, winrs.DefaultDialTimeout)
 	assert.Equal(t, linuxssh.DefaultHandshakeTimeout, winrs.DefaultHandshakeTimeout)
 }
+
+// Ruling 13: the WinRM path's own refusals before any dial carry transport and subcommand too: a forgotten target's
+// slot, and a host-key store the verifier cannot read.
+func TestWinRMEarlyRefusalsCarryTheParams(t *testing.T) {
+	w := newWinRMEnv(t)
+	s := w.wopen(t)
+	w.prov.ForgetTarget(testTarget)
+	_, err := s.TestConnection(context.Background())
+	pe := providerErr(t, err)
+	assert.Equal(t, TransportWinRM, pe.Params["transport"], pe.Code)
+	assert.Equal(t, winproto.SubWinFacts, pe.Params["subcommand"])
+	assert.True(t, errors.Is(err, winrs.ErrNotSent))
+
+	_, err = w.prov.Open(context.Background(), w.wref, w.wcred, providers.Env{}) // no HostKeys: tlspin refuses
+	pe = providerErr(t, err)
+	assert.Equal(t, reasonUnexpected, pe.Code)
+	assert.Equal(t, map[string]string{"transport": TransportWinRM, "subcommand": winproto.SubVersion}, pe.Params)
+}

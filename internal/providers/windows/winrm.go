@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ func (s *session) winrmRun(ctx context.Context, c linuxssh.HelperCommand) (linux
 	sub := c.Subcommand()
 	slot, err := s.pool.Slot(ctx, s.target)
 	if err != nil {
-		return linuxssh.Result{}, providers.HostKey{}, markNotSent(err)
+		return linuxssh.Result{}, providers.HostKey{}, markNotSent(err, winrmParams(sub))
 	}
 	defer slot()
 	pw, release, err := s.winrmPassword(ctx)
@@ -138,8 +139,20 @@ func winrmError(err error, v *tlspin.Verifier, ctx context.Context, sub string) 
 }
 
 // markNotSent adds winrs.ErrNotSent to the chain of an error raised before the command could reach the helper (no
-// connection or slot), keeping its provider error on top, so runWrite treats it as a refusal on both transports.
-func markNotSent(err error) error {
-	pe := asProviderError(err)
-	return &providers.Error{Code: pe.Code, Params: pe.Params, Retryable: pe.Retryable, Cause: fmt.Errorf("%w (%w)", err, winrs.ErrNotSent)}
+// connection or slot), keeping its provider error on top with extra params merged into a copy of its own, so runWrite
+// treats it as a refusal on both transports.
+func markNotSent(err error, extra map[string]string) error {
+	pe := withParams(asProviderError(err), extra)
+	pe.Cause = fmt.Errorf("%w (%w)", err, winrs.ErrNotSent)
+	return pe
+}
+
+// withParams is a copy of pe with extra merged into a copy of its params; pe itself is not changed.
+func withParams(pe *providers.Error, extra map[string]string) *providers.Error {
+	params := maps.Clone(pe.Params)
+	if params == nil {
+		params = map[string]string{}
+	}
+	maps.Copy(params, extra)
+	return &providers.Error{Code: pe.Code, Params: params, Retryable: pe.Retryable, Cause: pe.Cause}
 }
