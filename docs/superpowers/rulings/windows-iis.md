@@ -3551,3 +3551,206 @@ Pending: filled when the `v1.0.0-rc.1` run of `release.yml` ends.
   - No hint after a failed connection test that follows the password; leaving the WinRM phase of the dialog leaves
     the password missing; the RDP `output_too_large` text was added for a source-scanning test; the web passes no
     `from` (Task 8).
+
+# W8 (R72)
+
+Phase W8, decision R72: the Windows target's known debt after W7 and three small features (Alice's address in the
+setup dialogs, one live Windows server per host, removing a WinRM or CCS password). Plan:
+[2026-10-31-windows-w8-debt.md](../plans/2026-10-31-windows-w8-debt.md); branch `windows-w8`, cut from `main` at
+`fa182290`.
+
+## Task 0 (what was already done at `fa182290`)
+
+- A13 (`b44326e2`), A3 (`d3cd8e21`, `TestSSHRunContextEndedAfterAcquire`) and A4 (`b2a15584`) are ancestors of the
+  branch: done.
+- Ruling 14, the W6 minors: the ten fix tests are present: `TestProbeRDPNegotiationHonoursTheContext`
+  (`internal/providers/tlsverify/tlsverify_test.go`), `TestModelRDPStalePinKeepsAFailure` and
+  `TestModelReAddKeepsTheNetworkServiceGrant` (`internal/providers/windows/wintest/write_test.go`),
+  `TestMigration00037Down` (`migrations/windows_rdp_integration_test.go`), `TestRDPHelperDowngradeKeepsTheListener`
+  (`internal/inventory/windows_rdp_integration_test.go`), `TestRenderReasonVariant`
+  (`internal/notify/render_iis_test.go`), `TestCleanupPlanTrimsAdoptedEntries`
+  (`internal/providers/windows/winhelper/cleanup_test.go`), `TestRDPStatusAbsentValueChecksTheStore`
+  (`internal/providers/windows/winhelper/status_test.go`), `TestDriftProbeCarriesTheStoredWarnings`
+  (`internal/inventory/windows_drift_integration_test.go`), `TestCCSSkipNeedsAnUncutFile`
+  (`internal/inventory/ccs_password_integration_test.go`). Nothing of W6 remains for W8.
+
+## Rulings made during execution (W8)
+
+One line each: the ruling, then why.
+
+- P1: Tasks 1 and 3 ran in parallel (subagents, disjoint files); Task 2 after Task 1 and Task 4 after Task 2, one Go
+  task at a time on this machine (R70 Ruling 13) — a repo-wide `make lint` or `go test` must not read a half edit.
+- P2: Task 3 wrote its e2e step but the e2e ran once, after Task 2's server side existed — the step needs the DELETE
+  endpoint.
+
+### Task 1 (the emulator, winhelper, the real tests)
+
+- T1-1: A2's RED was shown under `GOARCH=386 go test` (the handler panicked, the client saw `EOF`) — on amd64 the old
+  code already refused offset `0xFFFFFFFF`; only a 32-bit `int` wraps it.
+- T1-2: `cmd/alice-winhelper/ccs_windows_test.go` (the DIAG site's caller) was edited beside the plan's files — the
+  new `createCCSSite` signature `(byIIS, made bool, err error)` breaks it; it uses the same `made` guard.
+- T1-3: A8 matches the word "Denying" alone — it occurs once in `setup.go`.
+- T1-4 (controller): A8's first-run "Denying" assertion holds only when the first run created the account — an
+  account left by an earlier test may already hold the deny rights, and a false red would spend a spare run; the
+  second-run "no Denying" assertion (the idempotency property) is unconditional.
+- T1-5: the emulator's unused `faultEnvelopeTooLarge` constant was removed with A6; the `winrs` "Send 413" row passed
+  without a client change (the status switch already maps it to `ErrProtocol`, Delete still sent last).
+- Coverage after Task 1 (`go test -cover`): wintest 97.1, winrs 96.9, winhelper 97.2, windows 99.1.
+
+### Task 4 (F4)
+
+- `archtest:TestShellcheckPinsAgree` (`1bd2e199`); RED shown by changing the wrapper's tag locally, then restored.
+- F9: not reproduced — `go test -race -count=10 -tags integration -v -run TestUnverifiedLicenseRefusesChangesAndKeepsUploadsWorking ./internal/api/`
+  with `make test` running beside it (started 20 s earlier, still running when the loop ended): 10 of 10 `--- PASS`,
+  `ok alice/internal/api 19.504s`. No change (R67 rule: fix only a found root cause).
+
+### Task 3 (web)
+
+- T3-1: `web/src/components/PlatformKeyPanel.tsx` calls `getPlatformKey()` in a closure — with `getPlatformKey(from?)`
+  TanStack's query context would otherwise arrive as `from` (`tsc` refuses it).
+- T3-2: one line of `web/src/pages/TargetsPage.test.tsx` follows the new `targets.form.scriptWindowsHelp` text — it
+  pinned the old sentence word for word; every other existing test is unchanged.
+- T3-3: a bad `from` shows the API's field text under the address field (`fieldErrorsOf`), not an alert — the alert
+  would name the field `ui.fields.from` ("Sender address"), which is wrong here.
+- T3-4: the address is trimmed and debounced (400 ms, `useDebouncedValue`, already in the codebase) — else every
+  keystroke fetches and a half-typed address shows the 422.
+- T3-5: F6 compares places by `id` — the opening place and the ticked binding may be different objects of one place.
+- T3-6: F6 with nothing ticked keeps the opening place's kind for the summary — before, it fell back to the Linux
+  summary even in a Windows dialog.
+- T3-7: Remove password follows the "Remove server" dialog (`AppModal`, Cancel, a red confirm); shown only when a
+  password is set and the person may manage credentials; the dialog closes before the step-up.
+- T3-8: the address field lives inside `WinRMSetupScript` and `ProfileScript`, so `TargetDetailPage.tsx` is
+  unchanged — its "Show setup script again" modal renders `WinRMSetupScript`.
+- T3-9: the Turkish of `targets.winrm.setupHelp`'s new clause was not quoted by the plan; written as "güvenlik
+  duvarında 5986 numaralı bağlantı noktasını yukarıda Alice'in adresi girildiyse o adrese, girilmediyse betikte
+  $AliceAddress değerini belirleyene kadar her adrese açar" — owner to review (Owner item 7).
+- T3-10: F8's test passed before any change (a test-only item, as planned).
+
+### Task 2 (inventory, API, migration 00039)
+
+- T2-1: 00039 also runs `GRANT UPDATE (rotated_at) ON credentials` to the app role (Down revokes it) — the role had
+  only SELECT and INSERT on `credentials`; ending a row failed with 42501. `migrations/roles_integration_test.go` and
+  `migrations/inventory_integration_test.go` follow (only `rotated_at` is updatable; `ciphertext`, `target_id` stay
+  refused).
+- T2-2: the removal audit's key is `credential_id` (comma-separated ids) — the audit refuses a key with a
+  "credential" segment unless it ends in `id`.
+- T2-3: F5's counting fake is a package seam `var sealPassword = (*secrets.Keyring).Seal`, swapped by `CountSeals` in
+  a non-parallel test — `Service.keyring` is a concrete type, no fake keyring can stand in.
+- T2-4: `TestOneWindowsTargetPerHost` ends the first target by SQL `deleted_at` — the test harness builds the Windows
+  provider without an SSH pool and `ForgetTarget` would panic on it (test harness only).
+- T2-5: the parallel-create row uses two ports — on one port `targets_endpoint_live` could fire first with the other
+  error.
+- T2-6: the DELETE handlers ignore a body — the existing DELETE handlers do the same.
+- T2-7: the WinRM route refuses a non-WinRM target with `ALC-WIN-0011` (409), as the PUT does.
+- T2-8 (controller): 00039's Down is not refused while ended rows exist; `docs/upgrade.md` warns that a downgrade
+  below 00039 makes an older Alice use a removed password again (it reads the newest row, ended or not) — refusing
+  would need a new SQLSTATE the plan does not have; the downgrade is a deliberate operator act. Owner to confirm.
+- `cmd/alice/serve_integration_test.go` pins migration version 39.
+
+### Review gate (Tasks 2-3)
+
+A fresh reviewer read `fa182290..60336966` against Review Focus 1-3 and 5: no Critical, one Important, six Minor.
+
+- I1, 00039's Down revived a removed password (code before 00039 reads the newest row, ended or not): fixed
+  (`9f6feec7`): the Down refuses with SQLSTATE `Z1038` while a live server has an ended `win_ccs`/`win_winrm` row and
+  no live one; a replaced password or a removed server does not block it
+  (`migrations:TestMigration00039DownKeepsRemovedPasswordsRemoved`); `docs/upgrade.md` and §13A.22 say so. This
+  replaces T2-8 (a warning only). `Z1038` is a new SQLSTATE beside the plan's `Z1037` — 00036 and 00038 refuse a Down
+  the older schema would misread the same way.
+- M1, a trigger so `rotated_at` can only go from NULL to a time on `win_*` rows: declined — the app role can insert a
+  new live row anyway, so the trigger guards nothing against a compromised app; Ruling 7's invariant lives in the one
+  transaction that writes it.
+- M2, a resent DELETE with the old `If-Match` answers 412, not 200: declined — Ruling 7 orders the version check
+  before the update as the PUT does; "idempotent" is with the current ETag (the 200 carries it).
+- M3, the address help spoke of the firewall on Linux profiles: fixed (`e839f95f`): Linux profiles show
+  `targets.form.aliceAddressKeyHelp` (the key line only).
+- M4, for 400 ms after typing the old script (possibly open to any address) stayed copyable: fixed (`e839f95f`): the
+  script is hidden while the typed address is not yet asked.
+- M5, no row for the same Windows host on the same port, and the Down's revoke unasserted: fixed (`9f6feec7`): the
+  same endpoint answers `targets_endpoint_live` (`ALC-TGT-0001`, the older index is checked first), the Down revokes
+  `UPDATE (rotated_at)`.
+- M6, the handler's parameter `clear` shadowed the builtin: fixed (`d5a78d7c`).
+
+### Task 5 (documents)
+
+- T5-1: WIN-78's e2e reference uses the existing spec title — the removal is a step of that one test.
+- T5-2: WIN-47's "CCS real fixture" is `cmd/alice-winhelper:TestRealCCSSharedFolderRemoved` — the test of the file
+  that holds `hasRecord`.
+- T5-3: the host guide sends the reader to Add server for the address field — the Servers page's "Prepare a server"
+  panel (`PlatformKeyPanel`) has no field (Ruling 3 names the setup dialogs and the server page's modal only).
+- T5-4: `upgrade.md` gives the duplicate-host query as a `docker compose exec … psql -U postgres -d alice` line — the
+  database name comes from `deploy/release/docker-compose.yml`.
+- T5-5: A1's check found `provider.windows.fields.port.help` named 22 only; the sentence "5986 over WinRM (HTTPS)" was
+  added (`01ff66fe`). The field's label stays "SSH port" (deferred: a label per transport needs a schema change).
+- T5-6: the documents commit `daf9f528` carries "(R72)" inside its subject, not at the end — not amended (no history
+  rewrite).
+
+## Item dispositions (W8)
+
+| # | Disposition | Where (commit, test) |
+|---|---|---|
+| A1 | declined (the schema default stays 22); the help sentence added | `01ff66fe` (`provider.windows.fields.port.help`) |
+| A2 | fixed | `93f859bb`, `TestNTLMServerRefuses` (WIN-69) |
+| A3 | done | `d3cd8e21` |
+| A4 | done | `b2a15584` |
+| A5 | declined | the plan's reason |
+| A6 | fixed | `93f859bb`, `TestWinRMEmulatorFaultsAndLimits`, `winrs:TestWinRSAlwaysDeletesTheShell` "Send 413" (WIN-70) |
+| A7 | declined | the plan's reason |
+| A8 | test added; the fix waits on run 1's evidence | `d9e1210e`, `f9433647`, `TestRealWinRMSetupScript` (WIN-73) |
+| A9 | fixed | `ff8190b8`, "a refused sign-in after the password shows the hint" |
+| A10 | fixed | `ff8190b8`, "the winrm phase says what a close without the password means" |
+| A11 | declined | the plan's reason |
+| A12 | → B1 | |
+| A13 | done | `b44326e2` |
+| A14 | fixed | `d9e1210e` |
+| A15 | declined | the plan's reason |
+| A16 | fixed | `d9e1210e`, `TestRealRunnerIsClean` (WIN-74) |
+| A17 | declined | the plan's reason |
+| W6-* | done (Ruling 14) | Task 0 above |
+| F1 | fixed (test) | `ffa874a9`, `TestRDPStatusAbsentValueChecksTheStore` (d) (WIN-23) |
+| F2 | fixed | `d9e1210e`, the CCS real fixture (WIN-47) |
+| F3 | fixed | `ff8190b8`, `web/src/components/foreignApp.ts` |
+| F4 | fixed (test) | `1bd2e199`, `archtest:TestShellcheckPinsAgree` |
+| F5 | fixed | `60336966`, `TestSetCCSPasswordRefusesBeforeSealing` (WIN-47) |
+| F6 | fixed | `ff8190b8`, "an unticked opening binding leaves no summary of its kind" |
+| F7 | declined | the plan's reason |
+| F8 | fixed (test) | `ff8190b8`, "opened from a certificate, a Windows place shows the Windows summary" |
+| F9 | not reproduced (10 of 10 under a parallel `make test`) | Task 4 above |
+| F10 | declined | the plan's reason |
+| F11 | declined | the plan's reason |
+| F12 | declined (`web/node_modules` removed before hand-over) | Task 6 |
+| B1 | done | `1b2ba764`, `e839f95f` (WIN-76) |
+| B2 | done | `468e5163`, `9f6feec7` (WIN-77) |
+| B3 | done | `f9b5de26`, `56d0b88f`, `9f6feec7` (WIN-78) |
+
+Counts as R72 states them: 17 fixed (A2, A6, A8, A9, A10, A12 through B1, A14, A16, F1, F2, F3, F4, F5, F6, F8, F9
+as captured, and the W6 row settled), 10 declined (A1, A5, A7, A11, A15, A17, F7, F10, F11, F12), 3 done (A3, A4,
+A13); the three features B1-B3 done. F9 changed no code (not reproduced); A8's fragment change depends on run 1.
+
+## Turkish texts (W8)
+
+| Key | EN | TR |
+|---|---|---|
+| `locales/common` `errors.windows.host_already_managed.title` | Alice already manages this Windows server. | Alice bu Windows sunucusunu zaten yönetiyor. |
+| `locales/common` `errors.windows.host_already_managed.cause` | Another entry with the same address exists (over OpenSSH or WinRM). Two entries for one server would count twice against the licence and would both change the same bindings. Nothing was added. | Aynı adrese sahip başka bir kayıt var (OpenSSH ya da WinRM üzerinden). Bir sunucu için iki kayıt lisansta iki kez sayılır ve ikisi de aynı bağlamaları değiştirir. Hiçbir şey eklenmedi. |
+| `locales/common` `errors.windows.host_already_managed.action` | Use the existing entry. To change its connection type, remove it first, then add the server again. | Var olan kaydı kullanın. Bağlantı türünü değiştirmek için önce kaydı kaldırın, ardından sunucuyu yeniden ekleyin. |
+| `locales/common` `errors.windows.transport_immutable.action` | To use the other connection, remove this entry, then add the server again with it. | Diğer bağlantıyı kullanmak için bu kaydı kaldırın, ardından sunucuyu o bağlantıyla yeniden ekleyin. |
+| `locales/common` `provider.windows.fields.port.help` | Usually 22 (OpenSSH Server on Windows); 5986 over WinRM (HTTPS). | Genellikle 22 (Windows üzerindeki OpenSSH Server); WinRM (HTTPS) üzerinden 5986. |
+| `web/src/locales` `targets.form.aliceAddress` | Alice's address (optional) | Alice'in adresi (isteğe bağlı) |
+| `web/src/locales` `targets.form.aliceAddressHelp` | The IP address the server sees Alice connect from. With it, the script opens the port (22 or 5986) in the firewall to that address only; without it, to any address until you set $AliceAddress in the script. | Sunucunun Alice'in bağlandığını gördüğü IP adresi. Girilirse betik güvenlik duvarında bağlantı noktasını (22 ya da 5986) yalnızca bu adrese açar; girilmezse betikte $AliceAddress değerini belirleyene kadar her adrese açar. |
+| `web/src/locales` `targets.form.aliceAddressKeyHelp` | The IP address the server sees Alice connect from. With it, Alice's key line accepts that address only (from=); without it, the key is accepted from any address. | Sunucunun Alice'in bağlandığını gördüğü IP adresi. Girilirse Alice'in anahtar satırı yalnızca bu adresi kabul eder (from=); girilmezse anahtar her adresten kabul edilir. |
+| `web/src/locales` `targets.winrm.setupHelp` | Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, opens port 5986 in the firewall to Alice's address when you entered one above, otherwise to any address until you set $AliceAddress in the script, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step. | Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, güvenlik duvarında 5986 numaralı bağlantı noktasını yukarıda Alice'in adresi girildiyse o adrese, girilmediyse betikte $AliceAddress değerini belirleyene kadar her adrese açar ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız. |
+| `web/src/locales` `targets.form.scriptWindowsHelp` | Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above. With Alice's address above, the key line and the firewall rule accept that address only. | Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır. Yukarıda Alice'in adresi girildiyse anahtar satırı ve güvenlik duvarı kuralı yalnızca o adresi kabul eder. |
+| `web/src/locales` `targets.winrm.failedAfterPassword` | The password is saved. If the server refused the sign-in, compare the password with the one set on the server, then use Test connection on the server's page. | Parola kaydedildi. Sunucu oturum açmayı reddettiyse parolayı sunucuda belirlenenle karşılaştırın, ardından sunucunun sayfasında Bağlantıyı sına'yı kullanın. |
+| `web/src/locales` `targets.winrm.closeWithoutPassword` | If you close now, Alice keeps the server without a password and cannot reach it. You can set the password later on the server's page. | Şimdi kapatırsanız Alice sunucuyu parolasız tutar ve ona ulaşamaz. Parolayı daha sonra sunucunun sayfasında belirleyebilirsiniz. |
+| `web/src/locales` `ccs.remove` | Remove password | Parolayı kaldır |
+| `web/src/locales` `ccs.removeConfirm` | Remove the CCS password of this server? Alice then lists and deploys no CCS file until a new password is set. | Bu sunucunun CCS parolası kaldırılsın mı? Yeni bir parola belirlenene kadar Alice hiçbir CCS dosyasını listelemez ve dağıtmaz. |
+| `web/src/locales` `winrm.removeConfirm` | Remove the WinRM password of this server? Alice cannot reach the server until a new password is set. | Bu sunucunun WinRM parolası kaldırılsın mı? Yeni bir parola belirlenene kadar Alice sunucuya ulaşamaz. |
+| `web/src/locales` `ccs.removed` | Removed. | Kaldırıldı. |
+| `web/src/locales` `audit.actions.target_ccs_password_removed` | CCS password of a Windows server removed | Bir Windows sunucusunun CCS parolası kaldırıldı |
+| `web/src/locales` `audit.actions.target_winrm_password_removed` | WinRM password of a Windows server removed | Bir Windows sunucusunun WinRM parolası kaldırıldı |
+
+## Runner runs used (W8)
+
+| Run | windows.yml | Head | windows-2022 / windows-2025 | windows-required | What it found |
+|---|---|---|---|---|---|
