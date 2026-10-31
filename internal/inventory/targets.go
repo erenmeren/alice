@@ -338,10 +338,15 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		}
 		name = n
 	}
+	// Nothing to change: refused, so an empty edit neither bumps the version nor is audited. A transport alone is
+	// judged against the target first (R71 Ruling 3): another one is the conflict, the target's own still nothing.
+	var empty validate.Errors
 	if p.Name == nil && p.DiscoveryIntervalHours == nil && p.PollIntervalMinutes == nil && p.CertificateCleanup == nil {
-		// Nothing to change: refused, so an empty edit neither bumps the version nor is audited.
-		errs.Add("name", validate.Required, nil)
-		errs.Add("discovery_interval_hours", validate.Required, nil)
+		empty.Add("name", validate.Required, nil)
+		empty.Add("discovery_interval_hours", validate.Required, nil)
+		if p.Transport == nil {
+			errs = append(errs, empty...)
+		}
 	}
 	if p.DiscoveryIntervalHours != nil && (*p.DiscoveryIntervalHours < 1 || *p.DiscoveryIntervalHours > 720) {
 		errs.Add("discovery_interval_hours", validate.OutOfRange, map[string]string{"min": "1", "max": "720"})
@@ -384,6 +389,9 @@ func (s *Service) UpdateTarget(ctx context.Context, a Actor, id uuid.UUID, ifVer
 		}
 		if p.Transport != nil && *p.Transport != cur.Transport {
 			return ErrTransportImmutable
+		}
+		if len(empty) > 0 {
+			return empty
 		}
 		var fields []string
 		details := map[string]string{}

@@ -265,6 +265,18 @@ func TestTransportImmutable(t *testing.T) {
 	_, err = h.svc.UpdateTarget(h.ctx, admin, ssh.ID, ssh.Version, inventory.TargetPatch{Name: &name3, Transport: tr(inventory.TransportSSH)})
 	require.NoError(t, err, "an SSH target names its own transport")
 
+	// A patch of the transport alone: another value is the conflict; the same value changes nothing and stays an empty
+	// patch (refused as one, the version unchanged).
+	cur := mustTarget(t, h, win.ID)
+	_, err = h.svc.UpdateTarget(h.ctx, admin, win.ID, cur.Version, inventory.TargetPatch{Transport: tr(inventory.TransportSSH)})
+	require.ErrorIs(t, err, inventory.ErrTransportImmutable, "a transport-only change")
+	_, err = h.svc.UpdateTarget(h.ctx, admin, win.ID, cur.Version, inventory.TargetPatch{Transport: tr(inventory.TransportWinRM)})
+	var empty validate.Errors
+	require.ErrorAs(t, err, &empty, "the same transport alone is an empty patch")
+	assert.Equal(t, "name", empty[0].Field)
+	assert.NotErrorIs(t, err, inventory.ErrTransportImmutable)
+	assert.Equal(t, cur.Version, mustTarget(t, h, win.ID).Version, "nothing changed")
+
 	linux := okTarget(t, h, admin, "web-01")
 	_, err = h.svc.UpdateTarget(h.ctx, admin, linux.ID, linux.Version, inventory.TargetPatch{Name: &name, Transport: tr(inventory.TransportSSH)})
 	var errs validate.Errors

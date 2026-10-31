@@ -22,6 +22,7 @@ import (
 
 	"alice/internal/i18n"
 	"alice/internal/inventory"
+	"alice/internal/platform/validate"
 	"alice/internal/providers/windows"
 	"alice/internal/secrets"
 	"alice/locales"
@@ -329,4 +330,19 @@ func TestTargetTransportHandlers(t *testing.T) {
 	assert.Equal(t, "ALC-WIN-0027", decodeErr(t, rec).Error.Code)
 	require.NotNil(t, patch.Transport)
 	assert.Equal(t, "ssh", *patch.Transport)
+
+	// A transport alone reaches the inventory, which answers the conflict for another one and the empty patch for the
+	// target's own.
+	patch = inventory.TargetPatch{}
+	rec = callWith(h, http.MethodPatch, "/api/v1/targets/"+targetID.String(), "admin", `{"transport":"ssh"}`, map[string]string{"If-Match": `"3"`})
+	assert.Equal(t, "ALC-WIN-0027", decodeErr(t, rec).Error.Code)
+	require.NotNil(t, patch.Transport)
+	assert.Nil(t, patch.Name)
+	inv.UpdateTargetFn = func(context.Context, inventory.Actor, uuid.UUID, int, inventory.TargetPatch) (inventory.Target, error) {
+		var errs validate.Errors
+		errs.Add("name", validate.Required, nil)
+		return inventory.Target{}, errs
+	}
+	rec = callWith(h, http.MethodPatch, "/api/v1/targets/"+targetID.String(), "admin", `{"transport":"winrm"}`, map[string]string{"If-Match": `"3"`})
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 }
