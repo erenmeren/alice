@@ -130,10 +130,14 @@ func TestRealWinRMNTLMAuth(t *testing.T) {
 func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
+	// Runner run 3: every program exited 1 with no output, and this test's first Create was refused (0x80070005) on
+	// both legs. The matrix runs before the audit settings change, so a refusal after it points at them (logged only).
+	diagnoseCommands(t, f)
 	auditProcessCreation(t)
 	t0 := time.Now()
 
 	res, err := run(c, f.helperCall(winproto.SubVersion))
+	res, err = f.retryRefusedCreate(t, c, f.helperCall(winproto.SubVersion), res, err, t0)
 	fact(t, "F25", "SSH_ORIGINAL_COMMAND=version, the helper with the argument ssh: %s", outcome(res, err))
 	require.NoError(t, err)
 	v := decode[winproto.VersionResponse](t, res.Stdout)
@@ -460,7 +464,8 @@ func killAtPrepared(t *testing.T, f *fx) {
 	a := r.post(send, false)
 	require.NoError(t, a.err)
 	require.Equal(t, http.StatusOK, a.status, "Send: %s", a.fault())
-	stdout, code := r.receive(t, shell, cmdID)
+	stdout, _, code, err := r.receive(shell, cmdID)
+	require.NoError(t, err)
 	r.delete(t, shell)
 	if answer := bytes.TrimSpace(stdout); len(answer) > 0 { // a deploy answer holds no key material
 		fact(t, "F29", "kill not reached: exit=%d, the helper answered %s", code, answer)
@@ -607,6 +612,7 @@ func TestRealWinRMAccountRights(t *testing.T) {
 	c := f.client(t, account)
 	t0 := time.Now()
 	res, err := run(c, f.helperCall(winproto.SubVersion))
+	res, err = f.retryRefusedCreate(t, c, f.helperCall(winproto.SubVersion), res, err, t0)
 	fact(t, "F31", "with %v and PasswordNeverExpires: %s", deny, outcome(res, err))
 	require.NoError(t, err)
 	for _, right := range deny {

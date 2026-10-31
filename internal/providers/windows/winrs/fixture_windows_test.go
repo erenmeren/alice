@@ -757,32 +757,39 @@ func (r *rawConn) command(t *testing.T, shell, program string, args ...string) s
 	return id
 }
 
-// receive asks for the command's output until it is done and returns its stdout and exit code.
-func (r *rawConn) receive(t *testing.T, shell, cmdID string) ([]byte, int) {
-	t.Helper()
+// receive asks for the command's output until it is done and returns its stdout, stderr and exit code.
+func (r *rawConn) receive(shell, cmdID string) (stdout, stderr []byte, code int, err error) {
 	const timedOut = 2150858793 // w:TimedOut: no output within the OperationTimeout; asked again
-	var out []byte
 	for end := time.Now().Add(2 * time.Minute); time.Now().Before(end); {
 		h := r.header()
 		h.OperationTimeout = 20 * time.Second
 		body, err := winrs.ReceiveRequest(h, shell, cmdID)
-		require.NoError(t, err)
-		a := r.post(body, false)
-		require.NoError(t, a.err)
-		if fe, ok := winrs.ParseFault(a.body); ok && a.status != http.StatusOK {
-			require.Equal(t, uint32(timedOut), fe.Code, "Receive answered a fault")
-			continue
+		if err != nil {
+			return nil, nil, 0, err
 		}
-		require.Equal(t, http.StatusOK, a.status, "Receive: %v", a.reqs)
+		a := r.post(body, false)
+		if a.err != nil {
+			return stdout, stderr, 0, a.err
+		}
+		if fe, ok := winrs.ParseFault(a.body); ok && a.status != http.StatusOK {
+			if fe.Code == timedOut {
+				continue
+			}
+			return stdout, stderr, 0, fe
+		}
+		if a.status != http.StatusOK {
+			return stdout, stderr, 0, fmt.Errorf("Receive answered %d", a.status)
+		}
 		got, err := winrs.ParseReceived(a.body, cmdID)
-		require.NoError(t, err)
-		out = append(out, got.Stdout...)
+		if err != nil {
+			return stdout, stderr, 0, fmt.Errorf("%w: %.600s", err, a.body)
+		}
+		stdout, stderr = append(stdout, got.Stdout...), append(stderr, got.Stderr...)
 		if got.Done {
-			return out, got.ExitCode
+			return stdout, stderr, got.ExitCode, nil
 		}
 	}
-	require.FailNow(t, "the command did not end within 2 minutes")
-	return nil, 0
+	return stdout, stderr, 0, errors.New("the command did not end within 2 minutes")
 }
 
 // delete deletes the shell; its answer is logged only.
