@@ -781,16 +781,25 @@ func importCert(t *testing.T, c *x509.Certificate, key crypto.Signer) string {
 	require.NoError(t, os.WriteFile(path, pfx, 0o600))
 	sum := sha1.Sum(c.Raw)          //nolint:gosec // the thumbprint, Windows' name of the certificate
 	thumb := fmt.Sprintf("%X", sum) // Windows writes thumbprints in upper case
-	t.Cleanup(func() {
-		if out, err := psRun(map[string]string{"THUMB": thumb}, "", `$p = "Cert:\LocalMachine\My\$env:THUMB"
-if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -DeleteKey }`); err != nil {
-			t.Errorf("removing the certificate %s: %v: %s", thumb, err, out)
-		}
-	})
+	removeCertLater(t, "My", thumb)
 	got := ps(t, map[string]string{"PFX": path}, pw, `$pw = ConvertTo-SecureString -String ([Console]::In.ReadLine()) -AsPlainText -Force
 (Import-PfxCertificate -FilePath $env:PFX -CertStoreLocation Cert:\LocalMachine\My -Password $pw).Thumbprint`)
 	require.Equal(t, thumb, got)
 	return thumb
+}
+
+// removeCertLater removes a certificate of a LocalMachine store at the end, with its key when it has one; a key
+// already gone (several certificates of one key, F28) or a certificate never added is not an error.
+func removeCertLater(t *testing.T, store, thumb string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if out, err := psRun(map[string]string{"STORE": store, "THUMB": thumb}, "", `$p = "Cert:\LocalMachine\$env:STORE\$env:THUMB"
+if (Test-Path -LiteralPath $p) {
+    try { Remove-Item -LiteralPath $p -DeleteKey } catch { Remove-Item -LiteralPath $p }
+}`); err != nil {
+			t.Errorf("removing the certificate %s from %s: %v: %s", thumb, store, err, out)
+		}
+	})
 }
 
 // testListener creates the HTTPS listener 127.0.0.1:45520 with the certificate and removes it at the end.
