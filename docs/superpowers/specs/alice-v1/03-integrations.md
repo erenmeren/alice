@@ -1137,7 +1137,8 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
   `linuxssh.ForcedCommand` built (13A.2's token rule); Command is `"C:\Program Files\Alice\alice-helper.exe"` (quotes
   written raw: element text escapes only `&`, `<` and `>`) with the one argument `ssh`; standard input goes only in
   Sends of at most 96 KiB with `End` on the last. WinRS starts the program through `cmd.exe /C` even with
-  `WINRS_SKIP_CMD_SHELL` TRUE (F25); `cmd.exe` parses only that constant line, and the helper's forced entry splits
+  `WINRS_SKIP_CMD_SHELL` TRUE (F25); `cmd.exe` parses only that constant line (no `%`, none of `&<>|^()`) and never
+  the environment variable, and the helper's forced entry splits
   `SSH_ORIGINAL_COMMAND` as under sshd. Helper `1.2.0`, protocol 1, unchanged; every `*MinVersion` rule applies.
 - **One call, one shell, one authenticated connection.** Each helper call holds one slot of the shared SSH pool
   (`Pool.Slot`, so the per-target limit covers both transports), builds one `http.Transport` (no proxy, no HTTP/2,

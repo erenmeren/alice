@@ -495,8 +495,9 @@ application's), so it never replaces the key it pinned.
 - No PowerShell runs for Alice, so PowerShell script block logging (event 4104) and transcription record nothing.
 - WinRS starts the helper through `cmd.exe` (measured: also when Alice asks it not to), so process creation auditing
   with command lines (Security event 4688) records `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh` and the
-  helper's own line. Alice's subcommand is in the environment, not on a command line, and key material is only on the
-  helper's standard input.
+  helper's own line, never Alice's subcommand. `cmd.exe` reads only that fixed line; the subcommand is in the
+  environment variable `SSH_ORIGINAL_COMMAND`, which `cmd.exe` never parses, and key material is only on the helper's
+  standard input.
 - Security event 4624 records one network sign-in per call (logon type 3, package NTLM, `NTLM V2`); a refused one is
   4625 with the account name. A domain account's sign-in is also checked by a domain controller (4776 there).
 - `Microsoft-Windows-WinRM/Operational` records each shell and its user, never what it carries.

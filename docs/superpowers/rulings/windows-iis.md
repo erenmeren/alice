@@ -2888,11 +2888,12 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
    answer (422, version unchanged); a `transport` value other than `ssh` or `winrm` is the field error `transport`
    `one_of` before any read; a `transport` on a non-Windows target is the field error `transport` `pattern`.
 4. **The helper does not change; the line reaches it through `SSH_ORIGINAL_COMMAND`.** **Amended (F25, runs 5 and 6;
-   Needs coordinator):** the environment variable reaches the helper's forced entry, and the helper stays `1.2.0` with
+   accepted by the coordinator, 2026-10-31):** the environment variable reaches the helper's forced entry, and the helper stays `1.2.0` with
    no `WinRMMinVersion`. But WinRS starts the program through `cmd.exe` even with `WINRS_SKIP_CMD_SHELL` TRUE: the
    helper's parent is `cmd.exe`, whose command line is `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh`, and
-   the helper's own command line is the program path without its quotes. `cmd.exe` parses only that constant line;
-   the subcommand line stays in the environment, never on a command line. The plan's fallback (helper 1.3.0 with a
+   the helper's own command line is the program path without its quotes. `cmd.exe` parses only Alice's constant line
+   `"C:\Program Files\Alice\alice-helper.exe" ssh`, which holds no `%` and none of `&<>|^()`; the only variable part
+   travels in `SSH_ORIGINAL_COMMAND`, which `cmd.exe` never parses. The plan's fallback (helper 1.3.0 with a
    `winrs` entry) would not remove `cmd.exe`, which WinRS inserts itself, so it was not taken. The Command element
    carries the program's quotes raw: element text escapes only `&`, `<` and `>`, because Windows does not decode
    `&#34;` in `rsp:Command` (run 5: the escaped form reached `cmd.exe` as `&`).
@@ -2934,7 +2935,7 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
     - `winrs.FaultError` carries `Action`, the request the fault answered (set by the client, never by the parser), so
       the code-2 row is exact: code 2 maps to `ssh.helper_missing` only at Command; any other fault after Create is
       `windows.winrm_fault` with `wsman_code`.
-    - **F29 (run 6; confirmation in run 7 pending):** a missing program is not a WS-Man fault: WinRS's `cmd.exe`
+    - **F29 (run 6; accepted by the coordinator, 2026-10-31; run 7's confirmation added by the controller):** a missing program is not a WS-Man fault: WinRS's `cmd.exe`
       answers "is not recognized" and the command finishes with exit code 9009 and no output. `winrmRun` maps exit 9009
       with an empty stdout to `ssh.helper_missing` (then `windows.helper_missing`, as over SSH); the Command was sent,
       so a write stays uncertain. The emulator answers a missing helper the same way.
@@ -3019,23 +3020,25 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   elevated with `LocalAccountTokenFilterPolicy` 1 as the images ship it; (a) did not apply. The forms `alice-w7-1`,
   `HOST\alice-w7-1` and `.\alice-w7-1` (raw) all sign in. The result with the policy set to 0 is logged by
   `TestRealWinRMNTLMAuth` and not yet read into this record (run 7+, pending).
-- **F25: the forced entry works; `cmd.exe` is inserted (Needs coordinator).** Runs 5 and 6
+- **F25: the forced entry works; `cmd.exe` is inserted (accepted by the coordinator, 2026-10-31).** Runs 5 and 6
   (<https://github.com/erenmeren/alice/actions/runs/41186388742>, <https://github.com/erenmeren/alice/actions/runs/41187834322>).
   `SSH_ORIGINAL_COMMAND` reaches the helper (`version` answers `{"ok":true,"helper":"1.2.0","protocol":1}`), but WinRS
   runs the program through `cmd.exe` despite `WINRS_SKIP_CMD_SHELL` TRUE (parent `cmd.exe /C "<program>" ssh`; the
   child's command line unquoted). The escaped `&#34;` form of the quotes reached `cmd.exe` as `&` (run 5); raw quotes
-  work. Ruling 4 amended; the helper stays 1.2.0.
+  work. Ruling 4 amended; the helper stays 1.2.0, no 1.3.0 fallback.
 - **F26: confirmed.** Run 6. 1 byte, 96 KiB, 96 KiB + 1 and 256 KiB of stdin arrive with equal SHA-256;
   `MaxEnvelopeSizekb` 500; a Send of about 615 KB is answered HTTP 413 (no WS-Man fault). `MaxSendChunk` stays 96 KiB.
 - **F27: confirmed for the cost; the reaping not measured.** Runs 4 and 6. 20 sequential `version` calls: p50 49-67 ms,
   maximum 54-114 ms (run 4: p50 57 ms, maximum 64 ms), far under the 3 s threshold, so no budget changes.
   `MaxShellsPerUser` 2147483647. Enumerating shells as the test account was refused ("A security error occurred"), so
   the `IdleTimeOut` clamp and the reaping of an undeleted shell were not measured (Alice deletes every shell it
-  creates).
+  creates). The coordinator accepted this as a residual (2026-10-31): the `IdleTimeOut` clamp is unknown; Alice always
+  sends Delete.
 - **F28: confirmed.** Runs 2, 3 and 6. The image's 5986 SPKI is unchanged after `Restart-Service WinRM`; a test listener
   renewed with a new key is refused at the handshake before any HTTP request (no 4624 or 4625, no WinRM Operational
   event); renewed with the same key it is accepted; an expired certificate with the pinned key is accepted.
-- **F29: confirmed for exit codes; a missing program is cmd.exe's exit 9009 (confirmation in run 7 pending).** Run 6.
+- **F29: confirmed for exit codes; a missing program is cmd.exe's exit 9009 (accepted by the coordinator, 2026-10-31;
+  run 7's confirmation pending).** Run 6.
   Exits 0, 2, 3 and 4 pass through as Receive's `ExitCode`; `iis-status` with a bad `--op` answers exit 2 with its JSON.
   A program path that does not exist is not a WS-Man fault at Command: the command finishes with `cmd.exe`'s exit
   code, 9009 (Ruling 13 amended). The `alicetest` kill at `deploy.prepared` is logged only (not yet read into this
@@ -3230,14 +3233,18 @@ leaves the password missing; the RDP text added for a source-scanning test is a 
 - The traceability map names the migration tests by their full names (`TestMigration00038WindowsWinRM`,
   `TestMigration00038Down`); the plan's table wrote `TestMigration00038`.
 
-## Needs coordinator (W7)
+## Coordinator decisions (W7)
 
-- **F25, `cmd.exe` under WinRS.** WinRS starts the helper through `cmd.exe /C "<program>" ssh` although Alice sends
-  `WINRS_SKIP_CMD_SHELL` TRUE. The controller ruled that the helper stays 1.2.0: the forced entry works, `cmd.exe`
-  parses only the constant quoted program line, and the plan's fallback (helper 1.3.0 with a `winrs` entry) would not
-  remove `cmd.exe`. Ruling 16 and WN-28 say so. Confirm, or order the fallback task. Cost if wrong: one helper task.
-- **F29, exit 9009.** A missing helper is `cmd.exe`'s exit 9009 with no output, mapped to `windows.helper_missing`;
-  confirmation in run 7 pending.
+- **F25, `cmd.exe` under WinRS: accepted as amended Ruling 4 (coordinator, 2026-10-31).** WinRS inserts `cmd.exe`
+  itself, even with `WINRS_SKIP_CMD_SHELL` TRUE. The line `cmd.exe` parses is Alice's constant
+  `"C:\Program Files\Alice\alice-helper.exe" ssh` (no `%`, none of `&<>|^()`); the only variable part travels in
+  `SSH_ORIGINAL_COMMAND`, which `cmd.exe` never parses. The helper stays 1.2.0; no 1.3.0 fallback. Ruling 16 and WN-28
+  say what 4688 records.
+- **F27, the shell reaping: accepted as a residual (coordinator, 2026-10-31).** The `IdleTimeOut` clamp is unknown
+  (shell enumeration is refused as the test account); Alice always sends Delete after a successful Create.
+- **F29, exit 9009: accepted (coordinator, 2026-10-31).** A missing helper is `cmd.exe`'s exit 9009 with no output,
+  mapped to `windows.helper_missing`; the emulator mirrors it. Run 7's confirmation is added by the controller.
+- **The stale doc comment of `WinRMSetupScript`** (`setup.go`) was fixed in the documents commit (controller ruling).
 
 ## Security review (W7)
 
@@ -3269,14 +3276,15 @@ Still for the owner to confirm:
 6. **Ruling 24:** the runner tests change WinRM and LSA settings on the hosted runners and create local accounts
    `alice-w7-<n>`, test listeners on 45520-45539 and `C:\ProgramData\alice-w7-<n>`, and restore everything as found.
 7. **The F24-F32 verdicts** ([W7 facts measured on real runners](#w7-facts-measured-on-real-runners)): F24 (a) did not
-   apply; F25 inserts `cmd.exe` (Needs coordinator); F30 Strict refuses.
+   apply; F25 inserts `cmd.exe` (accepted by the coordinator); F27's reaping is not measured (accepted residual); F30
+   Strict refuses.
 8. **A domain account over WinRM** is accepted by syntax and by the emulator only; the first real test is on a
    customer's or the owner's domain (manual matrix).
 
 Added during execution:
 
 - **Ruling 4 and 16 amended (F25):** Windows' process-creation log shows `cmd.exe /C "C:\Program Files\Alice\alice-helper.exe" ssh`
-  and the helper's own line for every WinRM call; never the subcommand or key material. Confirm.
+  and the helper's own line for every WinRM call; never the subcommand or key material. Accepted by the coordinator (2026-10-31); for the owner's information.
 - **Ruling 12 amended (F24 (d)):** a call may open a second connection during its sign-in, never after.
 - **Ruling 19 amended:** the setup endpoint takes Alice's address (`from`), but the web does not pass it yet, so the
   script shown in the web opens 5986 from any address with a warning to edit `$AliceAddress`. Decide whether the web
@@ -3346,8 +3354,9 @@ The new Turkish texts (EN/TR pairs as shipped; the coordinator checks them, R70'
   usernames); CredSSP; client-certificate mapping; NTLM channel binding (`CbtHardeningLevel` Strict); tlspin's
   CA-bundle mode for a WinRM listener; Alice rotating the Windows password; removing a WinRM password; changing a
   target's transport; refusing a second target for one host across transports; a domain account tested on a runner;
-  Server Core and Windows Server 2019 over WinRM (manual matrix); the reaping of an undeleted shell and the
-  `IdleTimeOut` clamp (F27, not measurable as the test account).
+  Server Core and Windows Server 2019 over WinRM (manual matrix).
+- **Accepted residuals (W7):** the `IdleTimeOut` clamp and the reaping of an undeleted shell are unknown (F27, not
+  measurable as the test account); Alice always sends Delete after a successful Create.
 - **Carried unchanged from [Deferred to W7+](#deferred-to-w7):** everything under "Not in W6"; W5's deferred items;
   R70's "Not in this batch" boundary (class B and C); the items R70 declined; the W6 owner items and W6 residual risks
   1-6, 8 and 9.
@@ -3362,4 +3371,3 @@ The new Turkish texts (EN/TR pairs as shipped; the coordinator checks them, R70'
   - No hint after a failed connection test that follows the password; leaving the WinRM phase of the dialog leaves
     the password missing; the RDP `output_too_large` text was added for a source-scanning test; the web passes no
     `from` (Task 8).
-  - `WinRMSetupScript`'s doc comment still says "without an address restriction" although it takes `from` (Task 7).

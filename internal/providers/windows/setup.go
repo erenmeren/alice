@@ -194,7 +194,7 @@ func SetupScriptWinRM(user, from string, allowUnverified bool) (string, error) {
 const winrmAddressNotice = `Write-Warning 'Alice''s address is not in these commands, so the firewall rule Alice-WinRM-In allows port 5986 from any address. To limit it, set $AliceAddress above.'
 `
 
-// WinRMSetupScript implements providers.WinRMSetupGuide: SetupScriptWinRM for user, without an address restriction;
+// WinRMSetupScript implements providers.WinRMSetupGuide: SetupScriptWinRM for user, its firewall rule limited to from;
 // "" when SetupScriptWinRM refuses (a build that cannot verify the helper).
 func (p *Provider) WinRMSetupScript(user, from string) string {
 	script, _ := SetupScriptWinRM(user, from, p.allowUnverified)
