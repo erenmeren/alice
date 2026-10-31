@@ -222,10 +222,10 @@ func (s *server) clearWinRMPassword(w http.ResponseWriter, r *http.Request) {
 	s.clearTargetPassword(w, r, s.deps.Inventory.ClearWinRMPassword)
 }
 
-// clearTargetPassword removes a password credential of a Windows server with clear: no body, If-Match required; the
+// clearTargetPassword removes a password credential of a Windows server with remove: no body, If-Match required; the
 // answer is the target (unchanged when nothing was set, R72 Ruling 8) with its ETag.
 func (s *server) clearTargetPassword(w http.ResponseWriter, r *http.Request,
-	clear func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int) (inventory.Target, error)) {
+	remove func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int) (inventory.Target, error)) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -236,7 +236,7 @@ func (s *server) clearTargetPassword(w http.ResponseWriter, r *http.Request,
 		s.writeError(w, r, ErrPreconditionFailed)
 		return
 	}
-	t, err := clear(r.Context(), s.actor(r), id, version)
+	t, err := remove(r.Context(), s.actor(r), id, version)
 	if err != nil {
 		s.fail(w, r, err)
 		return
