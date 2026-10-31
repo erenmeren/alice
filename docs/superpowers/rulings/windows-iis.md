@@ -3754,3 +3754,29 @@ A13); the three features B1-B3 done. F9 changed no code (not reproduced); A8's f
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | windows-required | What it found |
 |---|---|---|---|---|---|
+| 1 | <https://github.com/erenmeren/alice/actions/runs/41227580690> | `921e0d15` | fail / fail | fail | Only `TestRealWinRMSetupScript` failed, on A8: the second run printed "Denying" again on both images (the fragment is not idempotent). Every other real test, the F2 fixture and `TestRealRunnerIsClean` (A16) passed; F26 re-measured: an oversized Send is 413 with no fault. On windows-2022 the account existed before the run, so the first-run check was skipped (T1-4) |
+
+## Final review fixes (W8)
+
+A fresh reviewer that wrote none of the code read `fa182290..921e0d15` against Review Focus 1-5, Rulings 4-11 and the
+item table: no Critical, one Important, six Minor.
+
+- I1, `docs/operator-guide.md` still said a step below 39 brings a removed password back (the T2-8 warning left after
+  the review gate's Z1038 fix): fixed (`fb7d957a`): the step is refused with `Z1038`; a restored pre-39 backup has its
+  own passwords.
+- M1, the security spec and the design still called the password rows "append-only, no delete": fixed (`fb7d957a`):
+  rows are never deleted; a set or a removal ends the live row.
+- M2, the OpenAPI PUT texts said "DELETE removes it": fixed (`fb7d957a`): "DELETE ends it, its row stays sealed".
+- M3, "one live row per purpose" is not true for an upgraded database until its first set or removal (00039's Up ends
+  no older row): fixed by rewording (`fb7d957a`, §13A.22 and `ccs_password.go`'s comment) — behaviour is already right
+  (reads take the newest live row; a removal ends all live rows); a data change in the Up is not worth its risk.
+- M4, `migrations:TestMigration00039DownKeepsRemovedPasswordsRemoved` was missing from the matrix: fixed (`fb7d957a`,
+  WIN-78).
+- M5, no test of a zone address or of the WinRM script's bad-address path: fixed (`42e54436`, "shows the API's field
+  error for an address with a zone in the WinRM setup script, and no script"; it passed at once: the behaviour existed).
+- A8 (run 1's evidence, `88a12494`): the fragment compared `secedit /export`'s entries with `*<SID>` only; an
+  exported entry of a resolvable account is its name, so the second run added the SID again. The comparison now
+  translates each named entry to its SID. The SSH golden files changed with the fragment (the comparison lines only);
+  the real test logs the exported deny lines if the second run still prints "Denying".
+- M6, A2's row proves the fix only under `GOARCH=386`, which no gate runs: declined — the conversion is test-only
+  emulator code; the 386 RED is recorded (T1-1); a 386 leg in `make test` costs more than the risk.
