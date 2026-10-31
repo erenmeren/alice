@@ -510,7 +510,7 @@ describe('TargetsPage', () => {
         await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
         expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# windows setup script');
         expect(within(dialog).getByText('PowerShell setup script')).toBeInTheDocument();
-        expect(within(dialog).getByText('Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above.')).toBeInTheDocument();
+        expect(within(dialog).getByText('Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above. With Alice\'s address above, the key line and the firewall rule accept that address only.')).toBeInTheDocument();
         expect(within(dialog).getByLabelText(/^Windows account/)).toHaveValue('alice');
         expect(within(dialog).getByLabelText(/^Windows account/)).toHaveAttribute('maxlength', '36');
         await userEvent.type(within(dialog).getByLabelText(/^Name/), 'iis-01');

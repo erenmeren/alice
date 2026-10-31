@@ -18,7 +18,7 @@ type Profile = 'linux' | WebServerType | 'windows';
 // The design has no such panel: it is the design's Panel with labelled code blocks (gap row, Phase 9 Task 7).
 export function PlatformKeyPanel({ titleOrder = 2 }: { titleOrder?: 2 | 3 }) {
   const { t } = useTranslation();
-  const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
+  const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: () => getPlatformKey() });
   const [profile, setProfile] = useState<Profile>('linux');
   const script = key.data?.profiles[profile]?.script ?? '';
   return (

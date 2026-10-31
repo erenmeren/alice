@@ -182,8 +182,11 @@ export const setCCSPassword = (id: string, version: number, password: string) =>
 export const setWinRMPassword = (id: string, version: number, password: string) =>
   apiFetch<Target>(`${v1}/targets/${enc(id)}/winrm-password`, { method: 'PUT', body: { password }, headers: ifMatchVersion(version) });
 
+// fromQuery is the optional ?from= of a setup script: Alice's address as typed; the API checks it (R72 Ruling 3).
+const fromQuery = (from?: string) => (from ? `?from=${enc(from)}` : '');
+
 // getWinRMSetup is the PowerShell script that prepares a Windows server for WinRM (R71 Ruling 19); it holds no secret.
-export const getWinRMSetup = (id: string) => apiFetch<{ script: string }>(`${v1}/targets/${enc(id)}/winrm-setup`);
+export const getWinRMSetup = (id: string, from?: string) => apiFetch<{ script: string }>(`${v1}/targets/${enc(id)}/winrm-setup${fromQuery(from)}`);
 
 export const createTarget = (req: TargetCreateRequest) =>
   apiFetch<TargetCreated>(`${v1}/targets`, { method: 'POST', body: req });
@@ -232,7 +235,7 @@ export function listSSHKeys(q: SSHKeyQuery = {}): Promise<SSHKeyPage> {
 
 export const getSSHKey = (id: string) => apiFetch<SSHKeyDetail>(`${v1}/ssh-keys/${enc(id)}`);
 
-export const getPlatformKey = () => apiFetch<PlatformKeyInfo>(`${v1}/ssh-keys/platform-key`);
+export const getPlatformKey = (from?: string) => apiFetch<PlatformKeyInfo>(`${v1}/ssh-keys/platform-key${fromQuery(from)}`);
 
 export const removeKeyLocation = (id: string, confirmLastRootKey = false) =>
   apiFetch<JobAccepted>(`${v1}/ssh-keys/locations/${enc(id)}/actions/remove`, {

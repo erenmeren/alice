@@ -1,6 +1,7 @@
 import { Alert, Button, Code, CopyButton, Group, Loader, NativeSelect, NumberInput, Stack, Text, TextInput } from '@mantine/core';
+import { useDebouncedValue } from '@mantine/hooks';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { WEB_SERVER_TYPES, type WebServerType } from '../api/webServer';
 import { softwareName } from './software';
@@ -12,6 +13,7 @@ import type { HostKey, Job, JobError, Target, WindowsTransport } from '../api/ty
 import { AppModal } from './AppModal';
 import { CCSPasswordPanel } from './CCSPasswordPanel';
 import { ErrorAlert } from './ErrorAlert';
+import { fieldErrorsOf } from './fieldErrors';
 import { HostKeyConfirm } from './HostKeyConfirm';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
 import { DialogActions } from './ui';
@@ -326,12 +328,49 @@ export function AddServerModal({
 }
 
 // WinRMSetupScript shows the script that prepares a Windows server for WinRM (GET /targets/{id}/winrm-setup, R71 Ruling
-// 19). It holds no secret; a build that cannot verify the helper answers an empty script, which is not shown.
+// 19). It holds no secret; a build that cannot verify the helper answers an empty script, which is not shown. Alice's
+// address, when typed, is sent as ?from= (R72 Ruling 3).
 export function WinRMSetupScript({ targetId }: { targetId: string }) {
   const { t } = useTranslation();
-  const setup = useQuery({ queryKey: [...targetKey(targetId), 'winrm-setup'], queryFn: () => getWinRMSetup(targetId) });
-  if (!setup.data?.script) return <ErrorAlert error={setup.error} />;
-  return <ScriptBlock title={t('targets.winrm.setupTitle')} help={t('targets.winrm.setupHelp')} script={setup.data.script} testId="winrm-setup-script" />;
+  const [from, field] = useAliceAddress();
+  const setup = useQuery({ queryKey: [...targetKey(targetId), 'winrm-setup', from], queryFn: () => getWinRMSetup(targetId, from) });
+  return (
+    <Stack gap="xs">
+      {field(setup.error)}
+      {setup.data?.script ? (
+        <ScriptBlock title={t('targets.winrm.setupTitle')} help={t('targets.winrm.setupHelp')} script={setup.data.script} testId="winrm-setup-script" />
+      ) : (
+        <AddressError error={setup.error} />
+      )}
+    </Stack>
+  );
+}
+
+// useAliceAddress is the optional "Alice's address" field of a setup script (R72 Ruling 3): the debounced address to
+// send as ?from= ('' for none) and the field, which shows the API's error on from (the API decides what is valid).
+function useAliceAddress(): [string, (error: unknown) => ReactNode] {
+  const { t, i18n } = useTranslation();
+  const [value, setValue] = useState('');
+  const [from] = useDebouncedValue(value.trim(), 400);
+  const field = (error: unknown) => (
+    <TextInput
+      label={t('targets.form.aliceAddress')}
+      description={t('targets.form.aliceAddressHelp')}
+      value={value}
+      onChange={(e) => setValue(e.currentTarget.value)}
+      error={fieldErrorsOf(error, t, i18n).from}
+      maxLength={64}
+      autoComplete="off"
+      spellCheck={false}
+    />
+  );
+  return [from, field];
+}
+
+// AddressError is a script's load error, unless it is the address field's own (shown under the field).
+function AddressError({ error }: { error: unknown }) {
+  const { t, i18n } = useTranslation();
+  return 'from' in fieldErrorsOf(error, t, i18n) ? null : <ErrorAlert error={error} />;
 }
 
 // ProfileScript shows the commands that prepare a server of the chosen type (the profile's setup
@@ -339,13 +378,22 @@ export function WinRMSetupScript({ targetId }: { targetId: string }) {
 // account typed in the form (final review I1).
 function ProfileScript({ type, account }: { type: ServerType; account: string }) {
   const { t } = useTranslation();
-  const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
+  const [from, field] = useAliceAddress();
+  const key = useQuery({ queryKey: from ? [...PLATFORM_KEY_KEY, from] : PLATFORM_KEY_KEY, queryFn: () => getPlatformKey(from) });
   const windows = type === 'windows';
   const shown = key.data?.profiles[type]?.script;
   const script = shown && windows ? withWindowsAccount(shown, account.trim()) : shown;
-  if (!script) return <ErrorAlert error={key.error} />;
   const title = t(windows ? 'targets.form.scriptWindows' : 'targets.form.script');
-  return <ScriptBlock title={title} help={windows ? t('targets.form.scriptWindowsHelp') : undefined} script={script} testId="add-server-script" />;
+  return (
+    <Stack gap="xs">
+      {field(key.error)}
+      {script ? (
+        <ScriptBlock title={title} help={windows ? t('targets.form.scriptWindowsHelp') : undefined} script={script} testId="add-server-script" />
+      ) : (
+        <AddressError error={key.error} />
+      )}
+    </Stack>
+  );
 }
 
 // ScriptBlock is a setup script with its title, an optional help line and a copy button.

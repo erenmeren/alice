@@ -1155,7 +1155,9 @@
       "usernameWindows": "Windows account",
       "usernameWindowsHelp": "A local account (alice) or a domain account written as DOMAIN\\account.",
       "scriptWindows": "PowerShell setup script",
-      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above.",
+      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above. With Alice's address above, the key line and the firewall rule accept that address only.",
+      "aliceAddress": "Alice's address (optional)",
+      "aliceAddressHelp": "The IP address the server sees Alice connect from. With it, the script opens the port (22 or 5986) in the firewall to that address only; without it, to any address until you set $AliceAddress in the script.",
       "transport": "Connection",
       "transportHelp": "OpenSSH is recommended. Choose WinRM only when the server cannot run OpenSSH.",
       "transportSsh": "OpenSSH (recommended)",
@@ -1168,7 +1170,7 @@
     },
     "winrm": {
       "setupTitle": "WinRM setup script",
-      "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, opens port 5986 in the firewall to any address until you set $AliceAddress in the script, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
+      "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, opens port 5986 in the firewall to Alice's address when you entered one above, otherwise to any address until you set $AliceAddress in the script, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
       "passwordStep": "Then enter the same password here. Alice tests the connection as soon as the password is saved.",
       "showScript": "Show setup script again"
     },

@@ -1155,7 +1155,9 @@
       "usernameWindows": "Windows hesabı",
       "usernameWindowsHelp": "Yerel bir hesap (alice) ya da ALANADI\\hesap biçiminde yazılmış bir etki alanı hesabı.",
       "scriptWindows": "PowerShell kurulum betiği",
-      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır.",
+      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır. Yukarıda Alice'in adresi girildiyse anahtar satırı ve güvenlik duvarı kuralı yalnızca o adresi kabul eder.",
+      "aliceAddress": "Alice'in adresi (isteğe bağlı)",
+      "aliceAddressHelp": "Sunucunun Alice'in bağlandığını gördüğü IP adresi. Girilirse betik güvenlik duvarında bağlantı noktasını (22 ya da 5986) yalnızca bu adrese açar; girilmezse betikte $AliceAddress değerini belirleyene kadar her adrese açar.",
       "transport": "Bağlantı",
       "transportHelp": "OpenSSH önerilir. WinRM'yi yalnızca sunucuda OpenSSH çalıştırılamıyorsa seçin.",
       "transportSsh": "OpenSSH (önerilen)",
@@ -1168,7 +1170,7 @@
     },
     "winrm": {
       "setupTitle": "WinRM kurulum betiği",
-      "setupHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, betikte $AliceAddress değerini belirleyene kadar güvenlik duvarında 5986 numaralı bağlantı noktasını her adrese açar ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız.",
+      "setupHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, güvenlik duvarında 5986 numaralı bağlantı noktasını yukarıda Alice'in adresi girildiyse o adrese, girilmediyse betikte $AliceAddress değerini belirleyene kadar her adrese açar ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız.",
       "passwordStep": "Ardından aynı parolayı buraya girin. Parola kaydedilir kaydedilmez Alice bağlantıyı sınar.",
       "showScript": "Kurulum betiğini yeniden göster"
     },

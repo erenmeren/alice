@@ -1,11 +1,12 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { errorResponse, jobFixture, sessionFor, sessionHandlers, tlsHostKeyFixture, windowsWinRMTargetFixture } from '../test/fixtures';
+import { errorResponse, jobFixture, platformKeyFixture, sessionFor, sessionHandlers, tlsHostKeyFixture, windowsWinRMTargetFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
-import { AddServerModal } from './AddServerModal';
+import { AddServerModal, WinRMSetupScript } from './AddServerModal';
+import commonEn from '@locales/common/en.json';
 
 // R71 Ruling 22: the WinRM transport of a Windows server in the Add server dialog.
 const WN26 = 'Under WinRM, anyone with this account\'s password can run any command on the server as an administrator. With OpenSSH, Alice\'s key can run only alice-helper.exe.';
@@ -156,3 +157,69 @@ describe('AddServerModal WinRM transport', () => {
     expectNoRawKeys(view.container);
   });
 });
+
+// R72 Ruling 3 (B1): Alice's address, when typed, reaches the served scripts as ?from=; the API decides what is valid.
+describe('Alice\'s address in the setup scripts', () => {
+  const ADDRESS = /^Alice's address/;
+
+  // platformKey answers the platform key with the address in the Windows script and records every from it was asked.
+  function platformKey() {
+    const froms: (string | null)[] = [];
+    server.use(
+      http.get('/api/v1/ssh-keys/platform-key', ({ request }) => {
+        const from = new URL(request.url).searchParams.get('from');
+        froms.push(from);
+        if (from === 'not-an-ip') return errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'from', code: 'validation.pattern' }] });
+        const windows = { sudoers: '', script: `# windows setup script\n$AliceAddress = '${from ?? ''}'\n$AliceUser = 'alice'\n` };
+        return HttpResponse.json({ ...platformKeyFixture, profiles: { ...platformKeyFixture.profiles, windows } });
+      }),
+    );
+    return froms;
+  }
+
+  it('sends the typed address to the platform key and shows the script it answers', async () => {
+    const froms = platformKey();
+    const { dialog } = await openWindows();
+    await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
+    expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent("$AliceAddress = ''");
+    expect(froms).toEqual([null]);
+    await userEvent.type(within(dialog).getByLabelText(ADDRESS), '10.0.0.5');
+    await waitFor(() => expect(within(dialog).getByTestId('add-server-script')).toHaveTextContent("$AliceAddress = '10.0.0.5'"));
+    expect(froms.at(-1)).toBe('10.0.0.5');
+    expect(within(dialog).getByLabelText(ADDRESS)).toHaveAccessibleDescription(expect.stringContaining('to that address only'));
+    expect(within(dialog).getByText(/With Alice's address above, the key line and the firewall rule accept that address only/)).toBeInTheDocument();
+  });
+
+  it('shows the API\'s field error for a bad address and no script', async () => {
+    platformKey();
+    const { dialog } = await openWindows();
+    await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
+    await within(dialog).findByTestId('add-server-script');
+    await userEvent.type(within(dialog).getByLabelText(ADDRESS), 'not-an-ip');
+    await waitFor(() => expect(within(dialog).getByLabelText(ADDRESS)).toHaveAccessibleDescription(expect.stringContaining(commonEn.validation.pattern)));
+    expect(within(dialog).queryByTestId('add-server-script')).not.toBeInTheDocument();
+  });
+
+  it('asks the WinRM setup script with the typed address, and without one when the field is empty', async () => {
+    const froms: (string | null)[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.get('/api/v1/targets/:id/winrm-setup', ({ request }) => {
+        const from = new URL(request.url).searchParams.get('from');
+        froms.push(from);
+        return HttpResponse.json({ script: `# winrm setup script\n$AliceAddress = '${from ?? ''}'` });
+      }),
+    );
+    await renderWithStepUp(<WinRMSetupScript targetId={windowsWinRMTargetFixture.id} />);
+    expect(await screen.findByTestId('winrm-setup-script')).toHaveTextContent("$AliceAddress = ''");
+    expect(froms).toEqual([null]);
+    expect(screen.getByText(/to Alice's address when you entered one above/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(ADDRESS), 'fd00::5');
+    await waitFor(() => expect(screen.getByTestId('winrm-setup-script')).toHaveTextContent("$AliceAddress = 'fd00::5'"));
+    expect(froms.at(-1)).toBe('fd00::5');
+    await userEvent.clear(screen.getByLabelText(ADDRESS));
+    await waitFor(() => expect(screen.getByTestId('winrm-setup-script')).toHaveTextContent("$AliceAddress = ''"));
+    expect(froms.filter((f) => f === null).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
