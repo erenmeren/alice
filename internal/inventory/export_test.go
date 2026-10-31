@@ -323,3 +323,13 @@ func ValidWindowsUserFor(transport, s string) bool { return validWindowsUser(tra
 
 // DefaultWinRMPort is the port the inventory stores for a WinRM target that names none.
 const DefaultWinRMPort = defaultWinRMPort
+
+// CountSeals counts setTargetPassword's seals until restore (TestSetCCSPasswordRefusesBeforeSealing; not parallel).
+func CountSeals() (n *int, restore func()) {
+	n, seal := new(int), sealPassword
+	sealPassword = func(k *secrets.Keyring, loc secrets.Location, pt []byte) (secrets.Envelope, error) {
+		*n++
+		return seal(k, loc, pt)
+	}
+	return n, func() { sealPassword = seal }
+}

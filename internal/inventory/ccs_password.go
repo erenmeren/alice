@@ -85,10 +85,13 @@ func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID,
 	return s.setTargetPassword(ctx, a, target, ifVersion, pw, ccsPasswordSpec)
 }
 
+// sealPassword is the keyring's Seal (a seam: TestSetCCSPasswordRefusesBeforeSealing counts the calls).
+var sealPassword = (*secrets.Keyring).Seal
+
 // setTargetPassword stores pw as the spec's password of target, whose version must be ifVersion: the live row ended,
 // one new sealed row, the target's version moved, and the spec's audit action without the secret. pw is zeroed on every
-// path. The seal happens before the transaction; inside it the target is checked first, then the rule (so the seal of
-// an invalid password is discarded with the transaction, W5-5), then the version.
+// path. The rule is decided before the transaction and only a password that follows it is sealed (R72 Ruling 11);
+// inside the transaction the answers keep R70 Ruling 9's order: the target, its type, the rule, the version.
 func (s *Service) setTargetPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext,
 	spec targetPasswordSpec) (Target, error) {
 	defer pw.Zero()
@@ -96,12 +99,16 @@ func (s *Service) setTargetPassword(ctx context.Context, a Actor, target uuid.UU
 		return Target{}, err
 	}
 	id := uuid.Must(uuid.NewV7())
-	env, err := s.keyring.Seal(credentialLocation(id), pw.Bytes())
-	if err != nil {
-		return Target{}, fmt.Errorf("inventory: seal the %s password: %w", spec.name, err)
+	valid := spec.valid(pw.Bytes())
+	var env secrets.Envelope
+	if valid {
+		var err error
+		if env, err = sealPassword(s.keyring, credentialLocation(id), pw.Bytes()); err != nil {
+			return Target{}, fmt.Errorf("inventory: seal the %s password: %w", spec.name, err)
+		}
 	}
 	var updated Target
-	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cur, err := getTarget(ctx, tx, target, true)
 		if err != nil {
 			return err
@@ -109,7 +116,7 @@ func (s *Service) setTargetPassword(ctx context.Context, a Actor, target uuid.UU
 		if err := spec.check(cur); err != nil {
 			return err
 		}
-		if !spec.valid(pw.Bytes()) {
+		if !valid {
 			return spec.invalid
 		}
 		if cur.Version != ifVersion {

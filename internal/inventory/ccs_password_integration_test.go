@@ -474,3 +474,22 @@ func TestSetTargetPasswordEndsTheOlderRow(t *testing.T) {
 	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND rotated_at = $2", win.ID, *second.CCSPasswordSetAt),
 		"the older row ended when the newer was set")
 }
+
+// R72 Ruling 11 (R70 final M4; WIN-47): a password outside the rule is never sealed; the answers keep R70 Ruling 9's order.
+func TestSetCCSPasswordRefusesBeforeSealing(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.h
+	seals, restore := inventory.CountSeals()
+	defer restore()
+	server := mustTarget(t, h, f.server)
+	_, err := setCCS(t, h, f.admin, server, []byte("short"))
+	require.ErrorIs(t, err, inventory.ErrCCSPasswordInvalid)
+	assert.Zero(t, *seals, "a refused password is never sealed")
+	web := mustTarget(t, h, f.web)
+	_, err = setCCS(t, h, f.admin, web, []byte("short"))
+	require.ErrorIs(t, err, inventory.ErrNotWindowsTarget, "the type before the rule")
+	assert.Zero(t, *seals)
+	_, err = setCCS(t, h, f.admin, server, ccsPassword())
+	require.NoError(t, err)
+	assert.Equal(t, 1, *seals, "a valid password is sealed once")
+}
