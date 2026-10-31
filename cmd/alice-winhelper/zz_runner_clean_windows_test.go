@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,21 +26,23 @@ var packageStart = time.Now()
 func TestRealRunnerIsClean(t *testing.T) {
 	requireReal(t)
 
-	// No http.sys record on the W2 and W3 ports nor on W5's or W6's (the helper's own listing, which the
-	// W1 twin checks against netsh's records; W5's ccs records included).
+	// No http.sys record on the W2 and W3 ports nor on W5's, W6's or W7's (the helper's own listing, which
+	// the W1 twin checks against netsh's records; W5's ccs records included; W7's are the WinRM test
+	// listeners' 45520-45539).
 	list, err := sslBindings()
 	require.NoError(t, err)
 	require.NotEmpty(t, list, "positive control: the runner image's own records are listed")
 	for _, b := range list {
-		assert.False(t, b.Port >= 45330 && b.Port <= 45398 || b.Port >= 45480 && b.Port <= 45499 || b.Port >= 45500 && b.Port <= 45519,
+		assert.False(t, b.Port >= 45330 && b.Port <= 45398 || b.Port >= 45480 && b.Port <= 45499 || b.Port >= 45500 && b.Port <= 45519 ||
+			b.Port >= 45520 && b.Port <= 45539,
 			"an http.sys record is left: %+v", b)
 	}
 
-	// No alice-w2-, alice-w3-, alice-w5- or alice-w6- certificate in My, WebHosting, CA or Remote Desktop
-	// (by subject or friendly name: the helper names its imports "Alice <first SAN> ...", and every W2,
-	// W3, W5 and W6 fixture name starts so).
+	// No alice-w2-, alice-w3-, alice-w5-, alice-w6- or alice-w7- certificate in My, WebHosting, CA, Remote
+	// Desktop or Root (by subject or friendly name: the helper names its imports "Alice <first SAN> ...", and
+	// every W2, W3, W5, W6 and W7 fixture name starts so).
 	out := powershell(t, `$n = 0
-foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
+foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
     $p = "Cert:\LocalMachine\$s"
     if (-not (Test-Path -LiteralPath $p)) { continue }
     foreach ($c in Get-ChildItem -LiteralPath $p) {
@@ -47,7 +50,8 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
         if ($c.Subject -like '*alice-w2-*' -or $c.FriendlyName -like '*alice-w2-*' -or
             $c.Subject -like '*alice-w3-*' -or $c.FriendlyName -like '*alice-w3-*' -or
             $c.Subject -like '*alice-w5*' -or $c.FriendlyName -like '*alice-w5*' -or
-            $c.Subject -like '*alice-w6-*' -or $c.FriendlyName -like '*alice-w6-*') { "left $s $($c.Thumbprint) $($c.Subject)" }
+            $c.Subject -like '*alice-w6-*' -or $c.FriendlyName -like '*alice-w6-*' -or
+            $c.Subject -like '*alice-w7-*' -or $c.FriendlyName -like '*alice-w7-*') { "left $s $($c.Thumbprint) $($c.Subject)" }
     }
 }
 "count $n"`)
@@ -118,5 +122,39 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop')) {
 	assert.Nil(t, now.Hash, "SSLCertificateSHA1Hash is absent, as on the runner images (F12)")
 	if rdpTermServiceFound != "" {
 		assert.Equal(t, rdpTermServiceFound, termServiceState(t), "TermService is as the first RDP fixture found it")
+	}
+
+	// W7 (internal/providers/windows/winrs, an earlier go test run of the job): no alice-w7 account, no WinRM
+	// listener on 45520-45539, no firewall rule Alice WinRM, no test program directory, and the WinRM and LSA
+	// values as the first WinRS fixture found them (it wrote them to the temporary directory, read with the
+	// same script).
+	left = strings.Fields(string(powershell(t, `Import-Module Microsoft.WSMan.Management
+if ([ADSI]::Exists("WinNT://$env:COMPUTERNAME/alice-w7,user")) { 'account' }
+$n = 0
+foreach ($l in @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)) {
+    $n++
+    if ([int]$l.Port -ge 45520 -and [int]$l.Port -le 45539) { "listener:$($l.Address)/$($l.Transport):$($l.Port)" }
+}
+if ($n -eq 0) { 'no-listener-listed' }
+if (@(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Alice*WinRM*' -or $_.DisplayName -like 'Alice WinRM*' }).Count -gt 0) { 'firewall-rule' }`)))
+	assert.Empty(t, left, "W7 fixtures are left (no-listener-listed: the positive control, the image's 5986 listener, is missing)")
+	left, err = filepath.Glob(filepath.Join(os.Getenv("ProgramData"), "alice-w7-*"))
+	require.NoError(t, err)
+	assert.Empty(t, left, "the WinRS tests' program directories are left")
+	script, err := os.ReadFile(filepath.Join("..", "..", "internal", "providers", "windows", "winrs", "testdata", "settings.ps1"))
+	require.NoError(t, err)
+	settings := strings.TrimSpace(strings.ReplaceAll(string(powershell(t, string(script))), "\r\n", "\n"))
+	asFound := filepath.Join(os.TempDir(), "alice-w7-settings-as-found.txt")
+	if b, err := os.ReadFile(asFound); err == nil {
+		want := strings.Split(strings.TrimSpace(string(b)), "\n")
+		got := strings.Split(settings, "\n")
+		for i := range got {
+			got[i] = strings.TrimSpace(got[i])
+		}
+		slices.Sort(got)
+		assert.Equal(t, want, got, "the WinRM and LSA values are restored as the first WinRS fixture found them")
+		_ = os.Remove(asFound)
+	} else {
+		t.Logf("no WinRS fixture ran (%v); the WinRM and LSA values are %s", err, strings.ReplaceAll(settings, "\n", ", "))
 	}
 }

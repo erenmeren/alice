@@ -602,7 +602,7 @@ Expected: PASS; wintest at least 90 %, fakewindows at least 90 %; every W1-W6 em
   - The helper for these tests is the one the job built (`go build ./cmd/alice-winhelper`), copied to a temp path that is passed as `Call.Program` (the product always passes `winproto.HelperPath`).
 - Mirror: W6 Task 4 (record and restore, logged facts, the clean check), `setup_windows_test.go`'s `runNet` and `setupPowershell` helpers (copied, not imported: another package).
 
-- [ ] **Step 1: Write the tests.** They are skipped unless `ALICE_WIN_REAL=1`.
+- [x] **Step 1: Write the tests.** They are skipped unless `ALICE_WIN_REAL=1`.
   - `TestRealWinRMNTLMAuth` **[F24]**:
     - `version` over WinRS answers with the user `alice-w7`; `win-facts` reports `elevated` true.
     - `HOSTNAME\alice-w7` answers; `.\alice-w7` sent raw is logged pass or fail.
@@ -621,7 +621,7 @@ Expected: PASS; wintest at least 90 %, fakewindows at least 90 %; every W1-W6 em
   - `TestRealWinRMAccountRights` **[F31]**: with the two deny rights and `PasswordNeverExpires` on `alice-w7`, the call works; the 4624 event's logon type, package and `LmPackageName` are asserted; the wrong-password 4625 is logged. After `net user alice-w7` with a new random password (on stdin), the old password is `ErrAuthRefused` and the new one works. Log the result with the account out of Administrators and with S-1-5-114 in "Deny access to this computer from the network".
   - `TestRealRunnerIsClean` extended.
   - `windows.yml`: the required list adds the eight tests. `TestWindowsWorkflowRequiresEveryRealTest` keeps the list exact.
-- [ ] **Step 2: Verify locally what can be verified**
+- [x] **Step 2: Verify locally what can be verified**
 Run: `GOOS=windows GOARCH=amd64 go vet ./internal/providers/windows/winrs/ && GOOS=windows go test -c -o /dev/null ./internal/providers/windows/winrs/ && GOOS=windows go build -o /dev/null ./internal/providers/windows/winrs/testdata/stdinhash/ && actionlint .github/workflows/windows.yml && go test -count=1 ./internal/archtest/`
 Expected: PASS.
 - [ ] **Step 3: Run on real Windows.** Push `windows-w7` (run 1; it carries Task 2's `go.mod` change). Both legs must run every fact test (a fact test may fail on a variant it only logs; the asserted parts must pass). Count every run against the budget of 10. Record F24-F31 as rulings with the run links. When a fact differs, apply its "If it is wrong" column in its own fix commit, in the task that owns the code. F25's fallback goes to the coordinator before Task 6.
