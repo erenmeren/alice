@@ -1181,7 +1181,7 @@ durable write (the prepared journal). `winproto.RDPPickupWait` is 0 (F20: served
   | `ErrAuthRefused` (a final 401 or 403) | `windows.winrm_auth_refused` (`ALC-WIN-0024`, 502) | no | at Create yes, later no |
   | a fault at Create | `windows.winrm_fault` (`ALC-WIN-0026`, 502, param `wsman_code`) | no | yes |
   | a fault code 2 at Command | `ssh.helper_missing`, then `windows.helper_missing` | no | no |
-  | exit 9009 with no output (`cmd.exe` found no helper, F29) | `ssh.helper_missing`, then `windows.helper_missing` | no | no |
+  | exit 1 with no stdout (`cmd.exe` found no helper: "is not recognized" on stderr, F29) | `ssh.helper_missing`, then `windows.helper_missing` | no | no |
   | any other fault after Create | `windows.winrm_fault` | no | no |
   | `ErrTimeout` | `ssh.timeout` | yes | no |
   | `ErrOutputTooLarge` | `ssh.output_too_large` | no | no |

@@ -95,7 +95,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
     script; a password changed on the server later must be set in Alice too;
   - the account's membership: `net localgroup` with the name of the Administrators group (S-1-5-32-544) lists the
     account, or a group that holds it; a domain account is not added by the script;
-  - Negotiate: `Get-Item WSMan:\localhost\Service\Auth\Negotiate` is `true` (the script stops when it is off);
+  - Negotiate (`Service\Auth\Negotiate`) is on: read the registry value `auth_negotiate` under
+    `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service` (0 is off, absent is on); WinRM's own client
+    (`WSMan:` and `winrm`) fails when it is off. The script stops when it is off;
   - `CbtHardeningLevel`: `Get-Item WSMan:\localhost\Service\Auth\CbtHardeningLevel` is not `Strict` (Alice sends no
     channel binding);
   - for a local account, `LocalAccountTokenFilterPolicy` under

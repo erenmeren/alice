@@ -397,9 +397,9 @@ or client certificates, and sends no PowerShell.
 - A name such as `alice@corp.example` is not accepted.
 
 On Windows Server 2022 and 2025 as shipped, `LocalAccountTokenFilterPolicy` is 1, and the WinRM sign-in of a local
-administrator gets an elevated token (Security event 4624: logon type 3, package NTLM, `NTLM V2`). For a local account
-the script sets the value to 1 when it finds 0 or no value, because remote UAC would otherwise give the account a
-filtered token over WinRM; it prints the value it found (`LocalAccountTokenFilterPolicy found: ...`). This lifts remote
+administrator gets an elevated token (Security event 4624: logon type 3, package NTLM, `NTLM V2`). With the value 0 the
+WinRM sign-in of a local administrator is refused (measured: remote UAC gives the network logon a filtered token), so
+for a local account the script sets the value to 1 when it finds 0 or no value; it prints the value it found (`LocalAccountTokenFilterPolicy found: ...`). This lifts remote
 UAC filtering for every local administrator's network sign-in, so weigh it with your security team. A domain account
 needs no change.
 

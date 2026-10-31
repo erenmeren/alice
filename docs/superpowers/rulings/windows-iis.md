@@ -2896,7 +2896,8 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
    travels in `SSH_ORIGINAL_COMMAND`, which `cmd.exe` never parses. The plan's fallback (helper 1.3.0 with a
    `winrs` entry) would not remove `cmd.exe`, which WinRS inserts itself, so it was not taken. The Command element
    carries the program's quotes raw: element text escapes only `&`, `<` and `>`, because Windows does not decode
-   `&#34;` in `rsp:Command` (run 5: the escaped form reached `cmd.exe` as `&`).
+   `&#34;` in `rsp:Command` (run 5: the escaped form reached `cmd.exe` as `&`). `cmd.exe` cannot be avoided: with
+   `WINRS_SKIP_CMD_SHELL` sent as `MustComply="true"` the Command is refused with WS-Man fault 2150858809 (run 7).
 5. **One migration, `00038`.** As written (`TestMigration00038WindowsWinRM`, `TestMigration00038Down`; Down `Z1036`).
 6. **The accounts and their username forms.** As written. F24 (run 6, both images): `alice-w7-1`, `HOST\alice-w7-1`
    and `.\alice-w7-1` sent raw all sign in; Alice still strips `.\`. Precision (Task 7): the setup script treats
@@ -2935,9 +2936,10 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
     - `winrs.FaultError` carries `Action`, the request the fault answered (set by the client, never by the parser), so
       the code-2 row is exact: code 2 maps to `ssh.helper_missing` only at Command; any other fault after Create is
       `windows.winrm_fault` with `wsman_code`.
-    - **F29 (run 6; accepted by the coordinator, 2026-10-31; run 7's confirmation added by the controller):** a missing program is not a WS-Man fault: WinRS's `cmd.exe`
-      answers "is not recognized" and the command finishes with exit code 9009 and no output. `winrmRun` maps exit 9009
-      with an empty stdout to `ssh.helper_missing` (then `windows.helper_missing`, as over SSH); the Command was sent,
+    - **F29 (runs 6 and 7; accepted by the coordinator, 2026-10-31):** a missing program is not a WS-Man fault: WinRS's
+      `cmd.exe` writes "'<path>' is not recognized as an internal or external command, operable program or batch file." on stderr and the command finishes with exit code 1 and no
+      stdout (run 7; run 6's guess of 9009 was wrong). `winrmRun` maps exit 1 with an empty stdout (the
+      `WinRMHelperMissingExit` constant) to `ssh.helper_missing` (then `windows.helper_missing`, as over SSH); the Command was sent,
       so a write stays uncertain. The emulator answers a missing helper the same way.
     - F31 (run 3): an account removed from Administrators is refused with a 401 (`ErrAuthRefused`), not an
       access-denied fault, so no fault code is mapped to `winrm_auth_refused`. An access-denied fault (5) after Create
@@ -2981,7 +2983,8 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
 20. **Emulator model.** As written. Precisions (Task 3): the demo host's computer name is `WIN-DEMO01`; the demo
     binding `0.0.0.0:9444` (site "WinRM Journey") is the journey's; the fault codes the runners did not measure stay
     placeholders (bad request 87, unknown shell 2150858843, `MaxShellsPerUser` 2150859173, envelope too large
-    2150858817); a missing helper is exit 9009 (F29), not fault 2.
+    2150858817); a missing helper is exit 1 with no stdout (F29), not fault 2; a helper killed over WinRS exits 137
+    (`winhelper.ExitKilled`, F29), while the SSH emulator path keeps 255.
 21. **Security analysis and STRIDE `WN-26`..`WN-30`.** As written, with WN-28 amended for the `cmd.exe` that WinRS
     inserts (Ruling 16) and WN-30 for F24's verdict.
 22. **UI.** As written. Precisions (Task 8): the "(WinRM)" note is the catalogue's `title_winrm` variant, chosen when
@@ -3017,15 +3020,19 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
   takes 3 requests (anonymous 401 offering `Negotiate` and `Basic realm="WSMAN"`, type 1, type 3), later requests one
   each without credentials (the connection stays authenticated). Windows closes the connection after the anonymous
   401, so a call takes 2 dials: (d) applies, `maxDialsPerCall` = 2 (Ruling 12). `version` answers and the token is
-  elevated with `LocalAccountTokenFilterPolicy` 1 as the images ship it; (a) did not apply. The forms `alice-w7-1`,
-  `HOST\alice-w7-1` and `.\alice-w7-1` (raw) all sign in. The result with the policy set to 0 is logged by
-  `TestRealWinRMNTLMAuth` and not yet read into this record (run 7+, pending).
+  elevated with `LocalAccountTokenFilterPolicy` 1 as the images ship it. (a) applies (run 7,
+  <https://github.com/erenmeren/alice/actions/runs/41189449678>): with the policy set to 0 the sign-in of a local
+  administrator is refused (the network logon gets a filtered token), so the setup script's change of a 0 to 1 is
+  needed for a local account, and WN-30's "Med when F24 (a) applies" holds. The forms `alice-w7-1`,
+  `HOST\alice-w7-1` and `.\alice-w7-1` (raw) all sign in.
 - **F25: the forced entry works; `cmd.exe` is inserted (accepted by the coordinator, 2026-10-31).** Runs 5 and 6
   (<https://github.com/erenmeren/alice/actions/runs/41186388742>, <https://github.com/erenmeren/alice/actions/runs/41187834322>).
   `SSH_ORIGINAL_COMMAND` reaches the helper (`version` answers `{"ok":true,"helper":"1.2.0","protocol":1}`), but WinRS
   runs the program through `cmd.exe` despite `WINRS_SKIP_CMD_SHELL` TRUE (parent `cmd.exe /C "<program>" ssh`; the
   child's command line unquoted). The escaped `&#34;` form of the quotes reached `cmd.exe` as `&` (run 5); raw quotes
-  work. Ruling 4 amended; the helper stays 1.2.0, no 1.3.0 fallback.
+  work. With `WINRS_SKIP_CMD_SHELL` sent as `MustComply="true"` the Command is refused with WS-Man fault 2150858809
+  (run 7, <https://github.com/erenmeren/alice/actions/runs/41189449678>), so `cmd.exe` cannot be avoided. Ruling 4
+  amended; the helper stays 1.2.0, no 1.3.0 fallback.
 - **F26: confirmed.** Run 6. 1 byte, 96 KiB, 96 KiB + 1 and 256 KiB of stdin arrive with equal SHA-256;
   `MaxEnvelopeSizekb` 500; a Send of about 615 KB is answered HTTP 413 (no WS-Man fault). `MaxSendChunk` stays 96 KiB.
 - **F27: confirmed for the cost; the reaping not measured.** Runs 4 and 6. 20 sequential `version` calls: p50 49-67 ms,
@@ -3037,12 +3044,13 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 - **F28: confirmed.** Runs 2, 3 and 6. The image's 5986 SPKI is unchanged after `Restart-Service WinRM`; a test listener
   renewed with a new key is refused at the handshake before any HTTP request (no 4624 or 4625, no WinRM Operational
   event); renewed with the same key it is accepted; an expired certificate with the pinned key is accepted.
-- **F29: confirmed for exit codes; a missing program is cmd.exe's exit 9009 (accepted by the coordinator, 2026-10-31;
-  run 7's confirmation pending).** Run 6.
+- **F29: confirmed; a missing program is cmd.exe's exit 1 (accepted by the coordinator, 2026-10-31).** Runs 6 and 7
+  (<https://github.com/erenmeren/alice/actions/runs/41189449678>).
   Exits 0, 2, 3 and 4 pass through as Receive's `ExitCode`; `iis-status` with a bad `--op` answers exit 2 with its JSON.
   A program path that does not exist is not a WS-Man fault at Command: the command finishes with `cmd.exe`'s exit
-  code, 9009 (Ruling 13 amended). The `alicetest` kill at `deploy.prepared` is logged only (not yet read into this
-  record).
+  code 1, with no stdout and "'<path>' is not recognized as an internal or external command, operable program or batch file." on stderr (run 7; run 6's guess of
+  9009 was wrong; Ruling 13 amended). A helper killed at `deploy.prepared` over WinRS exits 137
+  (`winhelper.ExitKilled`), and the emulator's WinRM path mirrors 137.
 - **F30: confirmed.** Runs 2-4. The image offers `Negotiate` and `Basic realm="WSMAN"`; it has an HTTP listener on 5985
   (enabled), `Service\Auth` Basic true, Kerberos true, Negotiate true, Certificate false, CredSSP false,
   `CbtHardeningLevel` Relaxed, `AllowUnencrypted` false, `LmCompatibilityLevel` absent. (a) Negotiate off and Basic on:
@@ -3058,7 +3066,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 - **F32: confirmed.** Runs 4 and 6. The script's printed SPKI fingerprint equals `providers.TLSIdentity` of the
   certificate Alice's client sees, for the image's RSA listener on 5986 and an ECDSA P-256 listener on 45521.
 
-### Runner runs used (6 of 10 so far)
+### Runner runs used (7 of 10 so far)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -3068,7 +3076,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 4 | <https://github.com/erenmeren/alice/actions/runs/41184960052> | `0c108a36` | fail / fail | The diagnostic matrix: every Create right after a same-name recreate faulted `E_ACCESSDENIED`; programs still exited 1. F27 cost, F30 and F28 passed; the setup script ran cleanly (refusals, policy found 1, firewall rule, ECDSA listener printed) |
 | 5 | <https://github.com/erenmeren/alice/actions/runs/41186388742> | `b8820bc1` | fail / fail | Decisive: the escaped `&#34;` around the program reached `cmd.exe` as `&`; unquoted and raw-quote forms work, `SSH_ORIGINAL_COMMAND` is delivered and the helper answers `version` |
 | 6 | <https://github.com/erenmeren/alice/actions/runs/41187834322> | `a594ffec` | fail / fail | Nearly every fact measured: F24 forms, F25 (`cmd.exe` inserted), F26, F27, F28, F29 (exits; a missing program is not a fault), F32. Left failing: F25's `cmd.exe` assertions, F29's missing program, the fidelity fault at Command, and a leftover `C:\ProgramData\alice-w7-<n>` |
-| 7 | pending | pending | pending | pending |
+| 7 | <https://github.com/erenmeren/alice/actions/runs/41189449678> | `af716b23` | fail / fail | Only `TestFidelityWinRM/a_missing_program` and `TestRealWinRMExitCodes` failed, on the 9009 guess: a missing program exits 1 with cmd.exe's "is not recognized" on stderr. F24 (a): with `LocalAccountTokenFilterPolicy` 0 a local administrator's sign-in is refused. F25: `WINRS_SKIP_CMD_SHELL` with `MustComply="true"` faults 2150858809 at Command. F29: a helper killed at `deploy.prepared` exits 137 |
 | 8 | pending | pending | pending | pending |
 | 9 | pending | pending | pending | pending |
 | 10 | pending | pending | pending | pending |
@@ -3242,8 +3250,8 @@ leaves the password missing; the RDP text added for a source-scanning test is a 
   say what 4688 records.
 - **F27, the shell reaping: accepted as a residual (coordinator, 2026-10-31).** The `IdleTimeOut` clamp is unknown
   (shell enumeration is refused as the test account); Alice always sends Delete after a successful Create.
-- **F29, exit 9009: accepted (coordinator, 2026-10-31).** A missing helper is `cmd.exe`'s exit 9009 with no output,
-  mapped to `windows.helper_missing`; the emulator mirrors it. Run 7's confirmation is added by the controller.
+- **F29, a missing helper: accepted (coordinator, 2026-10-31).** A missing helper is `cmd.exe`'s exit 1 with no stdout
+  (run 7 measured 1; run 6's guess of 9009 was wrong), mapped to `windows.helper_missing`; the emulator mirrors it.
 - **The stale doc comment of `WinRMSetupScript`** (`setup.go`) was fixed in the documents commit (controller ruling).
 
 ## Security review (W7)
@@ -3275,8 +3283,8 @@ Still for the owner to confirm:
 5. **Ruling 5:** a WinRM target's `targets.credential_id` still names the platform key, unused.
 6. **Ruling 24:** the runner tests change WinRM and LSA settings on the hosted runners and create local accounts
    `alice-w7-<n>`, test listeners on 45520-45539 and `C:\ProgramData\alice-w7-<n>`, and restore everything as found.
-7. **The F24-F32 verdicts** ([W7 facts measured on real runners](#w7-facts-measured-on-real-runners)): F24 (a) did not
-   apply; F25 inserts `cmd.exe` (accepted by the coordinator); F27's reaping is not measured (accepted residual); F30
+7. **The F24-F32 verdicts** ([W7 facts measured on real runners](#w7-facts-measured-on-real-runners)): F24 (a) applies
+   (policy 0 refuses a local account; the images ship 1); F25 inserts `cmd.exe` (accepted by the coordinator); F27's reaping is not measured (accepted residual); F30
    Strict refuses.
 8. **A domain account over WinRM** is accepted by syntax and by the emulator only; the first real test is on a
    customer's or the owner's domain (manual matrix).
