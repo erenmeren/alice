@@ -631,6 +631,14 @@ func run(c *winrs.Client, call winrs.Call) (winrs.Result, error) {
 	return c.Run(ctx, call)
 }
 
+// runHash is run for a hashCall: Run takes the helper's entry only (helperCall), so stdinhash goes through the
+// test-only RunProgram, the same client path without that check.
+func runHash(c *winrs.Client, call winrs.Call) (winrs.Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	return c.RunProgram(ctx, call)
+}
+
 func decode[T any](t *testing.T, b []byte) T {
 	t.Helper()
 	var v T

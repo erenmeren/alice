@@ -147,7 +147,7 @@ func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	// cmd.exe /C even with WINRS_SKIP_CMD_SHELL TRUE (controller ruling: recorded as the measured fact, the helper
 	// stays 1.2.0). What must hold: the command lines carry the quoted program and its arguments only.
 	wait := startWatcher(t)
-	res, err = run(c, f.hashCall([]byte("x"), "0", "2"))
+	res, err = runHash(c, f.hashCall([]byte("x"), "0", "2"))
 	seen := wait()
 	require.NoError(t, err)
 	fact(t, "F25", "the running program from Win32_Process: %s", seen)
@@ -197,7 +197,7 @@ func TestRealWinRMStdin(t *testing.T) {
 	c := f.client(t, account)
 	for _, n := range []int{1, winrs.MaxSendChunk, winrs.MaxSendChunk + 1, 256 << 10} {
 		in := randomBytes(t, n)
-		res, err := run(c, f.hashCall(in, "0"))
+		res, err := runHash(c, f.hashCall(in, "0"))
 		require.NoError(t, err, "%d bytes", n)
 		got := strings.TrimSpace(string(res.Stdout))
 		fact(t, "F26", "%d bytes of stdin in Sends of at most %d: the program's SHA-256 equals Go's: %t", n, winrs.MaxSendChunk, got == hashHex(in))
@@ -414,7 +414,7 @@ func TestRealWinRMExitCodes(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
 	for _, code := range []int{0, 2, 3, 4} {
-		res, err := run(c, f.hashCall([]byte("x"), strconv.Itoa(code)))
+		res, err := runHash(c, f.hashCall([]byte("x"), strconv.Itoa(code)))
 		require.NoError(t, err, "exit %d", code)
 		fact(t, "F29", "a program exiting %d: ExitCode %d", code, res.ExitCode)
 		assert.Equal(t, code, res.ExitCode)

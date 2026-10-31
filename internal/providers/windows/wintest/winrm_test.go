@@ -254,16 +254,21 @@ func TestWinRMEmulatorServesAnAuthenticatedConnection(t *testing.T) {
 func TestWinRMEmulatorRefusesOtherPrograms(t *testing.T) {
 	e := newWinRMEnv(t)
 	c := e.client("alice", e.password)
-	for name, call := range map[string]func(*winrs.Call){
-		"other args": func(c *winrs.Call) { c.Args = []string{"ssh", "version"} },
-		"no args":    func(c *winrs.Call) { c.Args = nil },
-	} {
-		cl := e.call(winproto.SubVersion, nil)
-		call(&cl)
-		_, err := c.Run(context.Background(), cl)
-		var fe *winrs.FaultError
-		require.ErrorAs(t, err, &fe, name)
-		assert.Equal(t, uint32(2), fe.Code, name)
+	// winrs.Client.Run sends only the helper's entry (helperCall), so the other shapes are hand-made.
+	rp := e.raw(t, "alice", e.password)
+	for name, args := range map[string][]string{"other args": {"ssh", "version"}, "no args": nil} {
+		status, body := rp(e.createBody(t))
+		require.Equal(t, http.StatusOK, status, string(body))
+		shell, err := winrs.ParseShellCreated(body)
+		require.NoError(t, err)
+		cmd, err := winrs.CommandRequest(e.header(), shell, winproto.HelperPath, args)
+		require.NoError(t, err, name)
+		status, body = rp(cmd)
+		assert.Equal(t, uint32(2), faultCode(t, status, body), name)
+		del, err := winrs.DeleteRequest(e.header(), shell)
+		require.NoError(t, err)
+		status, _ = rp(del)
+		require.Equal(t, http.StatusOK, status, name)
 	}
 	// F29 as measured (runner run 7): WinRS starts a program that does not exist through cmd.exe /C, so the command
 	// runs and ends with exit 1, cmd.exe's "not recognized" text on stderr, nothing on stdout.
@@ -280,18 +285,14 @@ func TestWinRMEmulatorRefusesOtherPrograms(t *testing.T) {
 	assert.Empty(t, r.Stdout)
 	e.m.SetHelperMissing(false)
 	assert.Zero(t, e.m.WinRMShells())
-	var fe *winrs.FaultError
-	cl = e.call(winproto.SubVersion, nil)
-	cl.Env = map[string]string{"PATH": "version"}
-	_, err = c.Run(context.Background(), cl)
-	require.ErrorAs(t, err, &fe, "another variable")
-	assert.Equal(t, uint32(faultBadRequest), fe.Code)
-	require.ErrorIs(t, err, winrs.ErrNotSent)
+	other := bytes.Replace(e.createBody(t), []byte(`Name="SSH_ORIGINAL_COMMAND"`), []byte(`Name="PATH"`), 1)
+	status, body := rp(other)
+	assert.Equal(t, uint32(faultBadRequest), faultCode(t, status, body), "another variable")
 
 	// A second variable (which winrs never builds).
 	post := e.raw(t, "alice", e.password)
 	two := bytes.Replace(e.createBody(t), []byte("</rsp:Environment>"), []byte(`<rsp:Variable Name="PATH">x</rsp:Variable></rsp:Environment>`), 1)
-	status, body := post(two)
+	status, body = post(two)
 	assert.Equal(t, uint32(faultBadRequest), faultCode(t, status, body))
 	assert.Equal(t, 0, e.m.WinRMShells())
 }

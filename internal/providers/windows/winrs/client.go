@@ -100,11 +100,28 @@ func (c *Client) check(call Call) error {
 	return nil
 }
 
-// Run runs call: Create (the NTLM exchange happens here), Command, the stdin Sends, Receive until Done, and Delete
+// helperCall is amended Ruling 4's only call shape: cmd.exe, which WinRS inserts (F25), parses the program line, so
+// the program is a path without a cmd.exe metacharacter, the argument is ssh, and the one variable is
+// SSH_ORIGINAL_COMMAND, whose value cmd.exe never parses.
+func helperCall(call Call) bool {
+	_, hasLine := call.Env["SSH_ORIGINAL_COMMAND"]
+	return len(call.Args) == 1 && call.Args[0] == "ssh" && len(call.Env) == 1 && hasLine &&
+		!strings.ContainsAny(call.Program, "%&<>|^()")
+}
+
+// Run runs the helper's forced-command entry (helperCall) as runCall does; any other call is ErrBadConfig.
+func (c *Client) Run(ctx context.Context, call Call) (Result, error) {
+	if !helperCall(call) {
+		return Result{}, notSent(ErrBadConfig)
+	}
+	return c.runCall(ctx, call)
+}
+
+// runCall runs call: Create (the NTLM exchange happens here), Command, the stdin Sends, Receive until Done, and Delete
 // on every path after a successful Create. A timeout or an output overflow also sends Signal terminate. Each cleanup
 // request has its own budget, detached from ctx. Only Create carries the credentials, so the NTLM exchange runs once,
 // on Create; a refused sign-in is never retried, and no later request can start a new one.
-func (c *Client) Run(ctx context.Context, call Call) (Result, error) {
+func (c *Client) runCall(ctx context.Context, call Call) (Result, error) {
 	if err := c.check(call); err != nil {
 		return Result{}, notSent(err)
 	}

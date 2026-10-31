@@ -482,6 +482,19 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 		"the HTTP port 5985":   func(_ *winrs.Client, call *winrs.Call) { call.Addr = "127.0.0.1:5985" },
 		"two variables":        func(_ *winrs.Client, call *winrs.Call) { call.Env = map[string]string{"A": "1", "B": "2"} },
 		"quoted program":       func(_ *winrs.Client, call *winrs.Call) { call.Program = `"x"` },
+		// Amended Ruling 4: cmd.exe parses the program line, so only the helper's forced entry is sent.
+		"no argument":       func(_ *winrs.Client, call *winrs.Call) { call.Args = nil },
+		"another argument":  func(_ *winrs.Client, call *winrs.Call) { call.Args = []string{"version"} },
+		"a second argument": func(_ *winrs.Client, call *winrs.Call) { call.Args = []string{"ssh", "x"} },
+		"no variable":       func(_ *winrs.Client, call *winrs.Call) { call.Env = nil },
+		"another variable":  func(_ *winrs.Client, call *winrs.Call) { call.Env = map[string]string{"PATH": "version"} },
+		"an extra variable": func(_ *winrs.Client, call *winrs.Call) {
+			call.Env = map[string]string{"SSH_ORIGINAL_COMMAND": "version", "A": "1"}
+		},
+		"a control character": func(_ *winrs.Client, call *winrs.Call) { call.Program += "\t" },
+	}
+	for _, m := range "%&<>|^()" {
+		bad["the program has "+string(m)] = func(_ *winrs.Client, call *winrs.Call) { call.Program = `C:\x` + string(m) + `.exe` }
 	}
 	for name, mutate := range bad {
 		t.Run(name, func(t *testing.T) {
