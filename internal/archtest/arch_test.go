@@ -39,7 +39,8 @@ var rules = map[string][]string{
 	"alice/internal/certs/...":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver", // a web-server provider embeds the shared layer
-		"alice/internal/providers/tlsverify"}, // and judges what its endpoints serve with the shared verification (W2 Ruling 15)
+		"alice/internal/providers/tlsverify", // and judges what its endpoints serve with the shared verification (W2 Ruling 15)
+		"alice/internal/providers/tlspin"},   // API targets and the WinRM transport check the server identity with the shared pin (R59 G2, R71)
 	// The test world of the linuxssh provider runs the real nginx, Apache and HAProxy configuration parsers, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf",
@@ -48,6 +49,8 @@ var rules = map[string][]string{
 	"alice/internal/providers/apacheconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The Windows helper's protocol: pure, imported by the Windows helper.
 	"alice/internal/providers/windows/winproto": {"alice/internal/providers/linuxssh/helperproto"},
+	// The WinRS client: the address rule only; no provider contract, no SSH; NTLMSSP through go-ntlmssp (R71).
+	"alice/internal/providers/windows/winrs": {"alice/internal/platform/netaddr"},
 	// The Windows helper's platform-neutral core: the protocol and the shared validators only.
 	"alice/internal/providers/windows/winhelper": {"alice/internal/providers/windows/winproto", "alice/internal/providers/linuxssh/helperproto"},
 	// The emulated Windows host (test-only) runs the helper's core on a modelled machine behind the test SSH server and
@@ -528,6 +531,13 @@ func TestAllowed(t *testing.T) {
 		{"wintest to the test PKI allowed", "alice/internal/providers/windows/wintest", "alice/internal/testutil/pki", true},
 		{"wintest to providers denied", "alice/internal/providers/windows/wintest", "alice/internal/providers", false},
 		{"wintest to platform/db denied", "alice/internal/providers/windows/wintest", "alice/internal/platform/db", false},
+		{"winrs to netaddr allowed", "alice/internal/providers/windows/winrs", "alice/internal/platform/netaddr", true},
+		{"winrs to providers denied", "alice/internal/providers/windows/winrs", "alice/internal/providers", false},
+		{"winrs to linuxssh denied", "alice/internal/providers/windows/winrs", "alice/internal/providers/linuxssh", false},
+		{"winrs to winproto denied", "alice/internal/providers/windows/winrs", "alice/internal/providers/windows/winproto", false},
+		{"wintest to winrs allowed", "alice/internal/providers/windows/wintest", "alice/internal/providers/windows/winrs", true},
+		{"windows to winrs allowed", "alice/internal/providers/windows", "alice/internal/providers/windows/winrs", true},
+		{"windows to tlspin allowed", "alice/internal/providers/windows", "alice/internal/providers/tlspin", true},
 		{"haproxyconf to platform/db denied", "alice/internal/providers/haproxyconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},

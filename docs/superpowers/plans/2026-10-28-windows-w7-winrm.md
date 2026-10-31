@@ -425,7 +425,7 @@ Nine facts are new. Task 4's real tests measure F24-F31 with the `winrs` client 
   The shell and command IDs match `^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$` (Windows answers uppercase; F24 logs it). Any other ID is `ErrProtocol`.
 - Mirror: `helperproto`'s strict decoders (one bounded input, unknown shapes refused) and its table tests.
 
-- [ ] **Step 1: Write the failing tests** (`wsman_test.go`):
+- [x] **Step 1: Write the failing tests** (`wsman_test.go`):
   - `TestRequestsRoundTrip`: every client-half builder's output parses with `ParseRequest` back to its fields: the action, the shell ID, the env (one variable), the program and args, the stream bytes, `End`, and the signal code.
   - `TestRequestsCarryTheFixedOptions`: Create carries `WINRS_NOPROFILE` and `WINRS_CODEPAGE` 65001, and Command carries `WINRS_CONSOLEMODE_STDIN` FALSE and `WINRS_SKIP_CMD_SHELL` TRUE (the XML read back with `encoding/xml`). The `MaxEnvelopeSize` header is `153600` with `mustUnderstand="true"`.
   - `TestRequestsRefuseBadInput`: an env with two variables, a name outside `^[A-Z_]{1,32}$`, a value with a byte outside 0x20-0x7E, a chunk over `MaxSendChunk`, or an ID that is not an uppercase UUID → error, no bytes.
@@ -437,14 +437,14 @@ Nine facts are new. Task 4's real tests measure F24-F31 with the `winrs` client 
   - `TestParseRejectsHostileXML`: a DOCTYPE, an entity reference, nesting deeper than 32 elements, or two `Body` elements → `ErrProtocol` (the decoder runs with `Strict` and a token-depth bound).
   - `TestServerResponsesParse`: each server-half response parses with the client half's parser.
   - archtest `TestAllowed` rows: winrs to netaddr allowed; winrs to providers denied; winrs to linuxssh denied; winrs to winproto denied; wintest to winrs allowed; windows to winrs allowed.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test ./internal/providers/windows/winrs/ ./internal/archtest/`
 Expected: FAIL (package and rule missing).
-- [ ] **Step 3: Implement.** Add `"alice/internal/providers/windows/winrs": {"alice/internal/platform/netaddr"}` to `allowed` in `arch_test.go`, next to the `winproto` rule (`:50`), with the comment "the WinRS client: the address rule only; no provider contract, no SSH; NTLMSSP through go-ntlmssp (R71)". Also add `"alice/internal/providers/tlspin"` to the `"alice/internal/providers/..."` entry (`:41-42`), with the comment "API targets and the WinRM transport check the server identity with the shared pin (R59 G2, R71)". `doc.go` states the package's scope: the six actions of the `cmd` resource, over TLS to a pinned listener, NTLMv2 only.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 3: Implement.** Add `"alice/internal/providers/windows/winrs": {"alice/internal/platform/netaddr"}` to `allowed` in `arch_test.go`, next to the `winproto` rule (`:50`), with the comment "the WinRS client: the address rule only; no provider contract, no SSH; NTLMSSP through go-ntlmssp (R71)". Also add `"alice/internal/providers/tlspin"` to the `"alice/internal/providers/..."` entry (`:41-42`), with the comment "API targets and the WinRM transport check the server identity with the shared pin (R59 G2, R71)". `doc.go` states the package's scope: the six actions of the `cmd` resource, over TLS to a pinned listener, NTLMv2 only.
+- [x] **Step 4: Run the tests**
 Run: `go test -race -count=1 -cover ./internal/providers/windows/winrs/ ./internal/archtest/ && go run ./tools/pincheck`
 Expected: PASS; winrs at least 95 % (the codec alone).
-- [ ] **Step 5: Commit**: `feat(winrs): the WS-Management envelopes of the WinRS subset, client and server halves, strict and bounded (R71)`.
+- [x] **Step 5: Commit**: `feat(winrs): the WS-Management envelopes of the WinRS subset, client and server halves, strict and bounded (R71)`.
 
 ---
 
