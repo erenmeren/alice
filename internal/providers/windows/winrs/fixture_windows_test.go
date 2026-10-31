@@ -843,7 +843,7 @@ func listenerCert(t *testing.T, key *rsa.PrivateKey, notBefore, notAfter time.Ti
 func importCert(t *testing.T, c *x509.Certificate, key crypto.Signer) string {
 	t.Helper()
 	pw := newPassword(t)
-	pfx, err := pkcs12.Modern.Encode(key, c, nil, pw)
+	pfx, err := pkcs12.LegacyDES.Encode(key, c, nil, pw) // the widest Import-PfxCertificate support; the file is temporary
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "listener.pfx")
 	require.NoError(t, os.WriteFile(path, pfx, 0o600))
@@ -940,9 +940,12 @@ do {
 } while ((Get-Date) -lt $deadline)
 if ($p.Count -eq 0) { 'none'; exit 0 }
 $x = $p[0]
-$parent = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($x.ParentProcessId)"
-$o = Invoke-CimMethod -InputObject $x -MethodName GetOwner
-[pscustomobject]@{ CommandLine = "$($x.CommandLine)"; Parent = "$($parent.Name)"; ParentCommandLine = "$($parent.CommandLine)"; Owner = "$($o.Domain)\$($o.User)" } | ConvertTo-Json -Compress`)
+# The parent and the owner are read with the program running; a program gone in between leaves them empty.
+$parent = $null; $o = $null
+try { $parent = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($x.ParentProcessId)" } catch { }
+try { $o = Invoke-CimMethod -InputObject $x -MethodName GetOwner } catch { }
+[pscustomobject]@{ CommandLine = "$($x.CommandLine)"; Parent = "$($parent.Name)"; ParentCommandLine = "$($parent.CommandLine)"; Owner = "$($o.Domain)\$($o.User)" } | ConvertTo-Json -Compress
+exit 0`)
 	cmd.Env = powershellEnviron()
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
