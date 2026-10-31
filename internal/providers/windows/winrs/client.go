@@ -92,7 +92,8 @@ func (c *Client) check(call Call) error {
 		!validEnv(call.Env) || !validCommand(call.Program, call.Args) {
 		return ErrBadConfig
 	}
-	if _, _, err := net.SplitHostPort(call.Addr); err != nil {
+	// 5985 is WinRM's plain-HTTP port: Alice never dials it, even with TLS (Ruling 12).
+	if _, port, err := net.SplitHostPort(call.Addr); err != nil || port == "5985" {
 		return ErrBadConfig
 	}
 	return nil

@@ -430,6 +430,7 @@ func TestWinRSRefusesEverythingButNTLMOverTLS(t *testing.T) {
 		"no timeout":           func(_ *winrs.Client, call *winrs.Call) { call.Timeout = 0 },
 		"no output bound":      func(_ *winrs.Client, call *winrs.Call) { call.MaxOutput = 0 },
 		"bad address":          func(_ *winrs.Client, call *winrs.Call) { call.Addr = "no-port" },
+		"the HTTP port 5985":   func(_ *winrs.Client, call *winrs.Call) { call.Addr = "127.0.0.1:5985" },
 		"two variables":        func(_ *winrs.Client, call *winrs.Call) { call.Env = map[string]string{"A": "1", "B": "2"} },
 		"quoted program":       func(_ *winrs.Client, call *winrs.Call) { call.Program = `"x"` },
 	}
