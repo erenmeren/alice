@@ -16,7 +16,7 @@
       "name": "Windows server",
       "fields": {
         "host": { "label": "Address", "help": "Host name or IP address of the Windows server." },
-        "port": { "label": "SSH port", "help": "Usually 22 (OpenSSH Server on Windows)." },
+        "port": { "label": "SSH port", "help": "Usually 22 (OpenSSH Server on Windows); 5986 over WinRM (HTTPS)." },
         "username": { "label": "Windows account", "help": "alice, or DOMAIN\\alice-svc for a domain account." },
         "transport": { "label": "Connection", "help": "OpenSSH (recommended), or WinRM over HTTPS with the account's password." }
       }

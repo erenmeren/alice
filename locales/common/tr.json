@@ -16,7 +16,7 @@
       "name": "Windows sunucusu",
       "fields": {
         "host": { "label": "Adres", "help": "Windows sunucusunun ana bilgisayar adı veya IP adresi." },
-        "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22 (Windows üzerindeki OpenSSH Server)." },
+        "port": { "label": "SSH bağlantı noktası", "help": "Genellikle 22 (Windows üzerindeki OpenSSH Server); WinRM (HTTPS) üzerinden 5986." },
         "username": { "label": "Windows hesabı", "help": "alice veya etki alanı hesabı için ALAN\\alice-svc." },
         "transport": { "label": "Bağlantı", "help": "OpenSSH (önerilir) ya da hesabın parolasıyla HTTPS üzerinden WinRM." }
       }
