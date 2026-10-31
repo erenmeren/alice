@@ -554,6 +554,48 @@ func TestWinRMReleasesThePassword(t *testing.T) {
 	}
 }
 
+// pwSource answers WinRMPassword with fn.
+type pwSource struct {
+	*fakeCred
+	fn func() (secrets.Plaintext, func(), error)
+}
+
+func (p pwSource) WinRMPassword(context.Context, uuid.UUID) (secrets.Plaintext, func(), error) { return p.fn() }
+
+// The paths of winrmPassword and withParams no emulator call reaches: a source that fails with a release, one that
+// gives no release (the Plaintext is zeroed instead), and an error without params.
+func TestWinRMPasswordEdges(t *testing.T) {
+	t.Run("an error with a release releases", func(t *testing.T) {
+		released := false
+		s := &session{target: testTarget, cred: pwSource{fn: func() (secrets.Plaintext, func(), error) {
+			return secrets.Plaintext{}, func() { released = true }, errors.New("db: connection reset")
+		}}}
+		_, release, err := s.winrmPassword(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, release)
+		assert.True(t, released)
+	})
+	t.Run("no release: the Plaintext is zeroed", func(t *testing.T) {
+		pt := secrets.NewPlaintext([]byte("W7-" + rand.Text()))
+		s := &session{target: testTarget, cred: pwSource{fn: func() (secrets.Plaintext, func(), error) { return pt, nil, nil }}}
+		pw, release, err := s.winrmPassword(context.Background())
+		require.NoError(t, err)
+		require.NotEmpty(t, pw)
+		release()
+		for _, b := range pt.Bytes() {
+			require.Zero(t, b)
+		}
+	})
+	t.Run("withParams on an error without params", func(t *testing.T) {
+		pe := &providers.Error{Code: "ssh.unreachable", Retryable: true}
+		got := withParams(pe, map[string]string{"transport": TransportWinRM})
+		assert.Equal(t, map[string]string{"transport": TransportWinRM}, got.Params)
+		assert.Nil(t, pe.Params, "pe itself is not changed")
+		assert.Equal(t, pe.Code, got.Code)
+		assert.True(t, got.Retryable)
+	})
+}
+
 // Ruling 11: the WinRM listener's own binding is never deployable, over either transport.
 func TestWinRMListenerBindingStaysUnsupported(t *testing.T) {
 	check := func(t *testing.T, w *winrmEnv, s providers.Session, calls func() int) {
