@@ -337,12 +337,12 @@ export function AddServerModal({
 // address, when typed, is sent as ?from= (R72 Ruling 3).
 export function WinRMSetupScript({ targetId }: { targetId: string }) {
   const { t } = useTranslation();
-  const [from, field] = useAliceAddress();
+  const [from, field, pending] = useAliceAddress('targets.form.aliceAddressHelp');
   const setup = useQuery({ queryKey: [...targetKey(targetId), 'winrm-setup', from], queryFn: () => getWinRMSetup(targetId, from) });
   return (
     <Stack gap="xs">
       {field(setup.error)}
-      {setup.data?.script ? (
+      {pending ? null : setup.data?.script ? (
         <ScriptBlock title={t('targets.winrm.setupTitle')} help={t('targets.winrm.setupHelp')} script={setup.data.script} testId="winrm-setup-script" />
       ) : (
         <AddressError error={setup.error} />
@@ -352,15 +352,16 @@ export function WinRMSetupScript({ targetId }: { targetId: string }) {
 }
 
 // useAliceAddress is the optional "Alice's address" field of a setup script (R72 Ruling 3): the debounced address to
-// send as ?from= ('' for none) and the field, which shows the API's error on from (the API decides what is valid).
-function useAliceAddress(): [string, (error: unknown) => ReactNode] {
+// send as ?from= ('' for none), the field, which shows the API's error on from (the API decides what is valid), and
+// whether the typed address is not yet sent (the script is hidden then, so an older one cannot be copied).
+function useAliceAddress(help: string): [string, (error: unknown) => ReactNode, boolean] {
   const { t, i18n } = useTranslation();
   const [value, setValue] = useState('');
   const [from] = useDebouncedValue(value.trim(), 400);
   const field = (error: unknown) => (
     <TextInput
       label={t('targets.form.aliceAddress')}
-      description={t('targets.form.aliceAddressHelp')}
+      description={t(help)}
       value={value}
       onChange={(e) => setValue(e.currentTarget.value)}
       error={fieldErrorsOf(error, t, i18n).from}
@@ -369,7 +370,7 @@ function useAliceAddress(): [string, (error: unknown) => ReactNode] {
       spellCheck={false}
     />
   );
-  return [from, field];
+  return [from, field, value.trim() !== from];
 }
 
 // AddressError is a script's load error, unless it is the address field's own (shown under the field).
@@ -383,16 +384,16 @@ function AddressError({ error }: { error: unknown }) {
 // account typed in the form (final review I1).
 function ProfileScript({ type, account }: { type: ServerType; account: string }) {
   const { t } = useTranslation();
-  const [from, field] = useAliceAddress();
-  const key = useQuery({ queryKey: from ? [...PLATFORM_KEY_KEY, from] : PLATFORM_KEY_KEY, queryFn: () => getPlatformKey(from) });
   const windows = type === 'windows';
+  const [from, field, pending] = useAliceAddress(windows ? 'targets.form.aliceAddressHelp' : 'targets.form.aliceAddressKeyHelp');
+  const key = useQuery({ queryKey: from ? [...PLATFORM_KEY_KEY, from] : PLATFORM_KEY_KEY, queryFn: () => getPlatformKey(from) });
   const shown = key.data?.profiles[type]?.script;
   const script = shown && windows ? withWindowsAccount(shown, account.trim()) : shown;
   const title = t(windows ? 'targets.form.scriptWindows' : 'targets.form.script');
   return (
     <Stack gap="xs">
       {field(key.error)}
-      {script ? (
+      {pending ? null : script ? (
         <ScriptBlock title={title} help={windows ? t('targets.form.scriptWindowsHelp') : undefined} script={script} testId="add-server-script" />
       ) : (
         <AddressError error={key.error} />

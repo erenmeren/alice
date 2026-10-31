@@ -1160,6 +1160,7 @@
       "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır. Yukarıda Alice'in adresi girildiyse anahtar satırı ve güvenlik duvarı kuralı yalnızca o adresi kabul eder.",
       "aliceAddress": "Alice'in adresi (isteğe bağlı)",
       "aliceAddressHelp": "Sunucunun Alice'in bağlandığını gördüğü IP adresi. Girilirse betik güvenlik duvarında bağlantı noktasını (22 ya da 5986) yalnızca bu adrese açar; girilmezse betikte $AliceAddress değerini belirleyene kadar her adrese açar.",
+      "aliceAddressKeyHelp": "Sunucunun Alice'in bağlandığını gördüğü IP adresi. Girilirse Alice'in anahtar satırı yalnızca bu adresi kabul eder (from=); girilmezse anahtar her adresten kabul edilir.",
       "transport": "Bağlantı",
       "transportHelp": "OpenSSH önerilir. WinRM'yi yalnızca sunucuda OpenSSH çalıştırılamıyorsa seçin.",
       "transportSsh": "OpenSSH (önerilen)",

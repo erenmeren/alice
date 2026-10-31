@@ -1160,6 +1160,7 @@
       "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above. With Alice's address above, the key line and the firewall rule accept that address only.",
       "aliceAddress": "Alice's address (optional)",
       "aliceAddressHelp": "The IP address the server sees Alice connect from. With it, the script opens the port (22 or 5986) in the firewall to that address only; without it, to any address until you set $AliceAddress in the script.",
+      "aliceAddressKeyHelp": "The IP address the server sees Alice connect from. With it, Alice's key line accepts that address only (from=); without it, the key is accepted from any address.",
       "transport": "Connection",
       "transportHelp": "OpenSSH is recommended. Choose WinRM only when the server cannot run OpenSSH.",
       "transportSsh": "OpenSSH (recommended)",

@@ -200,6 +200,26 @@ describe('Alice\'s address in the setup scripts', () => {
     expect(within(dialog).queryByTestId('add-server-script')).not.toBeInTheDocument();
   });
 
+  it('hides the script while the typed address is not yet asked, so no older script can be copied', async () => {
+    platformKey();
+    const { dialog } = await openWindows();
+    await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'windows');
+    await within(dialog).findByTestId('add-server-script');
+    await userEvent.type(within(dialog).getByLabelText(ADDRESS), '10.0.0.6');
+    expect(within(dialog).queryByTestId('add-server-script')).not.toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByTestId('add-server-script')).toHaveTextContent("$AliceAddress = '10.0.0.6'"));
+  });
+
+  it('says on a Linux server that the address limits the key line only', async () => {
+    platformKey();
+    const { dialog } = await openWindows();
+    await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'nginx');
+    await within(dialog).findByTestId('add-server-script');
+    const help = within(dialog).getByLabelText(ADDRESS);
+    expect(help).toHaveAccessibleDescription(expect.stringContaining("Alice's key line accepts that address only"));
+    expect(help).not.toHaveAccessibleDescription(expect.stringContaining('firewall'));
+  });
+
   it('asks the WinRM setup script with the typed address, and without one when the field is empty', async () => {
     const froms: (string | null)[] = [];
     server.use(
