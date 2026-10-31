@@ -1168,7 +1168,7 @@
     },
     "winrm": {
       "setupTitle": "WinRM setup script",
-      "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, lets Alice's address through the firewall, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
+      "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, opens port 5986 in the firewall to any address until you set $AliceAddress in the script, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
       "passwordStep": "Then enter the same password here. Alice tests the connection as soon as the password is saved.",
       "showScript": "Show setup script again"
     },

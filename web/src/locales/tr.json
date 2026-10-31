@@ -1168,7 +1168,7 @@
     },
     "winrm": {
       "setupTitle": "WinRM kurulum betiği",
-      "setupHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, güvenlik duvarında Alice'in adresine izin verir ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız.",
+      "setupHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, betikte $AliceAddress değerini belirleyene kadar güvenlik duvarında 5986 numaralı bağlantı noktasını her adrese açar ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız.",
       "passwordStep": "Ardından aynı parolayı buraya girin. Parola kaydedilir kaydedilmez Alice bağlantıyı sınar.",
       "showScript": "Kurulum betiğini yeniden göster"
     },
