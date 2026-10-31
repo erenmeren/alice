@@ -3841,3 +3841,24 @@ item table: no Critical, one Important, six Minor.
   boundary; the items R70 and W8 declined; a domain account on a runner; Server Core and Windows Server 2019 over WinRM.
 - New in W8: the Windows port field's label "SSH port" under WinRM (T5-5); ending the older live rows of an upgraded
   database in a migration (final review M3, reworded instead); A2's 386 check in a gate (final review M6).
+
+## Coordinator review (W8)
+
+A fresh reviewer read `fa182290..ba354b28`: no Critical, one Important, one Minor. Clean: every read path of the CCS
+and WinRM passwords filters `rotated_at IS NULL`; the set path ends the older live rows before its insert; migration
+00039 (the index, `Z1037`, the grant, the Down's `Z1038`); the error mapping (`ALC-WIN-0029` before
+`ALC-TGT-0001`); the DELETE handlers (step-up, no token, `If-Match`, licence); the A8 fix; the web changes; the
+emulator's 413.
+
+- I1, a backup taken before version 39 that holds two live Windows servers on one host cannot be restored on a W8
+  build (the restore migrates the backup forward; 00039's Up refuses with `Z1037`, and its message asked for a step
+  that a restore cannot follow): fixed (`9af14b0b`): the message keeps `Z1037` and now also says "when restoring a
+  backup, restore it on the Alice version that made it, remove one of each pair, take a new backup, then upgrade";
+  `docs/upgrade.md` (00039's note), `docs/backup-restore.md` (the restore section) and `docs/troubleshooting.md`
+  ("The restore failed: <reason>") name the case. No Go change: the restore reports the migration error through its
+  generic `The restore failed: <reason>`, which carries the message.
+- M1, no test of several live rows for one purpose (a database upgraded from before 00039): fixed (`d1998d99`,
+  `inventory:TestSeveralLiveRowsOfAnUpgradedDatabase`): two live `win_ccs` rows inserted through the owner role; a
+  removal ends both, names both ids in the audit's `credential_id` and the source answers `ErrNoCCSPassword`; on a
+  second server a set leaves exactly one live row, the new one. It passed at once: the behaviour was already right.
+- Neither fix is pushed (the branch's runner budget stays at 2 runs; `main`'s `windows.yml` checks the merge).
