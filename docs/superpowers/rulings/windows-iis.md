@@ -3492,6 +3492,41 @@ The new Turkish texts (EN/TR pairs as shipped; the coordinator checks them, R70'
 | `errors.ssh.output_too_large.title_winrm` | The server sent more data over WinRM than Alice accepts. | Sunucu WinRM üzerinden Alice'in kabul ettiğinden fazla veri gönderdi. |
 | `errors.ssh.protocol_error.title_winrm` | Alice could not understand the server's WinRM answer. | Alice sunucunun WinRM yanıtını anlayamadı. |
 
+## Owner items of W4-W7 closed (2026-10-31)
+
+The owner (2026-10-31, "bunları bitir"): the five standing items are closed as follows, by the coordinator at the
+owner's instruction.
+
+1. **The ruleset** (W4 Ruling 12; release-checklist row 1.47): created with the `gh api` call of
+   `docs/dev/windows-ci.md`, ruleset id 26276716 (`main: windows-required`, active, bypass Repository admin always).
+   `gh api repos/erenmeren/alice/rules/branches/main` lists `required_status_checks` with `windows-required`
+   (integration 15368). The owner ticks row 1.47 (only the owner ticks the checklist).
+2. **The first release tag** (W4 Ruling 12): `v1.0.0-rc.1` on `main` (the release candidate form
+   `tools/releasebuild` and `make release` take; `MIN_UPGRADE_FROM` already names it). Its `release.yml` run is the
+   check that `windows` is called with `all: true` and that `stage` waits for it; the run is recorded under
+   [The first release tag run](#the-first-release-tag-run) when it ends, for release-checklist row 1.46. The stage is
+   unsigned; signing `SHA256SUMS` on the offline machine stays the vendor's step.
+3. **The manual matrix** (release-checklist section 8, rows 8.1-8.8): needs servers the runners do not offer, so it
+   stays an owner step before a customer release: 8.1 Windows Server 2019 (GitHub retired its `windows-2019` image in
+   2025), 8.2 Server Core (no hosted image), 8.3 a domain-joined server under the baseline, 8.4 Defender on, 8.6 the
+   helper from the signed package (needs a signed release), 8.7 AD FS and 8.8 ARM64 (when available). 8.5 is n/a
+   since W6. The release notes of a release without these rows say they are not verified (section 8's rule).
+4. **Authenticode** (W4 Ruling 13, design §15 Q2): decided: `alice-helper.exe` stays unsigned through 1.0; its
+   integrity rests on the package's signed `SHA256SUMS` and the setup script's embedded checksum; servers under WDAC
+   or AppLocker use a hash rule (host guide "Code signing"). Revisit at the first customer that needs a publisher rule.
+5. **Updating the helper before Alice**: the documented procedure is confirmed (operator guide "Updating"): copy the
+   new package's `helper/alice-winhelper-windows-<arch>.exe` by hand after checking it against the package's
+   `helper/alice-winhelper.sha256`, then **Test connection**. No setup-script option installs a newer helper: the
+   installed Alice cannot know a newer helper's checksum, so such an option would have to skip the one check the
+   script makes.
+
+Open after this: the W3 owner decisions (cleanup while the licence is locked; the accepted gaps under "Owner items
+(W3)"), and the manual matrix before a customer release.
+
+### The first release tag run
+
+Pending: filled when the `v1.0.0-rc.1` run of `release.yml` ends.
+
 ## Deferred to W8+
 
 - **Settled by W7** (Ruling 27): the WinRM transport (§13 W7), with username and password over NTLMv2.
