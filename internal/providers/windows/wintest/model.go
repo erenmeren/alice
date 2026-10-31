@@ -127,6 +127,13 @@ type Model struct {
 	rdpStale   bool             // ServeStaleRDP
 	rdpPinned  *tls.Certificate // what a stale listener keeps serving (nil with rdpPinSet: its failure)
 	rdpPinSet  bool             // the stale listener took its pin at the first write of the value
+
+	// The WinRM listener (R71 Task 3, winrm.go).
+	winrmAcct     *winrmAccount // nil: no sign-in succeeds
+	winrmComputer string        // the NetBIOS computer name the NTLM challenge names
+	winrmFail     uint32        // FailWinRM: the next signed-in request's fault code
+	winrmLog      []WinRMRequest
+	winrmShells   map[string]*winrmShell // the open shells, by shell id
 }
 
 // NewModel returns an elevated Windows Server 2022 Datacenter with IIS 10.0 installed, the stores My,
@@ -152,6 +159,9 @@ func NewModel() *Model {
 		keys:       map[string]bool{},
 		nsRead:     map[string]bool{},
 		lockWait:   winproto.LockWait,
+
+		winrmComputer: "WIN-DEMO01",
+		winrmShells:   map[string]*winrmShell{},
 	}
 	for _, s := range []string{"My", "WebHosting", "CA", "Root"} {
 		m.storeLocked(s)

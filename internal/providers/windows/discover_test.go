@@ -50,7 +50,7 @@ func TestDiscoverListsBindingsWithSites(t *testing.T) {
 		paths = append(paths, c.Location.CertPath)
 	}
 	assert.Equal(t, []string{"http.sys/ccs/443", "http.sys/hostnameport/www.win.example.test:443", "http.sys/ipport/0.0.0.0:5986",
-		"http.sys/ipport/0.0.0.0:8443", winproto.RDPCanonical}, paths)
+		"http.sys/ipport/0.0.0.0:8443", "http.sys/ipport/0.0.0.0:9444", winproto.RDPCanonical}, paths)
 	got := byPath(res.Certificates)
 
 	ccs := got["http.sys/ccs/443"]

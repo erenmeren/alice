@@ -26,10 +26,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/providers/windows/winrs"
 	"alice/internal/testutil/pki"
 )
 
@@ -283,7 +285,7 @@ func TestFakeWindowsServesTheDemoBindingsOverTLS(t *testing.T) {
 	require.Equal(t, 0, code, errOut)
 	var eps map[string]string
 	require.NoError(t, json.Unmarshal([]byte(out), &eps))
-	require.Len(t, eps, 4, "443, 8443, 5986 and RDP's 3389")
+	require.Len(t, eps, 5, "443, 8443, 5986, 9444 and RDP's 3389")
 	conn, err := tls.Dial("tcp", eps["443"], &tls.Config{ServerName: "www.win.example.test", InsecureSkipVerify: true}) //nolint:gosec // reads what the fake presents
 	require.NoError(t, err)
 	assert.Equal(t, "www.win.example.test", conn.ConnectionState().PeerCertificates[0].Subject.CommonName)
@@ -667,4 +669,71 @@ func TestDemoHostHasRDP(t *testing.T) {
 	require.NotNil(t, d.Certificate)
 	assert.Equal(t, selfSHA, d.Certificate.SHA256)
 	assert.Equal(t, selfSHA, served(), "the listener serves its self-signed certificate again")
+}
+
+// The demo host's WinRM listener (R71 Ruling 23): ctl winrm-account sets its one account from stdin, ctl
+// winrm-fingerprint prints the listener's SPKI fingerprint, and ctl endpoints names 5986 and the journey's 9444.
+func TestDemoHostHasWinRM(t *testing.T) {
+	st := startStack(t)
+	code, out, errOut := st.ctlRun(t, "", "endpoints")
+	require.Equal(t, 0, code, errOut)
+	var eps map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &eps))
+	require.Contains(t, eps, "5986")
+	require.Contains(t, eps, "9444")
+
+	code, out, errOut = st.ctlRun(t, "", "winrm-fingerprint")
+	require.Equal(t, 0, code, errOut)
+	fp := strings.TrimSpace(out)
+	require.True(t, strings.HasPrefix(fp, "SHA256:"), out)
+
+	var spki []byte
+	pin := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, //nolint:gosec // G402: VerifyConnection pins the SPKI
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			spki = cs.PeerCertificates[0].RawSubjectPublicKeyInfo
+			if providers.TLSIdentity(spki).Fingerprint != fp {
+				return errors.New("not the printed fingerprint")
+			}
+			return nil
+		}}
+	pw := make([]byte, 12)
+	_, err := rand.Read(pw)
+	require.NoError(t, err)
+	password := "Pw-" + hex.EncodeToString(pw)
+	callWith := func(password string) error {
+		c := &winrs.Client{TLS: pin, User: "alice", Password: password}
+		res, err := c.Run(context.Background(), winrs.Call{Addr: eps["5986"], Program: winproto.HelperPath, Args: []string{"ssh"},
+			Env: map[string]string{"SSH_ORIGINAL_COMMAND": winproto.SubVersion}, Timeout: 30 * time.Second, MaxOutput: 1 << 20})
+		if err == nil && !strings.Contains(string(res.Stdout), `"protocol":1`) {
+			return errors.New(string(res.Stdout))
+		}
+		return err
+	}
+	require.ErrorIs(t, callWith(password), winrs.ErrAuthRefused, "no account before ctl winrm-account")
+	assert.Equal(t, fp, providers.TLSIdentity(spki).Fingerprint, "the printed fingerprint is the listener's")
+
+	code, out, errOut = st.ctlRun(t, "alice "+password+"\n", "winrm-account")
+	require.Equal(t, 0, code, errOut)
+	assert.JSONEq(t, `{"ok":true}`, out)
+	require.NoError(t, callWith(password))
+	require.ErrorIs(t, callWith(password+"x"), winrs.ErrAuthRefused)
+
+	// The password is never an argument, and stdin holds exactly one "<user> <password>" line.
+	code, _, _ = st.ctlRun(t, "", "winrm-account", "alice", password)
+	assert.Equal(t, 2, code)
+	for name, in := range map[string]string{
+		"empty":        "",
+		"no password":  "alice\n",
+		"two lines":    "alice " + password + "\nbob x\n",
+		"three fields": "alice " + password + " more\n",
+		"control":      "alice pass\x01word\n",
+		"empty user":   " " + password + "\n",
+		"too long":     "alice " + strings.Repeat("a", maxAccountLine) + "\n",
+	} {
+		code, _, errOut := st.ctlRun(t, in, "winrm-account")
+		assert.Equal(t, 1, code, name)
+		assert.NotContains(t, errOut, password, name)
+	}
+	require.NoError(t, callWith(password), "a refused line changes nothing")
+	assert.NotContains(t, st.logs.String(), password)
 }

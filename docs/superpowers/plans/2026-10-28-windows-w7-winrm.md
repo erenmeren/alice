@@ -569,7 +569,7 @@ Expected: PASS; winrs at least 95 %, linuxssh at least 93 %, wintest at least 90
   The handler implements Ruling 20. `ExecuteForced` runs once the stdin `End` arrives, under the model's lock, with the shell's `SSH_ORIGINAL_COMMAND`. Crash points kill as on the SSH server (`wintest.KilledExit`).
 - Mirror: `wintest/server.go` (`NewServer`, one connection per call, the killed-process answer), `tls.go`'s per-record listeners, W6 Task 3 (`ctl`, the demo).
 
-- [ ] **Step 1: Write the failing tests** (`winrm_test.go`, with Task 2's `winrs.Client` as the client):
+- [x] **Step 1: Write the failing tests** (`winrm_test.go`, with Task 2's `winrs.Client` as the client):
   - `TestWinRMEmulatorRunsTheHelper`: `version` and `win-facts` over WinRS give the same JSON as over the SSH emulator, with one connection per call.
   - `TestWinRMEmulatorDeploysAndRollsBack`: `iis-deploy` with stdin over WinRS commits, the binding serves the new certificate, and `iis-restore` restores it.
   - `TestWinRMEmulatorRefusesBadLogons`: no account set, a wrong password, a wrong user → 401 after the exchange, and no shell was created.
@@ -577,14 +577,14 @@ Expected: PASS; winrs at least 95 %, linuxssh at least 93 %, wintest at least 90
   - `TestWinRMEmulatorKill`: a crash point during `iis-deploy` → `Done` with `KilledExit`, and the journal as on SSH.
   - `TestWinRMEmulatorFaultsAndLimits`: `FailWinRM(2150858770)` faults the next request; the 31st open shell faults; a body over `winrs.MaxEnvelopeSize` faults.
   - `TestDemoHostHasWinRM` (fakewindows `main_test.go`): `ctl winrm-account` with `alice <password>` on stdin sets the account (a call with that password works, another fails); a password given as an argument is refused; `ctl winrm-fingerprint` prints `providers.TLSIdentity` of the 5986 record's certificate; `ctl endpoints` names 5986 and 9444.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test ./internal/providers/windows/wintest/ ./cmd/alice-fakewindows/ -run 'WinRM|DemoHost'`
 Expected: FAIL.
-- [ ] **Step 3: Implement.** Go tests use random ports (`127.0.0.1:0`). The fakewindows container keeps its user, ports and flags (the compose file does not change).
-- [ ] **Step 4: Run the tests**
+- [x] **Step 3: Implement.** Go tests use random ports (`127.0.0.1:0`). The fakewindows container keeps its user, ports and flags (the compose file does not change).
+- [x] **Step 4: Run the tests**
 Run: `go test -race -count=1 -cover ./internal/providers/windows/wintest/ ./cmd/alice-fakewindows/ ./internal/providers/windows/winhelper/`
 Expected: PASS; wintest at least 90 %, fakewindows at least 90 %; every W1-W6 emulator test unchanged.
-- [ ] **Step 5: Commit**: `test(wintest): the emulator's WinRM HTTPS listener: NTLMv2 logon, WinRS shells running the helper's forced entry, faults and limits; fakewindows ctl winrm-account (R71)`.
+- [x] **Step 5: Commit**: `test(wintest): the emulator's WinRM HTTPS listener: NTLMv2 logon, WinRS shells running the helper's forced entry, faults and limits; fakewindows ctl winrm-account (R71)`.
 
 ---
 

@@ -20,24 +20,33 @@ func (m *Model) Handler() linuxsshtest.Handler {
 		sub, _, _ := strings.Cut(cmd, " ")
 		m.mu.Lock()
 		missing := m.helperMissing || m.noForced
-		protocol := m.protocol
-		delay := m.delays[sub]
 		m.mu.Unlock()
 		if missing {
 			return linuxsshtest.Response{Stderr: []byte("'" + sub + "' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n"), Exit: 1}
 		}
-		var out bytes.Buffer
-		if cmd == winproto.SubVersion && protocol != winproto.Protocol {
-			b, _ := json.Marshal(winproto.VersionResponse{OK: true, Helper: winproto.Version, Protocol: protocol})
-			return linuxsshtest.Response{Stdout: append(b, '\n'), Delay: delay}
-		}
-		o := winhelper.ExecuteForced(context.Background(), m.Host(), cmd, bytes.NewReader(stdin), &out)
-		if o.Killed {
-			// A helper killed at a crash point printed nothing (KillAt).
-			return linuxsshtest.Response{Exit: KilledExit, Delay: delay}
-		}
-		return linuxsshtest.Response{Stdout: out.Bytes(), Exit: o.Exit, Delay: delay}
+		return m.runHelper(cmd, stdin)
 	}
+}
+
+// runHelper is the installed helper's forced entry for one command line, on both transports (sshd's ForceCommand,
+// WinRS's SSH_ORIGINAL_COMMAND): a call killed at a crash point answers nothing, with KilledExit.
+func (m *Model) runHelper(cmd string, stdin []byte) linuxsshtest.Response {
+	sub, _, _ := strings.Cut(cmd, " ")
+	m.mu.Lock()
+	protocol := m.protocol
+	delay := m.delays[sub]
+	m.mu.Unlock()
+	var out bytes.Buffer
+	if cmd == winproto.SubVersion && protocol != winproto.Protocol {
+		b, _ := json.Marshal(winproto.VersionResponse{OK: true, Helper: winproto.Version, Protocol: protocol})
+		return linuxsshtest.Response{Stdout: append(b, '\n'), Delay: delay}
+	}
+	o := winhelper.ExecuteForced(context.Background(), m.Host(), cmd, bytes.NewReader(stdin), &out)
+	if o.Killed {
+		// A helper killed at a crash point printed nothing (KillAt).
+		return linuxsshtest.Response{Exit: KilledExit, Delay: delay}
+	}
+	return linuxsshtest.Response{Stdout: out.Bytes(), Exit: o.Exit, Delay: delay}
 }
 
 // NewServer starts an SSH server whose handler is the model's, in the mode of Windows OpenSSH (every

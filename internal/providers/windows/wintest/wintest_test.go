@@ -562,6 +562,7 @@ func TestDemoHost(t *testing.T) {
 		{"ipport", "", "0.0.0.0", 8443, winproto.AppIDIIS, "WebHosting"},
 		{"ipport", "", "0.0.0.0", 5986, "{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}", "My"},
 		{"ccs", "", "0.0.0.0", 443, winproto.AppIDIIS, ""},
+		{"ipport", "", "0.0.0.0", 9444, winproto.AppIDIIS, "My"},
 	}
 	if len(got) != len(wantB) {
 		t.Fatalf("bindings %+v", got)
@@ -571,12 +572,12 @@ func TestDemoHost(t *testing.T) {
 			t.Fatalf("binding %d: %+v want %+v", i, got[i], wantB[i])
 		}
 	}
-	if len(d.Sites) != 3 || d.Sites[0].Name != "Default Web Site" || d.Sites[0].Bindings[0].Information != "*:443:www.win.example.test" ||
+	if len(d.Sites) != 4 || d.Sites[3].Name != "WinRM Journey" || d.Sites[3].Bindings[0].Information != "*:9444:" || d.Sites[0].Name != "Default Web Site" || d.Sites[0].Bindings[0].Information != "*:443:www.win.example.test" ||
 		d.Sites[0].Bindings[0].SSLFlags != 1 || d.Sites[1].Name != "Intranet" || d.Sites[1].Bindings[0].Information != "*:8443:" ||
 		d.Sites[1].Bindings[0].SSLFlags != 0 {
 		t.Fatalf("sites %+v", d.Sites)
 	}
-	if len(d.Certificates) != 3 {
+	if len(d.Certificates) != 4 {
 		t.Fatalf("certificates %d", len(d.Certificates))
 	}
 	for _, c := range d.Certificates {
@@ -588,7 +589,7 @@ func TestDemoHost(t *testing.T) {
 	for _, c := range []struct {
 		port int
 		sni  string
-	}{{443, "www.win.example.test"}, {8443, ""}, {5986, ""}} {
+	}{{443, "www.win.example.test"}, {8443, ""}, {5986, ""}, {9444, ""}} {
 		if _, n, ok := m.Served("0.0.0.0", c.port, c.sni); !ok || n != 2 {
 			t.Fatalf("%d: %d %v", c.port, n, ok)
 		}
@@ -656,7 +657,7 @@ func TestNewServerServesTheBindingsItHas(t *testing.T) {
 		t.Fatal(err)
 	}
 	NewServer(t, m)
-	for _, p := range []int{443, 8443, 5986} {
+	for _, p := range []int{443, 8443, 5986, 9444} {
 		if m.Endpoint(p) == "" {
 			t.Fatalf("no listener for %d", p)
 		}

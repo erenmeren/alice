@@ -7,11 +7,12 @@
 // connection sees the first session's command, design 2026-10-21 §8).
 //
 //	alice-fakewindows serve [--listen ADDR] [--tls-bind IP] [--ctl ADDR]
-//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off | ccs-password | rdp-self-signed
+//	alice-fakewindows ctl [--ctl ADDR] ping | hostkey | endpoints | prepare | stale-tls-on | stale-tls-off | ccs-password | rdp-self-signed |
+//	  winrm-account | winrm-fingerprint
 //
 // serve generates a fresh Ed25519 host key and the demo host's test CA and certificates when it starts (nothing is
 // stored in the repository or the image), listens for SSH on --listen and serves the demo's TLS bindings on --tls-bind
-// at their own ports (443, 8443, 5986) and its RDP listener at 3389 (the RDP negotiation, then TLS; W6 Ruling 25);
+// at their own ports (443, 8443, 5986, 9444) and its RDP listener at 3389 (the RDP negotiation, then TLS; W6 Ruling 25);
 // "IP:0" gives random ports, for tests. No client key is authorized until
 // "ctl prepare" reads the Windows setup script Alice shows on its standard input and authorizes the key of its one
 // $AuthorizedKey = '...' line (the counterpart of the SSH target's alice-e2e-prepare); a later prepare replaces it.
@@ -23,6 +24,11 @@
 // start, which "ctl ccs-password" prints on its standard output (never logged). "ctl rdp-self-signed" deletes the RDP
 // listener's value, as someone outside Alice would, so it serves its self-signed certificate again (an e2e journey's
 // start, W6 Ruling 25).
+// The 5986 record is the demo's WinRM listener (R71 Rulings 20 and 23): WS-Man's WinRS subset over its TLS, behind an
+// NTLMv2 check of one account, running the helper's forced entry like the SSH server. No account signs in until "ctl
+// winrm-account" reads "<user> <password>" on its standard input (never an argument, never logged); "ctl
+// winrm-fingerprint" prints the listener's SPKI fingerprint as Alice shows it. 9444 is the IIS binding the WinRM
+// journey deploys to.
 // The control API has no authentication beyond its address: it listens on loopback only (serve refuses any other
 // address), ctl talks to loopback only, and it runs inside the container ("docker compose exec -T fakewindows
 // /alice-fakewindows ctl prepare < script").
@@ -54,6 +60,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"alice/internal/platform/clock"
+	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/wintest"
@@ -65,6 +72,8 @@ const (
 	defaultCtl     = "127.0.0.1:9093"
 	// maxScript is the largest setup script ctl prepare takes (Alice's is about 20 KiB).
 	maxScript = 1 << 20
+	// maxAccountLine is the longest "<user> <password>" line ctl winrm-account takes.
+	maxAccountLine = 512
 )
 
 // maxCtlBody is the largest control answer ctl prints (a variable for tests).
@@ -90,7 +99,9 @@ Commands:
         prepare (stdin: Alice's Windows setup script; authorizes the key of its $AuthorizedKey line) |
         stale-tls-on (the listeners keep serving what they served before the next bind, CCS file or RDP write) |
         stale-tls-off | ccs-password (the demo's CCS private-key password) |
-        rdp-self-signed (the RDP listener's value deleted: it serves its self-signed certificate again)
+        rdp-self-signed (the RDP listener's value deleted: it serves its self-signed certificate again) |
+        winrm-account (stdin: one line "<user> <password>"; the WinRM listener's account) |
+        winrm-fingerprint (the SHA256 fingerprint of the WinRM listener's SubjectPublicKeyInfo)
 `
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -283,7 +294,41 @@ func (c *control) handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, c.model.CCSPassword()+"\n")
 	})
+	// The WinRM listener's one account (R71 Ruling 23), from one "<user> <password>" line; the password is never logged
+	// or echoed.
+	mux.HandleFunc("POST /winrm-account", func(w http.ResponseWriter, r *http.Request) {
+		line, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAccountLine))
+		user, password, ok := accountOf(line)
+		if err != nil || !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": `stdin must be one line "<user> <password>" of printable ASCII`})
+			return
+		}
+		c.model.SetWinRMAccount(user, password)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /winrm-fingerprint", func(w http.ResponseWriter, _ *http.Request) {
+		spki, ok := c.model.WinRMSPKI()
+		if !ok {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "the WinRM listener serves no certificate"})
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, providers.TLSIdentity(spki).Fingerprint+"\n")
+	})
 	return mux
+}
+
+// accountOf reads one "<user> <password>" line (one trailing line end allowed): two fields of printable ASCII without
+// a space.
+func accountOf(b []byte) (user, password string, ok bool) {
+	line := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+	user, password, _ = strings.Cut(line, " ")
+	for _, f := range []string{user, password} {
+		if f == "" || strings.IndexFunc(f, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+			return "", "", false
+		}
+	}
+	return user, password, true
 }
 
 // endpoints maps each TLS binding port of the demo host, and the RDP listener's port, to the address its listener has.
@@ -387,6 +432,10 @@ var ctlCommands = map[string][2]string{
 	"ccs-password": {http.MethodGet, "/ccs-password"},
 	// rdp-self-signed: the RDP listener's value deleted, so it serves its self-signed certificate again (W6).
 	"rdp-self-signed": {http.MethodPost, "/rdp-self-signed"},
+	// winrm-account: stdin's "<user> <password>" becomes the WinRM listener's account (R71).
+	"winrm-account": {http.MethodPost, "/winrm-account"},
+	// winrm-fingerprint: the WinRM listener's SPKI fingerprint, as Alice shows it.
+	"winrm-fingerprint": {http.MethodGet, "/winrm-fingerprint"},
 }
 
 func runCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -423,6 +472,14 @@ func runCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		}
 		if len(b) > maxScript {
 			_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl prepare: the script is larger than %d bytes\n", maxScript)
+			return 1
+		}
+		body = b
+	}
+	if name == "winrm-account" {
+		b, err := io.ReadAll(io.LimitReader(stdin, maxAccountLine+1))
+		if err != nil || len(b) > maxAccountLine {
+			_, _ = fmt.Fprintf(stderr, "alice-fakewindows ctl winrm-account: stdin must be one line of at most %d bytes\n", maxAccountLine)
 			return 1
 		}
 		body = b

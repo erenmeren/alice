@@ -190,7 +190,7 @@ func TestCCSNeedsHelper110(t *testing.T) {
 	assert.Equal(t, []string{"version", "iis-dump"}, e.srv.Commands())
 	assert.Equal(t, []string{winproto.WarnCCSEnabled, WarnCCSHelperOutdated, winproto.WarnRDPHelperOutdated}, codes(res.Warnings))
 	assert.Empty(t, ccsLocations(res.Certificates))
-	assert.Len(t, res.Certificates, 4, "the W4 bindings")
+	assert.Len(t, res.Certificates, 5, "the W4 bindings")
 
 	ca := pki.NewCA("Outdated", pki.ECDSA256, time.Now())
 	nl := ca.Issue(pki.Opts{CommonName: "ccs.example.test", SANs: []string{"ccs.example.test"}}, time.Now())
@@ -245,7 +245,7 @@ func TestDiscoverWithoutPasswordIsW4(t *testing.T) {
 				paths = append(paths, c.Location.CertPath)
 			}
 			assert.Equal(t, []string{"http.sys/ccs/443", "http.sys/hostnameport/www.win.example.test:443", "http.sys/ipport/0.0.0.0:5986",
-				"http.sys/ipport/0.0.0.0:8443", winproto.RDPCanonical}, paths)
+				"http.sys/ipport/0.0.0.0:8443", "http.sys/ipport/0.0.0.0:9444", winproto.RDPCanonical}, paths)
 			assert.Equal(t, UnsupportedCCS, byPath(res.Certificates)["http.sys/ccs/443"].Location.Unsupported, "the old win_ccs reason")
 		})
 	}
@@ -336,7 +336,7 @@ func TestDiscoverCCSLinks(t *testing.T) {
 			res, err := sess.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
 			require.NoError(t, err)
 			assert.Empty(t, ccsLocations(res.Certificates))
-			assert.Len(t, res.Certificates, 5, "the bindings and the RDP listener are kept")
+			assert.Len(t, res.Certificates, 6, "the bindings and the RDP listener are kept")
 			assert.Equal(t, []string{winproto.WarnCCSEnabled, providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
 		})
 	}
@@ -361,7 +361,7 @@ func TestDiscoverCCSLinks(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []string{"iis-dump", "rdp-dump"}, e.srv.Commands()[before:], "no ccs-dump")
 			assert.Empty(t, ccsLocations(res.Certificates))
-			assert.Len(t, res.Certificates, 5, "the bindings and the RDP listener are kept")
+			assert.Len(t, res.Certificates, 6, "the bindings and the RDP listener are kept")
 			assert.Equal(t, []string{winproto.WarnCCSEnabled, providers.WarnListTruncated, providers.WarnLocationsDropped}, codes(res.Warnings))
 		})
 	}

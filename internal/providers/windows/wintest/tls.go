@@ -229,6 +229,13 @@ func (m *Model) Serve(ctx context.Context, bind string) error {
 	}
 	for i, ln := range lns {
 		m.serving.Add(1)
+		m.mu.Lock()
+		winrm := m.winrmPortLocked(ports[i])
+		m.mu.Unlock()
+		if winrm { // the WinRM record's port serves WS-Man over its TLS (R71 Ruling 20)
+			go m.serveWinRM(ctx, ln, m.listenerTLS(ports[i], false))
+			continue
+		}
 		go m.accept(ctx, ln, ports[i], ports[i] == rdpPort)
 	}
 	return nil
@@ -240,24 +247,7 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int, rdp bool)
 	defer m.serving.Done()
 	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
 	defer stop()
-	cfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			if rdp {
-				return m.rdpCertLocked()
-			}
-			ip := ""
-			if a, ok := hi.Conn.LocalAddr().(*net.TCPAddr); ok {
-				ip = a.IP.String()
-			}
-			if meant, ok := m.intents[hi.Conn.RemoteAddr().String()]; ok {
-				ip = meant
-			}
-			return m.certificateLocked(ip, port, hi.ServerName)
-		},
-	}
+	cfg := m.listenerTLS(port, rdp)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -274,6 +264,29 @@ func (m *Model) accept(ctx context.Context, ln net.Listener, port int, rdp bool)
 			}
 			_ = tls.Server(c, cfg).HandshakeContext(hctx)
 		}()
+	}
+}
+
+// listenerTLS is the TLS of a listener's port: what http.sys selects for the address the client reached (or the
+// helper meant), or with rdp what the RDP listener presents.
+func (m *Model) listenerTLS(port int, rdp bool) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if rdp {
+				return m.rdpCertLocked()
+			}
+			ip := ""
+			if a, ok := hi.Conn.LocalAddr().(*net.TCPAddr); ok {
+				ip = a.IP.String()
+			}
+			if meant, ok := m.intents[hi.Conn.RemoteAddr().String()]; ok {
+				ip = meant
+			}
+			return m.certificateLocked(ip, port, hi.ServerName)
+		},
 	}
 }
 
