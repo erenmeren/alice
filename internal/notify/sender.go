@@ -224,6 +224,7 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 		clean["reason"] = s.reasonTitle(locale, code, params["reason_variant"], params["transport"])
 	}
 	delete(clean, "reason_variant") // the variant of the reason's title (W6 final review M2); never rendered itself
+	delete(clean, "transport")      // the transport's variant of the reason's title (R71 Ruling 13); never rendered itself
 	subject := oneLine(s.Catalog.T(locale, "email."+template+".subject", clean))
 	body := strings.TrimSpace(s.Catalog.T(locale, "email."+template+".body", clean))
 	// The license note sits before the footer (L-28); the param that asks for it is not rendered.

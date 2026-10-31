@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -338,4 +339,16 @@ func TestRenderTransportVariant(t *testing.T) {
 		assert.Contains(t, render(lang, map[string]string{"error_reason": "windows.binding_changed", "reason_variant": "rdp", "transport": "winrm"}),
 			cat.T(lang, "errors.windows.binding_changed.title_rdp", nil), "%s: the listener's title first", lang)
 	}
+}
+
+// R71 Ruling 13: the param transport chooses the reason's title only and is never rendered itself, as reason_variant.
+func TestRenderDropsTheTransportParam(t *testing.T) {
+	cat, err := i18n.Load(fstest.MapFS{
+		"manifest.json":  {Data: []byte(`{"default":"en","locales":[{"code":"en","name":"English"}]}`)},
+		"common/en.json": {Data: []byte(`{"email":{"t":{"subject":"s","body":"[{{transport}}][{{reason_variant}}][{{reason}}]"},"footer":"f"},"errors":{"ssh":{"timeout":{"title":"plain","title_winrm":"winrm"}},"internal":{"unexpected":{"title":"x"}}}}`)},
+	})
+	require.NoError(t, err)
+	body := (&notify.Sender{Catalog: cat}).Render("ada@example.com", "t", "en", map[string]string{"error_reason": "ssh.timeout",
+		"transport": "winrm", "reason_variant": "rdp"}).Body
+	assert.True(t, strings.HasPrefix(body, "[{{transport}}][{{reason_variant}}][winrm]"), body)
 }
