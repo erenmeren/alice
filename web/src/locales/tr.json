@@ -803,7 +803,9 @@
       "deployment_rollout_preempted": "Kanarya dağıtımı bir olayla sona erdi",
       "deployment_rollout_completed": "Kanarya dağıtımı tamamlandı",
       "target_ccs_password_set": "Bir Windows sunucusunun CCS parolası ayarlandı",
-      "target_winrm_password_set": "Bir Windows sunucusunun WinRM parolası ayarlandı"
+      "target_ccs_password_removed": "Bir Windows sunucusunun CCS parolası kaldırıldı",
+      "target_winrm_password_set": "Bir Windows sunucusunun WinRM parolası ayarlandı",
+      "target_winrm_password_removed": "Bir Windows sunucusunun WinRM parolası kaldırıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -5357,13 +5359,17 @@
     "fieldHelp": "IIS Yöneticisi'nde (Merkezi Sertifikalar) depo için ayarlanan özel anahtar parolası: boşluksuz, yazdırılabilir ASCII karakterlerden oluşan 12 ile 128 karakter.",
     "set": "Parolayı ayarla",
     "replace": "Parolayı değiştir",
-    "saved": "Kaydedildi. Sunucunun Merkezi Sertifika Deposu dosyalarını listelemek için Keşfet'i seçin."
+    "remove": "Parolayı kaldır",
+    "removeConfirm": "Bu sunucunun CCS parolası kaldırılsın mı? Yeni bir parola belirlenene kadar Alice hiçbir CCS dosyasını listelemez ve dağıtmaz.",
+    "saved": "Kaydedildi. Sunucunun Merkezi Sertifika Deposu dosyalarını listelemek için Keşfet'i seçin.",
+    "removed": "Kaldırıldı."
   },
   "winrm": {
     "title": "WinRM parolası",
     "help": "Alice bu sunucuda WinRM üzerinden hesabın parolasıyla oturum açar. Parola Alice sunucusunda mühürlü saklanır, yalnızca Alice bağlıyken kullanılır ve bir daha gösterilmez. Kurulum betiğinin sunucuda ayarladığı parolayı girin ve her sunucuda farklı bir parola kullanın.",
     "field": "WinRM parolası",
     "fieldHelp": "Sunucudaki hesabın parolası: boşluksuz, yazdırılabilir ASCII karakterlerden oluşan 12 ile 128 karakter.",
-    "saved": "Kaydedildi. Denetlemek için Bağlantıyı sına'yı kullanın."
+    "saved": "Kaydedildi. Denetlemek için Bağlantıyı sına'yı kullanın.",
+    "removeConfirm": "Bu sunucunun WinRM parolası kaldırılsın mı? Yeni bir parola belirlenene kadar Alice sunucuya ulaşamaz."
   }
 }

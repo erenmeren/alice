@@ -1,9 +1,9 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import commonEn from '@locales/common/en.json';
 import type { Target } from '../api/types';
-import { setCCSPassword, setWinRMPassword } from '../api/endpoints';
+import { clearCCSPassword, clearWinRMPassword, setCCSPassword, setWinRMPassword } from '../api/endpoints';
 import { formatDateTime } from '../datetime';
 import { errorResponse, sessionFor, sessionHandlers, windowsCCSTargetFixture, windowsWinRMTargetFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
@@ -14,7 +14,13 @@ import { CCSPasswordPanel } from './CCSPasswordPanel';
 // The endpoint is counted, not replaced: two submits in one tick must send one request (W5-12b, R70).
 vi.mock('../api/endpoints', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api/endpoints')>();
-  return { ...mod, setCCSPassword: vi.fn(mod.setCCSPassword), setWinRMPassword: vi.fn(mod.setWinRMPassword) };
+  return {
+    ...mod,
+    setCCSPassword: vi.fn(mod.setCCSPassword),
+    setWinRMPassword: vi.fn(mod.setWinRMPassword),
+    clearCCSPassword: vi.fn(mod.clearCCSPassword),
+    clearWinRMPassword: vi.fn(mod.clearWinRMPassword),
+  };
 });
 
 const SET_AT = '2026-10-27T09:30:00Z';
@@ -229,5 +235,97 @@ describe('CCSPasswordPanel kind="winrm"', () => {
     const view = await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={windowsWinRMTargetFixture} canSet />, ['tr-TR']);
     expect(screen.getByRole('heading', { name: 'WinRM parolası', level: 2 })).toBeInTheDocument();
     expectNoRawKeys(view.container);
+  });
+});
+
+// R72 Ruling 7-10: Remove password ends the stored password (DELETE, If-Match, fresh step-up); the panel then says "Not set".
+describe('CCSPasswordPanel Remove password', () => {
+  const WINRM_URL = `/api/v1/targets/${windowsWinRMTargetFixture.id}/winrm-password`;
+  const winrmSet: Target = { ...windowsWinRMTargetFixture, winrm_password_set_at: SET_AT };
+
+  function onDelete(url: string, answer: Target, first?: () => Response) {
+    const deletes: { ifMatch: string | null; body: string }[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.delete(url, async ({ request }) => {
+        deletes.push({ ifMatch: request.headers.get('If-Match'), body: await request.text() });
+        if (deletes.length === 1 && first) return first();
+        return HttpResponse.json(answer, { headers: { ETag: `"${answer.version}"` } });
+      }),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+    );
+    return deletes;
+  }
+
+  it('removes the WinRM password after the confirmation, through the step-up with the version, and says "Not set"', async () => {
+    const deletes = onDelete(WINRM_URL, { ...winrmSet, winrm_password_set_at: null, version: winrmSet.version + 1 }, () =>
+      errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required'),
+    );
+    vi.mocked(clearWinRMPassword).mockClear();
+    vi.mocked(clearCCSPassword).mockClear();
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={winrmSet} canSet />);
+    expect(screen.getByText(formatDateTime(SET_AT, 'en-US'))).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove password' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Remove password' });
+    expect(within(confirm).getByText('Remove the WinRM password of this server? Alice cannot reach the server until a new password is set.')).toBeInTheDocument();
+    expect(deletes).toHaveLength(0);
+    await user.click(within(confirm).getByRole('button', { name: 'Remove password' }));
+    await user.type(await screen.findByLabelText('6-digit code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(deletes).toHaveLength(2));
+    expect(deletes[1]).toEqual({ ifMatch: `"${winrmSet.version}"`, body: '' });
+    expect(clearWinRMPassword).toHaveBeenCalledTimes(2);
+    expect(clearWinRMPassword).toHaveBeenCalledWith(winrmSet.id, winrmSet.version);
+    expect(clearCCSPassword).not.toHaveBeenCalled();
+    expect(await screen.findByText('Not set')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Removed.');
+    expect(screen.queryByRole('button', { name: 'Remove password' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Set password' })).toBeInTheDocument();
+  });
+
+  it('removes the CCS password with the CCS text and endpoint', async () => {
+    const target: Target = { ...windowsCCSTargetFixture, ccs_password_set_at: SET_AT };
+    const deletes = onDelete(PUT_URL, { ...target, ccs_password_set_at: null, version: target.version + 1 });
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel target={target} canSet />);
+    await user.click(screen.getByRole('button', { name: 'Remove password' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Remove password' });
+    expect(within(confirm).getByText('Remove the CCS password of this server? Alice then lists and deploys no CCS file until a new password is set.')).toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Remove password' }));
+    await waitFor(() => expect(deletes).toHaveLength(1));
+    expect(await screen.findByText('Not set')).toBeInTheDocument();
+  });
+
+  it('sends nothing when the confirmation is cancelled', async () => {
+    const deletes = onDelete(WINRM_URL, winrmSet);
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={winrmSet} canSet />);
+    await user.click(screen.getByRole('button', { name: 'Remove password' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Remove password' });
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deletes).toHaveLength(0);
+    expect(screen.getByText(formatDateTime(SET_AT, 'en-US'))).toBeInTheDocument();
+  });
+
+  it('offers no Remove password when nothing is set or to a person who cannot manage credentials', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    const view = await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={windowsWinRMTargetFixture} canSet />);
+    expect(screen.queryByRole('button', { name: 'Remove password' })).not.toBeInTheDocument();
+    view.unmount();
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={winrmSet} canSet={false} />);
+    expect(screen.queryByRole('button', { name: 'Remove password' })).not.toBeInTheDocument();
+  });
+
+  it('is worded in Turkish', async () => {
+    server.use(...sessionHandlers(sessionFor('admin', 'tr')));
+    const user = userEvent.setup();
+    const view = await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={winrmSet} canSet />, ['tr-TR']);
+    await user.click(screen.getByRole('button', { name: 'Parolayı kaldır' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Parolayı kaldır' });
+    expect(within(confirm).getByText('Bu sunucunun WinRM parolası kaldırılsın mı? Yeni bir parola belirlenene kadar Alice sunucuya ulaşamaz.')).toBeInTheDocument();
+    expectNoRawKeys(view.container);
+    expectNoRawKeys(confirm);
   });
 });

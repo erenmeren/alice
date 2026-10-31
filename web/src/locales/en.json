@@ -803,7 +803,9 @@
       "deployment_rollout_preempted": "Canary deployment ended by an incident",
       "deployment_rollout_completed": "Canary deployment completed",
       "target_ccs_password_set": "CCS password of a Windows server set",
-      "target_winrm_password_set": "WinRM password of a Windows server set"
+      "target_ccs_password_removed": "CCS password of a Windows server removed",
+      "target_winrm_password_set": "WinRM password of a Windows server set",
+      "target_winrm_password_removed": "WinRM password of a Windows server removed"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -5357,13 +5359,17 @@
     "fieldHelp": "The private-key password set for the store in IIS Manager (Centralized Certificates): 12 to 128 characters of printable ASCII, no spaces.",
     "set": "Set password",
     "replace": "Replace password",
-    "saved": "Saved. Choose Discover to list the files of the server's Centralized Certificate Store."
+    "remove": "Remove password",
+    "removeConfirm": "Remove the CCS password of this server? Alice then lists and deploys no CCS file until a new password is set.",
+    "saved": "Saved. Choose Discover to list the files of the server's Centralized Certificate Store.",
+    "removed": "Removed."
   },
   "winrm": {
     "title": "WinRM password",
     "help": "Alice signs in to this server over WinRM with the password of its account. The password stays sealed on the Alice server, is used only while Alice is connected, and is never shown again. Enter the password the setup script set on the server, and use a different password on every server.",
     "field": "WinRM password",
     "fieldHelp": "The password of the account on the server: 12 to 128 characters of printable ASCII, no spaces.",
-    "saved": "Saved. Use Test connection to check it."
+    "saved": "Saved. Use Test connection to check it.",
+    "removeConfirm": "Remove the WinRM password of this server? Alice cannot reach the server until a new password is set."
   }
 }

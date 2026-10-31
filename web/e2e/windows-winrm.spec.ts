@@ -27,8 +27,9 @@ import {
 // that run the helper's forced entry. The journey: add the server with WinRM (the WN-26 warning, port 5986), read its
 // setup script, give the emulator the account and a password made now, set the same password in Alice with a step-up,
 // confirm the listener's TLS key, see the bindings, deploy to the demo binding 0.0.0.0:9444 (used by this journey
-// only) and roll back with stale TLS, then a wrong password makes the connection test fail with ALC-WIN-0024. Every
-// visible text is read from the locale files at run time (translator).
+// only) and roll back with stale TLS, then a wrong password makes the connection test fail with ALC-WIN-0024, and
+// removing the password (R72) makes it fail with ALC-WIN-0025. Every visible text is read from the locale files at run
+// time (translator).
 
 const SERVER = 'e2e-windows-winrm';
 const ACCOUNT = 'alice';
@@ -36,8 +37,8 @@ const SUBJECT = 'winrm.win.example.test';
 const JOURNEY = 'http.sys/ipport/0.0.0.0:9444';
 const WINRM = 'http.sys/ipport/0.0.0.0:5986';
 const STEP_UP_SECONDS = 5 * 60;
-// The journey runs five jobs (the first test, the test after the password, the confirmation, a discovery, the test with
-// the wrong password) and two deployments.
+// The journey runs six jobs (the first test, the test after the password, the confirmation, a discovery, the test with
+// the wrong password, the test without a password) and two deployments.
 const JOURNEY_TIMEOUT = 8 * 60_000;
 const DEPLOY_STEPS = ['import_chain', 'import_certificate', 'bind', 'verify'];
 
@@ -229,6 +230,26 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await settle(request, refused);
       await expect(refused).toContainText(t('errors.windows.winrm_auth_refused.title'));
       await expectAccessible(page, 'windows server over WinRM, sign-in refused');
+
+      // 8. Remove the password (R72 Ruling 7-10), with a fresh step-up: the state reads "not set" and the connection test
+      // is refused with ALC-WIN-0025 before any dial.
+      const winrmPanel = page.getByTestId('winrm-password');
+      await advanceClock(request, STEP_UP_SECONDS + 1);
+      await winrmPanel.getByRole('button', { name: t('ccs.remove'), exact: true }).click();
+      const removeConfirm = page.getByRole('dialog', { name: t('ccs.remove') });
+      await expect(removeConfirm.getByText(t('winrm.removeConfirm'), { exact: true })).toBeVisible();
+      await removeConfirm.getByRole('button', { name: t('ccs.remove'), exact: true }).click();
+      const removeStepUp = page.getByRole('dialog', { name: c.stepUpHeading });
+      await field(removeStepUp, c.code).fill(await freshCode(request, totpSecret));
+      await removeStepUp.getByRole('button', { name: c.stepUpConfirm }).click();
+      await expect(removeStepUp).toHaveCount(0);
+      await expect(page.getByTestId('winrm-password-state')).toHaveText(t('ccs.notSet'));
+      await expect(winrmPanel.getByRole('status')).toHaveText(t('ccs.removed'));
+      await page.getByRole('button', { name: t('targets.test'), exact: true }).click();
+      const missing = page.getByRole('alert').filter({ hasText: 'ALC-WIN-0025' });
+      await settle(request, missing);
+      await expect(missing).toContainText(t('errors.windows.winrm_password_missing.title'));
+      await expectAccessible(page, 'windows server over WinRM, password removed');
     });
   });
 }

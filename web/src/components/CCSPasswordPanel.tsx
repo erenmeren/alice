@@ -2,23 +2,25 @@ import { Button, Group, PasswordInput, Stack, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { setCCSPassword, setWinRMPassword } from '../api/endpoints';
+import { clearCCSPassword, clearWinRMPassword, setCCSPassword, setWinRMPassword } from '../api/endpoints';
 import { TARGETS_KEY, targetKey } from '../api/queryKeys';
 import type { Target } from '../api/types';
 import { formatDateTime } from '../datetime';
+import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { useStepUp } from './StepUpProvider';
-import { FactList, Panel } from './ui';
+import { DialogActions, FactList, Panel } from './ui';
 
 // CCS_PASSWORD is the server's rule (W5 Ruling 10): 12 to 128 characters of printable ASCII without spaces. The WinRM
 // password has the same rule (R71 Ruling 7).
 const CCS_PASSWORD = /^[\x21-\x7e]{12,128}$/;
 
-// KINDS: the two passwords of a Windows server the panel sets (R71 Ruling 22): the endpoint, the answer's date field,
-// the locale keys and the test ids; the step-up, the If-Match version and the "set / replace" wording are shared.
+// KINDS: the two passwords of a Windows server the panel sets (R71 Ruling 22) and removes (R72): the endpoints, the
+// answer's date field, the locale keys and the test ids; the step-up, the If-Match version and the "set / replace /
+// remove" wording are shared.
 const KINDS = {
-  ccs: { set: setCCSPassword, setAt: (t: Target) => t.ccs_password_set_at, keys: 'ccs', invalid: 'errors.windows.ccs_password_invalid.cause' },
-  winrm: { set: setWinRMPassword, setAt: (t: Target) => t.winrm_password_set_at, keys: 'winrm', invalid: 'errors.windows.winrm_password_invalid.cause' },
+  ccs: { set: setCCSPassword, clear: clearCCSPassword, setAt: (t: Target) => t.ccs_password_set_at, keys: 'ccs', invalid: 'errors.windows.ccs_password_invalid.cause' },
+  winrm: { set: setWinRMPassword, clear: clearWinRMPassword, setAt: (t: Target) => t.winrm_password_set_at, keys: 'winrm', invalid: 'errors.windows.winrm_password_invalid.cause' },
 } as const;
 
 // ccsEnabled: a Windows server whose last scan says IIS uses the Centralized Certificate Store (win_ccs_enabled).
@@ -29,7 +31,8 @@ export function ccsEnabled(target: Target): boolean {
 // CCSPasswordPanel says whether Alice holds the private-key password of the server's Centralized Certificate Store and
 // lets a person with credentials.manage set or replace it (PUT /targets/{id}/ccs-password, with a fresh step-up; R68).
 // With kind winrm it does the same for the password Alice signs in with over WinRM (PUT /targets/{id}/winrm-password,
-// R71); onSaved gets the server's answer.
+// R71); onSaved gets the server's answer. Remove password, after a confirmation, ends the stored password (DELETE, with
+// a fresh step-up; R72 Ruling 7-10).
 // The password is taken out of the field as soon as it is submitted, sent once in the request body and never shown or
 // read back: the server answers only when it was set.
 export function CCSPasswordPanel({
@@ -51,6 +54,8 @@ export function CCSPasswordPanel({
   const [busy, setBusy] = useState(false);
   const [invalid, setInvalid] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   // The server's answer, until the page reads a newer version of the server.
   const [answer, setAnswer] = useState<Target | null>(null);
@@ -68,6 +73,7 @@ export function CCSPasswordPanel({
       const password = value;
       setValue('');
       setSaved(false);
+      setRemoved(false);
       setError(null);
       const valid = CCS_PASSWORD.test(password);
       setInvalid(!valid);
@@ -87,6 +93,28 @@ export function CCSPasswordPanel({
     } finally {
       inFlight.current = false;
     }
+  };
+
+  // remove runs after the confirmation; the button is offered only while a password is set (Ruling 8: a repeat is a no-op).
+  const remove = async () => {
+    setRemoving(false);
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSaved(false);
+    setRemoved(false);
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await run(() => k.clear(current.id, current.version));
+      setAnswer(res);
+      client.setQueryData(targetKey(current.id), res);
+      setRemoved(true);
+    } catch (err) {
+      setError(err);
+    }
+    setBusy(false);
+    inFlight.current = false;
+    void client.invalidateQueries({ queryKey: TARGETS_KEY });
   };
 
   return (
@@ -110,15 +138,33 @@ export function CCSPasswordPanel({
                 <Button type="submit" variant="default" loading={busy} disabled={value === ''}>
                   {t(setAt ? 'ccs.replace' : 'ccs.set')}
                 </Button>
+                {setAt && (
+                  <Button variant="light" color="red" disabled={busy} onClick={() => setRemoving(true)}>
+                    {t('ccs.remove')}
+                  </Button>
+                )}
               </Group>
             </Stack>
           </form>
         )}
         <Text size="sm" role="status">
-          {saved ? t(`${k.keys}.saved`) : ''}
+          {saved ? t(`${k.keys}.saved`) : removed ? t('ccs.removed') : ''}
         </Text>
         <ErrorAlert error={error} />
       </Stack>
+      {removing && (
+        <AppModal opened onClose={() => setRemoving(false)} title={t('ccs.remove')}>
+          <Text size="sm">{t(`${k.keys}.removeConfirm`)}</Text>
+          <DialogActions>
+            <Button variant="default" onClick={() => setRemoving(false)}>
+              {t('ui.cancel')}
+            </Button>
+            <Button color="red" onClick={() => void remove()}>
+              {t('ccs.remove')}
+            </Button>
+          </DialogActions>
+        </AppModal>
+      )}
     </Panel>
   );
 }

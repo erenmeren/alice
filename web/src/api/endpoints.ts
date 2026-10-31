@@ -182,6 +182,14 @@ export const setCCSPassword = (id: string, version: number, password: string) =>
 export const setWinRMPassword = (id: string, version: number, password: string) =>
   apiFetch<Target>(`${v1}/targets/${enc(id)}/winrm-password`, { method: 'PUT', body: { password }, headers: ifMatchVersion(version) });
 
+// clearCCSPassword and clearWinRMPassword remove the server's CCS or WinRM password (R72 Ruling 7-10): an Administrator's,
+// with a fresh step-up and the server's version (If-Match), no body. The answer is the server with its *_password_set_at
+// null; a repeat answers the server unchanged.
+export const clearCCSPassword = (id: string, version: number) =>
+  apiFetch<Target>(`${v1}/targets/${enc(id)}/ccs-password`, { method: 'DELETE', headers: ifMatchVersion(version) });
+export const clearWinRMPassword = (id: string, version: number) =>
+  apiFetch<Target>(`${v1}/targets/${enc(id)}/winrm-password`, { method: 'DELETE', headers: ifMatchVersion(version) });
+
 // fromQuery is the optional ?from= of a setup script: Alice's address as typed; the API checks it (R72 Ruling 3).
 const fromQuery = (from?: string) => (from ? `?from=${enc(from)}` : '');
 
