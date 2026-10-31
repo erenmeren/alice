@@ -243,6 +243,7 @@ func (m *Model) winrmHTTPServer(conns *atomic.Int64) *http.Server {
 		nh.ServeHTTP(w, r)
 		m.logWinRM(*e)
 	})
+	// The NTLM connection-context key is package-level, so this throwaway NTLMServer's connContext serves every per-request handler.
 	_, ntlmConnContext = NTLMServer(NTLMAccount{}, clock, nil)
 	return &http.Server{
 		Handler:           h,
@@ -312,6 +313,7 @@ func (m *Model) serveWSMan(w http.ResponseWriter, r *http.Request) {
 	for k := range req.Env {
 		e.EnvNames = append(e.EnvNames, k)
 	}
+	slices.Sort(e.EnvNames)
 	e.Program, e.Args = req.Program, req.Args
 
 	m.mu.Lock()

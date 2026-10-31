@@ -2,7 +2,7 @@
 // internal backend network) for the Windows journey (web/e2e/windows.spec.ts, R60). It is a test tool: it is built
 // into the e2e fake Windows image only and never ships (internal/archtest lists it in testOnlyDirs). It wraps
 // internal/providers/windows/wintest: the fixed demo host of wintest.Demo (Windows Server 2022 Datacenter with IIS
-// 10.0, three IIS sites, four http.sys entries, a CCS folder, an RDP listener), whose helper answers run the helper's
+// 10.0, four IIS sites, five http.sys entries, a CCS folder, an RDP listener), whose helper answers run the helper's
 // own code (winhelper), behind an SSH server that behaves like Windows OpenSSH (every session after the first on one
 // connection sees the first session's command, design 2026-10-21 §8).
 //
