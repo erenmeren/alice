@@ -52,11 +52,42 @@ func validCCSPassword(pw []byte) bool {
 	return true
 }
 
+// targetPasswordSpec is one password credential of a Windows server (the CCS password, W5 Rulings 9-11; the WinRM
+// password, R71 Rulings 7-8): its credentials purpose and kind, its name in error texts, the targets that take it, its
+// rule and the error for a password outside it, its audit action and the provider sentinels of its source.
+type targetPasswordSpec struct {
+	purpose, kind, name string
+	check               func(Target) error
+	valid               func([]byte) bool
+	invalid             error
+	action              string
+	none, unusable      error
+}
+
+var ccsPasswordSpec = targetPasswordSpec{purpose: purposeWinCCS, kind: kindWinCCS, name: "CCS",
+	check: func(t Target) error {
+		if t.Type != TypeWindows {
+			return ErrNotWindowsTarget
+		}
+		return nil
+	},
+	valid: validCCSPassword, invalid: ErrCCSPasswordInvalid, action: "target.ccs_password_set",
+	none: providers.ErrNoCCSPassword, unusable: providers.ErrCCSPasswordUnusable}
+
 // SetCCSPassword stores pw as the CCS password of Windows server target, whose version must be ifVersion, and returns
 // the target with its new version and CCSPasswordSetAt. pw is zeroed on every path. The API admits an Administrator
 // with a fresh step-up only (rbac.CredentialsManage); the change is ClassChange. Audited as target.ccs_password_set,
 // without the secret.
 func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (Target, error) {
+	return s.setTargetPassword(ctx, a, target, ifVersion, pw, ccsPasswordSpec)
+}
+
+// setTargetPassword stores pw as the spec's password of target, whose version must be ifVersion: one new sealed row
+// (rows are append-only), the target's version moved, and the spec's audit action without the secret. pw is zeroed on
+// every path. The seal happens before the transaction; inside it the target is checked first, then the rule (so the
+// seal of an invalid password is discarded with the transaction, W5-5), then the version.
+func (s *Service) setTargetPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext,
+	spec targetPasswordSpec) (Target, error) {
 	defer pw.Zero()
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return Target{}, err
@@ -64,7 +95,7 @@ func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID,
 	id := uuid.Must(uuid.NewV7())
 	env, err := s.keyring.Seal(credentialLocation(id), pw.Bytes())
 	if err != nil {
-		return Target{}, fmt.Errorf("inventory: seal the CCS password: %w", err)
+		return Target{}, fmt.Errorf("inventory: seal the %s password: %w", spec.name, err)
 	}
 	var updated Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -72,11 +103,11 @@ func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID,
 		if err != nil {
 			return err
 		}
-		if cur.Type != TypeWindows {
-			return ErrNotWindowsTarget
+		if err := spec.check(cur); err != nil {
+			return err
 		}
-		if !validCCSPassword(pw.Bytes()) { // after the target's type (W5-5, Ruling 9): the seal of an invalid password is discarded with the transaction
-			return ErrCCSPasswordInvalid
+		if !spec.valid(pw.Bytes()) {
+			return spec.invalid
 		}
 		if cur.Version != ifVersion {
 			return ErrVersionMismatch
@@ -84,8 +115,8 @@ func (s *Service) SetCCSPassword(ctx context.Context, a Actor, target uuid.UUID,
 		now := s.clock.Now().UTC()
 		if _, err := tx.Exec(ctx, `INSERT INTO credentials (id, purpose, kind, ciphertext, nonce, wrapped_dek, key_version, created_at, target_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			id, purposeWinCCS, kindWinCCS, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, now, target); err != nil {
-			return fmt.Errorf("inventory: store the CCS password: %w", err)
+			id, spec.purpose, spec.kind, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, now, target); err != nil {
+			return fmt.Errorf("inventory: store the %s password: %w", spec.name, err)
 		}
 		if _, err := tx.Exec(ctx, "UPDATE targets SET version = version + 1, updated_at = $2 WHERE id = $1", target, now); err != nil {
 			return fmt.Errorf("inventory: update target: %w", err)
@@ -93,7 +124,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		if updated, err = getTarget(ctx, tx, target, false); err != nil {
 			return err
 		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "target.ccs_password_set", ObjectType: "target",
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: spec.action, ObjectType: "target",
 			ObjectID: target.String(), Result: audit.Success, Details: map[string]string{"name": cur.Name, "credential_id": id.String()}})
 		return err
 	})
@@ -109,6 +140,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 // opened. release zeroes the password.
 // Errors carry no secret.
 func (c platformCredentials) CCSPassword(ctx context.Context, target uuid.UUID) (secrets.Plaintext, func(), error) {
+	return c.targetPassword(ctx, target, ccsPasswordSpec)
+}
+
+// targetPassword decrypts the newest row of the spec's purpose of live Windows server target: ErrNotFound wrapping
+// spec.none when there is none, errForeignCredential wrapping spec.unusable for a row of another target type or kind
+// (never opened), spec.unusable for a row this master key cannot open. release zeroes the password.
+func (c platformCredentials) targetPassword(ctx context.Context, target uuid.UUID, spec targetPasswordSpec) (secrets.Plaintext, func(), error) {
 	var (
 		id         uuid.UUID
 		kind, typ  string
@@ -118,20 +156,20 @@ func (c platformCredentials) CCSPassword(ctx context.Context, target uuid.UUID) 
 	err := c.s.pool.QueryRow(ctx, `SELECT c.id, c.kind, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, t.type
 FROM targets t JOIN credentials c ON c.target_id = t.id AND c.purpose = $2
 WHERE t.id = $1 AND t.deleted_at IS NULL
-ORDER BY c.created_at DESC, c.id DESC LIMIT 1`, target, purposeWinCCS).
+ORDER BY c.created_at DESC, c.id DESC LIMIT 1`, target, spec.purpose).
 		Scan(&id, &kind, &env.Ciphertext, &env.Nonce, &env.WrappedDEK, &env.KeyVersion, &typ)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return emptyValue, nil, fmt.Errorf("%w: %w", ErrNotFound, providers.ErrNoCCSPassword)
+		return emptyValue, nil, fmt.Errorf("%w: %w", ErrNotFound, spec.none)
 	}
 	if err != nil {
-		return emptyValue, nil, fmt.Errorf("inventory: read the CCS password: %w", err)
+		return emptyValue, nil, fmt.Errorf("inventory: read the %s password: %w", spec.name, err)
 	}
-	if typ != TypeWindows || kind != kindWinCCS {
-		return emptyValue, nil, fmt.Errorf("%w: %w", errForeignCredential, providers.ErrCCSPasswordUnusable)
+	if typ != TypeWindows || kind != spec.kind {
+		return emptyValue, nil, fmt.Errorf("%w: %w", errForeignCredential, spec.unusable)
 	}
 	pt, err := c.s.keyring.Open(credentialLocation(id), env)
 	if err != nil { // secrets.ErrDecrypt, which says nothing about why
-		return emptyValue, nil, fmt.Errorf("inventory: the CCS password cannot be decrypted with this master key: %w", providers.ErrCCSPasswordUnusable)
+		return emptyValue, nil, fmt.Errorf("inventory: the %s password cannot be decrypted with this master key: %w", spec.name, spec.unusable)
 	}
 	return pt, pt.Zero, nil
 }

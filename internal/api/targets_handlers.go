@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"regexp"
@@ -164,43 +165,23 @@ func (s *server) getTarget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, targetJSON(t, refs))
 }
 
-// maxCCSBody caps PUT /targets/{id}/ccs-password (W5 Ruling 9).
+// maxCCSBody caps PUT /targets/{id}/ccs-password (W5 Ruling 9) and /winrm-password (R71 Ruling 7).
 const maxCCSBody = 4 << 10
 
-// setCCSPassword sets the CCS password of a Windows server (W5 Rulings 9-11). The password is a secretText the handler
-// zeroes on every path; the answer is the target, which says when the password was set and never what it is.
+// setCCSPassword sets the CCS password of a Windows server (W5 Rulings 9-11).
 func (s *server) setCCSPassword(w http.ResponseWriter, r *http.Request) {
-	refs := s.serviceRefs(r)
-	id, ok := pathUUID(r, "id")
-	if !ok {
-		s.writeError(w, r, ErrNotFound)
-		return
-	}
-	version, ok := ifMatch(r)
-	if !ok {
-		s.writeError(w, r, ErrPreconditionFailed)
-		return
-	}
-	var req struct {
-		Password secretText `json:"password"`
-	}
-	defer func() { req.Password.zero() }()
-	if !s.decodeExact(w, r, &req, maxCCSBody, "password") {
-		return
-	}
-	t, err := s.deps.Inventory.SetCCSPassword(r.Context(), s.actor(r), id, version, secrets.NewPlaintext(req.Password))
-	req.Password.zero()
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	w.Header().Set("ETag", etag(t.Version))
-	writeJSON(w, http.StatusOK, targetJSON(t, refs))
+	s.setTargetPassword(w, r, s.deps.Inventory.SetCCSPassword)
 }
 
-// setWinRMPassword sets the WinRM password of a Windows server whose transport is winrm (R71 Ruling 7), as
-// setCCSPassword sets the CCS password.
+// setWinRMPassword sets the WinRM password of a Windows server whose transport is winrm (R71 Ruling 7).
 func (s *server) setWinRMPassword(w http.ResponseWriter, r *http.Request) {
+	s.setTargetPassword(w, r, s.deps.Inventory.SetWinRMPassword)
+}
+
+// setTargetPassword sets a password credential of a Windows server with set. The password is a secretText the handler
+// zeroes on every path; the answer is the target, which says when the password was set and never what it is.
+func (s *server) setTargetPassword(w http.ResponseWriter, r *http.Request,
+	set func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)) {
 	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
@@ -219,7 +200,7 @@ func (s *server) setWinRMPassword(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxCCSBody, "password") {
 		return
 	}
-	t, err := s.deps.Inventory.SetWinRMPassword(r.Context(), s.actor(r), id, version, secrets.NewPlaintext(req.Password))
+	t, err := set(r.Context(), s.actor(r), id, version, secrets.NewPlaintext(req.Password))
 	req.Password.zero()
 	if err != nil {
 		s.fail(w, r, err)
