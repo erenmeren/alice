@@ -688,12 +688,34 @@ export const windowsTargetFixture: Target = {
   username: 'CORP\\alice-svc',
   capabilities: ['cleanup_certificates', 'deploy_certificate', 'discover_certificates', 'test_connection', 'verify_deployment'],
   certificate_cleanup: true,
+  transport: 'ssh',
   facts: {
     ...targetFixture.facts,
     os: { id: 'windows', version_id: '10.0.20348.2700', pretty_name: 'Windows Server 2022 Datacenter' },
     windows: windowsFacts(),
   },
 };
+
+// windowsWinRMTargetFixture is a Windows server reached over WinRM (R71) whose WinRM password is not set yet.
+export const windowsWinRMTargetFixture: Target = {
+  ...windowsTargetFixture,
+  id: '0192b000-0000-7000-8000-0000000000a9',
+  name: 'web-iis-winrm',
+  port: 5986,
+  username: '.\\alice',
+  transport: 'winrm',
+  winrm_password_set_at: null,
+};
+
+// tlsHostKeyFixture is a WinRM listener's TLS identity (R71 Ruling 9): the SHA-256 of its SubjectPublicKeyInfo.
+export function tlsHostKeyFixture(o: Partial<HostKey> = {}): HostKey {
+  return hostKeyFixture({
+    key_type: 'tls-spki',
+    fingerprint: 'SHA256:winrmWinrmWinrmWinrmWinrmWinrmWinrmWinrm000',
+    verify_command: "openssl s_client -connect ADDRESS:PORT </dev/null 2>/dev/null | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64 | tr -d '='",
+    ...o,
+  });
+}
 
 // windowsBindingFixture is an http.sys SSL binding of an IIS site (the canonical text is its cert_path).
 export function windowsBindingFixture(o: Partial<CertificateLocation> = {}): CertificateLocation {

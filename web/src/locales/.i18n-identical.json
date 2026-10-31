@@ -31,6 +31,7 @@
   "sshKeys.types.rsa-4096",
   "targets.facts.iisVersion",
   "targets.page.facts.iis",
+  "targets.page.facts.transportWinrm",
   "webServer.siteColumn.haproxy",
   "webServer.software.apache",
   "webServer.software.haproxy",

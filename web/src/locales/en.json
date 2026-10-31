@@ -802,7 +802,8 @@
       "deployment_rollout_stopped": "Canary deployment stopped by the licence",
       "deployment_rollout_preempted": "Canary deployment ended by an incident",
       "deployment_rollout_completed": "Canary deployment completed",
-      "target_ccs_password_set": "CCS password of a Windows server set"
+      "target_ccs_password_set": "CCS password of a Windows server set",
+      "target_winrm_password_set": "WinRM password of a Windows server set"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1154,7 +1155,22 @@
       "usernameWindows": "Windows account",
       "usernameWindowsHelp": "A local account (alice) or a domain account written as DOMAIN\\account.",
       "scriptWindows": "PowerShell setup script",
-      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above."
+      "scriptWindowsHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It uses the Windows account you enter above.",
+      "transport": "Connection",
+      "transportHelp": "OpenSSH is recommended. Choose WinRM only when the server cannot run OpenSSH.",
+      "transportSsh": "OpenSSH (recommended)",
+      "transportWinrm": "WinRM over HTTPS",
+      "portWinrm": "WinRM HTTPS port",
+      "winrmWarning": "Under WinRM, anyone with this account's password can run any command on the server as an administrator. With OpenSSH, Alice's key can run only alice-helper.exe.",
+      "usernameWinrmHelp": "alice, .\\alice, SERVER\\alice or DOMAIN\\alice. The account must be a member of Administrators.",
+      "usernameWinrmInvalid": "Write the account as alice, .\\alice, SERVER\\alice or DOMAIN\\alice. Over WinRM, Alice cannot sign in with an e-mail-style name such as alice@corp.example.",
+      "winrmScriptLater": "After you add the server, Alice shows its WinRM setup script and asks for the account's password."
+    },
+    "winrm": {
+      "setupTitle": "WinRM setup script",
+      "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, lets Alice's address through the firewall, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
+      "passwordStep": "Then enter the same password here. Alice tests the connection as soon as the password is saved.",
+      "showScript": "Show setup script again"
     },
     "connecting": "Connecting to the server…",
     "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
@@ -1223,6 +1239,8 @@
         "state": "State",
         "address": "Address",
         "user": "User on the server",
+        "transport": "Transport",
+        "transportWinrm": "WinRM (HTTPS, NTLM)",
         "platform": "Platform",
         "os": "Operating system",
         "helper": "alice-helper version",
@@ -1261,6 +1279,9 @@
     "confirmHelp": "Alice received this fingerprint from {{host}}. Run the command below on the server and check that it shows the same fingerprint.",
     "fingerprintLabel": "Fingerprint",
     "commandLabel": "Command to run on the server",
+    "tlsLabel": "TLS certificate key (SPKI SHA-256)",
+    "tlsHelp": "Alice received this fingerprint of a TLS certificate key from {{host}}. Compare it with the listener fingerprint the WinRM setup script printed on the server (the value that starts with SHA256:). You can also run the command below, with the server's address and port, from a machine that reaches the server.",
+    "tlsCommandLabel": "Command to run from a machine that reaches the server",
     "yes": "Yes, this is my server",
     "no": "No, cancel",
     "pendingNote": "If you cancel, the server stays in the list as “Waiting for fingerprint confirmation”. You can confirm it later on the server's page.",
@@ -2515,6 +2536,11 @@
         },
         "store_error": {
           "cause": "The helper could not open the machine certificate store My or the intermediate store (CA), or Windows refused to add a certificate to it."
+        }
+      },
+      "ssh": {
+        "output_too_large": {
+          "action": "Check the server for unusually large content in what Alice reads there: the Remote Desktop listener's settings or the certificate stores."
         }
       }
     }
@@ -5330,5 +5356,12 @@
     "set": "Set password",
     "replace": "Replace password",
     "saved": "Saved. Choose Discover to list the files of the server's Centralized Certificate Store."
+  },
+  "winrm": {
+    "title": "WinRM password",
+    "help": "Alice signs in to this server over WinRM with the password of its account. The password stays sealed on the Alice server, is used only while Alice is connected, and is never shown again. Enter the password the setup script set on the server, and use a different password on every server.",
+    "field": "WinRM password",
+    "fieldHelp": "The password of the account on the server: 12 to 128 characters of printable ASCII, no spaces.",
+    "saved": "Saved. Use Test connection to check it."
   }
 }

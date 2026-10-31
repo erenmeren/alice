@@ -827,7 +827,7 @@ Expected: PASS. Then push (run 2 or 3; budget 10): both legs green with `windows
 - Consumes: Task 5's API, Task 3's `ctl winrm-account`.
 - Mirror: the Windows path of `AddServerModal.tsx` (setup script, then `HostKeyConfirm`), `CCSPasswordPanel.tsx` (step-up through `useStepUp().run`, the `If-Match` version, the answer's newer version), W6 Task 7.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - `AddServerModal.test.tsx`:
     - the transport choice defaults to OpenSSH;
     - WinRM sets port 5986 and shows the WN-26 warning text and the username help;
@@ -838,14 +838,14 @@ Expected: PASS. Then push (run 2 or 3; budget 10): both legs green with `windows
   - `TargetDetailPage.test.tsx`: a WinRM target shows the transport, the account, the password panel ("not set" or the date) and "Show setup script again". An SSH target shows none of it.
   - The error text: `ssh.unreachable` with `transport=winrm` shows the WinRM note; `ALC-WIN-0024..0028` render.
   - `windows-winrm.spec.ts` (Ruling 23), in EN and TR.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `cd web && npx vitest run src/components/AddServerModal.test.tsx src/components/CCSPasswordPanel.test.tsx src/components/HostKeyConfirm.test.tsx src/pages/TargetDetailPage.test.tsx`
 Expected: FAIL.
-- [ ] **Step 3: Implement**, EN and TR, help texts included: what WinRM needs on the server (the script and the password), that OpenSSH is recommended and why (WN-26), a different password per server, and how to compare the fingerprint.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 3: Implement**, EN and TR, help texts included: what WinRM needs on the server (the script and the password), that OpenSSH is recommended and why (WN-26), a different password per server, and how to compare the fingerprint.
+- [x] **Step 4: Run the tests**
 Run: `cd web && npx vitest run && npx tsc --noEmit && npm run lint && cd .. && make i18n-check && make web-coverage && make helper winhelper && E2E_PROJECT=alice-e2e-w7 ALICE_E2E_PORT=9985 make e2e-up && E2E_PROJECT=alice-e2e-w7 ALICE_E2E_PORT=9985 make e2e; E2E_PROJECT=alice-e2e-w7 make e2e-down`
 Expected: PASS; the whole e2e suite green.
-- [ ] **Step 5: Commit**: `feat(web): the WinRM transport of a Windows server: the choice and its warning, the setup script, the password with step-up, the TLS identity confirm, the target page; English and Turkish (R71)`.
+- [x] **Step 5: Commit**: `feat(web): the WinRM transport of a Windows server: the choice and its warning, the setup script, the password with step-up, the TLS identity confirm, the target page; English and Turkish (R71)`.
 
 ---
 

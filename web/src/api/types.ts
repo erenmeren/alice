@@ -455,6 +455,11 @@ export interface Target {
   // ccs_password_set_at (R68): only on a Windows server, when an Administrator last set the password of its Centralized
   // Certificate Store (PUT /targets/{id}/ccs-password); null when none was set. The password itself is never answered.
   ccs_password_set_at?: string | null;
+  // transport (R71): only on a Windows server, OpenSSH (ssh) or WinRM over HTTPS (winrm); fixed at creation.
+  transport?: WindowsTransport;
+  // winrm_password_set_at (R71): only on a Windows server reached over WinRM, when an Administrator last set the
+  // account's password (PUT /targets/{id}/winrm-password); null when none was set. The password is never answered.
+  winrm_password_set_at?: string | null;
   // vault is present on a Key Vault (type azure_key_vault) and never holds a secret.
   vault?: Vault;
   version: number;
@@ -468,7 +473,12 @@ export interface TargetCreateRequest {
   host: string;
   port: number;
   username: string;
+  // transport is sent for a Windows server reached over WinRM only (absent means ssh).
+  transport?: WindowsTransport;
 }
+
+// WindowsTransport is how Alice reaches a Windows server (R71 Ruling 2).
+export type WindowsTransport = 'ssh' | 'winrm';
 
 export interface JobAccepted {
   job_id: string;

@@ -802,7 +802,8 @@
       "deployment_rollout_stopped": "Kanarya dağıtımı lisans nedeniyle durdu",
       "deployment_rollout_preempted": "Kanarya dağıtımı bir olayla sona erdi",
       "deployment_rollout_completed": "Kanarya dağıtımı tamamlandı",
-      "target_ccs_password_set": "Bir Windows sunucusunun CCS parolası ayarlandı"
+      "target_ccs_password_set": "Bir Windows sunucusunun CCS parolası ayarlandı",
+      "target_winrm_password_set": "Bir Windows sunucusunun WinRM parolası ayarlandı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1154,7 +1155,22 @@
       "usernameWindows": "Windows hesabı",
       "usernameWindowsHelp": "Yerel bir hesap (alice) ya da ALANADI\\hesap biçiminde yazılmış bir etki alanı hesabı.",
       "scriptWindows": "PowerShell kurulum betiği",
-      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır."
+      "scriptWindowsHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik, yukarıda girdiğiniz Windows hesabını kullanır.",
+      "transport": "Bağlantı",
+      "transportHelp": "OpenSSH önerilir. WinRM'yi yalnızca sunucuda OpenSSH çalıştırılamıyorsa seçin.",
+      "transportSsh": "OpenSSH (önerilen)",
+      "transportWinrm": "HTTPS üzerinden WinRM",
+      "portWinrm": "WinRM HTTPS bağlantı noktası",
+      "winrmWarning": "WinRM'de bu hesabın parolasını bilen herkes sunucuda yönetici olarak her komutu çalıştırabilir. OpenSSH'de Alice'in anahtarı yalnızca alice-helper.exe'yi çalıştırabilir.",
+      "usernameWinrmHelp": "alice, .\\alice, SUNUCU\\alice ya da ALANADI\\alice. Hesap Administrators grubunun üyesi olmalıdır.",
+      "usernameWinrmInvalid": "Hesabı alice, .\\alice, SUNUCU\\alice ya da ALANADI\\alice biçiminde yazın. Alice, WinRM üzerinden alice@corp.example gibi e-posta biçimindeki bir adla oturum açamaz.",
+      "winrmScriptLater": "Sunucuyu ekledikten sonra Alice, WinRM kurulum betiğini gösterir ve hesabın parolasını ister."
+    },
+    "winrm": {
+      "setupTitle": "WinRM kurulum betiği",
+      "setupHelp": "Sunucuda, alice-helper.exe dosyasının bulunduğu klasörde, yönetici olarak açılmış bir PowerShell içinde bir kez çalıştırın. Betik yardımcı aracı kurar, hesabı hazırlar ve parolasını sorar, yoksa 5986 numaralı bağlantı noktasında bir HTTPS dinleyicisi oluşturur, güvenlik duvarında Alice'in adresine izin verir ve dinleyicinin parmak izini yazdırır. Bu parmak izini saklayın: son adımda karşılaştıracaksınız.",
+      "passwordStep": "Ardından aynı parolayı buraya girin. Parola kaydedilir kaydedilmez Alice bağlantıyı sınar.",
+      "showScript": "Kurulum betiğini yeniden göster"
     },
     "connecting": "Sunucuya bağlanılıyor…",
     "stillWorking": "Alice bu iş üzerinde çalışmaya devam ediyor. Sonucu görmek için bir dakika sonra sunucunun sayfasını açın.",
@@ -1223,6 +1239,8 @@
         "state": "Durum",
         "address": "Adres",
         "user": "Sunucudaki kullanıcı",
+        "transport": "Bağlantı yöntemi",
+        "transportWinrm": "WinRM (HTTPS, NTLM)",
         "platform": "Sunucu türü",
         "os": "İşletim sistemi",
         "helper": "alice-helper sürümü",
@@ -1261,6 +1279,9 @@
     "confirmHelp": "Alice bu parmak izini {{host}} adresinden aldı. Aşağıdaki komutu sunucuda çalıştırın ve aynı parmak izini gösterdiğini denetleyin.",
     "fingerprintLabel": "Parmak izi",
     "commandLabel": "Sunucuda çalıştırılacak komut",
+    "tlsLabel": "TLS sertifika anahtarı (SPKI SHA-256)",
+    "tlsHelp": "Alice, bir TLS sertifika anahtarının bu parmak izini {{host}} adresinden aldı. Bunu, WinRM kurulum betiğinin sunucuda yazdırdığı dinleyici parmak iziyle (SHA256: ile başlayan değer) karşılaştırın. Aşağıdaki komutu, sunucunun adresi ve bağlantı noktasıyla, sunucuya erişebilen bir makinede de çalıştırabilirsiniz.",
+    "tlsCommandLabel": "Sunucuya erişebilen bir makinede çalıştırılacak komut",
     "yes": "Evet, bu benim sunucum",
     "no": "Hayır, vazgeç",
     "pendingNote": "Vazgeçerseniz sunucu listede “Parmak izi onayı bekleniyor” durumunda kalır. Onayı daha sonra sunucunun sayfasında verebilirsiniz.",
@@ -2515,6 +2536,11 @@
         },
         "store_error": {
           "cause": "Yardımcı My makine sertifika deposunu ya da ara sertifika deposunu (CA) açamadı veya Windows ona sertifika eklemeyi reddetti."
+        }
+      },
+      "ssh": {
+        "output_too_large": {
+          "action": "Sunucuda Alice'in okuduklarında olağandışı büyük içerik olup olmadığını denetleyin: Uzak Masaüstü dinleyicisinin ayarları ya da sertifika depoları."
         }
       }
     }
@@ -5330,5 +5356,12 @@
     "set": "Parolayı ayarla",
     "replace": "Parolayı değiştir",
     "saved": "Kaydedildi. Sunucunun Merkezi Sertifika Deposu dosyalarını listelemek için Keşfet'i seçin."
+  },
+  "winrm": {
+    "title": "WinRM parolası",
+    "help": "Alice bu sunucuda WinRM üzerinden hesabın parolasıyla oturum açar. Parola Alice sunucusunda mühürlü saklanır, yalnızca Alice bağlıyken kullanılır ve bir daha gösterilmez. Kurulum betiğinin sunucuda ayarladığı parolayı girin ve her sunucuda farklı bir parola kullanın.",
+    "field": "WinRM parolası",
+    "fieldHelp": "Sunucudaki hesabın parolası: boşluksuz, yazdırılabilir ASCII karakterlerden oluşan 12 ile 128 karakter.",
+    "saved": "Kaydedildi. Denetlemek için Bağlantıyı sına'yı kullanın."
   }
 }

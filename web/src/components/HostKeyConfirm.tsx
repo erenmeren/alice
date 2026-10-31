@@ -20,17 +20,19 @@ export function HostKeyConfirm({
   busy?: boolean;
 }) {
   const { t } = useTranslation();
+  // A WinRM listener is pinned by its TLS certificate's public key, which the WinRM setup script prints (R71 Ruling 22).
+  const tls = hostKey.key_type === 'tls-spki';
   return (
     <Stack gap="xs">
-      <Text size="sm">{t('hostKeys.confirmHelp', { host })}</Text>
+      <Text size="sm">{t(tls ? 'hostKeys.tlsHelp' : 'hostKeys.confirmHelp', { host })}</Text>
       <Text size="sm" fw={600}>
-        {t('hostKeys.fingerprintLabel')}
+        {t(tls ? 'hostKeys.tlsLabel' : 'hostKeys.fingerprintLabel')}
       </Text>
       <Code block data-testid="host-key-fingerprint" style={WRAP} translate="no">
         {hostKey.fingerprint}
       </Code>
       <Text size="sm" fw={600}>
-        {t('hostKeys.commandLabel')}
+        {t(tls ? 'hostKeys.tlsCommandLabel' : 'hostKeys.commandLabel')}
       </Text>
       <Code block data-testid="host-key-command" style={WRAP} translate="no">
         {hostKey.verify_command}

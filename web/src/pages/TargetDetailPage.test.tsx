@@ -18,6 +18,7 @@ import {
   windowsCCSTargetFixture,
   windowsFacts,
   windowsTargetFixture,
+  windowsWinRMTargetFixture,
   nginxTargetFixture,
   nginxTargetWith,
   keyLocationFixture,
@@ -26,6 +27,8 @@ import {
   targetFixture,
   targetWith,
 } from '../test/fixtures';
+import { formatDateTime } from '../datetime';
+import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -1076,5 +1079,88 @@ describe('TargetDetailPage cleanup switch', () => {
     onWindows('admin', windowsTargetFixture, 'tr');
     await renderRoute(winPath, { languages: ['tr-TR'] });
     expect(await screen.findByRole('switch', { name: "Alice'in içe aktardığı sertifikaları, hiçbir şey kullanmayınca kaldır" })).toBeChecked();
+  });
+});
+
+// R71 Ruling 22: a Windows server reached over WinRM shows its transport, its account, the WinRM password panel and its
+// setup script; a server reached over OpenSSH shows none of it.
+describe('TargetDetailPage WinRM transport', () => {
+  const panelHeading = () => screen.queryByRole('heading', { name: 'WinRM password', level: 2 });
+  async function open(role: 'admin' | 'operator', target: Target, lang = 'en') {
+    onServer(role, target, [], lang);
+    server.use(
+      http.get('/api/v1/targets/:id', () => HttpResponse.json(target)),
+      http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+      http.get('/api/v1/targets/:id/winrm-setup', () => HttpResponse.json({ script: '# winrm setup script' })),
+    );
+    await renderRoute(`/servers/${target.id}`, lang === 'tr' ? { languages: ['tr-TR'] } : {});
+    await screen.findByRole('heading', { name: target.name, level: 1 });
+  }
+  const fact = (label: string) => screen.getByText(label, { selector: 'dt' }).nextElementSibling;
+
+  it('shows the transport, the account, "Not set" with the field, and the setup script again', async () => {
+    await open('admin', windowsWinRMTargetFixture);
+    expect(fact('Transport')).toHaveTextContent('WinRM (HTTPS, NTLM)');
+    expect(fact('User on the server')).toHaveTextContent('.\\alice');
+    expect(panelHeading()).toBeInTheDocument();
+    expect(screen.getByTestId('winrm-password-state')).toHaveTextContent('Not set');
+    expect(screen.getByLabelText(/^WinRM password/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Show setup script again' }));
+    expect(await screen.findByTestId('winrm-setup-script')).toHaveTextContent('# winrm setup script');
+  });
+
+  it('shows the date the password was set, without the field to an Operator', async () => {
+    const at = '2026-10-30T08:00:00Z';
+    await open('operator', { ...windowsWinRMTargetFixture, winrm_password_set_at: at });
+    expect(screen.getByTestId('winrm-password-state')).toHaveTextContent(formatDateTime(at, 'en-US'));
+    expect(screen.queryByLabelText(/^WinRM password/)).not.toBeInTheDocument();
+  });
+
+  it('shows none of it on a Windows server reached over OpenSSH', async () => {
+    await open('admin', windowsTargetFixture);
+    expect(screen.queryByText('WinRM (HTTPS, NTLM)')).not.toBeInTheDocument();
+    expect(panelHeading()).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show setup script again' })).not.toBeInTheDocument();
+  });
+
+  it('adds the WinRM note to an ssh.* reason with transport=winrm', async () => {
+    await open('admin', windowsWinRMTargetFixture);
+    server.use(
+      http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () =>
+        HttpResponse.json(jobFixture({ id: 'job-t', status: 'failed', error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable', params: { transport: 'winrm' } } })),
+      ),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(commonEn.errors.ssh.unreachable.title_winrm);
+  });
+
+  it.each([
+    ['ALC-WIN-0024', 'winrm_auth_refused'],
+    ['ALC-WIN-0025', 'winrm_password_missing'],
+    ['ALC-WIN-0026', 'winrm_fault'],
+    ['ALC-WIN-0027', 'transport_immutable'],
+    ['ALC-WIN-0028', 'winrm_password_invalid'],
+  ] as const)('explains %s (%s)', async (code, reason) => {
+    await open('admin', windowsWinRMTargetFixture);
+    server.use(
+      http.post('/api/v1/targets/:id/actions/test', () => HttpResponse.json({ job_id: 'job-t', status_url: '/api/v1/jobs/job-t' }, { status: 202 })),
+      http.get('/api/v1/jobs/:id', () =>
+        HttpResponse.json(jobFixture({ id: 'job-t', status: 'failed', error: { code, reason: `windows.${reason}`, params: { transport: 'winrm', wsman_code: '5' } } })),
+      ),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(commonEn.errors.windows[reason].title);
+    expect(alert).toHaveTextContent(code);
+  });
+
+  it('is worded in Turkish', async () => {
+    await open('admin', windowsWinRMTargetFixture, 'tr');
+    expect(screen.getByText('WinRM (HTTPS, NTLM)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Kurulum betiğini yeniden göster' })).toBeInTheDocument();
+    // The panel only: the page's own texts name http.sys, which reads like a key.
+    expectNoRawKeys(screen.getByTestId('winrm-password'));
   });
 });

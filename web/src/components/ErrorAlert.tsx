@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ApiError, NetworkError } from '../api/client';
 import { keyAlgorithmKey } from '../api/enums';
 import { withRoleCode } from './CodeText';
+import { titleKey } from './JobErrorAlert';
 
 // ErrorCodeLine writes the translated "Error code: {{code}}" with the code itself in a <Code translate="no">, wherever
 // the language puts the placeholder (the sentence stays the translator's; nothing is assembled from parts).
@@ -58,7 +59,7 @@ export function ErrorAlert({ error }: { error: unknown }) {
   const known = base !== '' && i18n.exists(`${base}.title`);
   // An unknown key still has the server's own text; with no key or no text there is only the generic message.
   const title = known
-    ? t(`${base}.title`, params)
+    ? t(titleKey(i18n, base, params), params)
     : base !== '' && error.message
       ? error.message
       : t('ui.unexpectedError');

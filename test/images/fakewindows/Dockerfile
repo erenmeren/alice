@@ -10,6 +10,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/alice-fakewindows/ cmd/alice-fakewindows/
+COPY internal/providers/*.go internal/providers/
+COPY internal/providers/windows/winrs/ internal/providers/windows/winrs/
 COPY internal/providers/windows/wintest/ internal/providers/windows/wintest/
 COPY internal/providers/windows/winhelper/ internal/providers/windows/winhelper/
 COPY internal/providers/windows/winproto/ internal/providers/windows/winproto/
@@ -21,6 +23,11 @@ COPY internal/providers/haproxyconf/ internal/providers/haproxyconf/
 COPY internal/providers/nginx/nginxconf/ internal/providers/nginx/nginxconf/
 COPY internal/testutil/pki/ internal/testutil/pki/
 COPY internal/platform/clock/ internal/platform/clock/
+COPY internal/platform/azureid/ internal/platform/azureid/
+COPY internal/platform/db/ internal/platform/db/
+COPY internal/platform/netaddr/ internal/platform/netaddr/
+COPY internal/platform/validate/ internal/platform/validate/
+COPY internal/secrets/ internal/secrets/
 RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-fakewindows ./cmd/alice-fakewindows
 
 FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2

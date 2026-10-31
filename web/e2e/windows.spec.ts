@@ -22,7 +22,8 @@ import {
 // compose service fakewindows (cmd/alice-fakewindows, the demo host of internal/providers/windows/wintest): Windows
 // Server 2022 Datacenter 10.0.20348.2700 with IIS 10.0, the sites "Default Web Site" (https *:443:www.win.example.test,
 // SNI) and "Intranet" (https *:8443:), and the http.sys entries hostnameport www.win.example.test:443 (IIS, My), ipport
-// 0.0.0.0:8443 (IIS, WebHosting), ipport 0.0.0.0:5986 (WinRM: another application) and ccs 443. Its helper answers come
+// 0.0.0.0:8443 (IIS, WebHosting), ipport 0.0.0.0:5986 (WinRM: another application), ccs 443 and ipport 0.0.0.0:9444 (IIS,
+// the site "WinRM Journey" that only windows-winrm.spec.ts deploys to, R71). Its helper answers come
 // from the helper's own code behind an SSH server that behaves like Windows OpenSSH. Every visible text is read from the
 // locale files at run time (translator).
 
@@ -92,8 +93,8 @@ async function deployToWeb(page: Page, t: Translate, subject: string, label: str
   await bindingRow(page, t, WEB).getByRole('button', { name: new RegExp(`^${escapeRegExp(prefix)}`) }).click();
   const dialog = page.getByRole('dialog', { name: t('deploy.title') });
   const groups = dialog.getByTestId('deploy-certificate-group');
-  // R69: the Remote Desktop listener's self-signed certificate is a group of its own.
-  await expect(groups, 'the picker groups the bindings by the certificate they serve').toHaveCount(5);
+  // R69: the Remote Desktop listener's self-signed certificate is a group of its own; R71: so is the 9444 binding's.
+  await expect(groups, 'the picker groups the bindings by the certificate they serve').toHaveCount(6);
   const group = groups.filter({ has: page.getByRole('heading', { level: 3, name: subject, exact: true }) });
   await expect(group).toHaveCount(1);
   await group.getByRole('button', { name: t('deploy.selectGroupNamed', { name: subject }) }).click();
@@ -196,11 +197,11 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByText(t('targets.page.operationsTextWindows'))).toBeVisible();
 
       // 4. One row per http.sys binding, with its IIS site; the WinRM and the CCS bindings are listed, not supported. R69:
-      // the Remote Desktop listener is a fifth row, so the column names a place.
+      // the Remote Desktop listener is a fifth row, so the column names a place. R71: the 9444 binding is a sixth.
       const table = page.getByRole('table', { name: t('locations.tableLabel') });
       await expect(table.getByRole('columnheader', { name: t('webServer.siteColumn.windows'), exact: true })).toBeVisible();
       await expect(table.getByRole('columnheader', { name: t('locations.columns.place'), exact: true })).toBeVisible();
-      await expect(table.getByTestId('location-row')).toHaveCount(5);
+      await expect(table.getByTestId('location-row')).toHaveCount(6);
       for (const text of [WEB, INTRANET, WINRM, CCS]) await expect(bindingRow(page, t, text), text).toHaveCount(1);
       await expect(bindingRow(page, t, WEB)).toContainText('Default Web Site');
       await expect(bindingRow(page, t, WEB).getByRole('link', { name: 'www.win.example.test', exact: true })).toBeVisible();
@@ -225,14 +226,14 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(usedWhere.getByRole('link', { name: SERVER, exact: true })).toBeVisible();
       await expect(usedWhere.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) })).toBeVisible();
 
-      // 7. R61: the bindings grouped by the certificate they serve (three certificates, the Remote Desktop listener's
-      // self-signed one (R69), and the CCS entry without one).
+      // 7. R61: the bindings grouped by the certificate they serve (three certificates, the 9444 binding's (R71), the
+      // Remote Desktop listener's self-signed one (R69), and the CCS entry without one).
       const first = newCert(HOST);
       const firstLabel = `win-renewal-1-${lang}`;
       await uploadPair(page, t, first, firstLabel);
       await openServer(page, t);
       const groups = page.getByTestId('certificate-group');
-      await expect(groups).toHaveCount(5);
+      await expect(groups).toHaveCount(6);
       const webGroup = groups.filter({ has: page.locator('code', { hasText: new RegExp(`^${escapeRegExp(WEB)}$`) }) });
       await expect(webGroup.getByTestId('certificate-group-row')).toContainText(HOST);
       await expect(webGroup.getByTestId('certificate-group-row')).toContainText(t('locations.group.count', { count: 1 }));

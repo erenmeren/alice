@@ -176,6 +176,15 @@ export const setCertificateCleanup = (id: string, certificateCleanup: boolean, v
 export const setCCSPassword = (id: string, version: number, password: string) =>
   apiFetch<Target>(`${v1}/targets/${enc(id)}/ccs-password`, { method: 'PUT', body: { password }, headers: ifMatchVersion(version) });
 
+// setWinRMPassword sets the password of the account Alice signs in with over WinRM (R71 Ruling 7), as setCCSPassword
+// sets the CCS password: an Administrator's, with a fresh step-up and the server's version (If-Match). The answer is
+// the server with its new winrm_password_set_at, never the password.
+export const setWinRMPassword = (id: string, version: number, password: string) =>
+  apiFetch<Target>(`${v1}/targets/${enc(id)}/winrm-password`, { method: 'PUT', body: { password }, headers: ifMatchVersion(version) });
+
+// getWinRMSetup is the PowerShell script that prepares a Windows server for WinRM (R71 Ruling 19); it holds no secret.
+export const getWinRMSetup = (id: string) => apiFetch<{ script: string }>(`${v1}/targets/${enc(id)}/winrm-setup`);
+
 export const createTarget = (req: TargetCreateRequest) =>
   apiFetch<TargetCreated>(`${v1}/targets`, { method: 'POST', body: req });
 

@@ -16,6 +16,7 @@ import type { HostKey, JobAccepted, JobError, KeyLocation, Target } from '../api
 import { useAuth } from '../auth/AuthProvider';
 import { canOn } from '../auth/permissions';
 import { PageLoader } from '../auth/guards';
+import { WinRMSetupScript } from '../components/AddServerModal';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { HostKeyConfirm } from '../components/HostKeyConfirm';
@@ -86,6 +87,7 @@ export function TargetDetailPage() {
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [showingScript, setShowingScript] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
   const [savingCleanup, setSavingCleanup] = useState(false);
   const [cleanupSaved, setCleanupSaved] = useState(false);
@@ -294,8 +296,14 @@ export function TargetDetailPage() {
                   {t('targets.page.readOnly')}
                 </StatusBadge>
               )}
+              {tg.transport === 'winrm' && (
+                <Button variant="default" leftSection={<Icon name="FileText" size={15} />} onClick={() => setShowingScript(true)}>
+                  {t('targets.winrm.showScript')}
+                </Button>
+              )}
             </Group>
           </Panel>
+          {tg.transport === 'winrm' && <CCSPasswordPanel kind="winrm" target={tg} canSet={canCredentials} />}
           {ccsEnabled(tg) && <CCSPasswordPanel target={tg} canSet={canCredentials} />}
           {can(tg, 'cleanup_certificates') && (
             <Panel title={t('targets.page.cleanup.title')}>
@@ -335,6 +343,11 @@ export function TargetDetailPage() {
             void runJob(() => Promise.resolve(accepted));
           }}
         />
+      )}
+      {showingScript && (
+        <AppModal opened onClose={() => setShowingScript(false)} title={t('targets.winrm.setupTitle')} size="lg">
+          <WinRMSetupScript targetId={tg.id} />
+        </AppModal>
       )}
       {moving && canAssign && <MoveDialog resource={{ type: 'target', id: tg.id, name: tg.name, service: tg.service }} onClose={() => setMoving(false)} />}
       {deleting && (
@@ -429,6 +442,7 @@ function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostK
     { key: 'address', label: t('targets.page.facts.address'), value: <Code translate="no">{`${target.host}:${target.port}`}</Code> },
     { key: 'user', label: t('targets.page.facts.user'), value: <Code translate="no">{target.username}</Code> },
   ];
+  if (target.transport === 'winrm') facts.push({ key: 'transport', label: t('targets.page.facts.transport'), value: t('targets.page.facts.transportWinrm') });
   if (isServerType(target.type)) facts.push({ key: 'platform', label: t('targets.page.facts.platform'), value: t(`targets.typeLabel.${target.type}`) });
   if (f.os.pretty_name) facts.push({ key: 'os', label: t('targets.page.facts.os'), value: f.os.pretty_name });
   if (f.helper_version) facts.push({ key: 'helper', label: t('targets.page.facts.helper'), value: f.helper_version });

@@ -7,8 +7,15 @@ import { withRoleCode } from './CodeText';
 // reasonTitle is the one-line text of a stable error reason (errors.<reason>.title); an unknown
 // reason gets the generic message, never the raw reason.
 export function reasonTitle(t: TFunction, i18n: I18n, reason: string, params: Record<string, string> = {}): string {
-  const key = `errors.${reason}.title`;
+  const key = titleKey(i18n, `errors.${reason}`, params);
   return i18n.exists(key) ? t(key, params) : t('ui.unexpectedError');
+}
+
+// titleKey is <base>.title, or <base>.title_winrm when the error came over WinRM (param transport=winrm) and that text
+// exists: the ssh.* reasons a WinRM call reuses then name WinRM (R71 Ruling 13).
+export function titleKey(i18n: I18n, base: string, params: Record<string, string>): string {
+  const winrm = `${base}.title_winrm`;
+  return params.transport === 'winrm' && i18n.exists(winrm) ? winrm : `${base}.title`;
 }
 
 // StillWorkingAlert: the screen stopped waiting for a job that has not finished.

@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import commonEn from '@locales/common/en.json';
 import type { Target } from '../api/types';
-import { setCCSPassword } from '../api/endpoints';
+import { setCCSPassword, setWinRMPassword } from '../api/endpoints';
 import { formatDateTime } from '../datetime';
-import { errorResponse, sessionFor, sessionHandlers, windowsCCSTargetFixture } from '../test/fixtures';
+import { errorResponse, sessionFor, sessionHandlers, windowsCCSTargetFixture, windowsWinRMTargetFixture } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
@@ -14,7 +14,7 @@ import { CCSPasswordPanel } from './CCSPasswordPanel';
 // The endpoint is counted, not replaced: two submits in one tick must send one request (W5-12b, R70).
 vi.mock('../api/endpoints', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api/endpoints')>();
-  return { ...mod, setCCSPassword: vi.fn(mod.setCCSPassword) };
+  return { ...mod, setCCSPassword: vi.fn(mod.setCCSPassword), setWinRMPassword: vi.fn(mod.setWinRMPassword) };
 });
 
 const SET_AT = '2026-10-27T09:30:00Z';
@@ -155,6 +155,79 @@ describe('CCSPasswordPanel', () => {
     const view = await renderWithStepUp(<CCSPasswordPanel target={windowsCCSTargetFixture} canSet />, ['tr-TR']);
     expect(screen.getByText('Ayarlanmadı')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Parolayı ayarla' })).toBeInTheDocument();
+    expectNoRawKeys(view.container);
+  });
+});
+
+// R71 Ruling 22: the same panel, kind winrm, sets the password Alice signs in with over WinRM.
+describe('CCSPasswordPanel kind="winrm"', () => {
+  const WINRM_URL = `/api/v1/targets/${windowsWinRMTargetFixture.id}/winrm-password`;
+  const winrmField = () => screen.getByLabelText(/^WinRM password/);
+
+  function onWinRMPut(answers: (() => Response)[] = []) {
+    const puts: { body: unknown; ifMatch: string | null }[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.put(WINRM_URL, async ({ request }) => {
+        puts.push({ body: await request.json(), ifMatch: request.headers.get('If-Match') });
+        const next = answers[puts.length - 1];
+        return next ? next() : HttpResponse.json({ ...windowsWinRMTargetFixture, winrm_password_set_at: SET_AT, version: windowsWinRMTargetFixture.version + 1 });
+      }),
+      http.put(PUT_URL, () => {
+        throw new Error('the CCS endpoint must not be called');
+      }),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(sessionFor('admin'))),
+    );
+    return puts;
+  }
+
+  it('sets the WinRM password through the step-up with the version, shows the date and never the password', async () => {
+    const puts = onWinRMPut([() => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')]);
+    vi.mocked(setWinRMPassword).mockClear();
+    vi.mocked(setCCSPassword).mockClear();
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={windowsWinRMTargetFixture} canSet onSaved={onSaved} />);
+    expect(screen.getByRole('heading', { name: 'WinRM password', level: 2 })).toBeInTheDocument();
+    expect(screen.getByText(/a different password on every server/)).toBeInTheDocument();
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+    const pw = secret(18);
+    await user.type(winrmField(), pw);
+    await user.click(screen.getByRole('button', { name: 'Set password' }));
+    await user.type(await screen.findByLabelText('6-digit code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(puts).toHaveLength(2));
+    expect(puts[1]).toEqual({ body: { password: pw }, ifMatch: `"${windowsWinRMTargetFixture.version}"` });
+    expect(setCCSPassword).not.toHaveBeenCalled();
+    expect(await screen.findByText(formatDateTime(SET_AT, 'en-US'))).toBeInTheDocument();
+    expect(winrmField()).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Replace password' })).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(pw);
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ winrm_password_set_at: SET_AT }));
+  });
+
+  it('refuses a password outside the rule with the WinRM text', async () => {
+    const puts = onWinRMPut();
+    const user = userEvent.setup();
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={windowsWinRMTargetFixture} canSet />);
+    await user.type(winrmField(), secret(11));
+    await user.click(screen.getByRole('button', { name: 'Set password' }));
+    expect(await screen.findByText(commonEn.errors.windows.winrm_password_invalid.cause)).toBeInTheDocument();
+    expect(puts).toHaveLength(0);
+  });
+
+  it('shows the date of the WinRM password, not of the CCS password', async () => {
+    server.use(...sessionHandlers(sessionFor('operator')));
+    const target: Target = { ...windowsWinRMTargetFixture, ccs_password_set_at: '2026-01-01T00:00:00Z', winrm_password_set_at: SET_AT };
+    await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={target} canSet={false} />);
+    expect(screen.getByText(formatDateTime(SET_AT, 'en-US'))).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^WinRM password/)).not.toBeInTheDocument();
+  });
+
+  it('is worded in Turkish', async () => {
+    server.use(...sessionHandlers(sessionFor('admin', 'tr')));
+    const view = await renderWithStepUp(<CCSPasswordPanel kind="winrm" target={windowsWinRMTargetFixture} canSet />, ['tr-TR']);
+    expect(screen.getByRole('heading', { name: 'WinRM parolası', level: 2 })).toBeInTheDocument();
     expectNoRawKeys(view.container);
   });
 });
