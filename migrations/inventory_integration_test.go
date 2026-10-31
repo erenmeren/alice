@@ -64,7 +64,8 @@ func TestInventoryTablesGrantOnlyWhatTheAppNeeds(t *testing.T) {
 	for _, stmt := range []string{
 		"DELETE FROM targets",
 		"DELETE FROM credentials",
-		"UPDATE credentials SET rotated_at = now()",
+		"UPDATE credentials SET ciphertext = '\\x01'", // 00039 opens rotated_at only (R72 Ruling 7)
+		"UPDATE credentials SET target_id = target_id",
 		"DELETE FROM host_keys",
 		"DELETE FROM ssh_keys",
 		"DELETE FROM ssh_key_locations",
@@ -83,6 +84,7 @@ func TestInventoryTablesGrantOnlyWhatTheAppNeeds(t *testing.T) {
 	assert.Equal(t, "Z1005", sqlState(exec(t, d.App, "UPDATE targets SET credential_id = credential_id WHERE id = $1", target)),
 		"a server's credential cannot be changed by the application")
 	require.NoError(t, exec(t, d.App, "UPDATE targets SET deleted_at = now() WHERE id = $1", target), "soft delete")
+	require.NoError(t, exec(t, d.App, "UPDATE credentials SET rotated_at = now()"), "a password row is ended, never deleted (00039)")
 	jobID, err := seedJob(t, d, nil, "succeeded")
 	require.NoError(t, err)
 	require.NoError(t, exec(t, d.App, "DELETE FROM jobs WHERE id = $1", jobID), "finished jobs are pruned")

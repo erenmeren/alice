@@ -395,3 +395,82 @@ func TestSetCCSPasswordOnANonWindowsTargetIsAConflict(t *testing.T) {
 	assert.Zero(t, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", f.web), "nothing stored")
 	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'target.ccs_password_set'"))
 }
+
+// liveRows counts the live (not ended) rows of purpose on target.
+func liveRows(h *harness, target uuid.UUID, purpose string) int {
+	return h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND purpose = $2 AND rotated_at IS NULL", target, purpose)
+}
+
+// R72 Rulings 7-8 (WIN-78): removing the CCS password ends its live rows (rotated_at), deletes nothing, moves the version
+// and audits target.ccs_password_removed without the secret; a removal with nothing set changes nothing; a set after it
+// makes one live row again. A stale version and a server that is not Windows are refused, nothing changed.
+func TestClearTargetPassword(t *testing.T) {
+	f := newCCSFixture(t)
+	h := f.h
+	server := mustTarget(t, h, f.server)
+	pw := ccsPassword()
+	set, err := setCCS(t, h, f.admin, server, pw)
+	require.NoError(t, err)
+
+	_, err = h.svc.ClearCCSPassword(h.ctx, f.admin, server.ID, server.Version)
+	require.ErrorIs(t, err, inventory.ErrVersionMismatch)
+	web := mustTarget(t, h, f.web)
+	_, err = h.svc.ClearCCSPassword(h.ctx, f.admin, web.ID, web.Version)
+	require.ErrorIs(t, err, inventory.ErrNotWindowsTarget)
+	assert.Equal(t, 1, liveRows(h, server.ID, "win_ccs"), "nothing ended by a refusal")
+
+	h.clock.Advance(time.Minute)
+	cleared, err := h.svc.ClearCCSPassword(h.ctx, f.admin, server.ID, set.Version)
+	require.NoError(t, err)
+	assert.Nil(t, cleared.CCSPasswordSetAt)
+	assert.Equal(t, set.Version+1, cleared.Version)
+	assert.Nil(t, mustTarget(t, h, server.ID).CCSPasswordSetAt)
+	var rotated *time.Time
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT rotated_at FROM credentials WHERE target_id = $1 AND purpose = 'win_ccs'",
+		server.ID).Scan(&rotated))
+	require.NotNil(t, rotated, "the row is kept, ended")
+	assert.Equal(t, h.clock.Now().UTC(), rotated.UTC())
+	_, _, err = ccsSource(t, h).CCSPassword(h.ctx, server.ID)
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+	require.ErrorIs(t, err, providers.ErrNoCCSPassword)
+	var details string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, `SELECT details::text FROM audit_log WHERE action = 'target.ccs_password_removed' AND object_id = $1`,
+		server.ID.String()).Scan(&details))
+	assert.Contains(t, details, "iis-02")
+	assert.NotContains(t, details, string(pw), "the audit row holds no secret")
+	var credID uuid.UUID
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT id FROM credentials WHERE target_id = $1", server.ID).Scan(&credID))
+	assert.Contains(t, details, credID.String(), "the ended credential is named")
+
+	again, err := h.svc.ClearCCSPassword(h.ctx, f.admin, server.ID, cleared.Version)
+	require.NoError(t, err, "nothing to remove is not an error")
+	assert.Equal(t, cleared.Version, again.Version, "nothing changed")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM audit_log WHERE action = 'target.ccs_password_removed'"), "and nothing audited")
+
+	next := ccsPassword()
+	reset, err := setCCS(t, h, f.admin, again, next)
+	require.NoError(t, err)
+	require.NotNil(t, reset.CCSPasswordSetAt)
+	assert.Equal(t, 1, liveRows(h, server.ID, "win_ccs"))
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", server.ID))
+	pt, release, err := ccsSource(t, h).CCSPassword(h.ctx, server.ID)
+	require.NoError(t, err)
+	assert.Equal(t, next, pt.Bytes())
+	release()
+}
+
+// R72 Ruling 7: a set ends the live row before its insert, so one live row per purpose stays the invariant.
+func TestSetTargetPasswordEndsTheOlderRow(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	win := winTarget(t, h, admin, "iis-01")
+	first, err := setCCS(t, h, admin, win, ccsPassword())
+	require.NoError(t, err)
+	h.clock.Advance(time.Hour)
+	second, err := setCCS(t, h, admin, first, ccsPassword())
+	require.NoError(t, err)
+	assert.Equal(t, 2, h.count("SELECT count(*) FROM credentials WHERE target_id = $1", win.ID), "nothing deleted")
+	assert.Equal(t, 1, liveRows(h, win.ID, "win_ccs"))
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND rotated_at = $2", win.ID, *second.CCSPasswordSetAt),
+		"the older row ended when the newer was set")
+}

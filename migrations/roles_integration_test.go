@@ -180,7 +180,9 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// 00026 adds service_id here and on the other owned tables (moving a resource to another service, R49).
 	"public.targets": {"UPDATE": {"capabilities", "certificate_cleanup", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
 		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "service_id", "status", "updated_at", "version"}},
-	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
+	// 00039 adds rotated_at: a removed or replaced password row is ended, never deleted (R72 Ruling 7).
+	"public.credentials": {"UPDATE": {"rotated_at"}},
+	"public.host_keys":   {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	// Phase 6 adds retired_at (a rotation retires its old key; a key found live again is un-retired).
 	"public.ssh_keys": {"UPDATE": {"is_platform_key", "retired_at", "service_id", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
@@ -330,6 +332,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	groundwork := hasColumn(t, d, "certificate_locations", "locator")
 	cleanupSwitch := hasColumn(t, d, "targets", "certificate_cleanup")
 	canary := hasColumn(t, d, "deployments", "revert_reason")
+	oneHost := indexCount(t, d) == 1
 	for rows.Next() {
 		var (
 			name, kind string
@@ -420,6 +423,10 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "settings"
 			})}
+		}
+		if name == "public.credentials" && !oneHost {
+			// Below 00039 credentials are append-only for the application.
+			wantColumns = nil
 		}
 		if name == "public.targets" && !cleanupSwitch {
 			// Below 00032 a server has no cleanup switch.

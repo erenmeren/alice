@@ -550,6 +550,8 @@ type fakeInventory struct {
 	ReplaceVaultCredentialsFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, in inventory.VaultCredentialInput) (inventory.Target, providers.ConnectionReport, uuid.UUID, error)
 	SetCCSPasswordFn               func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
 	SetWinRMPasswordFn             func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (inventory.Target, error)
+	ClearCCSPasswordFn             func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int) (inventory.Target, error)
+	ClearWinRMPasswordFn           func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int) (inventory.Target, error)
 	WinRMSetupFn                   func(ctx context.Context, target uuid.UUID, from string) (inventory.WinRMSetup, error)
 	DeleteVaultFn                  func(ctx context.Context, a inventory.Actor, id uuid.UUID, removeBindings bool) error
 	RequestAccessCheckFn           func(ctx context.Context, a inventory.Actor, vaultID, readSecretOf uuid.UUID) (uuid.UUID, error)
@@ -841,6 +843,20 @@ func (f *fakeInventory) SetCCSPassword(ctx context.Context, a inventory.Actor, t
 func (f *fakeInventory) SetWinRMPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, v int, pw secrets.Plaintext) (inventory.Target, error) {
 	if f.SetWinRMPasswordFn != nil {
 		return f.SetWinRMPasswordFn(ctx, a, target, v, pw)
+	}
+	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) ClearCCSPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, v int) (inventory.Target, error) {
+	if f.ClearCCSPasswordFn != nil {
+		return f.ClearCCSPasswordFn(ctx, a, target, v)
+	}
+	return inventory.Target{}, errNotConfigured
+}
+
+func (f *fakeInventory) ClearWinRMPassword(ctx context.Context, a inventory.Actor, target uuid.UUID, v int) (inventory.Target, error) {
+	if f.ClearWinRMPasswordFn != nil {
+		return f.ClearWinRMPasswordFn(ctx, a, target, v)
 	}
 	return inventory.Target{}, errNotConfigured
 }

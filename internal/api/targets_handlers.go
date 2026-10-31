@@ -41,6 +41,8 @@ func (s *server) targetRoutes() []route {
 		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/ccs-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.setCCSPassword},
 		// R71 Rulings 7 and 19: the WinRM password is set as the CCS password; the setup script holds no secret.
 		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/winrm-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.setWinRMPassword},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}/ccs-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.clearCCSPassword},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}/winrm-password", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.clearWinRMPassword},
 		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/winrm-setup", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.winrmSetup},
 	}
 }
@@ -208,6 +210,39 @@ func (s *server) setTargetPassword(w http.ResponseWriter, r *http.Request,
 	}
 	w.Header().Set("ETag", etag(t.Version))
 	writeJSON(w, http.StatusOK, targetJSON(t, refs))
+}
+
+// clearCCSPassword removes the CCS password of a Windows server (R72 Ruling 10).
+func (s *server) clearCCSPassword(w http.ResponseWriter, r *http.Request) {
+	s.clearTargetPassword(w, r, s.deps.Inventory.ClearCCSPassword)
+}
+
+// clearWinRMPassword removes the WinRM password of a Windows server whose transport is winrm (R72 Ruling 10).
+func (s *server) clearWinRMPassword(w http.ResponseWriter, r *http.Request) {
+	s.clearTargetPassword(w, r, s.deps.Inventory.ClearWinRMPassword)
+}
+
+// clearTargetPassword removes a password credential of a Windows server with clear: no body, If-Match required; the
+// answer is the target (unchanged when nothing was set, R72 Ruling 8) with its ETag.
+func (s *server) clearTargetPassword(w http.ResponseWriter, r *http.Request,
+	clear func(ctx context.Context, a inventory.Actor, target uuid.UUID, ifVersion int) (inventory.Target, error)) {
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	version, ok := ifMatch(r)
+	if !ok {
+		s.writeError(w, r, ErrPreconditionFailed)
+		return
+	}
+	t, err := clear(r.Context(), s.actor(r), id, version)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", etag(t.Version))
+	writeJSON(w, http.StatusOK, targetJSON(t, s.serviceRefs(r)))
 }
 
 // winrmSetup answers the WinRM setup script of a Windows server whose transport is winrm (R71 Ruling 19). script is ""

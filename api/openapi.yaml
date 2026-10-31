@@ -2517,8 +2517,8 @@ paths:
       description: >-
         The private-key password IIS's Centralized Certificate Store (CCS) opens its PFX files with, one per Windows server.
         Alice stores it sealed, as a credential of the server, and sends it to the server's helper only on standard input
-        when it reads or writes a CCS file; a new password replaces the old one (both are kept sealed as history; there is
-        no delete). The answer is the target, whose ccs_password_set_at says when the password was set; the password is
+        when it reads or writes a CCS file; a new password replaces the old one (both are kept sealed as history; DELETE
+        removes it). The answer is the target, whose ccs_password_set_at says when the password was set; the password is
         never answered, logged or audited (audited as target.ccs_password_set, without it). It must have 12 to 128
         characters of printable ASCII without spaces (422 ALC-WIN-0019 otherwise, nothing stored). A target that is not a
         Windows server is 409 ALC-WIN-0011. If-Match with the target's ETag is required (412 ALC-SYS-0008); the body is
@@ -2553,6 +2553,35 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: clearCCSPassword
+      summary: Remove the CCS password of a Windows server (R72)
+      description: >-
+        Ends the server's live CCS password: the stored row is kept, sealed under the master key in the database and
+        in backups, and is never used again (nothing is erased). The answer is the target, whose ccs_password_set_at
+        is null, with its new ETag; the removal is audited as target.ccs_password_removed with the ended credential
+        ids, never the password. With no password set the answer is 200 with the target unchanged (no new version, no
+        audit). A target that is not a Windows server is 409 ALC-WIN-0011. Deployments to CCS files are then refused with ALC-WIN-0018 and discovery lists no CCS file until a new password is set. If-Match with the target's ETag is required (412 ALC-SYS-0008); there is no body. Needs an
+        Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is
+        never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: credentials.manage
+      x-scope: resource
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "200":
+          description: The Windows server with ccs_password_set_at null
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/winrm-password:
     parameters:
       - { $ref: "#/components/parameters/ID" }
@@ -2562,8 +2591,8 @@ paths:
       description: >-
         The password of the server's account (config username) that Alice signs in with over WinRM (HTTPS, NTLMv2), one
         per Windows server whose transport is winrm. Alice stores it sealed, as a credential of the server, and decrypts
-        it for one helper call at a time; a new password replaces the old one (both are kept sealed as history; there is
-        no delete). Until one is set, every call to the server is refused with 409 ALC-WIN-0025, nothing dialled. The
+        it for one helper call at a time; a new password replaces the old one (both are kept sealed as history; DELETE
+        removes it). Until one is set, every call to the server is refused with 409 ALC-WIN-0025, nothing dialled. The
         answer is the target, whose winrm_password_set_at says when the password was set; the password is never
         answered, logged or audited (audited as target.winrm_password_set, without it). It must have 12 to 128
         characters of printable ASCII without spaces (422 ALC-WIN-0028 otherwise, nothing stored). A target that is not a
@@ -2597,6 +2626,35 @@ paths:
         "412": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: clearWinRMPassword
+      summary: Remove the WinRM password of a Windows server (R72)
+      description: >-
+        Ends the server's live WinRM password: the stored row is kept, sealed under the master key in the database and
+        in backups, and is never used again (nothing is erased). The answer is the target, whose winrm_password_set_at
+        is null, with its new ETag; the removal is audited as target.winrm_password_removed with the ended credential
+        ids, never the password. With no password set the answer is 200 with the target unchanged (no new version, no
+        audit). A target that is not a Windows server, or a Windows server whose transport is ssh, is 409 ALC-WIN-0011. Every call to the server is then refused with 409 ALC-WIN-0025, nothing dialled, until a new password is set. If-Match with the target's ETag is required (412 ALC-SYS-0008); there is no body. Needs an
+        Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is
+        never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: credentials.manage
+      x-scope: resource
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "200":
+          description: The Windows server with winrm_password_set_at null
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Target" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/targets/{id}/winrm-setup:

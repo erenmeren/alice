@@ -388,3 +388,84 @@ func TestWindowsHostAlreadyManagedHandler(t *testing.T) {
 		assert.Equal(t, want, decodeErr(t, rec).Error.Code)
 	}
 }
+
+// R72 Rulings 8 and 10 (WIN-78): DELETE /targets/{id}/winrm-password and /ccs-password are the PUTs' twins: an
+// Administrator with a fresh step-up, never a token, If-Match required, no body; the answer is the target with its ETag
+// and a null *_password_set_at.
+func TestClearTargetPasswordHandlers(t *testing.T) {
+	for _, c := range []struct {
+		route, field string
+		set          func(inv *fakeInventory, fn func(context.Context, inventory.Actor, uuid.UUID, int) (inventory.Target, error))
+		target       func() inventory.Target
+	}{
+		{"winrm-password", "winrm_password_set_at",
+			func(inv *fakeInventory, fn func(context.Context, inventory.Actor, uuid.UUID, int) (inventory.Target, error)) {
+				inv.ClearWinRMPasswordFn = fn
+			},
+			func() inventory.Target {
+				tg := sampleWindows(nil)
+				tg.Port, tg.Transport, tg.Version = 5986, inventory.TransportWinRM, 8
+				return tg
+			}},
+		{"ccs-password", "ccs_password_set_at",
+			func(inv *fakeInventory, fn func(context.Context, inventory.Actor, uuid.UUID, int) (inventory.Target, error)) {
+				inv.ClearCCSPasswordFn = fn
+			},
+			func() inventory.Target {
+				tg := sampleWindows(nil)
+				tg.Version = 8
+				return tg
+			}},
+	} {
+		t.Run(c.route, func(t *testing.T) {
+			h, inv, _ := ccsDeps(t)
+			path := "/api/v1/targets/" + targetID.String() + "/" + c.route
+			hdr := map[string]string{"If-Match": `"7"`}
+			var (
+				calls int
+				ver   int
+				id    uuid.UUID
+			)
+			c.set(inv, func(_ context.Context, _ inventory.Actor, target uuid.UUID, v int) (inventory.Target, error) {
+				calls++
+				ver, id = v, target
+				return c.target(), nil
+			})
+
+			rec := callWith(h, http.MethodDelete, path, "admin", "", hdr)
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+			assert.Equal(t, "ALC-AUTH-0003", decodeErr(t, rec).Error.Code, "an Administrator needs a fresh step-up")
+			rec = callWith(h, http.MethodDelete, path, "alice_operate_admin", "", hdr)
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+			assert.Equal(t, "ALC-AUTH-0002", decodeErr(t, rec).Error.Code, "never an API token")
+			assert.Equal(t, http.StatusForbidden, callWith(h, http.MethodDelete, path, "operator-stepup", "", hdr).Code, "an Operator")
+			rec = call(h, http.MethodDelete, path, "admin-stepup", "")
+			assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+			assert.Equal(t, "ALC-SYS-0008", decodeErr(t, rec).Error.Code, "If-Match is required")
+			assert.Zero(t, calls, "no refusal reached the inventory")
+
+			rec = callWith(h, http.MethodDelete, path, "admin-stepup", "", hdr)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Equal(t, 7, ver)
+			assert.Equal(t, targetID, id)
+			assert.Equal(t, `"8"`, rec.Header().Get("ETag"), "the new version")
+			obj := jsonObj(t, rec)
+			v, ok := obj[c.field]
+			assert.True(t, ok, c.field)
+			assert.Nil(t, v)
+			assert.Equal(t, targetID.String(), obj["id"], "the answer is the target")
+
+			for err, want := range map[error]string{inventory.ErrVersionMismatch: "ALC-SYS-0008", inventory.ErrNotWindowsTarget: "ALC-WIN-0011"} {
+				c.set(inv, func(context.Context, inventory.Actor, uuid.UUID, int) (inventory.Target, error) {
+					return inventory.Target{}, err
+				})
+				assert.Equal(t, want, decodeErr(t, callWith(h, http.MethodDelete, path, "admin-stepup", "", hdr)).Error.Code, "%v", err)
+			}
+			c.set(inv, func(context.Context, inventory.Actor, uuid.UUID, int) (inventory.Target, error) {
+				return inventory.Target{}, inventory.ErrNotFound
+			})
+			assert.Equal(t, http.StatusNotFound, callWith(h, http.MethodDelete, path, "admin-stepup", "", hdr).Code)
+			assert.Equal(t, http.StatusNotFound, callWith(h, http.MethodDelete, "/api/v1/targets/x/"+c.route, "admin-stepup", "", hdr).Code)
+		})
+	}
+}

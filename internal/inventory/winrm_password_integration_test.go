@@ -15,6 +15,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/windows"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -336,4 +337,43 @@ func TestWinRMSetupOnlyForWinRMTargets(t *testing.T) {
 	}
 	_, err = h.svc.WinRMSetup(h.ctx, uuid.New(), "")
 	require.ErrorIs(t, err, inventory.ErrNotFound)
+}
+
+// R72 Rulings 7 and 9 (WIN-78): after ClearWinRMPassword the server is in the "not set" state: WinRMPasswordSetAt is nil,
+// the source answers ErrNoWinRMPassword and the provider refuses its first call windows.winrm_password_missing before any
+// dial. The SSH Windows server and a Linux server are refused as the PUT refuses them.
+func TestWinRMTargetAfterPasswordRemoval(t *testing.T) {
+	h := newHarness(t, withWindowsProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	win := winrmTarget(t, h, admin, "iis-01")
+	ssh := winTarget(t, h, admin, "iis-02")
+	linux := okTarget(t, h, admin, "web-01")
+	for _, tg := range []inventory.Target{ssh, linux} {
+		_, err := h.svc.ClearWinRMPassword(h.ctx, admin, tg.ID, tg.Version)
+		require.ErrorIs(t, err, inventory.ErrNotWindowsTarget, tg.Name)
+	}
+	pw := winrmPassword()
+	set, err := setWinRM(t, h, admin, win, pw)
+	require.NoError(t, err)
+	cleared, err := h.svc.ClearWinRMPassword(h.ctx, admin, win.ID, set.Version)
+	require.NoError(t, err)
+	assert.Nil(t, cleared.WinRMPasswordSetAt)
+	assert.Equal(t, set.Version+1, cleared.Version)
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM credentials WHERE target_id = $1 AND rotated_at IS NOT NULL", win.ID), "kept, ended")
+	var details string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, `SELECT details::text FROM audit_log WHERE action = 'target.winrm_password_removed' AND object_id = $1`,
+		win.ID.String()).Scan(&details))
+	assert.Contains(t, details, "iis-01")
+	assert.NotContains(t, details, string(pw))
+	_, _, err = winrmSource(t, h).WinRMPassword(h.ctx, win.ID)
+	require.ErrorIs(t, err, providers.ErrNoWinRMPassword)
+
+	ref, _, err := h.svc.TargetRef(h.ctx, win.ID)
+	require.NoError(t, err)
+	pool := linuxssh.NewPool(&linuxssh.Dialer{Clock: h.clock, HostKeys: h.svc.HostKeyStore()}, linuxssh.MaxConnections, 16, linuxssh.IdleTimeout)
+	defer pool.Close()
+	_, err = windows.New(windows.Options{Pool: pool}).Open(h.ctx, ref, h.svc.Credentials(), providers.Env{Clock: h.clock, HostKeys: h.svc.HostKeyStore()})
+	var perr *providers.Error
+	require.ErrorAs(t, err, &perr)
+	assert.Equal(t, "windows.winrm_password_missing", perr.Code)
 }

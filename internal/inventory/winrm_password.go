@@ -13,8 +13,8 @@ import (
 
 // The WinRM password of a Windows server whose transport is winrm (R71 Rulings 5, 7 and 8), stored and read by the CCS
 // password's code (setTargetPassword, targetPassword) with its own spec: a credentials row of purpose win_winrm and kind winrm_password whose target_id is the server, sealed like
-// every credential (AAD credentials/<id>/ciphertext; public_info is empty). Rows are append-only and the newest row of a
-// server is its password; W7 has no delete. The password reaches the Windows provider only through the platform
+// every credential (AAD credentials/<id>/ciphertext; public_info is empty). A set or a removal ends the live row
+// (rotated_at, R72 Ruling 7); the live row is the password. The password reaches the Windows provider only through the platform
 // credential source (WinRMPassword), for one call at a time.
 
 const (
@@ -79,7 +79,7 @@ func requireWinRM(t Target) error {
 // winrmPasswordSpec is the WinRM password's targetPasswordSpec: a Windows server whose transport is winrm.
 var winrmPasswordSpec = targetPasswordSpec{purpose: purposeWinWinRM, kind: kindWinRMPassword, name: "WinRM", check: requireWinRM,
 	valid: validWinRMPassword, invalid: ErrWinRMPasswordInvalid, action: "target.winrm_password_set",
-	none: providers.ErrNoWinRMPassword, unusable: providers.ErrWinRMPasswordUnusable}
+	removed: "target.winrm_password_removed", none: providers.ErrNoWinRMPassword, unusable: providers.ErrWinRMPasswordUnusable}
 
 // SetWinRMPassword stores pw as the WinRM password of Windows server target, whose transport must be winrm and whose
 // version must be ifVersion, and returns the target with its new version and WinRMPasswordSetAt (setTargetPassword).
@@ -87,6 +87,13 @@ var winrmPasswordSpec = targetPasswordSpec{purpose: purposeWinWinRM, kind: kindW
 // change is ClassChange. Audited as target.winrm_password_set, without the secret.
 func (s *Service) SetWinRMPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int, pw secrets.Plaintext) (Target, error) {
 	return s.setTargetPassword(ctx, a, target, ifVersion, pw, winrmPasswordSpec)
+}
+
+// ClearWinRMPassword removes the WinRM password of Windows server target, whose transport must be winrm and whose
+// version must be ifVersion (clearTargetPassword). Afterwards every helper call is refused windows.winrm_password_missing
+// before any dial, until a new password is set (R72 Ruling 9).
+func (s *Service) ClearWinRMPassword(ctx context.Context, a Actor, target uuid.UUID, ifVersion int) (Target, error) {
+	return s.clearTargetPassword(ctx, a, target, ifVersion, winrmPasswordSpec)
 }
 
 // WinRMPassword implements providers.WinRMPasswordSource: it decrypts the newest WinRM password of live Windows server

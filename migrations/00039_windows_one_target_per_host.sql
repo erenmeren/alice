@@ -13,6 +13,10 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 CREATE UNIQUE INDEX targets_windows_host_live ON targets (lower(config->>'host')) WHERE type = 'windows' AND deleted_at IS NULL;
+-- Removing a CCS or WinRM password ends its live row (R72 Ruling 7): the application may set rotated_at, no other
+-- column; rows are still never deleted.
+GRANT UPDATE (rotated_at) ON credentials TO alice_app;
 
 -- +goose Down
+REVOKE UPDATE (rotated_at) ON credentials FROM alice_app;
 DROP INDEX targets_windows_host_live;

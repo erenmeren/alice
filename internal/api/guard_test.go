@@ -470,8 +470,8 @@ func TestRouteScopesMatchTheDesign(t *testing.T) {
 	}
 	// R64 adds the revocation check switch (read and change: platform). R65 adds a rollout's read and abort (resource) and
 	// its continue (cross). R68 adds the CCS password of a Windows server (resource). R71 adds its WinRM password and
-	// WinRM setup script (resource).
-	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6 + 4 + 9 + 1 + 2, scopeResource: 61 + 3 + 2 + 1 + 1 + 2 + 1 + 2, scopeList: 19 + 2, scopeCross: 16 + 3 + 1, scopeNone: 16,
+	// WinRM setup script (resource). R72 adds the removal of either password (resource).
+	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6 + 4 + 9 + 1 + 2, scopeResource: 61 + 3 + 2 + 1 + 1 + 2 + 1 + 2 + 2, scopeList: 19 + 2, scopeCross: 16 + 3 + 1, scopeNone: 16,
 		scopeSelf: 14, scopeAny: 13 + 1, scopeCreate: 7}, counts)
 	for key, want := range map[string]routeScope{
 		"GET /api/v1/discovery/settings": scopePlatform, "GET /api/v1/ssh-keys/platform-key": scopeAny,

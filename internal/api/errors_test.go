@@ -155,7 +155,8 @@ var notReasons = map[string]bool{
 	// The CCS password of a Windows server (R68): an audit action
 	"target.ccs_password_set": true,
 	// The WinRM password of a Windows server (R71): an audit action
-	"target.winrm_password_set": true,
+	"target.winrm_password_set":   true,
+	"target.ccs_password_removed": true, "target.winrm_password_removed": true, // R72 Ruling 7
 }
 
 // storedReasons collects the literal reasons (and package string constants) passed to reasonCalls

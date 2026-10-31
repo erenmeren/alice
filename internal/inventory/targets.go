@@ -30,8 +30,8 @@ import (
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
 discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at, service_id,
 certificate_cleanup, coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb),
-(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_ccs'),
-(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_winrm')`
+(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_ccs' AND c.rotated_at IS NULL),
+(SELECT max(c.created_at) FROM credentials c WHERE c.target_id = targets.id AND c.purpose = 'win_winrm' AND c.rotated_at IS NULL)`
 
 func scanTarget(row pgx.Row) (Target, error) {
 	var t Target
