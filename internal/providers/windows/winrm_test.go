@@ -561,3 +561,41 @@ func TestWinRMEarlyRefusalsCarryTheParams(t *testing.T) {
 	assert.Equal(t, reasonUnexpected, pe.Code)
 	assert.Equal(t, map[string]string{"transport": TransportWinRM, "subcommand": winproto.SubVersion}, pe.Params)
 }
+
+// Amended Ruling 4 (F25): WinRS starts the program through cmd.exe, so the one line cmd.exe parses is Alice's constant:
+// the Command element as the listener received it is exactly the quoted helper path with the argument ssh, with no
+// character cmd.exe expands or chains on. The variable part travels only in SSH_ORIGINAL_COMMAND, which cmd.exe never
+// parses: it is HelperCommand.Line(), whose tokens follow winproto's token rule.
+func TestWinRMCommandLineIsCmdSafe(t *testing.T) {
+	w := newWinRMEnv(t)
+	s := w.wopen(t)
+	_, err := s.TestConnection(context.Background())
+	require.NoError(t, err)
+	_, err = s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+	require.NoError(t, err)
+
+	const want = `<rsp:CommandLine><rsp:Command>"` + winproto.HelperPath + `"</rsp:Command><rsp:Arguments>ssh</rsp:Arguments></rsp:CommandLine>`
+	var lines []string
+	for _, r := range w.model.WinRMLog() {
+		switch r.Action {
+		case "Command":
+			assert.Equal(t, want, r.CommandLine, "the raw Command element")
+		case "Create":
+			lines = append(lines, r.Line)
+		}
+	}
+	require.Len(t, lines, 4)
+	for _, c := range []string{"%", "&", "<", ">", "|", "^", "(", ")", "!", "\n", "\r"} {
+		assert.NotContains(t, `"`+winproto.HelperPath+`" ssh`, c, "cmd.exe metacharacter %q", c)
+	}
+	for i, sub := range []string{winproto.SubVersion, winproto.SubWinFacts, winproto.SubIISDump, winproto.SubRDPDump} {
+		c, err := cmd(sub, nil)
+		require.NoError(t, err)
+		assert.Equal(t, c.Line(), lines[i], "SSH_ORIGINAL_COMMAND is the forced-command line")
+		tokens, ok := winproto.SplitCommandLine(lines[i])
+		require.True(t, ok, lines[i])
+		for _, tok := range tokens {
+			assert.True(t, winproto.ValidToken(tok), tok)
+		}
+	}
+}

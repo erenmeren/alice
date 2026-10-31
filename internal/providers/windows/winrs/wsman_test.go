@@ -488,3 +488,22 @@ func TestFaultErrorIsNotProtocol(t *testing.T) {
 	assert.True(t, errors.As(err, &fe))
 	assert.NotErrorIs(t, err, ErrProtocol)
 }
+
+// Amended Ruling 4 (F25): the environment value is the codec's printable ASCII without '"', byte for byte; the XML
+// specials are escaped in the Create body, and cmd.exe's metacharacters pass unchanged, because cmd.exe never parses
+// the value (only the helper reads it, through winproto.SplitCommandLine).
+func TestCreateEnvValueRule(t *testing.T) {
+	for c := 0; c < 256; c++ {
+		v := "a" + string([]byte{byte(c)}) + "b"
+		_, err := CreateShellRequest(hdr(), map[string]string{"SSH_ORIGINAL_COMMAND": v}, time.Minute)
+		allowed := c >= 0x20 && c <= 0x7e && c != '"'
+		assert.Equal(t, allowed, err == nil, "byte %#x", c)
+	}
+	v := `x&y<z>%p%|^(!)`
+	b, err := CreateShellRequest(hdr(), map[string]string{"SSH_ORIGINAL_COMMAND": v}, time.Minute)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `>x&amp;y&lt;z&gt;%p%|^(!)</rsp:Variable>`)
+	r, err := ParseRequest(b)
+	require.NoError(t, err)
+	assert.Equal(t, v, r.Env["SSH_ORIGINAL_COMMAND"])
+}

@@ -53,14 +53,18 @@ const (
 // WinRMRequest is one HTTP request the WinRM listener got: the action ("Create", "Command", "Send", "Receive",
 // "Signal", "Delete"; "" for a request that never reached WS-Man), the environment variable names of a Create, the
 // program and arguments of a Command, the connection's number and the authentication step ("none", "negotiate" for
-// an NTLM type 1, "authenticate" for a type 3, "basic", "other"). Never stdin, an environment value or a password.
+// an NTLM type 1, "authenticate" for a type 3, "basic", "other"). Line is a Create's SSH_ORIGINAL_COMMAND (the
+// helper line, which the SSH server's command log keeps too) and CommandLine a Command's raw rsp:CommandLine element
+// as it arrived, for the cmd.exe tests (amended Ruling 4). Never stdin, another environment value or a password.
 type WinRMRequest struct {
-	Action   string
-	EnvNames []string
-	Program  string
-	Args     []string
-	Conn     int
-	Auth     string
+	Action      string
+	EnvNames    []string
+	Program     string
+	Args        []string
+	Line        string
+	CommandLine string
+	Conn        int
+	Auth        string
 }
 
 type winrmAccount struct{ user, password string }
@@ -288,6 +292,8 @@ func authStep(h string) string {
 	return "other"
 }
 
+var commandLineRE = regexp.MustCompile(`<rsp:CommandLine>.*?</rsp:CommandLine>`)
+
 var opTimeoutRE = regexp.MustCompile(`<w:OperationTimeout>PT([0-9]{1,6})S</w:OperationTimeout>`)
 
 // serveWSMan answers one signed-in request of the WinRS subset.
@@ -319,7 +325,10 @@ func (m *Model) serveWSMan(w http.ResponseWriter, r *http.Request) {
 		e.EnvNames = append(e.EnvNames, k)
 	}
 	slices.Sort(e.EnvNames)
-	e.Program, e.Args = req.Program, req.Args
+	e.Program, e.Args, e.Line = req.Program, req.Args, req.Env["SSH_ORIGINAL_COMMAND"]
+	if req.Action == winrs.ActionCommand {
+		e.CommandLine = string(commandLineRE.Find(body))
+	}
 
 	m.mu.Lock()
 	failCode := m.winrmFail
