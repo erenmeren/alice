@@ -366,7 +366,16 @@ try {
     foreach ($right in @('SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
         $entries = @()
         if ($rights.ContainsKey($right) -and $rights[$right]) { $entries = @($rights[$right].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
-        if ($entries -notcontains "*$UserSid") { $entries += "*$UserSid"; $changed = $true }
+        # secedit /export names a resolvable account by name, not *SID (run 1 of W8): compare by SID.
+        $held = $false
+        foreach ($e in $entries) {
+            $sid = $e.TrimStart('*')
+            if (-not $e.StartsWith('*')) {
+                try { $sid = (New-Object System.Security.Principal.NTAccount($e)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = '' }
+            }
+            if ($sid -eq "$UserSid") { $held = $true }
+        }
+        if (-not $held) { $entries += "*$UserSid"; $changed = $true }
         $inf += "$right = " + ($entries -join ',')
     }
     if ($changed) {

@@ -609,7 +609,13 @@ func TestRealWinRMSetupScript(t *testing.T) {
 		// shortcut: only a new account is known not to hold the rights; an existing one may (an earlier test).
 		assert.Contains(t, first, "Denying", "the first run denies a new account the sign-in rights")
 	}
-	assert.NotContains(t, out, "Denying", "the second run finds the deny rights held")
+	if !assert.NotContains(t, out, "Denying", "the second run finds the deny rights held") {
+		// The evidence for the fragment's comparison: the deny lines as secedit exports them.
+		deny, derr := winrmPS(nil, "", "$f = Join-Path $env:TEMP ('alice-a8-' + [guid]::NewGuid().ToString('N') + '.inf'); "+
+			"& \"$env:WINDIR\\System32\\secedit.exe\" /export /cfg $f /areas USER_RIGHTS /quiet | Out-Null; "+
+			"Get-Content -LiteralPath $f -Encoding Unicode | Where-Object { $_ -match '^SeDeny(Remote)?InteractiveLogonRight' }; Remove-Item -LiteralPath $f")
+		t.Logf("FACT A8: the exported deny lines: %q (err %v)", deny, derr)
+	}
 	assert.Equal(t, v, winrsVersion(t, image.RawSubjectPublicKeyInfo, pw), "the password is unchanged")
 }
 
