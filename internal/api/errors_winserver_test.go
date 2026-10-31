@@ -346,3 +346,18 @@ func TestTargetTransportHandlers(t *testing.T) {
 	rec = callWith(h, http.MethodPatch, "/api/v1/targets/"+targetID.String(), "admin", `{"transport":"winrm"}`, map[string]string{"If-Match": `"3"`})
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 }
+
+// R71 Ruling 13: a WinRM target's errors carry transport (the web shows "(WinRM)" from it) and a fault's numeric
+// wsman_code; any other value is dropped with its key.
+func TestWinRMErrorParams(t *testing.T) {
+	in := map[string]string{"subcommand": "win-facts", "transport": "winrm", "wsman_code": "2150859173"}
+	assert.Equal(t, in, providerParams(in))
+	assert.Equal(t, map[string]string{"transport": "ssh"}, providerParams(map[string]string{"transport": "ssh"}))
+	for k, v := range map[string]string{
+		"transport": "WinRM", "wsman_code": "", "wsman_code ": "5",
+	} {
+		assert.Nil(t, providerParams(map[string]string{k: v}), "%s=%q", k, v)
+	}
+	assert.Nil(t, providerParams(map[string]string{"wsman_code": "12345678901"}), "at most 10 digits")
+	assert.Nil(t, providerParams(map[string]string{"wsman_code": "0x80338012"}), "the number only, never the fault's text")
+}

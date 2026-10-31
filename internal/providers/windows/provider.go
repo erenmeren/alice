@@ -17,6 +17,7 @@ import (
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
+	"alice/internal/providers/tlspin"
 	"alice/internal/providers/tlsverify"
 	"alice/internal/providers/windows/winproto"
 )
@@ -140,7 +141,9 @@ func (p *Provider) ForgetTarget(target uuid.UUID) { p.pool.ForgetTarget(target) 
 // this version call included, has its own fresh connection that is closed after its one command
 // (design §8, W0: Windows OpenSSH hands every later session on a connection the first session's
 // command), so env.FreshConnection needs nothing of its own: every call already sees the host key
-// the server presents now. The pool's dialer holds the host-key store, so env.HostKeys is not used.
+// the server presents now. Under SSH the pool's dialer holds the host-key store, so env.HostKeys is
+// not used; under WinRM (R71 Ruling 9) the session's tlspin.Verifier reads the pinned listener
+// identity from env.HostKeys and records sightings there.
 // The session keeps env.Clock (the real one when none) for the waits of a verification and of the
 // inline rollback, and env.Log (none: discarded) for the verification's one warning.
 func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
@@ -157,6 +160,14 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 		log = slog.New(slog.DiscardHandler)
 	}
 	s := &session{p: p, pool: p.pool, cfg: cfg, cred: cred, target: t.ID, caps: p.caps, clock: clk, log: log}
+	s.run = s.sshRun
+	if cfg.Transport == TransportWinRM {
+		pin, err := tlspin.New(ctx, tlspin.Options{Target: t.ID, ServerName: cfg.Host, Store: env.HostKeys})
+		if err != nil {
+			return nil, err
+		}
+		s.pin, s.run = pin, s.winrmRun
+	}
 	v, _, err := call[winproto.VersionResponse](ctx, s, winproto.SubVersion)
 	if err != nil {
 		return nil, err
@@ -184,6 +195,9 @@ type session struct {
 	closed  atomic.Bool
 	clock   clock.Clock
 	log     *slog.Logger
+	// run is the transport (R71 Ruling 10): sshRun, or winrmRun with pin, the listener's identity check.
+	run func(ctx context.Context, c linuxssh.HelperCommand) (linuxssh.Result, providers.HostKey, error)
+	pin *tlspin.Verifier
 }
 
 // writeReady refuses a helper older than winproto.WriteMinVersion before any write subcommand is sent
@@ -212,9 +226,24 @@ func (s *session) open() error {
 	return nil
 }
 
-// call runs one helper subcommand on a fresh connection of its own (Pool.AcquireFresh, one Run,
-// release(false): the connection is closed, never kept idle) and decodes the answer. It returns the
-// host key the connection was opened with. Errors pass through mapHelper.
+// sshRun runs c on a fresh SSH connection of its own (Pool.AcquireFresh, one Run, release(false): the
+// connection is closed, never kept idle) and returns the host key it was opened with. A connection
+// that cannot be opened, or a context that ended before Run, is marked winrs.ErrNotSent.
+func (s *session) sshRun(ctx context.Context, c linuxssh.HelperCommand) (linuxssh.Result, providers.HostKey, error) {
+	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
+	if err != nil {
+		return linuxssh.Result{}, providers.HostKey{}, markNotSent(err)
+	}
+	defer release(false)
+	if err := ctx.Err(); err != nil {
+		return linuxssh.Result{}, conn.HostKey(), markNotSent(providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": c.Subcommand()}))
+	}
+	res, err := conn.Run(ctx, c)
+	return res, conn.HostKey(), err
+}
+
+// call runs one helper subcommand on a connection of its own (s.run) and decodes the answer. It
+// returns the host key the connection was opened with. Errors pass through mapHelper.
 func call[T any](ctx context.Context, s *session, sub string, args ...string) (T, providers.HostKey, error) {
 	return callIn[T](ctx, s, sub, nil, args...)
 }
@@ -228,13 +257,7 @@ func callIn[T any](ctx context.Context, s *session, sub string, stdin []byte, ar
 		return zero, providers.HostKey{}, providers.NewError("internal.unexpected", false, err, map[string]string{"subcommand": sub})
 	}
 	defer c.WipeInput()
-	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
-	if err != nil {
-		return zero, providers.HostKey{}, err
-	}
-	res, err := conn.Run(ctx, c)
-	hk := conn.HostKey()
-	release(false)
+	res, hk, err := s.run(ctx, c)
 	if err != nil {
 		return zero, hk, mapHelper(err)
 	}

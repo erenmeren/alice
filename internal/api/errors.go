@@ -1414,6 +1414,9 @@ var providerParamKeys = map[string]bool{
 	// R61 (Windows): the helper's version and the version a write needs (windows.helper_outdated, Ruling 3); the
 	// store and SHA-1 of the previous certificate a Windows rollback failure names (Ruling 17, in place of backup_dir).
 	"helper_version": true, "required_version": true, "store": true, "previous_sha1": true,
+	// R71 (WinRM, Ruling 13): the transport of a Windows server's error (the web adds "(WinRM)") and a WS-Management
+	// fault's numeric code (never its text).
+	"transport": true, "wsman_code": true,
 }
 
 var (
@@ -1456,6 +1459,9 @@ var (
 	paramVersionRE       = regexp.MustCompile(`^[0-9]{1,5}(\.[0-9]{1,5}){0,3}$`)
 	paramStoreRE         = regexp.MustCompile(`^(?i:my|webhosting|remote desktop)$`)
 	paramSHA1RE          = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// R71. paramTransportRE: a Windows server's transport; paramWSManCodeRE: a fault's code, a uint32 in decimal.
+	paramTransportRE = regexp.MustCompile(`^(ssh|winrm)$`)
+	paramWSManCodeRE = regexp.MustCompile(`^[0-9]{1,10}$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -1474,6 +1480,7 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"azure_code": paramAzureCodeRE, "azure_request_id": paramRequestIDRE, "certificate_name": paramCertNameRE,
 	"auto_deploy_follows": paramBoolRE, "bound": paramBoolRE,
 	"helper_version": paramHelperVersionRE, "required_version": paramVersionRE, "store": paramStoreRE, "previous_sha1": paramSHA1RE,
+	"transport": paramTransportRE, "wsman_code": paramWSManCodeRE,
 }
 
 // validClientAddress is the second rule of client_address: the text must be an IP address.

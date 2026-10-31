@@ -818,7 +818,10 @@ var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "direct
 	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason",
 	// R61 (Windows): windows.helper_outdated names the helper's version and the one a write needs (W2 Ruling 3); a
 	// Windows rollback failure names the previous certificate's store and SHA-1 in place of backup_dir (Ruling 17).
-	"helper_version", "required_version", "store", "previous_sha1"}
+	"helper_version", "required_version", "store", "previous_sha1",
+	// R71 (WinRM, Ruling 13): the transport of a Windows server's error (the e-mail's variant, the web's "(WinRM)") and a
+	// WS-Management fault's numeric code.
+	"transport", "wsman_code"}
 
 const (
 	maxParamValue = 256  // bytes of one param value

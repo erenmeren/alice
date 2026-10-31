@@ -46,6 +46,20 @@ func TestWindowsConformance(t *testing.T) {
 	providertest.CheckUnsupported(t, s, s.caps)
 }
 
+// R71: the same suite against a WinRM target on the emulated listener (WinRS with NTLMv2 and the pinned SPKI); the
+// WinRM password, like the private key, never appears in any result or error.
+func TestWindowsWinRMConformance(t *testing.T) {
+	w := newWinRMEnv(t)
+	providertest.CheckSession(t, providertest.SessionHarness{
+		Capabilities: w.prov.Capabilities(),
+		Open: func(ctx context.Context) (providers.Session, error) {
+			return w.prov.Open(ctx, w.wref, w.wcred, providers.Env{HostKeys: w.whk})
+		},
+		Secrets: append(w.cred.secrets(t), w.pw),
+	})
+	providertest.CheckUnsupported(t, w.wopen(t), w.prov.Capabilities())
+}
+
 // R59 G7 / Review Focus 3: the deployment contract of a location that is not a file, each case on a
 // fresh emulated host whose IIS binding names the current certificate; the helper checks the guard on
 // the server (a forbidden rollback restores nothing), the traits are {on_target, self-restores}.

@@ -308,7 +308,9 @@ var jobParamKeys = []string{"port", "failed_step", "phase", "helper_code", "subc
 	// The vault provider's closed params (task 7-8 table): the role a forbidden read lacks (F-41), the
 	// permission model, Azure's strict-shape codes and request id, the caller's address a firewall
 	// refused, and "reason" (tenant_mismatch). None carries remote text.
-	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason"}
+	"role", "model", "aadsts", "azure_code", "azure_request_id", "client_address", "reason",
+	// A WinRM Windows server's transport and a WS-Management fault's numeric code (R71 Ruling 13).
+	"transport", "wsman_code"}
 
 func jobParams(in map[string]string) map[string]string {
 	var out map[string]string

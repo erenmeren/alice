@@ -3,11 +3,13 @@ package windows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/windows/winproto"
+	"alice/internal/providers/windows/winrs"
 )
 
 // The write subcommands' contract on Alice's side (R61, W2 Task 7), mirroring the Nginx provider's
@@ -192,27 +194,22 @@ type writeCall[T any] struct {
 	uncertain error
 }
 
-// runWrite runs one write subcommand on a fresh connection of its own (W1 Ruling 5: Pool.AcquireFresh,
-// one Run, closed after) with stdin, and sorts the result (decodeCall). Everything before the command
-// can have been sent is a refusal: a command that cannot be built, a connection that cannot be opened
-// (nothing reached the helper), a context that ended before Run. The command's copy of stdin is wiped
-// after the call; the caller clears its own.
+// runWrite runs one write subcommand on a connection of its own (W1 Ruling 5: s.run) with stdin, and
+// sorts the result (decodeCall). Everything before the command can have been sent is a refusal: a
+// command that cannot be built, and every error s.run marks winrs.ErrNotSent (under SSH a connection
+// that cannot be opened or a context that ended before Run; under WinRM the password read, the dial,
+// TLS, the identity, the sign-in, and a fault or protocol error at Create Shell; R71 Ruling 10). The
+// command's copy of stdin is wiped after the call; the caller clears its own.
 func runWrite[T any](ctx context.Context, s *session, sub string, stdin []byte, refusals map[string]int, args ...string) writeCall[T] {
 	c, err := cmd(sub, stdin, args...)
 	if err != nil {
 		return writeCall[T]{refusal: providers.NewError(reasonUnexpected, false, err, map[string]string{"subcommand": sub})}
 	}
 	defer c.WipeInput()
-	conn, release, err := s.pool.AcquireFresh(ctx, s.target, s.cfg.Config, s.cred)
-	if err != nil {
-		return writeCall[T]{refusal: asProviderError(err)}
+	res, _, runErr := s.run(ctx, c)
+	if errors.Is(runErr, winrs.ErrNotSent) {
+		return writeCall[T]{refusal: asProviderError(runErr)}
 	}
-	if err := ctx.Err(); err != nil {
-		release(false)
-		return writeCall[T]{refusal: providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": sub})}
-	}
-	res, runErr := conn.Run(ctx, c)
-	release(false)
 	return decodeCall[T](res, runErr, sub, refusals)
 }
 

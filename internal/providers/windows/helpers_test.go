@@ -67,22 +67,37 @@ func (f *fakeCred) secrets(t testing.TB) []string {
 	}
 }
 
-// memHostKeys is an in-memory providers.HostKeyStore with one pinned key.
+// memHostKeys is an in-memory providers.HostKeyStore with one pinned key; it keeps every sighting and counts the
+// reads of the pin.
 type memHostKeys struct {
 	mu     sync.Mutex
 	pinned *providers.HostKey
+	seen   []providers.HostKey
+	reads  int
 }
 
 func (m *memHostKeys) Pinned(context.Context, uuid.UUID) (providers.HostKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reads++
 	if m.pinned == nil {
 		return providers.HostKey{}, providers.ErrNoPinnedKey
 	}
 	return *m.pinned, nil
 }
 
-func (m *memHostKeys) Observed(context.Context, uuid.UUID, providers.HostKey, bool) error { return nil }
+func (m *memHostKeys) Observed(_ context.Context, _ uuid.UUID, k providers.HostKey, _ bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seen = append(m.seen, k)
+	return nil
+}
+
+func (m *memHostKeys) counts() (reads, seen int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reads, len(m.seen)
+}
 
 // env is the Windows provider wired to the emulated Windows host (wintest) through its SSH server,
 // which runs in the mode of Windows OpenSSH (every later session on a connection sees the first

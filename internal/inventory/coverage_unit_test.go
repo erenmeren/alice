@@ -152,6 +152,13 @@ func TestBoundParamsDropsControlCharacters(t *testing.T) {
 	assert.Equal(t, map[string]string{"port": "443", "phase": "committed"}, got)
 }
 
+// A WinRM Windows server's error keeps its transport and a fault's code (R71 Ruling 13: the e-mail's variant and the
+// web's "(WinRM)" read them).
+func TestBoundParamsKeepWinRMParams(t *testing.T) {
+	in := map[string]string{"subcommand": "iis-deploy", "transport": "winrm", "wsman_code": "87"}
+	assert.Equal(t, in, boundParams(in, errorParamKeys))
+}
+
 // The whitespace a paste brings before an HMAC key is dropped too (TestNormEAB has the trailing padding and the
 // refusals).
 func TestNormEABTrimsLeadingWhitespace(t *testing.T) {

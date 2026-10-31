@@ -534,6 +534,10 @@ func TestWinRMConfig(t *testing.T) {
 		refused(providers.TargetConfig{"host": "iis-01", "transport": tr, "username": `.\`}, "username", validate.Pattern)
 		refused(providers.TargetConfig{"host": "iis-01", "transport": tr, "username": `..\alice`}, "username", validate.Pattern)
 	}
+	// Ruling 6: what goes to NTLM. Only the local form .\ loses its prefix; go-ntlmssp splits the rest at the backslash.
+	for typed, sent := range map[string]string{"alice": "alice", `.\alice`: "alice", `HOST\alice`: `HOST\alice`, `CORP\alice`: `CORP\alice`} {
+		assert.Equal(t, sent, ntlmUser(typed), typed)
+	}
 	refused(providers.TargetConfig{"host": "iis-01", "transport": "psrp"}, "transport", validate.OneOf)
 	refused(providers.TargetConfig{"host": "iis-01", "transport": 1}, "transport", validate.OneOf)
 	refused(providers.TargetConfig{"host": "iis-01", "transport": "WinRM"}, "transport", validate.OneOf)

@@ -44,6 +44,16 @@ const (
 	ReasonRDPDisabled     = "windows.rdp_disabled"       // RDP_DISABLED: Remote Desktop is off now
 	ReasonRDPTLSOff       = "windows.rdp_tls_off"        // RDP_TLS_OFF: the listener's security layer offers no TLS
 	ReasonRDPKeyACLFailed = "windows.rdp_key_acl_failed" // error class key_acl: NETWORK SERVICE could not be given read access to the key
+
+	// The WinRM transport's reasons (W7, R71: ALC-WIN-0024..0028). Its other failures reuse the ssh.* reasons with
+	// the param transport=winrm (Ruling 13).
+	// winrm_password_missing: Alice holds no WinRM password of the server (refused before dialling); winrm_password_invalid:
+	// the password does not follow Alice's rule (Ruling 7).
+	ReasonWinRMAuthRefused     = "windows.winrm_auth_refused"     // the listener refused the NTLM sign-in, or denied access at Create
+	ReasonWinRMPasswordMissing = "windows.winrm_password_missing" //nolint:gosec // G101: a reason code, not a credential
+	ReasonWinRMFault           = "windows.winrm_fault"            // a WS-Management fault; param wsman_code
+	ReasonTransportImmutable   = "windows.transport_immutable"    // a patch changes the transport (Ruling 3)
+	ReasonWinRMPasswordInvalid = "windows.winrm_password_invalid" //nolint:gosec // G101: a reason code, not a credential
 )
 
 // The engine's own reasons the helper's codes map to (Ruling 6), so its recovery paths work unchanged.

@@ -5,6 +5,7 @@ package deployjobs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -674,6 +676,98 @@ func (e *env) addWinServer(name string) *winServer {
 	}
 	require.NotEqual(e.t, uuid.Nil, s.loc, "the binding is a location")
 	return s
+}
+
+// winrmServer is an emulated Windows server reached over WinRM (R71): addWinServer's host plus the WinRM record
+// 0.0.0.0:5986 of WinRM's appid, served by wintest's WinRM listener, whose one account is alice with pw. Its SSH
+// server is never used; it only starts the model's TLS listeners for Alice's probe.
+type winrmServer struct {
+	*winServer
+	ws   *wintest.WinRMServer
+	pw   string
+	cert pki.Leaf // the listener's certificate
+}
+
+// winrmLocator is the WinRM record's locator.
+var winrmLocator = winproto.Locator{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 5986, AppID: "{afebb9ad-9b97-4a91-9ab5-daf4d59122f6}"}
+
+// addWinRMServer starts an emulated Windows server with a WinRM listener and adds it as a target whose transport is
+// winrm (account alice). Nothing is run yet: connectWinRM sets the password and confirms the identity.
+func (e *env) addWinRMServer(name string, m *wintest.Model) *winrmServer {
+	e.t.Helper()
+	if m == nil {
+		m = wintest.NewModel()
+		m.SetLockWait(50 * time.Millisecond)
+		m.AddIntermediate(e.ca.IntermediatePEM)
+	}
+	s := &winrmServer{winServer: &winServer{model: m, locator: winproto.Locator{Type: winproto.BindingHostnamePort, Host: wwwName, Port: 443,
+		AppID: winproto.AppIDIIS}}, pw: "W7-" + rand.Text()}
+	s.oldSHA1 = m.AddCertificate("My", e.old.CertPEM, e.old.KeyPEM, wintest.CertOptions{FriendlyName: "www"})
+	m.AddBinding(winproto.SSLBinding{Type: winproto.BindingHostnamePort, Host: wwwName, Port: 443, AppID: winproto.AppIDIIS,
+		CertSHA1: s.oldSHA1, Store: "My"})
+	m.AddSite(winproto.Site{Name: "Default Web Site", ID: 1, State: "Started", Bindings: []winproto.SiteBinding{
+		{Protocol: "https", Information: "*:443:" + wwwName, SSLFlags: 1}}})
+	if _, ok := m.Binding(winrmLocator); !ok {
+		s.cert = e.ca.Issue(pki.Opts{CommonName: "iis-01", SANs: []string{"iis-01"}}, e.clock.Now())
+		sha1 := m.AddCertificate("My", s.cert.CertPEM, s.cert.KeyPEM, wintest.CertOptions{FriendlyName: "WinRM"})
+		m.AddBinding(winproto.SSLBinding{Type: winrmLocator.Type, IP: winrmLocator.IP, Port: winrmLocator.Port, AppID: winrmLocator.AppID,
+			CertSHA1: sha1, Store: "My"})
+	}
+	s.srv = wintest.NewServer(e.t, m) // the TLS listeners of the bindings, for Alice's probe
+	s.ws = wintest.NewWinRMServer(e.t, m)
+	m.SetWinRMAccount("alice", s.pw)
+	host, port, err := net.SplitHostPort(s.ws.Addr)
+	require.NoError(e.t, err)
+	s.host = host
+	s.sshPort, err = strconv.Atoi(port)
+	require.NoError(e.t, err)
+	e.mu.Lock()
+	e.wins = append(e.wins, s.winServer)
+	e.mu.Unlock()
+	tg, _, err := e.inv.CreateTarget(e.ctx, e.admin, inventory.NewTarget{Name: name, Type: inventory.TypeWindows, Host: s.host, Port: s.sshPort,
+		Username: "alice", Transport: inventory.TransportWinRM})
+	require.NoError(e.t, err)
+	s.target = tg.ID
+	return s
+}
+
+// setWinRMPassword is an Administrator setting the server's WinRM password in Alice.
+func (e *env) setWinRMPassword(s *winrmServer, pw string) {
+	e.t.Helper()
+	tg, err := e.inv.GetTarget(e.ctx, s.target)
+	require.NoError(e.t, err)
+	_, err = e.inv.SetWinRMPassword(e.ctx, e.admin, s.target, tg.Version, secrets.NewPlaintext([]byte(pw)))
+	require.NoError(e.t, err)
+}
+
+// connectWinRM sets the WinRM password, runs the first connection test (which records the listener's identity),
+// confirms that identity as an Administrator and runs the test and discovery again: the binding is a deployable
+// location.
+func (e *env) connectWinRM(s *winrmServer) {
+	e.t.Helper()
+	e.setWinRMPassword(s, s.pw)
+	_, err := e.inv.RequestTest(e.ctx, e.admin, s.target)
+	require.NoError(e.t, err)
+	e.drain()
+	keys, err := e.inv.ListHostKeys(e.ctx, s.target)
+	require.NoError(e.t, err)
+	require.Len(e.t, keys, 1)
+	require.Equal(e.t, providers.HostKeyTypeTLSSPKI, keys[0].KeyType)
+	_, err = e.inv.ConfirmHostKey(e.ctx, e.admin, s.target, keys[0].ID, keys[0].Fingerprint)
+	require.NoError(e.t, err)
+	e.drain()
+	got, err := e.inv.GetTarget(e.ctx, s.target)
+	require.NoError(e.t, err)
+	require.Equal(e.t, inventory.StatusOK, got.Status, "the WinRM server is connected and discovered: %s", got.LastErrorCode)
+	list, err := e.inv.ListLocations(e.ctx, s.target, false)
+	require.NoError(e.t, err)
+	for _, l := range list.Items {
+		if l.CertPath == winText {
+			require.True(e.t, l.Deployable, "the binding is deployable: %s", l.UnsupportedReason)
+			s.loc = l.ID
+		}
+	}
+	require.NotEqual(e.t, uuid.Nil, s.loc, "the binding is a location")
 }
 
 // winProber is Alice's own TLS probe against the emulated Windows servers: a probe of a binding port reaches the

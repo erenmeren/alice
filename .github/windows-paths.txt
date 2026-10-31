@@ -22,6 +22,7 @@ internal/providers/windows/**
 internal/providers/*
 internal/providers/linuxssh/**
 internal/providers/tlsverify/**
+internal/providers/tlspin/**
 internal/providers/providertest/**
 internal/providers/apacheconf/**
 internal/providers/haproxyconf/**

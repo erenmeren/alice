@@ -729,7 +729,7 @@ Expected: PASS; inventory at least 89 %, api at least 95 %.
   `runWrite` treats `errors.Is(err, winrs.ErrNotSent)` as a refusal.
 - Mirror: `ccs.go:50-82` (`s.cred.(providers.CCSPasswordSource)`, `ccsPasswordRefusal`), W6 Task 6's tests.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - `winrm_test.go` (over `wintest.NewWinRMServer`):
     - `TestSSHTransportIsW6` (Review Focus 5): no `transport`, or `ssh` → `Open` uses the pool, sends the same lines as before (the SSH emulator's log), and never calls `WinRMPassword` or `env.HostKeys`.
     - `TestWinRMCallShape` (Ruling 4): every call's log entry has Program `winproto.HelperPath`, Args `["ssh"]`, env names `["SSH_ORIGINAL_COMMAND"]`, and one connection per call (`TestEachWinRMCallUsesItsOwnConnection` as a subtest over `Discover`).
@@ -753,14 +753,14 @@ Expected: PASS; inventory at least 89 %, api at least 95 %.
     - `TestWindowsWinRMIdentityChangeBlocks`: a changed listener identity blocks the target (`host_key_changed`), and no deployment is sent.
     - `TestWindowsWinRMAuthRefused`: the emulator's account password changed → the deployment fails `ALC-WIN-0024` with nothing sent; setting the new password in Alice makes the next deployment work.
     - `TestWindowsWinRMPasswordMissing`: a WinRM target without a password → the deployment fails `ALC-WIN-0025` with nothing dialled.
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 Run: `go test ./internal/providers/windows/ -run 'WinRM|SSHTransport' && go test -tags integration ./internal/jobs/deployjobs/ -run WinRM`
 Expected: FAIL.
-- [ ] **Step 3: Implement.** The three call sites change to `s.run(ctx, c)` and nothing else in them changes.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 3: Implement.** The three call sites change to `s.run(ctx, c)` and nothing else in them changes.
+- [x] **Step 4: Run the tests**
 Run: `go test -race -count=1 -cover ./internal/providers/windows/... ./internal/providers/tlspin/ && go test -race -count=1 -tags integration ./internal/jobs/deployjobs/ ./internal/jobs/driftjobs/ ./internal/jobs/winjobs/`
 Expected: PASS; windows at least 95 %; every W1-W6 provider and engine test unchanged.
-- [ ] **Step 5: Commit**: `feat(providers/windows): the WinRM transport: one seam for every helper call, WinRS with NTLMv2 and the pinned listener SPKI, the same helper protocol and outcomes (R71)`.
+- [x] **Step 5: Commit**: `feat(providers/windows): the WinRM transport: one seam for every helper call, WinRS with NTLMv2 and the pinned listener SPKI, the same helper protocol and outcomes (R71)`.
 
 ---
 
