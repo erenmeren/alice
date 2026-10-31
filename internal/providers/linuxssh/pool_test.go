@@ -482,7 +482,7 @@ func TestPoolSlot(t *testing.T) {
 	require.NoError(t, <-got)
 	relOther(true)
 
-	// A cancelled context never wins over a free slot.
+	// A cancelled context is refused even when a slot is free.
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, err = e.pool.Slot(cancelled, testTarget)
