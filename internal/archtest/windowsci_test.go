@@ -657,3 +657,19 @@ func TestReleaseWorkflowWaitsForWindows(t *testing.T) {
 		assert.Contains(t, needs, j)
 	}
 }
+
+// F4 (R72): deploy/dev/shellcheck.sh's default image is the Makefile's SHELLCHECK_IMAGE, so actionlint and
+// make shellcheck never run two shellcheck versions.
+func TestShellcheckPinsAgree(t *testing.T) {
+	root := moduleRoot(t)
+	read := func(path string) string {
+		raw, err := os.ReadFile(filepath.Join(root, path)) //nolint:gosec // repository file
+		require.NoError(t, err)
+		return string(raw)
+	}
+	mk := regexp.MustCompile(`(?m)^SHELLCHECK_IMAGE\s*\?=\s*(\S+)\s*$`).FindStringSubmatch(read("Makefile"))
+	require.NotNil(t, mk, "Makefile: no SHELLCHECK_IMAGE ?= line")
+	sh := regexp.MustCompile(`\$\{SHELLCHECK_IMAGE:-([^}]+)\}`).FindStringSubmatch(read("deploy/dev/shellcheck.sh"))
+	require.NotNil(t, sh, "deploy/dev/shellcheck.sh: no ${SHELLCHECK_IMAGE:-...} default")
+	assert.Equal(t, mk[1], sh[1], "the shellcheck wrapper's default pin differs from the Makefile's")
+}
