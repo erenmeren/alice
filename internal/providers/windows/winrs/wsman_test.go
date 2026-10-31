@@ -138,7 +138,7 @@ func TestRequestsCarryTheFixedOptions(t *testing.T) {
 	require.NoError(t, err)
 	e = readEnvelope(t, b)
 	assert.Equal(t, map[string]string{"WINRS_CONSOLEMODE_STDIN": "FALSE", "WINRS_SKIP_CMD_SHELL": "TRUE"}, options(e))
-	assert.Contains(t, string(b), `<rsp:Command>&#34;C:\Program Files\Alice\alice-helper.exe&#34;</rsp:Command>`)
+	assert.Contains(t, string(b), `<rsp:Command>"C:\Program Files\Alice\alice-helper.exe"</rsp:Command>`)
 
 	// A sub-second operation timeout is rounded up; none at all leaves the header out.
 	h := hdr()
@@ -150,6 +150,37 @@ func TestRequestsCarryTheFixedOptions(t *testing.T) {
 	b, err = DeleteRequest(h, shellID)
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), "OperationTimeout")
+}
+
+// Element text escapes only '&', '<' and '>': Windows does not decode &#34; in the Command element (runner run 5).
+// The server half reads both forms.
+func TestRequestsWriteQuotesRaw(t *testing.T) {
+	b, err := CommandRequest(hdr(), shellID, `C:\a&b\<x>.exe`, []string{"a&b", "'q'"})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `<rsp:Command>"C:\a&amp;b\&lt;x&gt;.exe"</rsp:Command>`)
+	assert.Contains(t, string(b), `<rsp:Arguments>a&amp;b</rsp:Arguments><rsp:Arguments>'q'</rsp:Arguments>`)
+	assert.NotContains(t, string(b), "&#34;")
+	assert.NotContains(t, string(b), "&#39;")
+	r, err := ParseRequest(b)
+	require.NoError(t, err)
+	assert.Equal(t, `C:\a&b\<x>.exe`, r.Program)
+	assert.Equal(t, []string{"a&b", "'q'"}, r.Args)
+
+	b, err = CreateShellRequest(hdr(), map[string]string{"SSH_ORIGINAL_COMMAND": `a&b<c>'e'`}, time.Minute)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `>a&amp;b&lt;c&gt;'e'</rsp:Variable>`)
+	r, err = ParseRequest(b)
+	require.NoError(t, err)
+	assert.Equal(t, `a&b<c>'e'`, r.Env["SSH_ORIGINAL_COMMAND"])
+
+	// The escaped quote form still parses.
+	b, err = CommandRequest(hdr(), shellID, program, []string{"ssh"})
+	require.NoError(t, err)
+	b = bytes.ReplaceAll(b, []byte(`"C:`), []byte(`&#34;C:`))
+	b = bytes.ReplaceAll(b, []byte(`.exe"`), []byte(`.exe&#34;`))
+	r, err = ParseRequest(b)
+	require.NoError(t, err)
+	assert.Equal(t, program, r.Program)
 }
 
 func TestRequestsRefuseBadInput(t *testing.T) {
@@ -430,7 +461,7 @@ func TestParseRequestRefuses(t *testing.T) {
 		"bad variable":         rep(create, `Name="SSH_ORIGINAL_COMMAND"`, `Name="x"`),
 		"shell on create":      rep(create, `<w:OptionSet>`, `<w:SelectorSet><w:Selector Name="ShellId">`+shellID+`</w:Selector></w:SelectorSet><w:OptionSet>`),
 		"create without shell": rep(create, `<rsp:Shell>`, `<rsp:Other><rsp:Shell>`),
-		"unquoted program":     rep(command, `&#34;C:`, `C:`),
+		"unquoted program":     rep(command, `"C:`, `C:`),
 		"bad argument":         rep(command, `>ssh<`, `>a b<`),
 		"no command line":      rep(command, `<rsp:CommandLine>`, `<rsp:Other><rsp:CommandLine>`),
 		"other signal":         rep(signal, SignalTerminate, "ctrl_c"),

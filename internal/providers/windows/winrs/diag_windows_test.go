@@ -48,7 +48,7 @@ func (e edit) apply(t *testing.T, body []byte) []byte {
 			t.Logf("W7-diag: the body has no rsp:Command")
 			return body
 		}
-		inner := bytes.ReplaceAll(body[i:j], []byte("&#34;"), nil)
+		inner := bytes.ReplaceAll(bytes.ReplaceAll(body[i:j], []byte("&#34;"), nil), []byte(`"`), nil)
 		return append(append(append([]byte{}, body[:i]...), inner...), body[j:]...)
 	}
 	old := []byte(`<w:Option Name="` + e.option + `">` + e.from + `</w:Option>`)

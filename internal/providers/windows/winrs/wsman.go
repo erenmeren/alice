@@ -149,7 +149,25 @@ func seconds(d time.Duration) string {
 	return "PT" + strconv.FormatInt(int64((d+time.Second-1)/time.Second), 10) + "S"
 }
 
-func esc(b *bytes.Buffer, s string) { _ = xml.EscapeText(b, []byte(s)) }
+// esc writes element text, escaping only '&', '<' and '>'. Quotes stay raw: Windows takes the Command element's text
+// as it arrives, without turning &#34; back into a quote (runner run 5). The values are printable ASCII (validated).
+func esc(b *bytes.Buffer, s string) {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		default:
+			b.WriteByte(c)
+		}
+	}
+}
+
+// escAttr writes an attribute value (quotes escaped too).
+func escAttr(b *bytes.Buffer, s string) { _ = xml.EscapeText(b, []byte(s)) }
 
 func envelope(h Header, action, shellID string, opts []option, body func(*bytes.Buffer)) ([]byte, error) {
 	if !strings.HasPrefix(h.To, "https://") || !printable(h.To, false) || strings.ContainsAny(h.To, "<>&'") ||
@@ -654,7 +672,7 @@ func CommandStartedResponse(relatesTo, commandID string) []byte {
 func ReceivedResponse(relatesTo, commandID string, stdout []byte, done bool, exitCode int) []byte {
 	return response(ActionReceive+"Response", relatesTo, func(b *bytes.Buffer) {
 		var id bytes.Buffer
-		esc(&id, commandID)
+		escAttr(&id, commandID)
 		b.WriteString(`<rsp:ReceiveResponse>`)
 		if len(stdout) > 0 {
 			b.WriteString(`<rsp:Stream Name="stdout" CommandId="` + id.String() + `">` + base64.StdEncoding.EncodeToString(stdout) + `</rsp:Stream>`)
