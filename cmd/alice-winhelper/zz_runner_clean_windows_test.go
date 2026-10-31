@@ -74,13 +74,14 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
 	// its file's creation time (the image's own keys are older than this test binary).
 	assert.Empty(t, machineKeysSince(t, packageStart), "machine keys created during this run are left")
 
-	// No alice-w2-, alice-w3-, alice-w5- or alice-w6- site.
+	// No alice-w2-, alice-w3-, alice-w5-, alice-w6- or alice-w7- site (W7's is TestRealWinRMProvider's, in
+	// internal/providers/windows).
 	sites, err := exec.Command(appcmdPath(), "list", "site", "/text:name").Output()
 	require.NoError(t, err)
 	require.Contains(t, string(sites), "Default Web Site", "positive control: appcmd lists the image's own site")
 	for _, name := range strings.Fields(string(sites)) {
 		assert.False(t, strings.HasPrefix(name, "alice-w2-") || strings.HasPrefix(name, "alice-w3-") || strings.HasPrefix(name, "alice-w5-") ||
-			strings.HasPrefix(name, "alice-w6-"),
+			strings.HasPrefix(name, "alice-w6-") || strings.HasPrefix(name, "alice-w7-"),
 			"an IIS site is left: %s", name)
 	}
 
@@ -89,7 +90,7 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
 	left, err := filepath.Glob(`C:\ProgramData\Alice\helper-test-*`)
 	require.NoError(t, err)
 	assert.Empty(t, left, "test data directories are left")
-	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity", "alice-w5-ccs-site", "alice-w5-ccs-diag", "alice-w6-fidelity"} {
+	for _, dir := range []string{"alice-w2-fidelity", "alice-w3-fidelity", "alice-w5-fidelity", "alice-w5-ccs-site", "alice-w5-ccs-diag", "alice-w6-fidelity", "alice-w7-provider"} {
 		_, err = os.Stat(filepath.Join(os.Getenv("SystemDrive")+`\`, "inetpub", dir))
 		assert.ErrorIs(t, err, os.ErrNotExist, "the fixture sites' directory %s is left", dir)
 	}
@@ -124,22 +125,30 @@ foreach ($s in @('My', 'WebHosting', 'CA', 'Remote Desktop', 'Root')) {
 		assert.Equal(t, rdpTermServiceFound, termServiceState(t), "TermService is as the first RDP fixture found it")
 	}
 
-	// W7 (internal/providers/windows/winrs, an earlier go test run of the job): no alice-w7 account, no WinRM
-	// listener on 45520-45539, no firewall rule Alice WinRM, no test program directory, and the WinRM and LSA
+	// W7 (internal/providers/windows/winrs and the WinRM setup script's tests in internal/providers/windows, earlier
+	// go test runs of the job): no alice-w7 account, no WinRM listener on 45520-45539, no firewall rule Alice WinRM
+	// (Alice-WinRM-In, which the setup script's tests remove), no test program directory, and the WinRM and LSA
 	// values as the first WinRS fixture found them (it wrote them to the temporary directory, read with the
 	// same script).
 	left = strings.Fields(string(powershell(t, `Import-Module Microsoft.WSMan.Management
 # [ADSI]::Exists throws for an absent account (runner run 1 of W7); Win32_UserAccount answers nothing.
 if (@(Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='alice-w7'").Count -gt 0) { 'account' }
 $n = 0
-foreach ($l in @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)) {
-    $n++
-    if ([int]$l.Port -ge 45520 -and [int]$l.Port -le 45539) { "listener:$($l.Address)/$($l.Transport):$($l.Port)" }
+# Get-WSManInstance is WinRM's own client (Negotiate to the local service): access denied means a W7 test left
+# the service refusing it (runner run 2: Negotiate left off).
+try {
+    foreach ($l in @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate)) {
+        $n++
+        if ([int]$l.Port -ge 45520 -and [int]$l.Port -le 45539) { "listener:$($l.Address)/$($l.Transport):$($l.Port)" }
+    }
+    if ($n -eq 0) { 'no-listener-listed' }
+} catch {
+    'wsman-client-refused'
 }
-if ($n -eq 0) { 'no-listener-listed' }
 if (@(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Alice*WinRM*' -or $_.DisplayName -like 'Alice WinRM*' }).Count -gt 0) { 'firewall-rule' }
 exit 0`)))
-	assert.Empty(t, left, "W7 fixtures are left (no-listener-listed: the positive control, the image's 5986 listener, is missing)")
+	assert.Empty(t, left, "W7 fixtures are left (no-listener-listed: the positive control, the image's 5986 listener, is missing; "+
+		"wsman-client-refused: WinRM refuses its own local client, a WinRM setting is left changed)")
 	left, err = filepath.Glob(filepath.Join(os.Getenv("ProgramData"), "alice-w7-*"))
 	require.NoError(t, err)
 	assert.Empty(t, left, "the WinRS tests' program directories are left")
