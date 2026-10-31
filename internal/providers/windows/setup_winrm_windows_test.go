@@ -607,7 +607,7 @@ func winrmSite(t *testing.T) pki.Leaf {
 	netsh := filepath.Join(os.Getenv("SystemRoot"), "System32", "netsh.exe")
 	t.Cleanup(func() {
 		if out, err := exec.Command(netsh, "http", "delete", "sslcert", key).CombinedOutput(); err != nil {
-			t.Logf("cleanup of the record %s: %v %s", key, err, out)
+			t.Errorf("cleanup of the record %s: %v %s", key, err, out)
 		}
 	})
 	out, err := exec.Command(netsh, "http", "add", "sslcert", key, "certhash="+thumb, "appid="+winproto.AppIDIIS, "certstorename=MY").CombinedOutput()
