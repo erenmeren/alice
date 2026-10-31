@@ -372,7 +372,8 @@ Use this only when the server cannot run OpenSSH. OpenSSH stays the recommended 
 **Under WinRM, anyone with this account's password can run any command on the server as an administrator. With
 OpenSSH, Alice's key can run only alice-helper.exe.** The password is an ordinary Windows password: it also signs in to
 the server's other network services that accept the account (file sharing, remote management), not only WinRM. Use a
-dedicated account, a different password on every server, and keep port 5986 open to the Alice server only.
+dedicated account, a different password on every server, and keep port 5986 open to the Alice server only (the
+script's firewall rule accepts any address until you set `$AliceAddress`, below).
 
 Over WinRM Alice runs the same `alice-helper.exe`, with the same subcommands, journal and rollback as over SSH. It
 connects to the server's WinRM HTTPS listener (TLS 1.2 or later, port 5986), signs in with the account's name and
@@ -414,8 +415,10 @@ $AliceUser = 'alice'
 $AliceAddress = 'Any'
 ```
 
-(Alice fills in the server's account, and Alice's address when it is known; with `'Any'` the script warns that port
-5986 is open to every address: set `$AliceAddress` to the Alice server's address.) In order, it:
+(Alice fills in the server's account. The address is `'Any'` by default: the script shown in Alice's web interface
+keeps it, and only the API's optional `from` parameter (`GET /api/v1/targets/{id}/winrm-setup?from=<address>`) fills
+it in. With `'Any'` the script prints a warning that port 5986 is open to every address: set `$AliceAddress` to the
+Alice server's address before you run it.) In order, it:
 
 1. Checks that it runs elevated, the account name, and that WinRM's Negotiate authentication is on (read from
    `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Service`, value `auth_negotiate`). With Negotiate off it
@@ -456,6 +459,19 @@ It never installs or changes OpenSSH, never changes Basic, Negotiate, Kerberos, 
 
 Then enter the same password in Alice (**WinRM password** on the server's page; an Administrator with a fresh
 authenticator code). Alice tests the connection as soon as it is saved.
+
+### What else to know
+
+- **Command Processor AutoRun.** WinRS starts the helper through `cmd.exe /C` without `/D`, so the `AutoRun` values
+  under `HKLM:\SOFTWARE\Microsoft\Command Processor` and the account's
+  `HKCU:\SOFTWARE\Microsoft\Command Processor` run before the helper on every call. Only an administrator or the
+  account itself can write them; keep them empty.
+- **Account lockout.** A wrong password in Alice makes every call a failed sign-in (Security event 4625). Under an
+  account lockout policy this can lock the account, for a domain account on every server that uses it. Set the
+  password in Alice again right after changing it on the server.
+- **The sign-in resends the first request.** NTLM takes up to three requests, and each carries the Create body with
+  Alice's subcommand line (never key material); the first is sent before the sign-in. All of them travel inside TLS
+  to the listener whose key you confirmed, and to no other.
 
 ### The settings Alice needs
 

@@ -2366,7 +2366,7 @@ None of these files holds key material.
 
 ## ALC-WIN-0024: The Windows server refused Alice's WinRM sign-in
 
-**Meaning.** The Windows server's WinRM listener refused the sign-in of the target's account with the password set in Alice, so Alice sent nothing to the helper. (HTTP 502, reason `windows.winrm_auth_refused`.)
+**Meaning.** The Windows server's WinRM listener refused the sign-in of the target's account with the password set in Alice. A refusal at the sign-in means Alice sent nothing to the helper; a refusal later in the call (after the shell was created) leaves a write uncertain, and Alice checks the server's state before it decides. (HTTP 502, reason `windows.winrm_auth_refused`.)
 
 **Likely cause.** The password set in Alice differs from the account's password on the server; the account is not a member of Administrators (directly or through a group); or the server refuses NTLM: Negotiate authentication is turned off for WinRM, `CbtHardeningLevel` is `Strict` (Alice sends no channel binding), or a policy restricts NTLM. A local account on a server where "Deny access to this computer from the network" names Local account (S-1-5-114) cannot sign in over the network either.
 

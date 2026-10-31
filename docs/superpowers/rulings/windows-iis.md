@@ -2920,6 +2920,13 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
       connection. `maxDialsPerCall` is 2, and the second dial is allowed only while the Create request (the sign-in)
       is in flight; after Create's answer any dial is refused (`ErrUnreachable`), so Send still goes only on the
       connection that authenticated.
+    - **A transport failure during the sign-in (security review W7, I1):** go-ntlmssp's Negotiator drops the error of
+      its type 1 and type 3 steps (a dial, the TLS handshake with a pin refusal, I/O) and hands back the anonymous 401.
+      The client records the first transport error under the Negotiator; when Create ends in a 401 and one was
+      recorded, the call fails with `ErrUnreachable` wrapping it (and `ErrNotSent`), never `ErrAuthRefused`. So a key
+      seen only on the second connection reaches the verifier's refusal (a sighting, `target.host_key_changed` or
+      unconfirmed), and a transient fault stays retryable. The dialer's former "refused" flag became dead and was
+      removed: a refused third dial is now one of those recorded errors.
     - **Credentials only on Create (Ruling 28 amended):** `req.SetBasicAuth` is set on the Create request only; later
       requests carry none, so a 401 after Create ends the call (`ErrAuthRefused`, no new exchange, stdin never sent
       again) and the cleanup is tried once, best effort. F24 measured that the connection stays authenticated (later
@@ -2942,9 +2949,11 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
       `WinRMHelperMissingExit` constant) to `ssh.helper_missing` (then `windows.helper_missing`, as over SSH); the Command was sent,
       so a write stays uncertain. The emulator answers a missing helper the same way.
     - F31 (run 3): an account removed from Administrators is refused with a 401 (`ErrAuthRefused`), not an
-      access-denied fault, so no fault code is mapped to `winrm_auth_refused`. An access-denied fault (5) after Create
-      is `windows.winrm_fault` with `wsman_code` 5; a 401 or 403 after Create is `windows.winrm_auth_refused` and
-      uncertain for a write. `ErrBadConfig` (Alice's own construction error) is `internal.unexpected`.
+      access-denied fault. **Amended (security review W7, M1):** the access-denied fault WinRM answers at Create is
+      2147942405 (E_ACCESSDENIED as WinRM reports it, measured in runs 3 and 4); that code at Create is
+      `windows.winrm_auth_refused`, replacing the guessed 5, which is now an ordinary `windows.winrm_fault`. An
+      access-denied fault after Create is `windows.winrm_fault` with `wsman_code` 2147942405; a 401 or 403 after
+      Create is `windows.winrm_auth_refused` and uncertain for a write. `ErrBadConfig` (Alice's own construction error) is `internal.unexpected`.
     - The params `transport` (`^(ssh|winrm)$`) and `wsman_code` (`^[0-9]{1,10}$`) pass the allow-lists of the API, the
       inventory's deployment records and the deployment jobs, so the e-mail variant and the record keep them.
     - The e-mail variant lookup (`reasonTitle` in `internal/notify/sender.go`) takes `reason_variant` first, then the
@@ -3003,7 +3012,9 @@ The plan's 31 rulings stand as written, except where an entry says "Amended", "P
 27. **"Deferred to W7+": settled or carried.** As written; see [Deferred to W8+](#deferred-to-w8).
 28. **The Negotiator wrapping.** **Amended (Task 2 review):** the credentials go in through `req.SetBasicAuth` on the
     Create request only (Ruling 12); the Negotiator removes that header before the anonymous first try, so Basic never
-    leaves the process (`TestWinRSNeverSendsBasic`, `TestWinRSSignsInOnCreateOnly`).
+    leaves the process (`TestWinRSNeverSendsBasic`, `TestWinRSSignsInOnCreateOnly`). **Note (security review W7,
+    I1):** the Negotiator wraps a small RoundTripper that keeps the first transport error of the exchange, which the
+    Negotiator itself drops (Ruling 12).
 29. **The direct-module rule.** As written.
 30. **The username is configuration, not a secret.** As written.
 31. **NTLM channel binding is not available.** **Confirmed (F30, run 3):** with `CbtHardeningLevel` Strict the sign-in
@@ -3256,7 +3267,58 @@ leaves the password missing; the RDP text added for a source-scanning test is a 
 
 ## Security review (W7)
 
-Pending: Task 10 step 6 (Ruling 26).
+Reviewer: a fresh reviewer who wrote none of the code (Ruling 26), at `3b5da306`. Counts: 0 critical, 1 important,
+4 minor.
+
+- **I1, a transport or pin failure on the sign-in's second connection was reported as a refused password:** fixed in
+  `178445ca` (winrs records the first transport error under the Negotiator and returns `ErrUnreachable` wrapping it;
+  winrs tests for a pin refused and a dial refused on the second connection, and `TestWinRMSecondConnectionIdentity`:
+  another key on the second connection is `target.host_key_changed` with the sighting recorded). Rulings 12 and 28
+  amended.
+- **M1, the access-denied row used the guessed fault 5:** fixed in `b836cc43` (2147942405 at Create is
+  `windows.winrm_auth_refused`; Ruling 13 amended). The emulator models no access-denied code of its own.
+- **M2, the codec did not enforce Ruling 4 alone:** fixed in `a29bdd58` (`winrs.Client.Run` refuses, as
+  `ErrBadConfig` before any dial, a call whose argument is not exactly `ssh`, whose variables are not exactly
+  `SSH_ORIGINAL_COMMAND`, or whose program holds `%`, `&`, `<`, `>`, `|`, `^`, `(`, `)` or a control character; the
+  real tests' stdinhash calls use the test-only `RunProgram` in `export_test.go`).
+- **M3, residuals missing from the threat model:** fixed in the documents commit of the final review fixes (WN-28:
+  `cmd.exe /C` without `/D` runs the Command Processor `AutoRun` values, and the Create body is sent up to 3 times
+  during the sign-in, the first unauthenticated, to the pinned listener only; WN-29: account lockout from repeated
+  4625, and the Go-string residual also covers the base64 Basic header string and go-ntlmssp's NT-hash bytes; the host
+  guide's "What else to know").
+- **M4, `.\` is stripped, so the domain sent is empty; unmeasured on a domain-joined host:** declined. Ruling 6 stays
+  (go-ntlmssp would send "." as the domain); how a domain-joined server treats a local account with an empty domain
+  is an owner manual-matrix item ([Owner items (W7)](#owner-items-w7), item 8).
+
+## Final review fixes (W7)
+
+The independent final review at `3b5da306` found 0 critical, 1 important and 6 minor issues.
+
+- **I1, WN-26 and the host guide said the firewall rule opens 5986 to Alice's address only:** fixed in the documents
+  commit (the web sends no `from`, so the served script uses Any with a printed warning; the operator edits
+  `$AliceAddress`, or the API's optional `from` parameter sets it). A web input for the address is an owner item.
+- **M1, the fault-5 row against the ruling:** fixed with security M1 in `b836cc43`.
+- **M2, `CommandRequest`'s comment said "without cmd.exe":** fixed in `af2f5ce2` (it asks WinRS to skip `cmd.exe`,
+  which WinRS does not honour, F25).
+- **M3, `ALC-WIN-0024` said Alice sent nothing for any 401 or 403:** fixed in the documents commit (a refusal at the
+  sign-in sends nothing; a later refusal leaves a write uncertain).
+- **M4, `sshRun`'s context check after `AcquireFresh` was untested:** fixed in `d3cd8e21`
+  (`TestSSHRunContextEndedAfterAcquire`: `ssh.timeout`, `winrs.ErrNotSent`, no command sent).
+- **M5, the WinRM crash table had no sent-once assertion:** fixed in `b2a15584` (counted from the emulator's Create
+  lines, as the SSH table counts commands).
+- **M6, three untested paths in `winrm.go`:** fixed in `a168ba5d` (`TestWinRMPasswordEdges`: the release on a source
+  error, the `pt.Zero` fallback, `withParams` without params).
+
+Ledger minors the final review triaged as fine to defer (declined for W7, carried to W8+):
+- `ConfigSchema`'s port default is 22 under `winrm` (the form sets 5986 itself, Ruling 22).
+- A failed WinRM call returns an empty host key to the caller (the sighting is recorded by the verifier).
+- The OID first-arc shortcut comment; the netsh cleanup's log line; a Task 4 commit carried Task 7 clean-test lines;
+  the test `authorized_keys` line left on the runner; the setup script's no-listener and domain-account paths are
+  untested on runners (manual matrix).
+- The deny-rights fragment is not idempotent (shared with the SSH script, its golden would change).
+- The web: no hint after a failed connection test right after the password is saved; leaving the WinRM step leaves the
+  password missing; the RDP `output_too_large` text exists for the source-scanning test (a brittle coupling); the web
+  passes no `from` for SSH or WinRM (owner item).
 
 ## Acceptance (design §13 W7)
 
@@ -3287,7 +3349,8 @@ Still for the owner to confirm:
    (policy 0 refuses a local account; the images ship 1); F25 inserts `cmd.exe` (accepted by the coordinator); F27's reaping is not measured (accepted residual); F30
    Strict refuses.
 8. **A domain account over WinRM** is accepted by syntax and by the emulator only; the first real test is on a
-   customer's or the owner's domain (manual matrix).
+   customer's or the owner's domain (manual matrix). The same matrix checks a local account written `.\alice` on a
+   domain-joined server (Alice strips `.\`, so NTLM carries an empty domain; security review W7, M4).
 
 Added during execution:
 
@@ -3297,9 +3360,12 @@ Added during execution:
 - **Ruling 19 amended:** the setup endpoint takes Alice's address (`from`), but the web does not pass it yet, so the
   script shown in the web opens 5986 from any address with a warning to edit `$AliceAddress`. Decide whether the web
   asks for the address.
+- **A web input for Alice's address (SSH and WinRM):** neither setup dialog asks for it, so both served scripts open
+  their port (22 or 5986) to any address with a printed warning until the operator edits `$AliceAddress` (final review
+  W7, I1).
 - **The deny-rights fragment is not idempotent** (Ruling 18): every run of either script sets the two deny rights
   again and prints "Denying ...". Harmless; fixing it changes the SSH script's text.
-- **The WN-26..WN-30 residuals** ([Security review (W7)](#security-review-w7), once written): WN-26 High accepted as
+- **The WN-26..WN-30 residuals** ([Security review (W7)](#security-review-w7)): WN-26 High accepted as
   competitor parity.
 - **The W4, W5 and W6 owner items stay open** (the ruleset, the first release tag, the manual matrix, Authenticode,
   the helper update procedure).
