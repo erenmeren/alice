@@ -909,18 +909,18 @@ Expected: PASS; 0 gaps, 0 pending.
 
 **Files:** none new. Fixes go to the task that owns the code.
 
-- [ ] **Step 1: Full local gates**
+- [x] **Step 1: Full local gates**
 Run: `go mod tidy && git diff --exit-code go.mod go.sum && make lint && make test && make i18n-check && make matrix-check MATRIXCHECK_FLAGS=-strict && make docs-check && make helper winhelper && make build && make coverage`
 Expected: PASS; `go.mod` as Task 2 left it (go-ntlmssp direct, nothing else changed against `main`: `git diff main -- go.mod` shows one line moved), `go.sum` unchanged against `main`; every floor met, `winrs` at least 95, none lowered.
-- [ ] **Step 2: Windows build and vet**
+- [x] **Step 2: Windows build and vet**
 Run: the Windows line of "Verification commands".
 Expected: PASS.
-- [ ] **Step 3: e2e and image.** Only when no other `make ci` or Docker-based run is active on the machine: `E2E_PROJECT=alice-e2e-w7 ALICE_E2E_PORT=9985 make ci`. Otherwise run Task 8's e2e when the machine frees, and list `make ci` as pending in the acceptance report.
+- [x] **Step 3: e2e and image.** Only when no other `make ci` or Docker-based run is active on the machine: `E2E_PROJECT=alice-e2e-w7 ALICE_E2E_PORT=9985 make ci`. Otherwise run Task 8's e2e when the machine frees, and list `make ci` as pending in the acceptance report.
 Expected: PASS; the e2e totals are recorded.
-- [ ] **Step 4: Real Windows.** The `windows.yml` run of the branch's code head is green on windows-2022 and windows-2025, with `windows-required` green (runs counted, at most 10). If it cannot be, the rulings file lists it as an owner item and the acceptance report says it is pending.
-- [ ] **Step 5: gitleaks** over the whole range `<branch base>..HEAD`. Use R70's fixed `make secrets-scan`, which scans commits in a worktree (R70 C3); if it is not on `main`, use W6's way: export with `git log -p`, scan in `dir` mode with `.gitleaks.toml`. Fingerprint any finding in `.gitleaksignore` without key material. No test password may be a literal (tests generate them).
-- [ ] **Step 6: The transport security review (Ruling 26)**, then the independent review of `<branch base>..HEAD` against Review Focus 1-6 and Rulings 4, 6-16, 28, 31. Both are made by reviewers that did not write the code. Fix or decline every finding with a reason in the rulings file ("Security review (W7)", "Final review fixes (W7)").
-- [ ] **Step 7: Acceptance check against design §4.2 (as amended by R71) and §13 W7**, one line each in the rulings file, then fill "§22 Phase W7 as built":
+- [x] **Step 4: Real Windows.** The `windows.yml` run of the branch's code head is green on windows-2022 and windows-2025, with `windows-required` green (runs counted, at most 10). If it cannot be, the rulings file lists it as an owner item and the acceptance report says it is pending.
+- [x] **Step 5: gitleaks** over the whole range `<branch base>..HEAD`. Use R70's fixed `make secrets-scan`, which scans commits in a worktree (R70 C3); if it is not on `main`, use W6's way: export with `git log -p`, scan in `dir` mode with `.gitleaks.toml`. Fingerprint any finding in `.gitleaksignore` without key material. No test password may be a literal (tests generate them).
+- [x] **Step 6: The transport security review (Ruling 26)**, then the independent review of `<branch base>..HEAD` against Review Focus 1-6 and Rulings 4, 6-16, 28, 31. Both are made by reviewers that did not write the code. Fix or decline every finding with a reason in the rulings file ("Security review (W7)", "Final review fixes (W7)").
+- [x] **Step 7: Acceptance check against design §4.2 (as amended by R71) and §13 W7**, one line each in the rulings file, then fill "§22 Phase W7 as built":
   - the same helper and protocol over WinRS (Ruling 4, F25; `TestWinRMCallShape`, `TestRealWinRMProvider`);
   - username and password authentication over NTLMv2, the password sealed and set with step-up (Rulings 6-8, 28, F24, F31);
   - the listener's certificate pinned by SPKI with the shared TLS pinning (Ruling 9, F28, F32);

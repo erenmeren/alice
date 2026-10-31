@@ -3077,7 +3077,7 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 - **F32: confirmed.** Runs 4 and 6. The script's printed SPKI fingerprint equals `providers.TLSIdentity` of the
   certificate Alice's client sees, for the image's RSA listener on 5986 and an ECDSA P-256 listener on 45521.
 
-### Runner runs used (7 of 10 so far)
+### Runner runs used (10 of 10)
 
 | Run | windows.yml | Head | windows-2022 / windows-2025 | What it found |
 |---|---|---|---|---|
@@ -3088,9 +3088,9 @@ Runs of `.github/workflows/windows.yml` (windows-2022 = Windows Server 2022 Data
 | 5 | <https://github.com/erenmeren/alice/actions/runs/41186388742> | `b8820bc1` | fail / fail | Decisive: the escaped `&#34;` around the program reached `cmd.exe` as `&`; unquoted and raw-quote forms work, `SSH_ORIGINAL_COMMAND` is delivered and the helper answers `version` |
 | 6 | <https://github.com/erenmeren/alice/actions/runs/41187834322> | `a594ffec` | fail / fail | Nearly every fact measured: F24 forms, F25 (`cmd.exe` inserted), F26, F27, F28, F29 (exits; a missing program is not a fault), F32. Left failing: F25's `cmd.exe` assertions, F29's missing program, the fidelity fault at Command, and a leftover `C:\ProgramData\alice-w7-<n>` |
 | 7 | <https://github.com/erenmeren/alice/actions/runs/41189449678> | `af716b23` | fail / fail | Only `TestFidelityWinRM/a_missing_program` and `TestRealWinRMExitCodes` failed, on the 9009 guess: a missing program exits 1 with cmd.exe's "is not recognized" on stderr. F24 (a): with `LocalAccountTokenFilterPolicy` 0 a local administrator's sign-in is refused. F25: `WINRS_SKIP_CMD_SHELL` with `MustComply="true"` faults 2150858809 at Command. F29: a helper killed at `deploy.prepared` exits 137 |
-| 8 | pending | pending | pending | pending |
-| 9 | pending | pending | pending | pending |
-| 10 | pending | pending | pending | pending |
+| 8 | <https://github.com/erenmeren/alice/actions/runs/41190949721> | `3b5da306` | pass / pass | The F29 fix (a missing helper is exit 1, a killed one 137): every real test and the fidelity suite green on both images; the measurements of runs 6-7 hold |
+| 9 | <https://github.com/erenmeren/alice/actions/runs/41192413321> | `073dc340` | pass / pass | The security and final review fixes (the second-connection transport error, fault 2147942405, the Ruling 4 guard in `Run`, the e-mail text): green on both images |
+| 10 | <https://github.com/erenmeren/alice/actions/runs/41198166021> | `853b9520` | pass / pass | The implementer's final tip (the guard tests of `tlsprobe` and `nginx` allowing `winrs/client.go`, the gitleaks allowlist): green on both images, `windows-required` green |
 
 ## Rulings made during execution (W7)
 
@@ -3320,9 +3320,76 @@ Ledger minors the final review triaged as fine to defer (declined for W7, carrie
   password missing; the RDP `output_too_large` text exists for the source-scanning test (a brittle coupling); the web
   passes no `from` for SSH or WinRM (owner item).
 
+## Coordinator review (W7)
+
+The coordinator's independent review of `9b856c88..853b9520` (2026-10-31, a reviewer that wrote none of the code, after
+the two reviews above): 0 critical, 1 important, 4 minor. All five fixed.
+
+- **I1, the web's setup help still said the firewall rule lets Alice's address through:** the web passes no `from`, so
+  the served script opens 5986 to any address (final review I1 fixed the documents, not this string). Fixed in
+  `2f85d9bd`: EN and TR say the rule opens 5986 to any address until `$AliceAddress` is set; the owner table below
+  quotes the new text.
+- **M1, a WinRM target on port 5985 was accepted at creation** and then failed every call as `internal.unexpected`
+  (the client's `ErrBadConfig`, Ruling 12). Fixed in `ca26c982`: `validateNewTarget` and `ParseConfig` answer the field
+  error `port` `pattern` under `transport: winrm`; an SSH server may still listen on 5985.
+- **M2, `!` was missing from the `cmd.exe` metacharacter list** of amended Ruling 4 (`cmd.exe /C` expands `!VAR!`
+  under `DelayedExpansion`); the program is Alice's constant, so defence in depth. Fixed in `62330efd`, with the guard
+  test.
+- **M3, the Send body's base64 copy of a stdin chunk (a deployment's private key) was never cleared** and WN-29 did not
+  list it. Fixed in `62330efd`: `roundTrip` clears the body once `Do` returned; the Go string the encoder builds stays,
+  and WN-29 now lists it with the other Go-string residuals.
+- **M4, a regression in the Add server dialog:** every type change between Linux servers reset a typed port to 22,
+  because leaving `windows` always chose the SSH transport (and its port). Fixed in `a2d1e828`: only leaving a WinRM
+  Windows server resets the transport and the port; a test keeps a typed 2222 across Linux ↔ Nginx.
+
+Checked and found clean by that review: the NTLM sign-in (no Basic anywhere, credentials on Create only), the pin
+(`InsecureSkipVerify` only with `VerifyConnection`, no session cache), the dial gate and the second-connection error
+path, the bounds, the shell lifecycle (Delete on every path after a parsed Create), the password's release in
+`winrm.go`, the step-up, zeroing, ETag and immutability of the API handler, migration `00038` and its Down, the module
+and secrets hygiene, and the web's username rule and locale coverage.
+
 ## Acceptance (design §13 W7)
 
-Pending: Task 10 step 7.
+Against §4.2 as amended by R71 and §13 W7, at the final code head:
+
+- **The same helper and protocol over WinRS:** helper `1.2.0`, protocol 1, the subcommand in `SSH_ORIGINAL_COMMAND`
+  through the `cmd.exe` WinRS inserts (Ruling 4 as amended, F25): `TestWinRMCallShape`, `TestWinRMCommandLineIsCmdSafe`,
+  `TestWinRSSendsOnlyTheHelper`, `TestRealWinRMRunsTheForcedEntry`, `TestRealWinRMProvider`, `TestFidelityWinRM`. Met.
+- **Username and password over NTLMv2, the password sealed and set with step-up** (Rulings 6-8, 28; F24, F31):
+  `TestWinRSNeverSendsBasic`, `TestWinRSSignsInOnCreateOnly`, `TestWinRSSignInMayTakeASecondConnection`,
+  `TestSetWinRMPassword*`, `TestWinRMReleasesThePassword`, `TestWinRMPasswordEdges`, `TestRealWinRMNTLMAuth`,
+  `TestRealWinRMAccountRights`. Met.
+- **The listener's certificate pinned by SPKI with the shared TLS pinning** (Ruling 9; F28, F32):
+  `TestWinRSPinBeforeAnyRequest`, `TestWinRMIdentityFlow`, `TestWinRMSecondConnectionIdentity`,
+  `TestRealWinRMListenerIdentity`, `TestRealWinRMSetupScript`. Met.
+- **Basic and unencrypted HTTP refused** (Rulings 12, 28; F30): `TestWinRSRefusesEverythingButNTLMOverTLS` (5985,
+  no TLS, TLS below 1.2), `TestWinRSNeverSendsBasic`, `TestRealWinRMAuthOffer`; a 5985 target is refused at creation
+  (coordinator review M1). Met.
+- **The security analysis states that the account is not limited to the helper** (Ruling 21, WN-26 High, accepted
+  by the owner as competitor parity): `04-security.md` WN-26, design §4.2, the transport choice's caution in the UI and
+  the host guide. Met.
+- **The transport review** (Ruling 26): [Security review (W7)](#security-review-w7), then the final and the
+  coordinator reviews. Met.
+
+Final gates (Task 10), at `a2d1e828` (the last code change) and `829d74c2`:
+
+- Step 1: `go mod tidy` leaves `go.mod` and `go.sum` unchanged (one line moved against `main`: go-ntlmssp direct);
+  `make lint` 0 issues; `make i18n-check` consistent; `make matrix-check MATRIXCHECK_FLAGS=-strict` 379 IDs, 369 by
+  tests, 7 partial, 1 owner, 2 deferred, 0 gaps; `make docs-check` clean.
+- Step 2: the Windows build and vet line (amd64 and arm64 helper, `-tags alicetest`, the `winrs` test binary): PASS.
+- Step 3: `E2E_PROJECT=alice-e2e-w7 ALICE_E2E_PORT=9985 make ci` in the worktree, in two runs: the first passed
+  `lint` through `web-coverage` (web: 171 files, 2743 tests, statements 96.5 %) and failed in `vuln` on `osv`
+  (`GHSA-g3hv-75wg-m249`, minimatch 10.2.6, published 2026-10-30, a development dependency of eslint whose range
+  stays ^10; ignored until 2027-01-29 in `829d74c2`); the second run took the stages from `vuln` on: `vuln`,
+  `secrets-scan` (2169 commits, no leaks), `fs-scan`, `e2e-up`, `e2e-hardening-check`, `e2e` (171 passed, 4 skipped,
+  0 failed, 54.9 min), `e2e-down`, `image-check` (ok) and `image-scan`: exit 0.
+- Step 4: runs 8 and 9 green on both images at the last Windows-path code change before the coordinator fixes; run 10
+  (<https://github.com/erenmeren/alice/actions/runs/41198166021>) green at `853b9520`, the implementer's final tip, with `windows-required` green. The coordinator fixes (`ca26c982`, `62330efd`) are checked by `windows.yml` on `main` after the
+  push, since the branch budget is spent.
+- Step 5: `make secrets-scan` over the worktree: 2164 commits scanned, no leaks (the one finding, the SSH goldens'
+  public-key placeholder, is fingerprinted in `.gitleaksignore`, `853b9520`).
+- Step 6: the three reviews above.
+- Step 7: this section and design §22.
 
 ## Owner items (W7)
 
