@@ -137,7 +137,7 @@ func TestStatusAndFence(t *testing.T) {
 
 // TestRDPStatusAbsentValueChecksTheStore (W6 final review M5, R70): a restored RDP operation whose
 // previous value was absent names the previous self-signed certificate only while Remote Desktop holds
-// exactly it; another self-signed certificate (Windows made a new one), or two, is "".
+// exactly it; another self-signed certificate (Windows made a new one), or two, or a store read that fails, is "".
 func TestRDPStatusAbsentValueChecksTheStore(t *testing.T) {
 	f := newRDPFixture(t, true)
 	f.rdpCommitted(op1, f.in())
@@ -152,12 +152,22 @@ func TestRDPStatusAbsentValueChecksTheStore(t *testing.T) {
 	}
 	other := pki.SelfSigned("WIN-RDP-NEW", pki.ECDSA256, testNow)
 	delete(f.h.certs, [2]string{winproto.RDPStoreSelfSigned, f.selfSHA1})
-	f.h.addCert(winproto.RDPStoreSelfSigned, other.Cert.Raw, true)
+	otherSHA1 := f.h.addCert(winproto.RDPStoreSelfSigned, other.Cert.Raw, true)
 	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
 		t.Fatalf("another self-signed certificate: %s", raw)
 	}
 	f.h.addCert(winproto.RDPStoreSelfSigned, f.self.Cert.Raw, true)
 	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
 		t.Fatalf("two self-signed certificates: %s", raw)
+	}
+	// (d) Remote Desktop holds exactly the previous certificate again, but the store read fails: "".
+	delete(f.h.certs, [2]string{winproto.RDPStoreSelfSigned, otherSHA1})
+	f.h.storeListErr = errors.New("disk")
+	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != "" {
+		t.Fatalf("the store read fails: %s", raw)
+	}
+	f.h.storeListErr = nil
+	if _, st, raw := f.statusCall(winproto.SubIISStatus, op1); st.CurrentCertSHA256 != f.selfSHA256 {
+		t.Fatalf("the store read works again: %s", raw)
 	}
 }
