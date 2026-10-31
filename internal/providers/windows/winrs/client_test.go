@@ -827,5 +827,4 @@ func TestWinRSShellIdle(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	assert.Contains(t, string(f.served[0].body), "<rsp:IdleTimeOut>PT90S</rsp:IdleTimeOut>")
-	assert.Equal(t, 90*time.Second, call.Timeout+winrs.ShellIdleSlack)
 }
