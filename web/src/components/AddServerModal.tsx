@@ -87,6 +87,8 @@ export function AddServerModal({
   const [blocked, setBlocked] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [candidate, setCandidate] = useState<HostKey | null>(null);
+  // afterPassword: the connection test follows a saved WinRM password, so a failure gets the password hint (A9, R72).
+  const [afterPassword, setAfterPassword] = useState(false);
   const abort = useAbort();
 
   // chooseType switches the server type; the account follows the type's default until the person edits it.
@@ -198,6 +200,7 @@ export function AddServerModal({
   // passwordSaved tests the connection of a WinRM server with the password just set; its listener's identity comes next.
   const passwordSaved = (saved: Target) => {
     setTarget(saved);
+    setAfterPassword(true);
     void afterCreate(saved, async (s) => {
       const res = await testTarget(saved.id);
       return waitForJob(res.job_id, { signal: s });
@@ -296,6 +299,7 @@ export function AddServerModal({
           <WinRMSetupScript targetId={target.id} />
           <Text size="sm">{t('targets.winrm.passwordStep')}</Text>
           <CCSPasswordPanel kind="winrm" target={target} canSet onSaved={passwordSaved} />
+          <Text size="sm">{t('targets.winrm.closeWithoutPassword')}</Text>
           <DialogActions>
             <Button variant="default" onClick={close}>
               {t('ui.close')}
@@ -315,6 +319,7 @@ export function AddServerModal({
           {error !== null && problem}
           <JobErrorAlert error={jobError} />
           {!blocked && error === null && <Text size="sm">{t('targets.failedHelp')}</Text>}
+          {afterPassword && <Text size="sm">{t('targets.winrm.failedAfterPassword')}</Text>}
           <DialogActions>
             <Button variant="default" onClick={close}>
               {t('ui.close')}

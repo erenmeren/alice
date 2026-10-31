@@ -1174,6 +1174,8 @@
       "setupTitle": "WinRM setup script",
       "setupHelp": "Run it once in an elevated PowerShell on the server, in the folder that holds alice-helper.exe. It installs the helper, prepares the account and asks for its password, creates an HTTPS listener on port 5986 when there is none, opens port 5986 in the firewall to Alice's address when you entered one above, otherwise to any address until you set $AliceAddress in the script, and prints the listener's fingerprint. Keep that fingerprint: you compare it in the last step.",
       "passwordStep": "Then enter the same password here. Alice tests the connection as soon as the password is saved.",
+      "closeWithoutPassword": "If you close now, Alice keeps the server without a password and cannot reach it. You can set the password later on the server's page.",
+      "failedAfterPassword": "The password is saved. If the server refused the sign-in, compare the password with the one set on the server, then use Test connection on the server's page.",
       "showScript": "Show setup script again"
     },
     "connecting": "Connecting to the server…",

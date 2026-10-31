@@ -396,6 +396,15 @@ describe('DeployDialog from a certificate', () => {
     await showDialog({ certificate: NEW_CERT });
     expect(await screen.findByText(/not used on any website that Alice can deploy to/)).toBeInTheDocument();
   });
+
+  it('opened from a certificate, a Windows place shows the Windows summary', async () => {
+    asRole('operator');
+    certServer([l1, windowsBindingFixture({ id: 'w9', cert_path: 'http.sys/ipport/0.0.0.0:9443' })]);
+    await showDialog({ certificate: NEW_CERT });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /0\.0\.0\.0:9443/ }));
+    const texts = screen.getAllByText(/^Alice (imports|backs up)/).map((e) => e.textContent ?? '');
+    expect(texts).toEqual([expect.stringContaining('into the certificate store of the binding')]);
+  });
 });
 
 describe('DeployDialog canary (R65)', () => {
@@ -946,6 +955,19 @@ describe('DeployDialog on a Windows server', () => {
     expect(texts).toHaveLength(2);
     expect(texts[0]).toContain("into the server's Personal (My) store");
     expect(texts[1]).toContain('into the certificate store of the binding');
+  });
+
+  it('an unticked opening binding leaves no summary of its kind', async () => {
+    asRole('operator');
+    certificates([NEW_CERT]);
+    const file = windowsCCSFileFixture({ id: 'c1', certificate: SERVED });
+    await showDialog({ location: W1, siblings: [W1, file] });
+    await screen.findByText(/points the binding to the new certificate/);
+    await userEvent.click(screen.getByRole('checkbox', { name: /0\.0\.0\.0:8443/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /ccs\.example\.test\.pfx/ }));
+    const texts = screen.getAllByText(/^Alice imports/).map((e) => e.textContent ?? '');
+    expect(texts).toEqual([expect.stringContaining('intermediate certificates into the server')]);
+    expect(screen.queryByText(/points the binding to the new certificate/)).not.toBeInTheDocument();
   });
 
   it('says "places" for the select-all of a group that holds a CCS file, "bindings" for one of bindings only (W5-12d, R70)', async () => {

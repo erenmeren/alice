@@ -26,7 +26,7 @@ import { InternalLink } from './InternalLink';
 import { LocationWarning } from './LocationWarning';
 import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
-import { foreignAppText } from './WebsitesPanel';
+import { foreignAppText } from './foreignApp';
 import deploy from './deploy.module.css';
 import { DialogActions, Notice } from './ui';
 import { CanaryChoice, serviceIdOf } from './CanaryChoice';
@@ -147,10 +147,12 @@ function DeployForm({
 
   const places = detail.data?.locations ?? [];
   const targets: CertificateLocation[] = bindings ? pickedBindings : location ? [location] : places.filter((p) => picked.includes(p.id));
-  // One summary per kind of place among the opening location and the ticked places, the opening kind first (W5-12c,
-  // R70): a CCS file is written in place, not bound (R68); the Remote Desktop listener gets its own sentence (R69).
-  const summaries = [...new Set([...(location ? [location] : []), ...targets].map(summaryKey))];
-  if (summaries.length === 0) summaries.push('deploy.summary');
+  // One summary per kind of the ticked places, the opening kind first when it is ticked (W5-12c, R70; F6, R72): a CCS
+  // file is written in place, not bound (R68); the Remote Desktop listener gets its own sentence (R69). With nothing
+  // ticked, the opening place's kind.
+  const ordered = location && targets.some((l) => l.id === location.id) ? [location, ...targets.filter((l) => l.id !== location.id)] : targets;
+  const summaries = [...new Set(ordered.map(summaryKey))];
+  if (summaries.length === 0) summaries.push(location ? summaryKey(location) : 'deploy.summary');
   const tooMany = targets.length > MAX_DEPLOY_LOCATIONS;
   const knownLocations = bindings ?? (location ? [location] : places);
 
