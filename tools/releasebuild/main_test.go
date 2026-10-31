@@ -805,6 +805,9 @@ func makeIn(t *testing.T, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command("make", args...)
 	cmd.Dir = filepath.Join("..", "..")
+	// Under make release-gates the test runs inside a nested make, whose MAKEFLAGS (w: print the
+	// directory) would put "make[3]: Entering directory" before the line the tests assert.
+	cmd.Env = append(os.Environ(), "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
