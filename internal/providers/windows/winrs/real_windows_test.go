@@ -142,7 +142,9 @@ func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	v := decode[winproto.VersionResponse](t, res.Stdout)
 	assert.True(t, v.OK && v.Helper == winproto.Version, "the forced-command entry answers version: %s", res.Stdout)
 
-	// The process as Windows records it, caught while stdinhash sleeps 2 s.
+	// The process as Windows records it, caught while stdinhash sleeps 2 s. Runner run 6: WinRS starts it through
+	// cmd.exe /C even with WINRS_SKIP_CMD_SHELL TRUE (controller ruling: recorded as the measured fact, the helper
+	// stays 1.2.0). What must hold: the command lines carry the quoted program and its arguments only.
 	wait := startWatcher(t)
 	res, err = run(c, f.hashCall([]byte("x"), "0", "2"))
 	seen := wait()
@@ -150,20 +152,43 @@ func TestRealWinRMRunsTheForcedEntry(t *testing.T) {
 	fact(t, "F25", "the running program from Win32_Process: %s", seen)
 	require.NotEqual(t, "none", seen, "the watcher saw stdinhash.exe running")
 	p := decode[struct{ CommandLine, Parent, ParentCommandLine, Owner string }](t, []byte(seen))
-	assert.Equal(t, `"`+f.stdinhash+`" 0 2`, p.CommandLine, "the command line is the quoted program and its arguments only")
-	assert.False(t, strings.EqualFold("cmd.exe", p.Parent), "no cmd.exe between WinRM and the program")
+	fact(t, "F25", "parent image %s; parent command line %s; program command line %s", p.Parent, p.ParentCommandLine, p.CommandLine)
+	if strings.EqualFold("cmd.exe", p.Parent) {
+		assert.True(t, strings.HasSuffix(p.ParentCommandLine, ` /C "`+f.stdinhash+`" 0 2`),
+			"cmd.exe's command line is /C, the quoted program and its arguments only: %s", p.ParentCommandLine)
+	}
+	assert.True(t, strings.HasPrefix(strings.TrimPrefix(p.CommandLine, `"`), f.stdinhash) && strings.HasSuffix(p.CommandLine, " 0 2"),
+		"the program's command line is the program and its arguments only: %s", p.CommandLine)
 	assert.True(t, strings.EqualFold(f.host+`\`+account, p.Owner), "the program runs as %s, not %s", account, p.Owner)
 
+	// Log only: whether MustComply on the option removes cmd.exe.
+	mustComply := func(b []byte) []byte {
+		return bytes.Replace(b, []byte(`<w:Option Name="WINRS_SKIP_CMD_SHELL">TRUE</w:Option>`),
+			[]byte(`<w:Option Name="WINRS_SKIP_CMD_SHELL" MustComply="true">TRUE</w:Option>`), 1)
+	}
+	wait = startWatcher(t)
+	_, stderr, code, err := f.rawRun(t, f.stdinhash, []string{"0", "2"}, nil, []byte("x"), mustComply)
+	fact(t, "F25", "WINRS_SKIP_CMD_SHELL with MustComply=\"true\": exit %d, stderr %s, err %v; the running program: %s", code, first(stderr, 200), err, wait())
+
+	// Security 4688: the helper's process and the cmd.exe WinRS starts for it carry no subcommand text (the
+	// SSH_ORIGINAL_COMMAND value "version" is in the environment only).
 	time.Sleep(2 * time.Second)
-	fact(t, "F25", "Security 4688 with command lines since the test started: %s", ps(t, map[string]string{"SINCE": t0.UTC().Format(time.RFC3339Nano)}, "",
+	events := ps(t, map[string]string{"SINCE": t0.UTC().Format(time.RFC3339Nano), "DIR": f.dir}, "",
 		sinceScript+`$out = @()
 foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688; StartTime = $since } -ErrorAction SilentlyContinue)) {
     $d = Get-Data $e
-    if ($d['NewProcessName'] -like '*\stdinhash.exe' -or $d['NewProcessName'] -like '*\alice-helper.exe') {
+    if ($d['NewProcessName'] -like '*\stdinhash.exe' -or $d['NewProcessName'] -like '*\alice-helper.exe' -or
+        ($d['NewProcessName'] -like '*\cmd.exe' -and $d['CommandLine'] -like "*$($env:DIR)*")) {
         $out += [pscustomobject]@{ NewProcessName = $d['NewProcessName']; CommandLine = $d['CommandLine']; Parent = $d['ParentProcessName']; Target = $d['TargetUserName'] }
     }
 }
-ConvertTo-Json -Compress -InputObject @($out)`))
+ConvertTo-Json -Compress -InputObject @($out)`)
+	fact(t, "F25", "Security 4688 with command lines since the test started: %s", events)
+	for _, e := range decode[[]struct{ NewProcessName, CommandLine string }](t, []byte(events)) {
+		if strings.Contains(e.CommandLine, "alice-helper.exe") {
+			assert.NotContains(t, e.CommandLine, winproto.SubVersion, "the subcommand never reaches a command line: %s", e.CommandLine)
+		}
+	}
 }
 
 func TestRealWinRMStdin(t *testing.T) {
