@@ -11,10 +11,17 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -22,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
@@ -29,6 +37,7 @@ import (
 	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/winrs"
+	"alice/internal/testutil/pki"
 )
 
 // outcome is a call's result for a log line: the error (winrs errors hold no server text and no credential) or
@@ -375,9 +384,7 @@ func TestRealWinRMListenerIdentity(t *testing.T) {
 func TestRealWinRMExitCodes(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
-	// winhelper.ExitKilled is the exit of a helper killed at any crash point (main.go exits with o.Exit), so
-	// stdinhash exiting with it stands for the -tags alicetest helper (see the report's ruling).
-	for _, code := range []int{0, 2, 3, 4, winhelper.ExitKilled} {
+	for _, code := range []int{0, 2, 3, 4} {
 		res, err := run(c, f.hashCall([]byte("x"), strconv.Itoa(code)))
 		require.NoError(t, err, "exit %d", code)
 		fact(t, "F29", "a program exiting %d: ExitCode %d", code, res.ExitCode)
@@ -398,6 +405,111 @@ func TestRealWinRMExitCodes(t *testing.T) {
 	require.ErrorAs(t, err, &fe, "a program that does not exist is a WS-Management fault")
 	fact(t, "F29", "a program path that does not exist: %v (WS-Management fault code %d)", err, fe.Code)
 	assert.Equal(t, uint32(2), fe.Code, "Ruling 13: ERROR_FILE_NOT_FOUND at Command")
+
+	killAtPrepared(t, f)
+}
+
+// killAtPrepared runs an iis-deploy of a helper built with -tags alicetest over WinRS, killed at deploy.prepared
+// (logged only). The kill hook reads ALICE_WIN_TEST_KILL_AT, a second environment variable winrs never sends, so
+// the shell is created by hand; the helper needs its trusted data directory (winproto.DataDir) and a real
+// http.sys record to replace.
+func killAtPrepared(t *testing.T, f *fx) {
+	t.Helper()
+	helper := filepath.Join(f.dir, "alice-helper-alicetest.exe")
+	b, err := exec.Command("go", "build", "-tags", "alicetest", "-o", helper, "alice/cmd/alice-winhelper").CombinedOutput()
+	require.NoError(t, err, "go build -tags alicetest: %s", b)
+
+	// The record the deployment replaces: 0.0.0.0:45522 (a spare fixture port) naming an alice-w7- certificate.
+	now := time.Now()
+	keyA, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	certA := listenerCert(t, keyA, now.Add(-time.Hour), now.AddDate(0, 1, 0))
+	thumbA := importCert(t, certA, keyA)
+	loc := winproto.Locator{Type: winproto.BindingIPPort, IP: "0.0.0.0", Port: 45522, AppID: winproto.AppIDIIS}
+	canonical, ok := loc.Canonical()
+	require.True(t, ok)
+	netsh := filepath.Join(os.Getenv("SystemRoot"), "System32", "netsh.exe")
+	t.Cleanup(func() {
+		out, err := exec.Command(netsh, "http", "delete", "sslcert", "ipport=0.0.0.0:45522").CombinedOutput()
+		t.Logf("netsh http delete sslcert ipport=0.0.0.0:45522: %v: %s", err, bytes.TrimSpace(out))
+	})
+	out, err := exec.Command(netsh, "http", "add", "sslcert", "ipport=0.0.0.0:45522", "certhash="+thumbA,
+		"appid="+winproto.AppIDIIS, "certstorename=MY").CombinedOutput()
+	require.NoError(t, err, "netsh http add sslcert: %s", out)
+
+	// The new certificate, removed at the end wherever a deployment that was not killed put it.
+	ca := pki.NewCA("alice-w7-kill-ca", pki.RSA2048, now)
+	leaf := ca.Issue(pki.Opts{CommonName: "alice-w7-kill", SANs: []string{"alice-w7-kill"}, KeyType: pki.RSA2048}, now)
+	removeCertLater(t, "My", thumbprint(leaf.Cert))
+	removeCertLater(t, "CA", thumbprint(ca.Intermediate))
+	in, err := json.Marshal(winproto.DeployInput{Locator: loc, ExpectSHA256: hashHex(certA.Raw), ChainPEM: string(leaf.FullchainPEM),
+		KeyPEM: string(leaf.KeyPEM), ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{}})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(in), winrs.MaxSendChunk)
+	op := uuid.NewString()
+	helperDataDir(t, op, canonical)
+
+	r := newRaw(t, imageAddr, f.spki, account, f.pw)
+	body, err := winrs.CreateShellRequest(r.header(), map[string]string{"SSH_ORIGINAL_COMMAND": winproto.SubIISDeploy + " " + winproto.ArgOp + " " + op},
+		callTimeout+winrs.ShellIdleSlack)
+	require.NoError(t, err)
+	body = bytes.Replace(body, []byte("</rsp:Environment>"),
+		[]byte(`<rsp:Variable Name="ALICE_WIN_TEST_KILL_AT">deploy.prepared</rsp:Variable></rsp:Environment>`), 1)
+	shell, _ := r.createBody(t, body)
+	cmdID := r.command(t, shell, helper, "ssh")
+	send, err := winrs.SendRequest(r.header(), shell, cmdID, in, true)
+	require.NoError(t, err)
+	a := r.post(send, false)
+	require.NoError(t, a.err)
+	require.Equal(t, http.StatusOK, a.status, "Send: %s", a.fault())
+	stdout, code := r.receive(t, shell, cmdID)
+	r.delete(t, shell)
+	if answer := bytes.TrimSpace(stdout); len(answer) > 0 { // a deploy answer holds no key material
+		fact(t, "F29", "kill not reached: exit=%d, the helper answered %s", code, answer)
+		return
+	}
+	fact(t, "F29", "killed exit=%d (a helper killed at deploy.prepared answers nothing; winhelper.ExitKilled is %d, wintest.KilledExit 255)",
+		code, winhelper.ExitKilled)
+}
+
+// helperDataDir makes the helper's data directory (owner Administrators, as the helper requires) when it is
+// absent and removes what it made at the end; when it exists (TestRealSetupScript made it), it removes the state
+// files this operation writes.
+func helperDataDir(t *testing.T, op, canonical string) {
+	t.Helper()
+	top := "" // the first directory this test makes
+	for d := winproto.DataDir; ; {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+		top = d
+		p := filepath.Dir(d)
+		if p == d {
+			break
+		}
+		d = p
+	}
+	if top != "" {
+		t.Cleanup(func() {
+			if err := os.RemoveAll(top); err != nil {
+				t.Errorf("removing %s: %v", top, err)
+			}
+		})
+		require.NoError(t, os.MkdirAll(winproto.DataDir, 0o700))
+		out, err := exec.Command("icacls", winproto.DataDir, "/setowner", "*"+adminsSID).CombinedOutput()
+		require.NoError(t, err, "icacls /setowner: %s", out)
+		t.Logf("made the helper's data directory %s (absent before; %s removed at the end)", winproto.DataDir, top)
+		return
+	}
+	sum := sha256.Sum256([]byte(canonical))
+	files := []string{filepath.Join(winproto.DataDir, "journal", op+".json"), filepath.Join(winproto.DataDir, "bindings", hex.EncodeToString(sum[:])+".json")}
+	t.Cleanup(func() {
+		for _, f := range files {
+			if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("removing %s: %v", f, err)
+			}
+		}
+	})
 }
 
 func TestRealWinRMAuthOffer(t *testing.T) {

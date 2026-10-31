@@ -696,12 +696,68 @@ func (r *rawConn) create(t *testing.T, idle time.Duration) (string, rawAnswer) {
 	t.Helper()
 	body, err := winrs.CreateShellRequest(r.header(), nil, idle)
 	require.NoError(t, err)
+	return r.createBody(t, body)
+}
+
+// createBody sends a Create request built by the caller.
+func (r *rawConn) createBody(t *testing.T, body []byte) (string, rawAnswer) {
+	t.Helper()
 	a := r.post(body, true)
 	require.NoError(t, a.err)
 	require.Equal(t, http.StatusOK, a.status, "Create: %v, %s", a.reqs, a.fault())
 	id, err := winrs.ParseShellCreated(a.body)
 	require.NoError(t, err)
 	return id, a
+}
+
+// command starts program with args in the shell and returns the command id.
+func (r *rawConn) command(t *testing.T, shell, program string, args ...string) string {
+	t.Helper()
+	body, err := winrs.CommandRequest(r.header(), shell, program, args)
+	require.NoError(t, err)
+	a := r.post(body, false)
+	require.NoError(t, a.err)
+	require.Equal(t, http.StatusOK, a.status, "Command: %v, %s", a.reqs, a.fault())
+	id, err := winrs.ParseCommandStarted(a.body)
+	require.NoError(t, err)
+	return id
+}
+
+// receive asks for the command's output until it is done and returns its stdout and exit code.
+func (r *rawConn) receive(t *testing.T, shell, cmdID string) ([]byte, int) {
+	t.Helper()
+	const timedOut = 2150858793 // w:TimedOut: no output within the OperationTimeout; asked again
+	var out []byte
+	for end := time.Now().Add(2 * time.Minute); time.Now().Before(end); {
+		h := r.header()
+		h.OperationTimeout = 20 * time.Second
+		body, err := winrs.ReceiveRequest(h, shell, cmdID)
+		require.NoError(t, err)
+		a := r.post(body, false)
+		require.NoError(t, a.err)
+		if fe, ok := winrs.ParseFault(a.body); ok && a.status != http.StatusOK {
+			require.Equal(t, uint32(timedOut), fe.Code, "Receive answered a fault")
+			continue
+		}
+		require.Equal(t, http.StatusOK, a.status, "Receive: %v", a.reqs)
+		got, err := winrs.ParseReceived(a.body, cmdID)
+		require.NoError(t, err)
+		out = append(out, got.Stdout...)
+		if got.Done {
+			return out, got.ExitCode
+		}
+	}
+	require.FailNow(t, "the command did not end within 2 minutes")
+	return nil, 0
+}
+
+// delete deletes the shell; its answer is logged only.
+func (r *rawConn) delete(t *testing.T, shell string) {
+	t.Helper()
+	body, err := winrs.DeleteRequest(r.header(), shell)
+	require.NoError(t, err)
+	a := r.post(body, false)
+	t.Logf("Delete: status %d, err %v", a.status, a.err)
 }
 
 // ---- Windows' records ---------------------------------------------------------------------------------------
@@ -791,13 +847,17 @@ func importCert(t *testing.T, c *x509.Certificate, key crypto.Signer) string {
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "listener.pfx")
 	require.NoError(t, os.WriteFile(path, pfx, 0o600))
-	sum := sha1.Sum(c.Raw)          //nolint:gosec // the thumbprint, Windows' name of the certificate
-	thumb := fmt.Sprintf("%X", sum) // Windows writes thumbprints in upper case
+	thumb := thumbprint(c)
 	removeCertLater(t, "My", thumb)
 	got := ps(t, map[string]string{"PFX": path}, pw, `$pw = ConvertTo-SecureString -String ([Console]::In.ReadLine()) -AsPlainText -Force
 (Import-PfxCertificate -FilePath $env:PFX -CertStoreLocation Cert:\LocalMachine\My -Password $pw).Thumbprint`)
 	require.Equal(t, thumb, got)
 	return thumb
+}
+
+// thumbprint is Windows' name of a certificate: the upper-case hex SHA-1 of its DER.
+func thumbprint(c *x509.Certificate) string {
+	return fmt.Sprintf("%X", sha1.Sum(c.Raw)) //nolint:gosec // the thumbprint, Windows' name of the certificate
 }
 
 // removeCertLater removes a certificate of a LocalMachine store at the end, with its key when it has one; a key
