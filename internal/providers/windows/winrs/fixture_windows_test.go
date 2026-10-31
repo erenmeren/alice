@@ -321,7 +321,7 @@ func holds(t *testing.T, sid *windows.SID, right string) bool {
 func grantRight(t *testing.T, sid *windows.SID, right string) func() {
 	t.Helper()
 	if holds(t, sid, right) {
-		t.Logf("%s already holds %s", sid, right)
+		fact(t, "F31", "%s already holds %s as found (left alone)", sid, right)
 		return func() {}
 	}
 	restore := sync.OnceFunc(func() {
