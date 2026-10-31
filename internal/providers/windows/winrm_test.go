@@ -298,7 +298,7 @@ func TestWinRMPasswordMissing(t *testing.T) {
 	assert.True(t, pe.Retryable)
 }
 
-// Ruling 13 through the emulator: faults at Create, a wrong password, the helper missing (cmd.exe's 9009), a stalled
+// Ruling 13 through the emulator: faults at Create, a wrong password, the helper missing (cmd.exe's exit 1), a stalled
 // Receive, an unreachable listener; and every row of the table through winrmError.
 func TestWinRMErrorTable(t *testing.T) {
 	w := newWinRMEnv(t)
@@ -333,7 +333,7 @@ func TestWinRMErrorTable(t *testing.T) {
 		_, err := s.TestConnection(context.Background())
 		check(t, err, ReasonWinRMAuthRefused, false, true, nil)
 	})
-	t.Run("the helper missing: cmd.exe's exit 9009", func(t *testing.T) {
+	t.Run("the helper missing: cmd.exe's exit 1", func(t *testing.T) {
 		w.model.SetHelperMissing(true)
 		t.Cleanup(func() { w.model.SetHelperMissing(false) })
 		_, err := s.TestConnection(context.Background())
@@ -420,14 +420,17 @@ func TestWinRMWriteOutcomeTable(t *testing.T) {
 		result    providers.DeployResult
 		code      string
 		retryable bool
+		exitCode  string // a helper exit, decoded as over SSH; "" for a WinRS error
 	}{
-		{"a fault at Create", func(_ *testing.T, w *winrmEnv) { w.model.FailWinRM(87) }, 0, providers.DeployNoChange, ReasonWinRMFault, false},
+		{"a fault at Create", func(_ *testing.T, w *winrmEnv) { w.model.FailWinRM(87) }, 0, providers.DeployNoChange, ReasonWinRMFault, false, ""},
 		{"a wrong password", func(_ *testing.T, w *winrmEnv) { w.wcred.set("wrong-"+rand.Text(), nil) }, 0,
-			providers.DeployNoChange, ReasonWinRMAuthRefused, false},
-		{"the helper missing: cmd.exe's exit 9009", func(_ *testing.T, w *winrmEnv) { w.model.SetHelperMissing(true) }, 0,
-			providers.DeployUncertain, ReasonHelperMissing, false},
+			providers.DeployNoChange, ReasonWinRMAuthRefused, false, ""},
+		{"the helper missing: cmd.exe's exit 1", func(_ *testing.T, w *winrmEnv) { w.model.SetHelperMissing(true) }, 0,
+			providers.DeployUncertain, ReasonHelperMissing, false, ""},
+		{"a helper killed: exit 137 over WinRS", func(_ *testing.T, w *winrmEnv) { w.model.KillAt("deploy.prepared") }, 0,
+			providers.DeployUncertain, ReasonHelperMissing, false, "137"},
 		{"a timeout after Command", func(_ *testing.T, w *winrmEnv) { w.model.Delay(winproto.SubIISDeploy, time.Minute) },
-			500 * time.Millisecond, providers.DeployUncertain, "ssh.timeout", true},
+			500 * time.Millisecond, providers.DeployUncertain, "ssh.timeout", true, ""},
 	} {
 		t.Run(r.name, func(t *testing.T) {
 			w := newWinRMEnv(t)
@@ -447,7 +450,11 @@ func TestWinRMWriteOutcomeTable(t *testing.T) {
 			pe := providerErr(t, err)
 			assert.Equal(t, r.code, pe.Code)
 			assert.Equal(t, r.retryable, pe.Retryable)
-			assert.Equal(t, TransportWinRM, pe.Params["transport"])
+			if r.exitCode == "" { // a transport error of WinRS; a helper exit is decoded as over SSH (DecodeHelper)
+				assert.Equal(t, TransportWinRM, pe.Params["transport"])
+			} else {
+				assert.Equal(t, r.exitCode, pe.Params["exit_code"])
+			}
 			if r.result == providers.DeployNoChange {
 				assert.Equal(t, derSHA256(w.old.Cert.Raw), w.served(), "a refusal changed nothing")
 			}
@@ -534,9 +541,9 @@ func TestWinRMListenerBindingStaysUnsupported(t *testing.T) {
 	})
 }
 
-// F29 as measured: a missing helper is cmd.exe's exit 9009 with nothing on stdout, mapped as over SSH.
+// F29 as measured (run 7): a missing helper is cmd.exe /C's exit 1 with nothing on stdout, mapped as over SSH.
 func TestWinRMHelperMissingExit(t *testing.T) {
-	assert.Equal(t, 9009, WinRMHelperMissingExit)
+	assert.Equal(t, 1, WinRMHelperMissingExit)
 }
 
 func TestWinRMDialTimeoutMatchesSSH(t *testing.T) {

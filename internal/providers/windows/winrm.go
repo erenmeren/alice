@@ -27,10 +27,11 @@ const (
 	faultFileNotFound = 2
 )
 
-// WinRMHelperMissingExit is cmd.exe's "is not recognized" exit code: WinRS starts the program through cmd.exe even
-// with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command with this exit and nothing on stdout, not a
-// fault at Command (F29, measured on runner runs 6 and 7). The real test asserts against it.
-const WinRMHelperMissingExit = 9009
+// WinRMHelperMissingExit is cmd.exe /C's exit for a program it cannot find: WinRS starts the program through cmd.exe
+// even with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command with this exit, its "is not recognized"
+// text on stderr and nothing on stdout, not a fault at Command (F29, measured on runner run 7). The helper itself
+// never exits 1 (its exits are 0, 2, 3, 4 and 137; a Go runtime crash is 2). The real test asserts against it.
+const WinRMHelperMissingExit = 1
 
 // ntlmUser is the account name sent to NTLM (Ruling 6): the local form .\alice without its .\ (go-ntlmssp would send
 // "." as the domain); every other form as typed, go-ntlmssp taking the part before the backslash as the domain.

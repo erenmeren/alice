@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/winrs"
 	"alice/internal/testutil/pki"
@@ -264,8 +265,8 @@ func TestWinRMEmulatorRefusesOtherPrograms(t *testing.T) {
 		require.ErrorAs(t, err, &fe, name)
 		assert.Equal(t, uint32(2), fe.Code, name)
 	}
-	// F29 as measured (runner runs 6 and 7): WinRS starts a program that does not exist through cmd.exe, so the
-	// command runs and ends with cmd.exe's "not recognized" exit, its text on stderr, nothing on stdout.
+	// F29 as measured (runner run 7): WinRS starts a program that does not exist through cmd.exe /C, so the command
+	// runs and ends with exit 1, cmd.exe's "not recognized" text on stderr, nothing on stdout.
 	cl := e.call(winproto.SubVersion, nil)
 	cl.Program = `C:\Windows\System32\alice-absent.exe`
 	r, err := c.Run(context.Background(), cl)
@@ -308,7 +309,7 @@ func TestWinRMEmulatorKill(t *testing.T) {
 	e.m.KillAt("deploy.prepared")
 	res, err := e.run(t, winproto.SubIISDeploy+" --op "+op, deployInput(t, loc, old, nl))
 	require.NoError(t, err)
-	assert.Equal(t, KilledExit, res.ExitCode)
+	assert.Equal(t, winhelper.ExitKilled, res.ExitCode, "over WinRS the killed helper's own exit (F29, run 7); SSH keeps KilledExit")
 	assert.Empty(t, res.Stdout, "a killed helper prints nothing")
 	assert.Contains(t, e.m.Points(), "deploy.prepared")
 	e.m.Reboot()

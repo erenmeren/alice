@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/providers/windows/winhelper"
 	"alice/internal/providers/windows/winproto"
 	"alice/internal/providers/windows/winrs"
 )
@@ -40,9 +41,10 @@ const (
 	defaultOpTimeout = time.Minute // a Receive without OperationTimeout
 
 	faultFileNotFound = 2 // Command: the helper with arguments other than ssh
-	// notRecognizedExit is cmd.exe's exit for a program that does not exist: WinRS starts the program through cmd.exe
-	// even with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command, not a fault (F29, runner runs 6 and 7).
-	notRecognizedExit     = 9009
+	// notRecognizedExit is cmd.exe's exit for a program it cannot find: WinRS starts the program through cmd.exe
+	// /C even with WINRS_SKIP_CMD_SHELL, so a missing helper is a finished command, not a fault (F29, measured on
+	// runner run 7).
+	notRecognizedExit     = 1
 	faultBadRequest       = 87         // ERROR_INVALID_PARAMETER: a request outside the subset or out of order
 	faultShellNotFound    = 2150858843 // the shell does not exist (deleted, or never made)
 	faultMaxShells        = 2150859173 // the user's MaxShellsPerUser is reached
@@ -465,6 +467,9 @@ func (m *Model) winrmSend(req winrs.Request) ([]byte, uint32) {
 		res := m.runHelper(line, stdin)
 		m.mu.Lock()
 		run.cmd.stdout, run.cmd.exit = res.Stdout, res.Exit
+		if res.Exit == KilledExit { // a helper killed over WinRS ends with winhelper.ExitKilled itself (F29, run 7)
+			run.cmd.exit = winhelper.ExitKilled
+		}
 		m.mu.Unlock()
 		done := run.cmd.done
 		if res.Delay > 0 {
