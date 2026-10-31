@@ -152,9 +152,17 @@ func TestSetWinRMPasswordRefuses(t *testing.T) {
 	win := winrmTarget(t, h, admin, "iis-01")
 	ssh := winTarget(t, h, admin, "iis-02")
 	linux := okTarget(t, h, admin, "web-01")
+	// refuse sets pw (a copy) on tg and checks that the inventory zeroed the copy on the refusal too.
+	refuse := func(tg inventory.Target, pw []byte) error {
+		t.Helper()
+		given := bytes.Clone(pw)
+		_, err := h.svc.SetWinRMPassword(h.ctx, admin, tg.ID, tg.Version, secrets.NewPlaintext(given))
+		assert.Equal(t, make([]byte, len(pw)), given, "the password is zeroed on a refusal")
+		return err
+	}
 
 	for _, tg := range []inventory.Target{ssh, linux} {
-		_, err := setWinRM(t, h, admin, tg, []byte("short"))
+		err := refuse(tg, []byte("short"))
 		require.ErrorIs(t, err, inventory.ErrNotWindowsTarget, tg.Name)
 		assert.NotErrorIs(t, err, inventory.ErrWinRMPasswordInvalid, "the target before the rule")
 	}
@@ -164,15 +172,15 @@ func TestSetWinRMPasswordRefuses(t *testing.T) {
 		"a space":       append(bytes.Clone(pw[:12]), ' '),
 		"empty":         nil,
 	} {
-		_, err := setWinRM(t, h, admin, win, bad)
+		err := refuse(win, bad)
 		assert.ErrorIs(t, err, inventory.ErrWinRMPasswordInvalid, name)
 		if err != nil && len(bad) > 0 {
 			assert.NotContains(t, err.Error(), string(bad), name)
 		}
 	}
-	_, err := setWinRM(t, h, admin, inventory.Target{ID: win.ID, Version: win.Version + 1}, pw)
+	err := refuse(inventory.Target{ID: win.ID, Version: win.Version + 1}, pw)
 	require.ErrorIs(t, err, inventory.ErrVersionMismatch)
-	_, err = h.svc.SetWinRMPassword(h.ctx, admin, uuid.New(), 1, secrets.NewPlaintext(winrmPassword()))
+	err = refuse(inventory.Target{ID: uuid.New(), Version: 1}, winrmPassword())
 	require.ErrorIs(t, err, inventory.ErrNotFound)
 	assert.Zero(t, h.count("SELECT count(*) FROM credentials WHERE purpose = 'win_winrm'"), "nothing stored")
 	assert.Zero(t, h.count("SELECT count(*) FROM audit_log WHERE action = 'target.winrm_password_set'"))
