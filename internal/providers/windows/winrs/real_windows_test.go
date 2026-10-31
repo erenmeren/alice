@@ -407,6 +407,11 @@ func TestRealWinRMListenerIdentity(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// winRMHelperMissingExit is cmd.exe's exit for a program it cannot find (9009). shortcut: a local copy of the
+// provider constant windows.WinRMHelperMissingExit, not yet in the tree when this was written; use the provider's
+// once it exists.
+const winRMHelperMissingExit = 9009
+
 func TestRealWinRMExitCodes(t *testing.T) {
 	f := winrmFixture(t)
 	c := f.client(t, account)
@@ -424,13 +429,14 @@ func TestRealWinRMExitCodes(t *testing.T) {
 	e := decode[winproto.ErrorResponse](t, res.Stdout)
 	assert.False(t, e.OK)
 
+	// Runner run 6: cmd.exe runs the program, so a missing one is cmd.exe's "not recognized" exit, not a fault.
 	missing := f.helperCall(winproto.SubVersion)
 	missing.Program = f.dir + `\missing.exe`
-	_, err = run(c, missing)
-	var fe *winrs.FaultError
-	require.ErrorAs(t, err, &fe, "a program that does not exist is a WS-Management fault")
-	fact(t, "F29", "a program path that does not exist: %v (WS-Management fault code %d)", err, fe.Code)
-	assert.Equal(t, uint32(2), fe.Code, "Ruling 13: ERROR_FILE_NOT_FOUND at Command")
+	res, err = run(c, missing)
+	require.NoError(t, err)
+	_, stderr, code, rerr := f.rawRun(t, missing.Program, missing.Args, missing.Env, nil, nil)
+	fact(t, "F29", "a missing program: exit %d, stderr %s (hand-driven: exit %d, err %v)", res.ExitCode, first(stderr, 200), code, rerr)
+	assert.Equal(t, winRMHelperMissingExit, res.ExitCode)
 
 	killAtPrepared(t, f)
 }
