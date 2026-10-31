@@ -8,5 +8,9 @@
 #   ignoreUntil = 2026-12-31
 #   reason = "why Alice is not affected, or what blocks the fix"
 #
-# There is none today. A High or Critical finding with a fix is fixed, not ignored
-# (docs/dev/dependency-updates.md).
+# A High or Critical finding with a fix is fixed, not ignored (docs/dev/dependency-updates.md).
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2027-01-29
+reason = "minimatch 10.2.6 (Medium, a denial of service through glob amplification) is a development dependency only, reached through eslint, @eslint/config-array and @typescript-eslint/typescript-estree, whose ranges are ^10.x; nothing of it ships. Renew or remove when those packages take minimatch 11."
