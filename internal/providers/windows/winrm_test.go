@@ -368,7 +368,7 @@ func TestWinRMErrorTable(t *testing.T) {
 		check(t, err, ReasonWinRMFault, false, true, map[string]string{"wsman_code": "87"})
 	})
 	t.Run("access denied at Create", func(t *testing.T) {
-		w.model.FailWinRM(faultAccessDenied)
+		w.model.FailWinRM(2147942405) // E_ACCESSDENIED as WinRM reports it at Create (runs 3-4)
 		_, err := s.TestConnection(context.Background())
 		check(t, err, ReasonWinRMAuthRefused, false, true, nil)
 	})
@@ -411,12 +411,13 @@ func TestWinRMErrorTable(t *testing.T) {
 		{"a refused configuration", ns(winrs.ErrBadConfig), reasonUnexpected, false, nil},
 		{"auth refused", ns(winrs.ErrAuthRefused), ReasonWinRMAuthRefused, false, nil},
 		{"auth refused after Create", winrs.ErrAuthRefused, ReasonWinRMAuthRefused, false, nil},
-		{"access denied at Create", ns(&winrs.FaultError{Code: faultAccessDenied, Action: winrs.ActionCreate}), ReasonWinRMAuthRefused, false, nil},
+		{"access denied at Create", ns(&winrs.FaultError{Code: 2147942405, Action: winrs.ActionCreate}), ReasonWinRMAuthRefused, false, nil},
+		{"code 5 at Create", ns(&winrs.FaultError{Code: 5, Action: winrs.ActionCreate}), ReasonWinRMFault, false, map[string]string{"wsman_code": "5"}},
 		{"a fault at Create", ns(&winrs.FaultError{Code: 2150859173, Action: winrs.ActionCreate}), ReasonWinRMFault, false, map[string]string{"wsman_code": "2150859173"}},
 		{"file not found at Command", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionCommand}, "ssh.helper_missing", false, nil},
 		{"code 2 at Send", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionSend}, ReasonWinRMFault, false, map[string]string{"wsman_code": "2"}},
 		{"code 2 at Receive", &winrs.FaultError{Code: faultFileNotFound, Action: winrs.ActionReceive}, ReasonWinRMFault, false, map[string]string{"wsman_code": "2"}},
-		{"access denied after Create", &winrs.FaultError{Code: faultAccessDenied, Action: winrs.ActionCommand}, ReasonWinRMFault, false, map[string]string{"wsman_code": "5"}},
+		{"access denied after Create", &winrs.FaultError{Code: 2147942405, Action: winrs.ActionCommand}, ReasonWinRMFault, false, map[string]string{"wsman_code": "2147942405"}},
 		{"a fault after Command", &winrs.FaultError{Code: 87, Action: winrs.ActionReceive}, ReasonWinRMFault, false, map[string]string{"wsman_code": "87"}},
 		{"a timeout", fmt.Errorf("%w: %w", winrs.ErrTimeout, context.DeadlineExceeded), "ssh.timeout", true, nil},
 		{"a timeout before Create", ns(winrs.ErrTimeout), "ssh.timeout", true, nil},

@@ -20,10 +20,10 @@ import (
 // signed in with NTLMv2 and pinned by the listener's SubjectPublicKeyInfo. The helper runs its forced-command entry
 // with the line in SSH_ORIGINAL_COMMAND (Ruling 4), so everything after s.run is the SSH path's.
 
-// The WS-Management fault codes Ruling 13 names: access denied at Create (5, until F31 measures it), and the program
-// not found at Command (2, ERROR_FILE_NOT_FOUND, F29).
+// The WS-Management fault codes Ruling 13 names: access denied at Create (2147942405, E_ACCESSDENIED as WinRM reports
+// it, measured on runner runs 3 and 4), and the program not found at Command (2, ERROR_FILE_NOT_FOUND, F29).
 const (
-	faultAccessDenied = 5
+	faultAccessDenied = 2147942405
 	faultFileNotFound = 2
 )
 
