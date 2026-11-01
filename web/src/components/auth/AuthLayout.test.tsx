@@ -26,7 +26,7 @@ describe('AuthLayout', () => {
     const main = screen.getByRole('main');
     expect(within(main).getByRole('heading', { level: 1, name: 'Form title' })).toBeInTheDocument();
     expect(within(main).getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
-    expect(within(main).getByRole('button', { name: 'Türkçe (TR)' })).toBeInTheDocument();
+    expect(within(main).getByRole('button', { name: 'Türkçe, TR' })).toBeInTheDocument();
     expect(screen.getAllByRole('main')).toHaveLength(1);
   });
 
@@ -60,9 +60,9 @@ describe('AuthLayout', () => {
         <p>content</p>
       </AuthLayout>,
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
     expect(await screen.findByText('Daha az belirsizlik. Daha fazla kontrol.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'English (EN)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'English, EN' })).toBeInTheDocument();
     expect(saved).toBe(false);
   });
 

@@ -691,13 +691,13 @@ describe('setup wizard in the design\'s setup shell', () => {
     await renderRoute('/setup');
     await screen.findByRole('heading', { level: 2, name: 'Enter the setup code' });
     expect(screen.getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Alice kurulumu' })).toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: 'Kurulum adımları' })).getByText('Kurulum kodu ve dil')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'English (EN)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'English, EN' }));
     await enterCode();
     await screen.findByRole('heading', { level: 2, name: 'Choose your language' });
-    expect(screen.queryByRole('button', { name: 'Türkçe (TR)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Türkçe, TR' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
     // The language step is still the first rail item, and nothing is done yet.
     expect(within(rail()).getByText('Setup code & language').closest('li')).toHaveAttribute('aria-current', 'step');

@@ -38,7 +38,7 @@ describe('NotFoundPage', () => {
     );
     await renderRoute('/no-such-page');
     await screen.findByRole('heading', { level: 1, name: 'Page not found' });
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Sayfa bulunamadı' })).toBeInTheDocument();
     await waitFor(() => expect(saved).toHaveLength(1));
   });
@@ -54,7 +54,7 @@ describe('NotFoundPage', () => {
     );
     await renderRoute('/no-such-page');
     await screen.findByRole('heading', { level: 1, name: 'Page not found' });
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Sayfa bulunamadı' })).toBeInTheDocument();
     expect(saved).toBe(false);
   });

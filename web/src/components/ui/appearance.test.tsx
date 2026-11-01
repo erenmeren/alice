@@ -84,11 +84,11 @@ describe('ThemeToggle and LanguageToggle', () => {
   });
   it('is named by the other language in its own name and switches to it (two languages)', async () => {
     await renderApp(<LanguageToggle signedIn={false} />);
-    const toggle = screen.getByRole('button', { name: 'Türkçe (TR)' });
+    const toggle = screen.getByRole('button', { name: 'Türkçe, TR' });
     expect(toggle).toHaveTextContent('tr');
     await userEvent.click(toggle);
     await waitFor(() => expect(root).toHaveAttribute('lang', 'tr'));
-    expect(screen.getByRole('button', { name: 'English (EN)' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'English, EN' })).toBeVisible();
   });
 });
 
@@ -119,7 +119,7 @@ describe('appearance edge cases', () => {
     await waitFor(() => expect(root).toHaveAttribute('lang', 'tr'));
     unmount();
     await renderApp(<LanguageToggle signedIn />, ['tr-TR']);
-    await userEvent.click(screen.getByRole('button', { name: 'English (EN)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'English, EN' }));
     await waitFor(() => expect(root).toHaveAttribute('lang', 'en'));
   });
 
@@ -127,7 +127,7 @@ describe('appearance edge cases', () => {
     const saved = vi.fn();
     server.use(http.put('/api/v1/auth/locale', async ({ request }) => { saved(await request.json()); return new HttpResponse(null, { status: 204 }); }));
     await renderApp(<LanguageToggle signedIn />);
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
     await waitFor(() => expect(saved).toHaveBeenCalledWith({ locale: 'tr' }));
   });
 
@@ -150,8 +150,8 @@ describe('a language whose texts cannot be loaded', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Language' }), 'tr');
     unmount();
     await renderApp(<LanguageToggle signedIn />);
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
-    expect(screen.getByRole('button', { name: 'Türkçe (TR)' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe, TR' }));
+    expect(screen.getByRole('button', { name: 'Türkçe, TR' })).toBeVisible();
     expect(root).toHaveAttribute('lang', 'en');
     expect(saved).not.toHaveBeenCalled();
   });
