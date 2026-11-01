@@ -3810,6 +3810,11 @@ item table: no Critical, one Important, six Minor.
   the run; regenerated in `74ddeef2`.
 - e2e: 171 passed, 4 skipped (59.4 min), both `windows-winrm.spec.ts` journeys (en, tr) with the removal step;
   vitest 171 files, 2758 tests.
+- The coordinator's full `make ci` on `main` after the merge (`c9640aff`, `alice-e2e-main`, port 9974): every stage
+  through `secrets-scan` (2201 commits) and `fs-scan` passed; e2e 170 passed, 4 skipped, 1 failed: `phase9.spec.ts`
+  "every route in light and dark" (tr) hit its 30 min timeout on a loaded machine (the session ended inside the
+  test; the snapshot shows the sign-in page). Alone it passed in 3.8 min; listed as a load flake in
+  `fixes-2026-10-26.md`. No W8 file is on that path.
 - `make coverage` (in `make ci`): every floor met, none lowered: `inventory` 89.3 (89), `api` 96.9 (95), `windows`
   99.1 (95), `winproto` 100 (100), `winhelper` 97.2 (95), `wintest` 97.2 (90), `winrs` 96.9 (95),
   `cmd/alice-fakewindows` 93.4 (90).
