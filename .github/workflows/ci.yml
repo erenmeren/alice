@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The runners are discarded after the job: testcontainers' Ryuk reaper adds nothing and its 60-second start-up
+  # failed under load ("wait for reaper: context deadline exceeded", the coverage job at fa182290, 2026-10-31).
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
 # A newer push to the same branch (or pull request) cancels the run it supersedes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
