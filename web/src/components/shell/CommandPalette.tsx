@@ -41,6 +41,7 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
   };
   const needle = query.trim().toLocaleLowerCase(i18n.language);
   const found = items.filter((i) => t(i.labelKey).toLocaleLowerCase(i18n.language).includes(needle));
+  const shortcut = isMac() ? '⌘K' : 'Ctrl K';
   const openFirst = () => {
     const first = found[0];
     if (!first) return;
@@ -49,13 +50,16 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
   };
   return (
     <>
-      <Button variant="subtle" color="gray" size="xs" className={classes.trigger} aria-label={t('shell.search.open')} leftSection={<Icon name="Search" size={15} />} onClick={() => setOpened(true)}>
+      {/* The name carries the shortcut ("Search pages, Ctrl K"): the visible text must be part of the accessible name
+          (WCAG 2.5.3; axe-core 4.14 reads the aria-hidden kbd as visible text, token by token). */}
+      <Button variant="subtle" color="gray" size="xs" className={classes.trigger} aria-label={`${t('shell.search.open')}, ${shortcut}`} leftSection={<Icon name="Search" size={15} />} onClick={() => setOpened(true)}>
         {/* The design hides the label below 1200 px (styles.css), the shortcut below 760 px. */}
         <Box component="span" visibleFrom="lg">
           {t('shell.search.open')}
         </Box>
+        {/* A space: axe joins the children's text without one ("Search pagesCtrl K" is not in the name). */}{' '}
         <Box component="kbd" visibleFrom="sm" aria-hidden="true" className={classes.kbd} ml={8}>
-          {isMac() ? '⌘K' : 'Ctrl K'}
+          {shortcut}
         </Box>
       </Button>
       <AppModal opened={opened} onClose={close} title={t('shell.search.title')} size="lg">

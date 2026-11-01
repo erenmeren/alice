@@ -37,7 +37,7 @@ describe('command palette', () => {
   it('opens the first match with Enter', async () => {
     server.use(...sessionHandlers(adminSession), http.get('/api/v1/audit', () => HttpResponse.json({ items: [], next_cursor: null })));
     const { router } = await renderRoute('/');
-    await userEvent.click(await screen.findByRole('button', { name: 'Search pages' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Search pages, Ctrl K' }));
     await userEvent.type(await screen.findByRole('textbox', { name: 'Find a page…' }), 'audit{Enter}');
     await waitFor(() => expect(router.state.location.pathname).toBe('/audit'));
     // The modal leaves after its closing transition.
@@ -46,7 +46,7 @@ describe('command palette', () => {
   it('opens a page by its link, and Escape closes the palette and forgets the query', async () => {
     server.use(...sessionHandlers(adminSession));
     const { router } = await renderRoute('/');
-    const trigger = await screen.findByRole('button', { name: 'Search pages' });
+    const trigger = await screen.findByRole('button', { name: 'Search pages, Ctrl K' });
     await userEvent.click(trigger);
     await userEvent.type(await screen.findByRole('textbox', { name: 'Find a page…' }), 'lic');
     await userEvent.keyboard('{Escape}');
@@ -62,7 +62,7 @@ describe('command palette', () => {
   it('does nothing on Enter when no page matches', async () => {
     server.use(...sessionHandlers(adminSession));
     const { router } = await renderRoute('/');
-    await userEvent.click(await screen.findByRole('button', { name: 'Search pages' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Search pages, Ctrl K' }));
     await userEvent.type(await screen.findByRole('textbox', { name: 'Find a page…' }), 'zzz{Enter}');
     expect(screen.getByRole('dialog', { name: 'Go to a page' })).toHaveTextContent('No page matches.');
     expect(router.state.location.pathname).toBe('/');

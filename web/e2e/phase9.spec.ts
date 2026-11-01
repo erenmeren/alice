@@ -160,7 +160,7 @@ async function scanOverlays(page: Page, lang: Lang, label: string): Promise<void
   await expect(page.getByText(t('shell.attention.overview'), { exact: true })).toBeVisible();
   await expectAccessibleAt(page, `attention popover ${label}`, WIDTHS, { soft: true });
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: t('shell.search.open'), exact: true }).click();
+  await page.getByRole('button', { name: `${t('shell.search.open')}, Ctrl K`, exact: true }).click(); // the runners are Linux
   const palette = page.getByRole('dialog', { name: t('shell.search.title') });
   await expectAccessibleAt(page, `page palette ${label}`, WIDTHS, { soft: true, dialog: palette });
   await page.keyboard.press('Escape');

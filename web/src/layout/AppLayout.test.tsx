@@ -37,7 +37,7 @@ describe('AppLayout design details', () => {
   it('shows the search label from 1200 px only and ends the installation card with a lock icon', async () => {
     server.use(...sessionHandlers(adminSession));
     await renderRoute('/');
-    const search = await screen.findByRole('button', { name: 'Search pages' });
+    const search = await screen.findByRole('button', { name: 'Search pages, Ctrl K' });
     expect(within(search).getByText('Search pages')).toHaveClass('mantine-visible-from-lg');
     const text = screen.getByText('Self-hosted installation').parentElement;
     expect(text?.nextElementSibling?.tagName).toBe('svg');
@@ -152,7 +152,7 @@ describe('AppLayout shell', () => {
     await screen.findByRole('navigation', { name: 'Main navigation' });
     const skip = screen.getByRole('link', { name: 'Skip to content' });
     const nav = screen.getByRole('navigation', { name: 'Main navigation' });
-    const search = screen.getByRole('button', { name: 'Search pages' });
+    const search = screen.getByRole('button', { name: 'Search pages, Ctrl K' });
     const main = screen.getByRole('main');
     expect(skip.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(nav.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

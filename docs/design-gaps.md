@@ -89,7 +89,7 @@ design, the product and the tests:
 | top bar | search that finds resources | page palette over the role's destinations only (R7), hint "Only pages you can open" | 4 | differs |
 | top bar | the bell's unread dot | no dot: there is no unread state on the server (R8) | 4 | differs |
 | top bar | the palette shortcut label | `⌘K` on Apple platforms, `Ctrl K` elsewhere (the design's `.kbd` style) | 4 | filled |
-| top bar | the TR/EN toggle's visible text "TR" is not part of its accessible name "Türkçe" (WCAG 2.5.3) | fixed 2026-11-01: the name is "Türkçe, TR" / "English, EN" (axe-core 4.14 reports the mismatch through the aria-hidden code; the native name stays first) | 3 | filled |
+| top bar | the TR/EN toggle's visible text "TR" is not part of its accessible name "Türkçe" (WCAG 2.5.3) | fixed 2026-11-01: the name is "Türkçe, TR" / "English, EN" (axe-core 4.14 reports the mismatch through the aria-hidden code; the native name stays first); the palette trigger's name carries its shortcut the same way ("Search pages, Ctrl K") | 3 | filled |
 | mobile | the design's 222 px drawer | Mantine AppShell's full-width off-canvas navbar under the top bar (e2e contract); Escape closes it and returns focus to the menu button | 4 | differs |
 | banners | product banners (setup, 12 license kinds, notifications failing, 48-hour backup alarm, SSO step-up refusal, sign-out failure) | Mantine Alerts as status lines with the design's icons per severity (ShieldAlert / CircleAlert / CircleDot); link text inherits the alert's color, bold | 4 | filled |
 | popover | the notifications dialog layout | 340 px popover with `AttentionItem` rows, title, loading/error/empty states and "Open the overview" | 4 | filled |
