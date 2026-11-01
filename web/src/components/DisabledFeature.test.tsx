@@ -39,7 +39,9 @@ describe('DisabledFeature', () => {
       </DisabledFeature>,
     );
     await userEvent.hover(screen.getByTestId('disabled-feature'));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Not available for Nginx servers yet');
+    // Mantine 9 opens the tooltip through floating-ui's frames; under the coverage suite on a loaded machine it once
+    // took longer than the 5 s default (the tooltip was in the DOM when the failure printed).
+    expect(await screen.findByRole('tooltip', {}, { timeout: 20_000 })).toHaveTextContent('Not available for Nginx servers yet');
   });
 
   it('words the note in Turkish', async () => {
