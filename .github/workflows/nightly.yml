@@ -80,7 +80,9 @@ jobs:
 
   browsers:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 513 specs on one worker over three browsers take about 4.7 h (the v1.0.0-rc.1 release gate); 120 minutes
+    # cancelled this job every night from 2026-10-13 to 2026-10-31.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
