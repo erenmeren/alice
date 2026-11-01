@@ -268,6 +268,8 @@ func FuzzParseAuthorizedKeys(f *testing.F) {
 		k + " user@host\n",
 		`command="echo \"quoted\" a,b",from="10.0.0.0/8",no-pty ` + k + " c\n",
 		`environment="A=B" ` + k,
+		// An options field past maxOptionsTextBytes: OptionsText is cut, Options complete (nightly fuzz, 2026-11-01).
+		`command="echo \"quoted\" a,b",from="1` + strings.Repeat("@", 4200) + `" ` + k + " c\n",
 		k + "\r\n# comment\r\n\r\n",
 		"cert-authority " + k + " ca\n",
 		sk + " security key\n",
@@ -293,7 +295,9 @@ func FuzzParseAuthorizedKeys(f *testing.F) {
 		for _, l := range a.Lines {
 			switch l.Kind {
 			case LineKey:
-				if (len(l.Options) > 0) != (l.OptionsText != "") || strings.Join(l.Options, ",") != l.OptionsText {
+				// OptionsText is the joined options cut at maxOptionsTextBytes ("…"); Options stay complete.
+				joined := strings.Join(l.Options, ",")
+				if (len(l.Options) > 0) != (l.OptionsText != "") || capText(joined, maxOptionsTextBytes) != l.OptionsText {
 					t.Fatalf("options and OptionsText disagree: %q", l.Raw)
 				}
 				again, err := ParseAuthorizedKeys([]byte(l.Raw))
