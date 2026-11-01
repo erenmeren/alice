@@ -44,11 +44,16 @@ func TestF62UntrustedCertificateAndThePin(t *testing.T) {
 	require.NoError(t, m.Send(context.Background(), notify.Message{To: "ops@example.com", Subject: "s", Body: "b"}))
 	assert.Len(t, s.Messages(), 1)
 
-	cfg.Pin = "00" + s.Fingerprint()[2:]
+	// The first hex digit flipped: "00" + fp[2:] equalled the real fingerprint whenever it began with "00" (1 in 256
+	// runs), and the send then succeeded.
+	cfg.Pin = "0" + s.Fingerprint()[1:]
+	if cfg.Pin == s.Fingerprint() {
+		cfg.Pin = "1" + s.Fingerprint()[1:]
+	}
 	m, err = notify.NewSMTPMailer(cfg, clk)
 	require.NoError(t, err)
 	err = m.Send(context.Background(), notify.Message{To: "ops@example.com", Subject: "s", Body: "b"})
-	require.True(t, errors.As(err, &ce), "a pin that does not match is an untrusted certificate, with the one served")
+	require.True(t, errors.As(err, &ce), "a pin that does not match is an untrusted certificate, with the one served: %v", err)
 	assert.Equal(t, s.Fingerprint(), ce.Cert.Fingerprint)
 	assert.Len(t, s.Messages(), 1, "nothing was sent")
 }
