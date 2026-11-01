@@ -81,6 +81,7 @@ func (s *Server) withFault(w http.ResponseWriter, r *http.Request, op string, ns
 		return
 	}
 	if !sleepCtx(r.Context(), f.Delay) {
+		resetConn(w) // the client is gone: no implicit empty 200 for a client still reading
 		return
 	}
 	if f.Reset {

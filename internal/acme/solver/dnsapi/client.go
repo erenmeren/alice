@@ -167,6 +167,9 @@ func Do(ctx context.Context, client *http.Client, req *http.Request, identifier 
 		}
 		return 0, nil, nil, acme.DNSProviderError(identifier, res.StatusCode, !errors.Is(err, ErrTooLarge))
 	}
+	if ce := ctx.Err(); ce != nil { // an answer that arrived as the context died is the context's error, not an answer
+		return 0, nil, nil, ce
+	}
 	return res.StatusCode, res.Header, body, nil
 }
 

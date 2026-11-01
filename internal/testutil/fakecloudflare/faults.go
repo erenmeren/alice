@@ -84,6 +84,9 @@ func (s *Server) applyFault(w http.ResponseWriter, r *http.Request, f *Fault) bo
 		select {
 		case <-t.C:
 		case <-r.Context().Done():
+			// The client is gone: no answer. A plain return would let net/http send an implicit empty 200, which a
+			// client still reading would take for an answer (the deadline tests' "status 200" flake).
+			resetConn(w)
 			return true
 		}
 	}
