@@ -912,7 +912,7 @@ describe('typed secrets and repeated saves', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Add certificate authority' }));
     const dialog = await screen.findByRole('dialog');
     const input = within(dialog).getByLabelText(/^Allowed names/);
-    const described = () => (input.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent ?? `missing ${id}`);
+    const described = () => (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean).map((id) => document.getElementById(id)?.textContent ?? `missing ${id}`);
     expect(described()).toEqual([expect.stringContaining('Type a domain ending')]);
     await userEvent.type(input, 'com{Enter}');
     expect(described()).toEqual([expect.stringContaining('Use at least two parts'), expect.stringContaining('Type a domain ending')]);

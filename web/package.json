@@ -12,8 +12,8 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@mantine/core": "^8.3.18",
-    "@mantine/hooks": "^8.3.18",
+    "@mantine/core": "^9.7.4",
+    "@mantine/hooks": "^9.7.4",
     "@tanstack/react-query": "^5.104.5",
     "i18next": "^26.5.7",
     "react": "^19.3.1",

@@ -24,6 +24,10 @@ class ResizeObserverStub {
 }
 window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 window.HTMLElement.prototype.scrollIntoView = () => {};
+// Mantine 9's Textarea autosize listens to document.fonts, which jsdom does not implement.
+Object.defineProperty(document, 'fonts', {
+  value: { addEventListener: () => {}, removeEventListener: () => {} },
+});
 
 // findBy*/waitFor wait up to 1 s by default; under the full parallel suite a busy machine needs more
 // (shell attention bell, network discovery dialogs). Failing waits only take longer to fail.
