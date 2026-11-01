@@ -50,7 +50,7 @@ const SERVER = 'e2e-nginx';
 const DAY_SECONDS = 24 * 3600;
 // The first recovery of an interrupted deployment waits 30 s (deployjobs FirstRecovery).
 const FIRST_RECOVERY_SECONDS = 31;
-const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English', tr: 'Türkçe' };
+const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English, EN', tr: 'Türkçe, TR' };
 const OPERATOR: Account = { username: 'olcay', fullName: 'Olcay Öztürk', password: 'operator-password-2026' };
 const AUDITOR: Account = { username: 'deniz', fullName: 'Deniz Aksoy', password: 'auditor-password-2026' };
 
