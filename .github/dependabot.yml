@@ -21,14 +21,31 @@ updates:
       # customer (prod-readiness OPS-7). Majors are a planned release with their own migration path.
       - dependency-name: postgres
         update-types: ["version-update:semver-major"]
+      # The web build runs on the Node LTS line (even majors); a Current line (25, 27, ...) is not taken. The move to
+      # the next LTS is made by hand with its digest (docs/dev/dependency-updates.md).
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+  # The e2e target and the SSH matrix images stand for the distributions Alice supports (Ubuntu 22.04, Debian 12,
+  # Rocky 9): a new distribution release is a new matrix row decided by the owner, not a replacement of the
+  # existing one (Dependabot #1, #4, #19, #20 closed on 2026-11-01). Digest refreshes of the same tag still come.
   - package-ecosystem: docker
     directory: /test/images/e2e-target
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: docker
     directory: /test/images/sshd
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: debian
+        update-types: ["version-update:semver-major"]
+      - dependency-name: rockylinux/rockylinux
+        update-types: ["version-update:semver-major"]
 
   # PostgreSQL in deploy/docker-compose.yml. internal/testutil/pgtest and
   # internal/platform/db name the same reference in Go and are edited by hand (tools/pincheck

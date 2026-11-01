@@ -64,6 +64,14 @@ PostgreSQL majors: Dependabot is told to ignore them (`ignore` entries for `post
 customer. A major is a planned release with its own migration path. The open pull request #5
 (PostgreSQL 16 to 18) must be closed, not merged, by the owner.
 
+Distribution and runtime majors: the e2e target and SSH matrix images (`test/images/e2e-target`,
+`test/images/sshd/*.Dockerfile`) stand for the distributions Alice supports, so Dependabot is told to ignore a
+new Ubuntu, Debian or Rocky release there; adding a distribution is a new matrix row and the owner's decision.
+The release image's `node` stays on the LTS line (24): Current lines (25, 27, ...) are ignored and the move to
+the next LTS is made by hand with its digest. Go module and npm majors are taken one at a time with the full
+gates (2026-11-01: React 19, Mantine 9 and react-router 8 taken; msw 3 left, it changes request interception and
+16 tests in 6 files fail, a planned migration).
+
 GitHub Action:
 
     git ls-remote https://github.com/actions/checkout 'refs/tags/v7*'
