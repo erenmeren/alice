@@ -9,7 +9,9 @@ export interface LanguageToggleProps {
 }
 
 // LanguageToggle is the design's TR/EN button (R9): it shows the other language's code and is named by that language's
-// own name, so a person who reads only that language finds it. With two languages it toggles.
+// own name, so a person who reads only that language finds it. With two languages it toggles. The name carries the
+// visible code too ("Türkçe (TR)"): WCAG 2.5.3, the visible text is part of the accessible name (axe-core 4.14
+// checks it through aria-hidden).
 export function LanguageToggle({ signedIn }: LanguageToggleProps) {
   const { i18n } = useTranslation();
   const other = LANGUAGES.find((l) => l.code !== i18n.language) ?? LANGUAGES[0];
@@ -28,7 +30,7 @@ export function LanguageToggle({ signedIn }: LanguageToggleProps) {
     }
   };
   return (
-    <Button variant="subtle" color="gray" size="xs" aria-label={other.name} lang={other.code} onClick={() => void change()}>
+    <Button variant="subtle" color="gray" size="xs" aria-label={`${other.name} (${other.code.toLocaleUpperCase(i18n.language)})`} lang={other.code} onClick={() => void change()}>
       <span className={classes.langCode} aria-hidden="true">
         {other.code}
       </span>

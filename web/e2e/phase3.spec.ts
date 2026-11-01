@@ -27,7 +27,7 @@ import {
 const OPERATOR: Account = { username: 'olcay', fullName: 'Olcay Öztürk', password: 'operator-password-2026' };
 const HOST_KEY_PUB = '/etc/ssh/ssh_host_ed25519_key.pub';
 const DEPLOY_KEYS = '/home/deploy/.ssh/authorized_keys';
-const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English', tr: 'Türkçe' };
+const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English (EN)', tr: 'Türkçe (TR)' };
 const DAY_SECONDS = 24 * 3600;
 // linuxssh.IdleTimeout: an idle SSH connection is reused for at most this long.
 const SSH_IDLE_SECONDS = 60;

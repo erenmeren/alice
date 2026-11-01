@@ -142,7 +142,7 @@ describe('AppLayout shell', () => {
     await renderRoute('/');
     expect(await screen.findByTestId('current-user')).toHaveTextContent(new RegExp(`^${adminSession.user.display_name}$`));
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Türkçe' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Türkçe (TR)' })).toBeVisible();
     expect(await screen.findByText(/Self-hosted · Alice/)).toBeVisible();
   });
 

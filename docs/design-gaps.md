@@ -33,7 +33,8 @@ design, the product and the tests:
 - **R7 Command palette = pages only.** It lists the destinations the role may open; there is no resource search.
 - **R8 Attention bell.** A popover that reads `/alerts` only while open; no polling, no unread dot.
 - **R9 Language toggle.** With two languages the top bar shows the other language's code (TR/EN), named by that
-  language's own name; Your account has the language select.
+  language's own name with the code ("Türkçe (TR)", so the visible text is part of the name, WCAG 2.5.3); Your
+  account has the language select.
 - **R10 Overview.** The dashboard becomes the design's Overview with Operations and Assurance tabs; the "Welcome"
   heading is removed; the metric strip shows Key rotations instead of the SSH key total.
 - **R11 Copy.** Navigation and page titles take the design's names; body text with a security or legal meaning keeps
@@ -88,7 +89,7 @@ design, the product and the tests:
 | top bar | search that finds resources | page palette over the role's destinations only (R7), hint "Only pages you can open" | 4 | differs |
 | top bar | the bell's unread dot | no dot: there is no unread state on the server (R8) | 4 | differs |
 | top bar | the palette shortcut label | `⌘K` on Apple platforms, `Ctrl K` elsewhere (the design's `.kbd` style) | 4 | filled |
-| top bar | the TR/EN toggle's visible text "TR" is not part of its accessible name "Türkçe" (WCAG 2.5.3) | kept: R9 and the e2e pin the native language name, clearer to a screen-reader user than a code | 3 | differs |
+| top bar | the TR/EN toggle's visible text "TR" is not part of its accessible name "Türkçe" (WCAG 2.5.3) | fixed 2026-11-01: the name is "Türkçe (TR)" / "English (EN)" (axe-core 4.14 reports the mismatch through the aria-hidden code; the native name stays first) | 3 | filled |
 | mobile | the design's 222 px drawer | Mantine AppShell's full-width off-canvas navbar under the top bar (e2e contract); Escape closes it and returns focus to the menu button | 4 | differs |
 | banners | product banners (setup, 12 license kinds, notifications failing, 48-hour backup alarm, SSO step-up refusal, sign-out failure) | Mantine Alerts as status lines with the design's icons per severity (ShieldAlert / CircleAlert / CircleDot); link text inherits the alert's color, bold | 4 | filled |
 | popover | the notifications dialog layout | 340 px popover with `AttentionItem` rows, title, loading/error/empty states and "Open the overview" | 4 | filled |

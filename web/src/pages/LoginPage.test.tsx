@@ -241,7 +241,7 @@ describe('sign-in page safety', () => {
       return new HttpResponse(null, { status: 204 });
     }));
     await renderRoute('/login');
-    await userEvent.click(await screen.findByRole('button', { name: 'Türkçe' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Türkçe (TR)' }));
     expect(await screen.findByRole('heading', { level: 1, name: "Alice'e giriş yapın" })).toBeInTheDocument();
     expect(screen.getByText('Alice hesabınızla giriş yapın.')).toBeInTheDocument();
     expect(saved).toBe(false);

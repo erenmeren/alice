@@ -69,7 +69,7 @@ describe('application shell', () => {
     );
     await renderRoute('/');
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
-    await userEvent.click(screen.getByRole('button', { name: 'Türkçe' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe (TR)' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
     await waitFor(() => expect(saved).toBe('tr'));
     expect(localStorage.getItem('alice.lang')).toBe('tr');

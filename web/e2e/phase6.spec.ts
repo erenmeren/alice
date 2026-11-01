@@ -69,7 +69,7 @@ const WIDTHS = [375, 768, 1280, 1920] as const;
 const OPERATOR: Account = { username: 'olcay', fullName: 'Olcay Öztürk', password: 'operator-password-2026' };
 // Rotation emails go to Administrators with an email address.
 const MAILED_ADMIN: Account & { email: string } = { ...ADMIN, email: 'ada@example.com' };
-const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English', tr: 'Türkçe' };
+const LANGUAGE_NAMES: Record<Lang, string> = { en: 'English (EN)', tr: 'Türkçe (TR)' };
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
