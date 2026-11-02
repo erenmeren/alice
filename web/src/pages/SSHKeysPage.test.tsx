@@ -281,7 +281,9 @@ describe('SSHKeysPage', () => {
     const { router } = await renderRoute('/ssh-keys');
     await screen.findByTestId('ssh-keys-table');
     await userEvent.click(screen.getByRole('button', { name: 'Saved views' }));
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Root keys' }));
+    // Mantine 9 opens the menu through floating-ui's frames; on a loaded CI runner the item once arrived after the
+    // 5 s default (the DOM dump showed the page with no dropdown yet).
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Root keys' }, { timeout: 20_000 }));
     await waitFor(() => expect(router.state.location.search).toContain('os_user=root'));
     await waitFor(() => expect(queries.at(-1)?.get('q')).toBe('ci'));
     expect(within(screen.getByRole('main')).getByLabelText(/^Search/)).toHaveValue('ci');
