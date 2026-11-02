@@ -99,10 +99,13 @@ than the three Alice needs (client secret, client certificate, managed identity)
 
 Update procedure: `go get <module>@vX.Y.Z` for the five modules, `go mod tidy`, `go mod verify`,
 `go run ./tools/pincheck`, `make test test-integration`, then run the fake's round trip
-(`go test ./internal/testutil/fakekv -run SDK`) again. A new Key Vault api-version in the SDK needs the
-fake's version check (`fakekv.APIVersion`) and the reference answers in `test/testdata/kv-recordings`
-updated first; MSAL's changes to the assertion header or the token request need the fake's token
-endpoint checked.
+(`go test ./internal/testutil/fakekv -run SDK`) again. The provider asks every client for one api-version
+(`azurekv.KeyVaultAPIVersion`, through `azcore.ClientOptions.APIVersion`), and the fake's SDK test does the
+same for `azsecrets`: an SDK whose default moves (azsecrets 1.5.1 moved to `2026-04-01` on 2026-11-02; the
+fake answered every secret list with `azure.unexpected_response`) changes nothing. Moving Alice to a new
+api-version is a deliberate change of that constant, `fakekv.APIVersion` and the reference answers in
+`test/testdata/kv-recordings` together; MSAL's changes to the assertion header or the token request need
+the fake's token endpoint checked.
 
 ## go-ldap (directory sign-in)
 

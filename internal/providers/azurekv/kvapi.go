@@ -33,6 +33,9 @@ type kvAPI interface {
 	ImportCertificate(ctx context.Context, name string, p azcertificates.ImportCertificateParameters) (azcertificates.Certificate, error)
 }
 
+// KeyVaultAPIVersion is the Key Vault REST api-version every SDK client requests.
+const KeyVaultAPIVersion = "2025-07-01"
+
 type sdkAPI struct {
 	cred    azcore.TokenCredential
 	certs   *azcertificates.Client
@@ -46,6 +49,10 @@ var _ kvAPI = (*sdkAPI)(nil)
 // newSDKAPI builds the three clients on the vault transport. The SDK's challenge-resource
 // verification stays on (ruling S2): no option disables it.
 func newSDKAPI(v azureid.Vault, cred azcore.TokenCredential, opts azcore.ClientOptions, r *retryer) (*sdkAPI, error) {
+	// Every client asks for the api-version the fake serves and the recordings were taken against
+	// (R40 row 2), whatever default the SDK of the day carries: azsecrets 1.5.1 moved to 2026-04-01
+	// and the fake answered every secret list with azure.unexpected_response.
+	opts.APIVersion = KeyVaultAPIVersion
 	certs, err := azcertificates.NewClient(v.URL, cred, &azcertificates.ClientOptions{ClientOptions: opts})
 	if err != nil {
 		return nil, err

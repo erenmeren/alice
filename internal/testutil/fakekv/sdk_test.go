@@ -37,6 +37,14 @@ func sdkOptions(s *fakekv.Server) azcore.ClientOptions {
 		Retry: policy.RetryOptions{MaxRetries: -1}, Telemetry: policy.TelemetryOptions{Disabled: true}}
 }
 
+// secretOptions pins the api-version the fake serves: azsecrets 1.5.1 asks for 2026-04-01 by default,
+// as the provider's kvapi.go does for every client.
+func secretOptions(s *fakekv.Server) azcore.ClientOptions {
+	o := sdkOptions(s)
+	o.APIVersion = fakekv.APIVersion
+	return o
+}
+
 var vaultScopes = policy.TokenRequestOptions{Scopes: []string{"https://vault.azure.net/.default"}}
 
 func secretCredential(t *testing.T, s *fakekv.Server, secret string) azcore.TokenCredential {
@@ -92,7 +100,7 @@ func exercise(t *testing.T, s *fakekv.Server, cred azcore.TokenCredential, ver s
 	}
 	assert.Equal(t, 1, n)
 
-	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: opts})
+	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: secretOptions(s)})
 	require.NoError(t, err)
 	sec, err := secrets.GetSecret(ctx, "web-cert", ver, nil)
 	require.NoError(t, err)
@@ -223,7 +231,7 @@ func TestSDKErrorsAreTypedAsAlicesMappingNeeds(t *testing.T) {
 	require.Error(t, err)
 
 	cred := secretCredential(t, s, s.Secret())
-	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: sdkOptions(s)})
+	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: secretOptions(s)})
 	require.NoError(t, err)
 	certs, err := azcertificates.NewClient(s.VaultURL(), cred, &azcertificates.ClientOptions{ClientOptions: sdkOptions(s)})
 	require.NoError(t, err)
@@ -309,7 +317,7 @@ func TestSDKImportAndPagingAndNextLinks(t *testing.T) {
 	assert.False(t, imp.Attributes.Created.Before(before), "created is not before the request")
 	assert.Equal(t, s.Versions("new-cert")[0], imp.ID.Version())
 	// The imported version reads back as a secret.
-	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: sdkOptions(s)})
+	secrets, err := azsecrets.NewClient(s.VaultURL(), cred, &azsecrets.ClientOptions{ClientOptions: secretOptions(s)})
 	require.NoError(t, err)
 	sec, err := secrets.GetSecret(ctx, "new-cert", imp.ID.Version(), nil)
 	require.NoError(t, err)
