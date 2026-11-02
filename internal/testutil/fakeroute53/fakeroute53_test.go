@@ -619,7 +619,9 @@ func TestFaults(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	s.FailNext(OpZones, Fault{Delay: 5 * time.Second, Status: 500})
+	before := s.Counters()[OpZones]
 	assert.Error(t, zones(ctx).err, "the delay honours the request's context")
+	assert.Equal(t, before, s.Counters()[OpZones], "a request cut short by its context is not an answered operation")
 
 	stop := s.FailAll(OpZones, Fault{Status: 500})
 	for range 3 {
