@@ -34,7 +34,7 @@ var (
 // container. Use it as: func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }.
 func Main(m *testing.M) int {
 	ctx := context.Background()
-	ctr, err := postgres.Run(ctx, "postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea",
+	ctr, err := postgres.Run(ctx, "postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab",
 		postgres.WithDatabase("vendor"),
 		postgres.WithUsername("vendor"),
 		postgres.WithPassword("s3cret-pw"),

@@ -527,7 +527,7 @@ RELEASE_STAGE_FLAGS ?=
 # Every 1.0.x release accepts an update from the first release candidate on; raise it when a release needs an intermediate one
 # (the first release signed by a new release key: the overlap release that carried both keys; licensing-vendor.md, Rotation).
 MIN_UPGRADE_FROM ?= 1.0.0-rc.1
-POSTGRES_RELEASE_IMAGE := postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+POSTGRES_RELEASE_IMAGE := postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
 
 RELEASE_OUTPUTS = "$(abspath $(RELEASE_DIR))/alice-$(VERSION)" "$(abspath $(RELEASE_DIR))/sbom-$(VERSION)" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256.sig"
 
@@ -543,7 +543,7 @@ release-preflight: # make release's first prerequisite: refuse before anything i
 release: BUILD_TIME := $(BUILD_TIME)
 release: release-preflight helper winhelper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; needs Docker; sign SHA256SUMS offline, then make release-pack)
 	$(MAKE) image-check IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
-	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
 	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
 	$(MAKE) sbom VERSION=$(VERSION)
 	$(MAKE) image-notices VERSION=$(VERSION)

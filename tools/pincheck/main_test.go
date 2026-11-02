@@ -13,7 +13,7 @@ import (
 const (
 	sha   = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 	dg    = "sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
-	pgRef = "postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea"
+	pgRef = "postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab"
 )
 
 func TestRepositoryIsPinned(t *testing.T) {
