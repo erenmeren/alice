@@ -455,18 +455,13 @@ try {
 	return flags, admin, rights
 }
 
-// passwordLastSet is net user's "Password last set" line of alice.
+// passwordLastSet is the time the password of alice was last set, as the SAM stores it.
 func passwordLastSet(t *testing.T) string {
 	t.Helper()
-	code, out := runNet(t, "", "user", setupAccount)
-	require.Equal(t, 0, code, "net user %s: %s", setupAccount, out)
-	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "Password last set") {
-			return strings.TrimSpace(l)
-		}
-	}
-	require.FailNow(t, "net user names no Password last set", "%s", out)
-	return ""
+	// The SAM's stored FILETIME, not `net user`'s "Password last set": that line is now minus the account's
+	// password age in whole seconds, so two readings of an unchanged password can differ by a second (the
+	// windows-2025 schedule run 41424587614 read 10:02:06 and then 10:02:05).
+	return strings.TrimSpace(winrmPSMust(t, nil, "", `(Get-LocalUser -Name '`+setupAccount+`').PasswordLastSet.ToFileTimeUtc()`))
 }
 
 // firewallRule is the rule Alice-WinRM-In: display name, direction, action, enabled, protocol, port and addresses.
