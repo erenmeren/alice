@@ -184,7 +184,12 @@ Reviewing a Dependabot pull request: read the release notes; for an image, compa
 - The testcontainers Ryuk reaper image is chosen by the library version, not named in this
   repository.
 - Playwright downloads its browsers (`npx playwright install`); the version follows
-  `@playwright/test` in the lockfile, the download itself is not content-pinned.
+  `@playwright/test` in the lockfile, the download itself is not content-pinned. A browser roll can
+  bring a browser bug: the WebKit of Playwright 1.64 (27.2) reports a `style-src-attr` CSP violation
+  for every `document.createElement('select')` (WebKit bug 327212, microsoft/playwright#43416), so
+  the `cspGuard` fixture of `web/e2e/helpers.ts` ignores that directive on WebKit alone. Remove the
+  exception with the Playwright release whose WebKit carries the fix (WebKit PR 77544): run
+  `make e2e-browsers` with it taken out and keep it out when WebKit is green.
 - `actions/setup-node` and `actions/setup-go` download the Node and Go toolchains by the version
   given to them (`go-version-file: go.mod`, `node-version: 24`).
 

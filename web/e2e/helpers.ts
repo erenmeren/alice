@@ -84,17 +84,25 @@ export const test = base.extend<{ cspGuard: void; networkChangeGuard: void; cutO
     { auto: true },
   ],
   cspGuard: [
-    async ({ page }, use) => {
+    async ({ page, browserName }, use) => {
       const violations: string[] = [];
+      // WebKit 27.2 (the build of Playwright 1.64) reports a style-src-attr violation for every
+      // document.createElement('select') (WebKit bug 327212, microsoft/playwright#43416; fixed upstream by
+      // WebKit PR 77544). Until Playwright ships that build, WebKit ignores the style-attribute directive;
+      // Chromium and Firefox still guard the style attributes of the same pages (nightly 41421109801).
+      const ignoreStyleAttr = browserName === 'webkit';
       page.on('console', (m) => {
-        if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) violations.push(`console on ${page.url()}: ${m.text()}`);
+        if (m.type() !== 'error' || !/Content Security Policy/i.test(m.text())) return;
+        if (ignoreStyleAttr && /style-src/.test(m.text())) return;
+        violations.push(`console on ${page.url()}: ${m.text()}`);
       });
       await page.exposeFunction('__aliceCspViolation', (report: string) => violations.push(`event: ${report}`));
-      await page.addInitScript(() => {
+      await page.addInitScript((ignoreStyleAttr: boolean) => {
         document.addEventListener('securitypolicyviolation', (e) => {
+          if (ignoreStyleAttr && e.effectiveDirective === 'style-src-attr') return;
           window.__aliceCspViolation?.(`${e.effectiveDirective} blocked ${e.blockedURI || 'inline'} on ${e.documentURI}`);
         });
-      });
+      }, ignoreStyleAttr);
       await use();
       expect(violations, 'CSP violations').toEqual([]);
     },
