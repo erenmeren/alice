@@ -779,14 +779,19 @@ async function checkWidths(page: Page, screen: string, widths: readonly number[]
 // (loaders) never finish, so they are not waited for. document.getAnimations() flushes styles first, so a transition
 // that a viewport change has just started is included.
 export async function settleAnimations(page: Page): Promise<void> {
-  await page.evaluate(() =>
-    Promise.all(
-      document
-        .getAnimations()
-        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
-        .map((a) => a.finished.catch(() => undefined)),
-    ),
-  );
+  // Mantine's Transition starts its CSS transition two animation frames after the element mounted
+  // (use-transition: pre-entering, then entering), so a dialog whose fields are already on screen may
+  // have nothing running yet; each round waits two frames, then for what runs, until a round finds nothing
+  // (nightly 41461850843: the Import into Key Vault submit label measured too pale on WebKit).
+  await page.evaluate(async () => {
+    const twoFrames = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+    for (let round = 0; round < 5; round++) {
+      await twoFrames();
+      const running = document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
+      if (running.length === 0) return;
+      await Promise.all(running.map((a) => a.finished.catch(() => undefined)));
+    }
+  });
 }
 
 export async function seriousViolations(page: Page, only?: Locator): Promise<string[]> {
