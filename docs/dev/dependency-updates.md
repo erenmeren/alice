@@ -70,7 +70,10 @@ new Ubuntu, Debian or Rocky release there; adding a distribution is a new matrix
 The release image's `node` stays on the LTS line (24): Current lines (25, 27, ...) are ignored and the move to
 the next LTS is made by hand with its digest. Go module and npm majors are taken one at a time with the full
 gates (2026-11-01: React 19, Mantine 9 and react-router 8 taken; msw 3 left, it changes request interception and
-16 tests in 6 files fail, a planned migration).
+16 tests in 6 files fail, a planned migration). Two npm majors are ignored in `.github/dependabot.yml` since
+2026-11-03: `msw` (that migration is made by hand, Dependabot #36 closed) and `typescript` (TypeScript 7 fails
+`npm ci` with ERESOLVE while typescript-eslint 8.72 accepts `>=4.8.4 <6.1.0`, Dependabot #37 closed; lift the
+rule when typescript-eslint's peer range includes 7).
 
 GitHub Action:
 

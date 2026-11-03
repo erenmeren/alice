@@ -73,3 +73,12 @@ updates:
     open-pull-requests-limit: 5
     groups:
       npm-minor-patch: { update-types: [minor, patch] }
+    ignore:
+      # typescript-eslint 8.72 accepts typescript >=4.8.4 <6.1.0: TypeScript 7 (Dependabot #37, closed 2026-11-03)
+      # fails npm ci with ERESOLVE. Lift this when typescript-eslint's peer range includes 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # msw 3 changes request interception and setup (16 tests in 6 files, Dependabot #36 closed 2026-11-03): a
+      # migration made by hand with the full gates (docs/dev/dependency-updates.md), not a bump.
+      - dependency-name: msw
+        update-types: ["version-update:semver-major"]
