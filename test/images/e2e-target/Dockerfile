@@ -15,7 +15,7 @@
 # The deploy account has no password but is not locked ("*", not useradd's "!"), so the Phase 6
 # journey's key login (a key Alice generated and deployed there) works with or without PAM.
 
-FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS helper
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS helper
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/alice-helper/ cmd/alice-helper/
